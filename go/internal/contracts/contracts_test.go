@@ -86,7 +86,7 @@ func samples() map[record.Kind]any {
 		invoke.KindReceipt:          &invoke.Receipt{Header: withSchema(h, "receipt/1"), Invocation: inv, Attempt: 1, Response: ref, Usage: invoke.Usage{InputTokens: 1, CostUSD: 0.5, CostReported: true}},
 		verdict.KindObservation:     &verdict.Observation{Header: withSchema(h, "observation/1"), Check: verdict.CheckPathExists, Claim: ref, Result: verdict.Refuted, Confidence: 0.9, Evidence: []record.Ref{{Kind: "thought", ID: "x"}}},
 		verdict.KindVerdict:         &verdict.Verdict{Header: withSchema(h, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Confidence: 0.7, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: inv}, Basis: []record.Ref{{Kind: "receipt", ID: "r"}}, Falsifiers: []thought.Ref{ref}, Direction: verdict.Both},
-		verdict.KindResolution:      &verdict.Resolution{Header: withSchema(h, "resolution/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Effective: inv, Candidates: []record.RecordID{inv}, Observations: []record.RecordID{inv}, ResolverVer: verdict.ResolverVer, Rule: "standing:judge", Confidence: 0.7},
+		verdict.KindResolution:      &verdict.Resolution{Header: withSchema(h, "resolution/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Effective: inv, Candidates: []record.RecordID{inv}, Observations: []record.RecordID{inv}, ResolverVer: verdict.ResolverVer, Thresholds: verdict.DefaultThresholds, Rule: "standing:judge", Confidence: 0.7},
 		invoke.KindReconciled:       &invoke.Reconciled{Header: withSchema(h, "invocation_reconciled/1"), Invocation: inv, Disposition: invoke.DispositionAbandoned, Evidence: "tool-less"},
 	}
 }

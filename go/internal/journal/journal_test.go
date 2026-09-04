@@ -490,3 +490,35 @@ func TestClosedRefusesAndCloseIsIdempotent(t *testing.T) {
 		t.Fatalf("scan on closed: %v", err)
 	}
 }
+
+// The journal executes every registered type's declared vocabulary at BOTH
+// doors: a wire-invalid record is refused at Submit (nothing written), and a
+// forged frame whose body is structurally fine but out of vocabulary is
+// refused at recovery without modifying the log. Before this round Validate
+// never called ValidateWire, so "rejected" rows in the declared contracts
+// were documentation only.
+func TestJournalExecutesDeclaredVocabulary(t *testing.T) {
+	j, a, l := openJournal(t)
+	ctx := context.Background()
+	submit(t, j, "one", thoughtRec(1))
+	bad := thoughtRec(2)
+	bad.Thought = "haiku"
+	if _, err := j.Submit(ctx, Command{IdempotencyKey: "bad", Epoch: j.Epoch(), Records: []record.Record{bad}}); err == nil || !strings.Contains(err.Error(), "out of vocabulary") {
+		t.Fatalf("wire-invalid record accepted at submit: %v", err)
+	}
+	if j.Head() != 1 {
+		t.Fatalf("refused submit wrote something: head %d", j.Head())
+	}
+	j.Close()
+	forged := thoughtRec(2)
+	forged.Encoding = "ebcdic"
+	forge(t, a, Envelope{TxID: "f", Epoch: l.Epoch, FirstSeq: 2, LastSeq: 2, Records: []Encoded{encodedOf(t, forged, 2)}})
+	before, _ := os.ReadFile(logPath(a))
+	if _, err := Open(l); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "out of vocabulary") {
+		t.Fatalf("wire-invalid forged frame accepted at recovery: %v", err)
+	}
+	after, _ := os.ReadFile(logPath(a))
+	if !bytes.Equal(before, after) {
+		t.Fatal("refusal modified the log")
+	}
+}

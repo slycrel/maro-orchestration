@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -18,16 +20,26 @@ import (
 const ResolverVer = "resolver/1"
 
 // Thresholds are the registered numbers the resolver consults, each with a
-// Why (D13: reported, never magic).
+// Why (D13: reported, never magic). Validated before any fold.
 type Thresholds struct {
-	Refute    float64 // an observation at or above this confidence settles failure without a judge
-	RefuteWhy string
+	Refute    float64 `json:"refute"`
+	RefuteWhy string  `json:"refute_why"`
 }
 
 // DefaultThresholds is the v1 registration.
 var DefaultThresholds = Thresholds{
 	Refute:    0.9,
 	RefuteWhy: "a deterministic check that is 90%+ sure a claim is false outranks a model judge that has not seen the check; below that the judge decides (v1 registration; re-measure against observation accuracy once live)",
+}
+
+func (t Thresholds) validate() error {
+	if math.IsNaN(t.Refute) || t.Refute < 0 || t.Refute > 1 {
+		return fmt.Errorf("%w: refute threshold %v not in [0,1]", ErrCandidates, t.Refute)
+	}
+	if t.RefuteWhy == "" {
+		return fmt.Errorf("%w: refute threshold has no why", ErrCandidates)
+	}
+	return nil
 }
 
 // Candidates is the input to a resolution: every verdict and observation
@@ -39,34 +51,124 @@ type Candidates struct {
 	Observations []*Observation
 }
 
-// Resolve is the pure fold. It is order-independent by construction: inputs
-// are sorted by record ID (never Seq); supersession is applied as a set
-// operation; the result depends only on the set. Rules, in order:
-//  1. supersession — a verdict named by another's Supersedes is dropped.
-//  2. refutation — for kinds with a failure outcome, a refuting observation
-//     at/above the threshold settles the failure outcome unless an OPERATOR
-//     verdict exists (operators outrank checks).
-//  3. standing — the highest standing rank wins; within a rank the highest
-//     confidence; equal rank and confidence with DIFFERENT outcomes is
-//     contested (no effective verdict; outcome = the kind's unknown, or the
-//     agreed outcome when they agree).
-//  4. self cannot promote — if the winner is a self-verdict claiming the
-//     kind's success outcome, the resolution's outcome is the kind's unknown
-//     (the verdict stands as a claim; success needs a judge or an operator).
-func Resolve(c Candidates, th Thresholds) Resolution {
-	res := Resolution{VerdictKind: c.VerdictKind, ResolverVer: ResolverVer}
+var (
+	ErrCandidates   = errors.New("verdict: invalid candidates")
+	ErrSupersession = errors.New("verdict: invalid supersession")
+)
+
+// validate refuses a candidate collection the fold must not touch: empty
+// subject, a verdict or observation for another subject or kind, an
+// unknown kind, duplicate ids, any record failing its wire validation
+// (NaN confidence, foreign vocabulary), a verdict without a Seq (the
+// supersession rule needs order), and a bad threshold.
+func (c Candidates) validate(th Thresholds) error {
+	if err := th.validate(); err != nil {
+		return err
+	}
+	if c.Subject.Kind == "" || c.Subject.ID == "" {
+		return fmt.Errorf("%w: empty subject", ErrCandidates)
+	}
+	if _, ok := outcomes[c.VerdictKind]; !ok {
+		return fmt.Errorf("%w: kind %q", ErrCandidates, c.VerdictKind)
+	}
+	seen := map[record.RecordID]bool{}
+	for _, v := range c.Verdicts {
+		if v == nil {
+			return fmt.Errorf("%w: nil verdict", ErrCandidates)
+		}
+		if seen[v.ID] {
+			return fmt.Errorf("%w: duplicate id %s", ErrCandidates, v.ID)
+		}
+		seen[v.ID] = true
+		if v.Subject != c.Subject || v.VerdictKind != c.VerdictKind {
+			return fmt.Errorf("%w: verdict %s is for %v/%s, not %v/%s", ErrCandidates, v.ID, v.Subject, v.VerdictKind, c.Subject, c.VerdictKind)
+		}
+		if v.Seq == 0 {
+			return fmt.Errorf("%w: verdict %s has no Seq — resolve only committed verdicts", ErrCandidates, v.ID)
+		}
+		if err := v.ValidateWire(); err != nil {
+			return fmt.Errorf("%w: %v", ErrCandidates, err)
+		}
+	}
+	for _, o := range c.Observations {
+		if o == nil {
+			return fmt.Errorf("%w: nil observation", ErrCandidates)
+		}
+		if seen[o.ID] {
+			return fmt.Errorf("%w: duplicate id %s", ErrCandidates, o.ID)
+		}
+		seen[o.ID] = true
+		if o.Subject != c.Subject {
+			return fmt.Errorf("%w: observation %s is for %v, not %v", ErrCandidates, o.ID, o.Subject, c.Subject)
+		}
+		if !Applies(o.Check, c.VerdictKind) {
+			return fmt.Errorf("%w: observation %s (%s) does not apply to %s", ErrCandidates, o.ID, o.Check, c.VerdictKind)
+		}
+		if err := o.ValidateWire(); err != nil {
+			return fmt.Errorf("%w: %v", ErrCandidates, err)
+		}
+	}
+	return nil
+}
+
+// supersession builds the tombstone set from a validated candidate set:
+// every link must name a present verdict of this (subject, kind) with a
+// lower Seq and a standing no higher than the replacement's; the graph must
+// be acyclic. An invalid link is an error and NOTHING is dropped.
+func supersession(vs []*Verdict) (map[record.RecordID]bool, error) {
+	byID := map[record.RecordID]*Verdict{}
+	for _, v := range vs {
+		byID[v.ID] = v
+	}
+	dead := map[record.RecordID]bool{}
+	for _, v := range vs {
+		if v.Supersedes == "" {
+			continue
+		}
+		t, ok := byID[v.Supersedes]
+		if !ok {
+			return nil, fmt.Errorf("%w: %s supersedes %s, which is not a candidate verdict of this subject and kind", ErrSupersession, v.ID, v.Supersedes)
+		}
+		if t.Seq >= v.Seq {
+			return nil, fmt.Errorf("%w: %s (seq %d) supersedes %s (seq %d) — a replacement must come later", ErrSupersession, v.ID, v.Seq, t.ID, t.Seq)
+		}
+		if standingRank[v.Source.Standing] < standingRank[t.Source.Standing] {
+			return nil, fmt.Errorf("%w: %s (%s) may not supersede %s (%s) — lower standing cannot erase higher", ErrSupersession, v.ID, v.Source.Standing, t.ID, t.Source.Standing)
+		}
+		dead[v.Supersedes] = true
+	}
+	// acyclic: follow links; Seq strictly decreasing along a chain guarantees it, so a cycle would have failed the Seq check above
+	return dead, nil
+}
+
+// Resolve is the pure fold. Order-independent by construction: inputs are
+// sorted by record ID for a stable walk, but no rule ever decides by ID or
+// Seq except the supersession check (Seq strictly increasing along a link).
+// Rules, in order:
+//  1. supersession (validated, see above)
+//  2. refutation — for kinds with a failure outcome, every refuting
+//     observation at/above the threshold is decisive unless an OPERATOR
+//     verdict exists; the rule names ALL decisive observations.
+//  3. standing — highest rank, then highest confidence; equal maxima with
+//     different outcomes ⇒ contested (no effective; the kind's unknown);
+//     equal maxima that AGREE ⇒ the outcome, with NO effective verdict named
+//     (agreed maxima are incomparable — no ID picks one).
+//  4. self cannot promote — a lone self winner claiming success ⇒ unknown.
+func Resolve(c Candidates, th Thresholds) (Resolution, error) {
+	if err := c.validate(th); err != nil {
+		return Resolution{}, err
+	}
+	res := Resolution{VerdictKind: c.VerdictKind, ResolverVer: ResolverVer, Thresholds: th}
 	vs := append([]*Verdict{}, c.Verdicts...)
 	sort.Slice(vs, func(i, j int) bool { return vs[i].ID < vs[j].ID })
-	superseded := map[record.RecordID]bool{}
-	for _, v := range vs {
-		if v.Supersedes != "" {
-			superseded[v.Supersedes] = true
-		}
+	dead, err := supersession(vs)
+	if err != nil {
+		return Resolution{}, err
 	}
 	var live []*Verdict
 	for _, v := range vs {
 		res.Candidates = append(res.Candidates, v.ID)
-		if !superseded[v.ID] && v.VerdictKind == c.VerdictKind {
+		if !dead[v.ID] {
 			live = append(live, v)
 		}
 	}
@@ -81,24 +183,33 @@ func Resolve(c Candidates, th Thresholds) Resolution {
 			hasOperator = true
 		}
 	}
-	// rule 2: refutation settles failure without a judge
+	// rule 2
 	if fail, ok := failureOutcome[c.VerdictKind]; ok && !hasOperator {
-		var best *Observation
+		var decisive []*Observation
 		for _, o := range obs {
-			if o.Result == Refuted && o.Confidence >= th.Refute && (best == nil || o.Confidence > best.Confidence) {
-				best = o
+			if o.Result == Refuted && o.Confidence >= th.Refute {
+				decisive = append(decisive, o)
 			}
 		}
-		if best != nil {
-			res.Outcome, res.Confidence, res.Rule = fail, best.Confidence, "refuted_by_observation:"+string(best.Check)
-			return res
+		if len(decisive) > 0 {
+			maxc := 0.0
+			names := ""
+			for _, o := range decisive {
+				if o.Confidence > maxc {
+					maxc = o.Confidence
+				}
+				names += string(o.Check) + "@" + string(o.ID) + ";"
+				res.Decisive = append(res.Decisive, o.ID)
+			}
+			res.Outcome, res.Confidence, res.Rule = fail, maxc, "refuted_by_observation:"+names
+			return res, nil
 		}
 	}
 	if len(live) == 0 {
 		res.Outcome, res.Rule = unknownFor(c.VerdictKind), "no_candidates"
-		return res
+		return res, nil
 	}
-	// rule 3: standing, then confidence
+	// rule 3
 	top := live[0]
 	for _, v := range live[1:] {
 		if better(v, top) {
@@ -117,35 +228,28 @@ func Resolve(c Candidates, th Thresholds) Resolution {
 			agree = false
 		}
 	}
-	if !agree {
-		res.Contested, res.Outcome, res.Confidence, res.Rule = true, unknownFor(c.VerdictKind), top.Confidence, fmt.Sprintf("contested:%d_peers_at_%s", len(peers), top.Source.Standing)
-		return res
+	res.Confidence = top.Confidence
+	switch {
+	case !agree:
+		res.Contested, res.Outcome, res.Rule = true, unknownFor(c.VerdictKind), fmt.Sprintf("contested:%d_peers_at_%s", len(peers), top.Source.Standing)
+		return res, nil
+	case len(peers) > 1:
+		// agreed maxima: the outcome is settled, no single verdict is "the" effective one
+		res.Outcome, res.Rule = top.Outcome, fmt.Sprintf("agreed_maxima:%d_at_%s", len(peers), top.Source.Standing)
+		for _, p := range peers {
+			res.Decisive = append(res.Decisive, p.ID)
+		}
+	default:
+		res.Effective, res.Outcome, res.Rule = top.ID, top.Outcome, "standing:"+string(top.Source.Standing)
 	}
-	res.Effective, res.Outcome, res.Confidence = top.ID, top.Outcome, top.Confidence
-	res.Rule = "standing:" + string(top.Source.Standing)
-	if len(peers) > 1 {
-		res.Rule += fmt.Sprintf("+agree:%d", len(peers))
-	}
-	// rule 4: self cannot promote
+	// rule 4
 	if top.Source.Standing == StandingSelf && top.Outcome == successOutcomes[c.VerdictKind] {
-		res.Effective, res.Outcome, res.Rule = "", unknownFor(c.VerdictKind), "self_cannot_promote"
+		res.Effective, res.Decisive, res.Outcome, res.Rule = "", nil, unknownFor(c.VerdictKind), "self_cannot_promote"
 	}
-	return res
+	return res, nil
 }
 
-func unknownFor(k VerdictKind) string {
-	if u, ok := unknownOutcome[k]; ok {
-		return u
-	}
-	// kinds with no unknown (stuck, delivery) fall to their non-success outcome
-	switch k {
-	case KindStuck:
-		return "stuck"
-	case KindDelivery:
-		return "undeliverable"
-	}
-	return ""
-}
+func unknownFor(k VerdictKind) string { return unknownOutcome[k] }
 
 // better is the partial order: standing rank, then confidence. Equal on
 // both is incomparable — never broken by ID or Seq.
@@ -158,26 +262,29 @@ func better(a, b *Verdict) bool {
 }
 
 // Fold reads every verdict and observation from the production journal,
-// grouped by (subject, kind).
+// grouped by (subject, kind); an observation joins the groups its check
+// applies to. Records failing decode (wire validation runs there) fail the
+// fold: a corrupt journal is an error, not a plausible set.
 func Fold(pr *journal.ProductionReader) (map[string]*Candidates, error) {
 	groups := map[string]*Candidates{}
-	key := func(s record.Ref, k VerdictKind) string { return string(s.Kind) + "/" + s.ID + "/" + string(k) }
 	get := func(s record.Ref, k VerdictKind) *Candidates {
-		g, ok := groups[key(s, k)]
+		key := groupKey(s, k)
+		g, ok := groups[key]
 		if !ok {
 			g = &Candidates{Subject: s, VerdictKind: k}
-			groups[key(s, k)] = g
+			groups[key] = g
 		}
 		return g
 	}
 	err := pr.Scan(0, func(r record.Record) error {
 		switch v := r.(type) {
 		case *Verdict:
-			get(v.Subject, v.VerdictKind).Verdicts = append(get(v.Subject, v.VerdictKind).Verdicts, v)
+			g := get(v.Subject, v.VerdictKind)
+			g.Verdicts = append(g.Verdicts, v)
 		case *Observation:
-			// an observation is about a subject for every kind it can settle
-			for k := range failureOutcome {
-				get(v.Subject, k).Observations = append(get(v.Subject, k).Observations, v)
+			for _, k := range applicability[v.Check] {
+				g := get(v.Subject, k)
+				g.Observations = append(g.Observations, v)
 			}
 		}
 		return nil
@@ -185,30 +292,122 @@ func Fold(pr *journal.ProductionReader) (map[string]*Candidates, error) {
 	return groups, err
 }
 
-// Commit writes a Resolution for a candidate set, idempotent by (subject,
-// kind, candidate set): the same set resolves once.
+func groupKey(s record.Ref, k VerdictKind) string {
+	return string(s.Kind) + "/" + s.ID + "/" + string(k)
+}
+
+// keyOf is the idempotency key: canonical JSON of everything the fold
+// depends on (version, subject, kind, thresholds, candidate and observation
+// id lists — length-delimited by construction), so no two different sets
+// collide and a threshold change is a different resolution.
+func keyOf(c Candidates, res Resolution) string {
+	payload, _ := json.Marshal(struct {
+		Ver  string            `json:"ver"`
+		Sub  record.Ref        `json:"subject"`
+		Kind VerdictKind       `json:"kind"`
+		Th   Thresholds        `json:"thresholds"`
+		C    []record.RecordID `json:"candidates"`
+		O    []record.RecordID `json:"observations"`
+	}{ResolverVer, c.Subject, c.VerdictKind, res.Thresholds, res.Candidates, res.Observations})
+	sum := sha256.Sum256(payload)
+	return "resolution:" + hex.EncodeToString(sum[:])
+}
+
+// Commit writes a Resolution for a candidate set, idempotent by the key
+// above. On replay it returns the resolution that was COMMITTED (read back
+// from the journal), never a recomputation.
 func Commit(ctx context.Context, j *journal.Journal, run record.RunID, attempt uint32, c Candidates, th Thresholds) (*Resolution, error) {
-	res := Resolve(c, th)
+	res, err := Resolve(c, th)
+	if err != nil {
+		return nil, err
+	}
 	res.Header = record.Header{ID: record.NewID(), Schema: "resolution/1", RunID: run, Attempt: attempt, Subject: c.Subject, At: time.Now().UTC()}
-	h := sha256.New()
-	h.Write([]byte(string(c.Subject.Kind) + "/" + c.Subject.ID + "/" + string(c.VerdictKind)))
-	for _, id := range res.Candidates {
-		h.Write([]byte(id))
-	}
-	for _, id := range res.Observations {
-		h.Write([]byte(id))
-	}
-	key := "resolution:" + hex.EncodeToString(h.Sum(nil))
+	key := keyOf(c, res)
 	ack, err := j.Submit(ctx, journal.Command{IdempotencyKey: key, Epoch: j.Epoch(), Records: []record.Record{&res}})
 	if err != nil {
 		return nil, err
 	}
 	if ack.Replayed {
-		return &res, ErrAlreadyResolved
+		var committed *Resolution
+		scanErr := j.Production().ScanThrough(ack.FirstSeq-1, ack.LastSeq, func(r record.Record) error {
+			if rr, ok := r.(*Resolution); ok {
+				committed = rr
+			}
+			return nil
+		})
+		if scanErr != nil || committed == nil {
+			return nil, fmt.Errorf("verdict: replayed resolution at seq %d could not be read back: %v", ack.FirstSeq, scanErr)
+		}
+		return committed, ErrAlreadyResolved
 	}
 	return &res, nil
 }
 
 // ErrAlreadyResolved: this exact candidate set was resolved before; the
-// returned Resolution is what it would compute again.
+// returned Resolution is the one on record.
 var ErrAlreadyResolved = errors.New("verdict: candidate set already resolved")
+
+// Current picks, per (subject, kind), the resolution whose input set (candidates ∪
+// observations) is MAXIMAL by inclusion among the journaled resolutions.
+// Two resolutions with incomparable sets are contested and yield no current
+// resolution for that key (an error naming both). Never decided by Seq or ID.
+func Current(pr *journal.ProductionReader) (map[string]*Resolution, error) {
+	byKey := map[string][]*Resolution{}
+	err := pr.Scan(0, func(r record.Record) error {
+		if rr, ok := r.(*Resolution); ok {
+			k := groupKey(rr.Subject, rr.VerdictKind)
+			byKey[k] = append(byKey[k], rr)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*Resolution{}
+	for k, rs := range byKey {
+		var maximal []*Resolution
+		for _, a := range rs {
+			dominated := false
+			for _, b := range rs {
+				if a != b && includes(b, a) && !includes(a, b) {
+					dominated = true
+					break
+				}
+			}
+			if !dominated {
+				maximal = append(maximal, a)
+			}
+		}
+		// equal sets (same inputs, e.g. different thresholds) are also incomparable
+		if len(maximal) != 1 {
+			ids := ""
+			for _, m := range maximal {
+				ids += string(m.ID) + " "
+			}
+			return nil, fmt.Errorf("verdict: %s has %d incomparable resolutions (%s) — no current resolution", k, len(maximal), ids)
+		}
+		out[k] = maximal[0]
+	}
+	return out, nil
+}
+
+func includes(a, b *Resolution) bool {
+	set := map[record.RecordID]bool{}
+	for _, id := range a.Candidates {
+		set[id] = true
+	}
+	for _, id := range a.Observations {
+		set[id] = true
+	}
+	for _, id := range b.Candidates {
+		if !set[id] {
+			return false
+		}
+	}
+	for _, id := range b.Observations {
+		if !set[id] {
+			return false
+		}
+	}
+	return true
+}

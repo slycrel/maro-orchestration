@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -138,7 +139,7 @@ func TestRegisterRefusesDefects(t *testing.T) {
 }
 
 func TestValidateHeader(t *testing.T) {
-	r := &ThoughtStored{Header: Header{ID: NewID(), Schema: "thought_stored/1", Seq: 1, Subject: Ref{Kind: "thought", ID: "s256v1:00"}, At: time.Now()}}
+	r := &ThoughtStored{Header: Header{ID: NewID(), Schema: "thought_stored/1", Seq: 1, Subject: Ref{Kind: "thought", ID: "s256v1:00"}, At: time.Now()}, Hash: "s256v1:" + strings.Repeat("ab", 32), Thought: "goal", Bytes: 1, Encoding: "utf8"}
 	if err := Validate(r, true); err != nil {
 		t.Fatal(err)
 	}

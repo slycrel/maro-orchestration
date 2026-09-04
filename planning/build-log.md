@@ -359,3 +359,48 @@ ignore observations; closed vocabularies, direction fixed by standing, judge
 needs an invocation, confidence in [0,1], falsifiers closure-only, contested
 never has an effective verdict, foreign resolver version refused; journaled
 resolutions fold and are idempotent per candidate set.
+
+**Review round (Skeptic + Expert QA, codex; 22 findings, verified in the
+tree before fixing).** Every HIGH was real; the fixes:
+
+- *Wire rules never executed* (both lenses, HIGH). `record.Validate` now
+  calls every registered type's `ValidateWire` — so the declared
+  `rejected` rows are executed at both journal doors (submit and recovery)
+  for all 12 kinds, not documented. Cross-cutting: two fixtures in other
+  packages were wire-invalid and had been passing; fixed. Journal-level
+  must-detect added (`TestJournalExecutesDeclaredVocabulary`); mutation
+  (disable the call) kills it and the verdict twin.
+- *Resolve trusted unvalidated inputs* (HIGH). `Resolve` returns an error;
+  candidates are validated first (subject present and uniform, kind uniform,
+  wire-valid, NaN confidence refused, Seq present).
+- *Supersession as an unchecked tombstone* (both, HIGH). The graph is
+  checked: target must be a candidate, the replacement's Seq strictly later,
+  standing never lower. Bad links refuse the whole set (a lane wrote an
+  invalid verdict — that is the defect to surface, not to route around).
+- *Observations applied to unrelated kinds/claims* (both, HIGH). An
+  applicability table (check kind → verdict kinds) attaches observations;
+  refutation names ALL decisive observations (≥ threshold) in `Decisive`,
+  not the first found; an operator verdict still outranks the checks.
+- *Current resolution unwired; overlapping commits* (both). `Current` folds
+  journaled resolutions to the inclusion-maximal one per (subject, kind);
+  incomparable candidate sets are an error, not a silent pick.
+- *Idempotency key* (both, HIGH). Structured key = sha256 of canonical JSON
+  {resolver version, subject, kind, thresholds, candidate IDs, observation
+  IDs}; a replay returns the COMMITTED resolution (read back), never a
+  recomputed one, plus `ErrAlreadyResolved`.
+- *Ties broken by ID / NaN* (both). Agreed maxima with different outcomes ⇒
+  contested with `Effective` empty; `Candidates`/`Decisive` are sorted for
+  canonical output only, never consulted for choice. Test covers Seq
+  renumbering and observation permutations.
+- *Degenerate kinds asserted failure* (QA MEDIUM). Kinds without a failure
+  outcome (`stuck`, `delivery`) resolve to their unknown; `Resolution`'s
+  validator refuses rule/shape contradictions (effective ∉ candidates,
+  contested with an effective, refuted without decisive).
+- *Threshold boundary untested; thresholds unvalidated* (both). Thresholds
+  validated at registration; boundary at exactly `Refute` exercised.
+
+Test count in `internal/verdict` 6 → 10; all with `-race`. Deferred, not
+lost: combining confidences across agreeing candidates (no basis yet);
+the reviewer's "sufficient set" reading of refutation stays a set-of-
+decisive record, threshold on the max — revisit when the sheriff (step 7)
+has live numbers.

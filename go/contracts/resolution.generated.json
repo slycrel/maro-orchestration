@@ -99,6 +99,13 @@
       "is_thought": false
     },
     {
+      "name": "Decisive",
+      "wire": "decisive",
+      "go_type": "[]record.RecordID",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
       "name": "Candidates",
       "wire": "candidates",
       "go_type": "[]record.RecordID",
@@ -116,6 +123,13 @@
       "name": "ResolverVer",
       "wire": "resolver_ver",
       "go_type": "string",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Thresholds",
+      "wire": "thresholds",
+      "go_type": "verdict.Thresholds",
       "omittable": false,
       "is_thought": false
     },
@@ -141,6 +155,6 @@
       "is_thought": false
     }
   ],
-  "source_ref": "d7ac94d7",
+  "source_ref": "edd74e93",
   "generator": "maro-go contracts gen v1"
 }

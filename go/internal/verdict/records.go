@@ -26,6 +26,27 @@ const (
 
 var checks = set(CheckPathExists, CheckSymbolExists, CheckFabricationDiff, CheckReceiptComplete, CheckClaimProbe)
 
+// applicability is the registered table of which verdict kinds a check can
+// settle. An observation joins only those groups; a refutation for one kind
+// never becomes a failure for another.
+var applicability = map[CheckKind][]VerdictKind{
+	CheckPathExists:      {KindClosure, KindProvenance},
+	CheckSymbolExists:    {KindClosure, KindProvenance},
+	CheckClaimProbe:      {KindProvenance},
+	CheckFabricationDiff: {KindFabrication},
+	CheckReceiptComplete: {KindFabrication},
+}
+
+// Applies reports whether a check can settle a verdict kind.
+func Applies(c CheckKind, k VerdictKind) bool {
+	for _, kk := range applicability[c] {
+		if kk == k {
+			return true
+		}
+	}
+	return false
+}
+
 // ObsResult is what a check found. could_not_observe is distinct from
 // refuted: a check that could not run proves nothing either way.
 type ObsResult string
@@ -86,8 +107,8 @@ var outcomes = map[VerdictKind]map[string]bool{
 	KindClosure:     set("achieved", "not_achieved", "unknown"),
 	KindProvenance:  set("grounded", "ungrounded", "unknown"),
 	KindFabrication: set("consistent", "fabricated", "unknown"),
-	KindStuck:       set("stuck", "progressing"),
-	KindDelivery:    set("delivered", "undeliverable"),
+	KindStuck:       set("stuck", "progressing", "unknown"),
+	KindDelivery:    set("delivered", "undeliverable", "unknown"),
 }
 
 var successOutcomes = map[VerdictKind]string{
@@ -99,8 +120,10 @@ var failureOutcome = map[VerdictKind]string{
 	KindClosure: "not_achieved", KindProvenance: "ungrounded", KindFabrication: "fabricated",
 }
 
+// unknownOutcome is what an unresolved, contested, or unpromotable set
+// yields: never a failure the evidence did not establish.
 var unknownOutcome = map[VerdictKind]string{
-	KindStep: "unclear", KindClosure: "unknown", KindProvenance: "unknown", KindFabrication: "unknown",
+	KindStep: "unclear", KindClosure: "unknown", KindProvenance: "unknown", KindFabrication: "unknown", KindStuck: "unknown", KindDelivery: "unknown",
 }
 
 // Standing is who asserted a verdict; it ranks candidates.
@@ -186,17 +209,21 @@ func (r *Verdict) ValidateWire() error {
 }
 
 // Resolution is the effective verdict for (subject, kind) as of a candidate
-// set, with every candidate named and the resolver version and rule that
-// decided it. Effective is empty when the set is contested.
+// set, with every candidate named and the resolver version, thresholds, and
+// rule that decided it. Effective is set only when ONE verdict won on
+// standing; agreed maxima and refutations name their Decisive records
+// instead; contested and unpromotable sets name none.
 type Resolution struct {
 	record.ProductionRecord
 	record.Header `json:"header"`
 	VerdictKind   VerdictKind       `json:"verdict_kind"`
-	Outcome       string            `json:"outcome"`             // the effective outcome (or the kind's unknown when contested/unverified)
-	Effective     record.RecordID   `json:"effective,omitempty"` // the winning verdict, when one wins
+	Outcome       string            `json:"outcome"`
+	Effective     record.RecordID   `json:"effective,omitempty"`
+	Decisive      []record.RecordID `json:"decisive,omitempty"` // agreed peers, or the refuting observations
 	Candidates    []record.RecordID `json:"candidates"`
 	Observations  []record.RecordID `json:"observations,omitempty"`
 	ResolverVer   string            `json:"resolver_ver"`
+	Thresholds    Thresholds        `json:"thresholds"`
 	Rule          string            `json:"rule"`
 	Contested     bool              `json:"contested"`
 	Confidence    float64           `json:"confidence"`
@@ -218,19 +245,66 @@ func (r *Resolution) ValidateWire() error {
 	if r.ResolverVer != ResolverVer {
 		return fmt.Errorf("resolution: resolver %q is not %s", r.ResolverVer, ResolverVer)
 	}
-	if r.Effective != "" {
-		if err := record.ValidateID(r.Effective); err != nil {
-			return err
-		}
+	if err := r.Thresholds.validate(); err != nil {
+		return err
 	}
-	if r.Contested && r.Effective != "" {
-		return fmt.Errorf("resolution: contested with an effective verdict")
+	if err := confidenceOK(r.Confidence); err != nil {
+		return err
 	}
 	if r.Rule == "" {
 		return fmt.Errorf("resolution: no rule")
 	}
-	return confidenceOK(r.Confidence)
+	seen := map[record.RecordID]bool{}
+	for _, id := range append(append([]record.RecordID{}, r.Candidates...), r.Observations...) {
+		if err := record.ValidateID(id); err != nil {
+			return fmt.Errorf("resolution: %w", err)
+		}
+		if seen[id] {
+			return fmt.Errorf("resolution: duplicate id %s", id)
+		}
+		seen[id] = true
+	}
+	inCands := func(id record.RecordID) bool {
+		for _, c := range r.Candidates {
+			if c == id {
+				return true
+			}
+		}
+		return false
+	}
+	if r.Effective != "" && !inCands(r.Effective) {
+		return fmt.Errorf("resolution: effective %s is not a candidate", r.Effective)
+	}
+	for _, d := range r.Decisive {
+		if !seen[d] {
+			return fmt.Errorf("resolution: decisive %s is neither a candidate nor an observation", d)
+		}
+	}
+	rule := r.Rule
+	switch {
+	case r.Contested:
+		if r.Effective != "" || len(r.Decisive) != 0 || r.Outcome != unknownOutcome[r.VerdictKind] || !hasPrefix(rule, "contested:") {
+			return fmt.Errorf("resolution: contested must carry the kind's unknown, no effective, no decisive, rule contested:")
+		}
+	case hasPrefix(rule, "standing:"):
+		if r.Effective == "" || len(r.Candidates) == 0 {
+			return fmt.Errorf("resolution: a standing rule names one effective candidate")
+		}
+	case hasPrefix(rule, "agreed_maxima:"), hasPrefix(rule, "refuted_by_observation:"):
+		if r.Effective != "" || len(r.Decisive) == 0 {
+			return fmt.Errorf("resolution: %s names decisive records and no effective", rule)
+		}
+	case rule == "self_cannot_promote", rule == "no_candidates":
+		if r.Effective != "" || len(r.Decisive) != 0 || r.Outcome != unknownOutcome[r.VerdictKind] {
+			return fmt.Errorf("resolution: %s yields the kind's unknown and names nothing", rule)
+		}
+	default:
+		return fmt.Errorf("resolution: rule %q out of vocabulary", rule)
+	}
+	return nil
 }
+
+func hasPrefix(s, p string) bool { return len(s) >= len(p) && s[:len(p)] == p }
 
 func confidenceOK(c float64) error {
 	if c < 0 || c > 1 || c != c {

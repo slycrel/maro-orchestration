@@ -13,7 +13,7 @@
       "constraint": "defined",
       "pattern": "^(path_exists|symbol_exists|fabrication_diff|receipt_complete|claim_probe)$",
       "rejects": "vibes",
-      "measured_by": "internal/verdict:TestWireValidation"
+      "measured_by": "internal/verdict:TestRefutationSettlesFailure"
     },
     "claim": {
       "absence": "never",

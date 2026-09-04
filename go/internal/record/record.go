@@ -89,6 +89,13 @@ func (h *Header) ValidateWire() error {
 	return nil
 }
 
+// WireValidator is implemented by record types whose declared vocabulary is
+// executable: closed value sets, ranges, cross-field rules. Validate runs it
+// at the ONE boundary every record crosses (journal submit and decode), so a
+// declared "rejected" is enforced at runtime, not only by the reference
+// reader.
+type WireValidator interface{ ValidateWire() error }
+
 // Record is implemented by every durable record type. Envelope() is derived
 // from the registry, not chosen by the record, so a type cannot lie about
 // its population.
@@ -147,6 +154,11 @@ func Validate(r Record, stored bool) error {
 	}
 	if h.At.IsZero() {
 		return errors.New("record: At is zero")
+	}
+	if wv, ok := r.(WireValidator); ok {
+		if err := wv.ValidateWire(); err != nil {
+			return fmt.Errorf("record: %s: wire: %w", kind, err)
+		}
 	}
 	return nil
 }
