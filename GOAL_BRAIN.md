@@ -4287,3 +4287,10 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   queue (note §19). The note gained a one-page vision read on top so the
   approval surface is the commitments and cuts, not the type definitions.
   Phase 2 build step 1 is next (`planning/successor-plan.md` Queue).
+
+- **2026-09-04 (Successor v1 design APPROVED, cuts accepted — Jeremy):** *"go,
+  cuts are fine."* Approves the one-page vision read atop
+  `planning/successor-design-v1.md` (v1.6, `successor`) and the four v1 cuts:
+  fork children query + working-copy writes only, outward mutations
+  parent-committed after selection; fixed-N experiments; subprocess +
+  scripted backends; CLI + intake seam. Phase 2 build step 1 begins.
