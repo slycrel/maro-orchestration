@@ -307,7 +307,14 @@ boundary. Then decide what the successor becomes.
 - **Verification bar.** Behavior tests + one adversarial review pass
   is the default DONE. Batteries, derivation guards, and differential
   sweeps are decree-only upgrades, never the default.
-- **Work queue lives here.** A `## Queue` section below carries
+- **Work queue lives here.** A `## Queue
+
+- **[NEXT] Phase 2 build, step 1** of `successor-design-v1.md` §16 — records,
+  identity, envelopes, thought store, lease, contracts foundation. Design note
+  review CLOSED 2026-09-04 at r7 by Jeremy's call ("Do we really need 7
+  review rounds on our guidance doc...?"); r7 residuals are §19 of the note,
+  picked up at the steps that touch them (2, 3, 8, 10).
+ section below carries
   ordered work with status; each session reads it first, takes the top
   item, updates it. The queue is this doc — no machinery unless the
   doc demonstrably fails at it.

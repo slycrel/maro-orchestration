@@ -2,7 +2,60 @@
 status: living
 ---
 
-# Successor v1 — design note (Phase 2, the whole system) — v1.6
+# Successor v1 — design note (Phase 2, the whole system) — v1.6, review closed
+
+## The one-page vision read (start here; the rest is the how, and it is mine)
+
+**What it is.** One Go process that takes a goal, routes it, plans it, runs
+it through backends, judges what came back, records it, learns from it in a
+way the next run is *measured* against, and tells the user the outcome where
+they asked — and counts "the user didn't hear it" as a failed mission.
+
+**What it holds to (your decrees, in order of how much they shaped it):**
+- *Maro is the thought process; the data flowing through it is the thoughts*
+  (D16). Two populations in the type system. Process artifacts are
+  contract-tested hard. Thoughts are never sliced, never "corrected", never
+  the reason a run ends; when a backend can't take one whole, that's a
+  routing problem, and if nobody can, the engine says so.
+- *Learning changes behavior, measured* (D11, D14). The loop is closed in
+  v1: an item minted from one run is applied in a later one under a real
+  control, an independent evaluator scores it, and a lifecycle transition
+  follows — and then a later run demonstrably behaves differently. Tenure
+  never promotes. The measurement is designed so an interested writer can't
+  forge it.
+- *The bitter lesson lives inside the process* (D17). Mechanisms are data
+  the driver reads; a one-shot beating the harness is a learning that decays
+  a mechanism's standing through the same lifecycle as any lesson. No
+  up-front sort of what ages well.
+- *Targets, never constraints* (D13, D15). Every call is metered; overage is
+  a report; nothing stops on cost. The only stops are outward-act authority
+  and a provider refusing.
+- *One process, not an OS* (D12). Lanes are goroutines under a supervisor;
+  timers live inside; no cron. Whole-process death is external and said so.
+- *Edges are where success and failure live* (D10). One journal, one
+  sequencer, shared-spec ledgers as exact projections; separate workspace
+  roots; the pack carries learning between engines.
+- *Recursion is the shape* (§8.6). Goals are a tree; fork has a durable join;
+  memory is scoped by ancestry; v1 runs one level deep and tests two.
+- *Removal is a deliverable* (§8.9). Every build step starts by subtracting.
+
+**What v1 deliberately does not do:** in-attempt outward mutations inside a
+fork (fork-ineligible goals run sequentially); adaptive stopping in
+experiments (fixed-N only); backends beyond subprocess + scripted;
+interfaces beyond CLI plus the seam; worker isolation (D12, later).
+
+**How it was reviewed.** Seven codex rounds (Architect, Skeptic, Minimalist
+in r1). Rounds 1–2 found real design holes and reshaped the note. Rounds 3–7
+peeled build-time layers off two subsystems and were stopped by your
+question — the plan's rule is one pass; I overran it. Their residue is in
+§19 as build-time items, not blockers. Ledgers: `verdict-r1..7.md` in the
+review directory.
+
+**What you're approving:** the commitments above and the cuts. Everything
+below the line is implementation and changes without ceremony.
+
+---
+
 
 *2026-09-04. Implementation is mine (Jeremy: "implementation, per usual, is
 yours"); this note comes to him as a vision read. Brief = the drift review's
@@ -812,3 +865,17 @@ declaration and a native pack envelope; whole-harness vs `ablate(m)`
 attribution with an equivalence test; anti-lift sentences for subprocess,
 NOW/AGENDA, first_verdict; conformance appendix with honest statuses and
 steps; build order re-sequenced.
+
+## 19. Build-time residuals (from r7; queued, not blocking)
+
+1. `ArtifactManifest` for a unit is derived by a sequencer/projector fold
+   over the attempt's journal interval (ordered record IDs, exposure records,
+   terminal watermark), never authored by the run driver; `UnitEvidence`
+   cites it.
+2. Crash recovery of an experiment at N assignments writes an explicit
+   closure record on next start so the verifier's citation rule holds.
+3. `PreparedEffectIntent` lifecycle as separate records (`adopted`,
+   `dispatched`, `verified|failed|abandoned`), not a field.
+4. Fishing guard: one open experiment per (ItemRev, family); re-opening
+   requires a new protocol version that cites the prior attestation.
+5. `write_local` is its own operation class, distinct from `query`.
