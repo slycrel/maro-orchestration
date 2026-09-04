@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Holistic drift review — where we started, why we're here, what carries forward
 
 *2026-09-04. This is the review Jeremy asked for on 2026-07-17 (MILESTONES -6):
