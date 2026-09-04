@@ -1128,3 +1128,58 @@ heartbeat record is committed. Test now waits on the journal.
 Tests: tail +2 (unreadable evidence; agenda after the tail's receipt),
 forgeries +8, journal +1; 15 packages green under `-race`; contracts 38
 kinds, 0 errors / 0 warnings.
+
+## Step 10a — the policy apply surface: mechanisms as data at one boundary (2026-09-05)
+
+Step 10 lands in two halves. This half is the second apply surface §7
+names, built first because the experiment half needs a thing to ablate.
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| `policy` learned kind, versioned data consumed at ONE driver boundary | §7, D17 | kept: a `learned_revision` of kind `policy` carries a declared `PolicyRule{mechanism, enabled}` as a record field, not a thought (D16: process data is contract-tested; an unknown mechanism is refused at the door). `text` is now omitted for policies |
+| Mechanism vocabulary | §7 "which mechanisms are enabled, decomposition depth, judge configuration" | **cut to two in v1**: `recall` (recall injection) and `model_judge` (AGENDA's separate judge backend). Decomposition depth and intent-check toggles would reach into the AGENDA loop's fold rules; they arrive when an `ablate(m)` experiment (step 11) needs them, not before |
+| `PolicySelection{Run, Considered, Enabled, Basis}` | §7 | kept, plus `Snapshot` (defaults, then each enabled rule in item order) so the record says what the attempt ran with, not only who decided |
+| `PolicyApplication{Item, Revision, Run, Snapshot}` | §7 | kept with `Selection` + `Rule` in place of `Run` + `Snapshot`: the proof cites the selection whose snapshot it contributed to; one per enabled revision, same command |
+| "consumed at one policy boundary in the driver" | §7 | kept: the selection is folded and committed IN the attempt's command (attempt, created, selection, applications — atomic, so no attempt exists without its policy); `Config.Policy` and `Config.Mechanisms` on the attempt; two consumers — `Driver.judge(a)` and the recall query's `Off` |
+| Policy-selection fold as versioned data over item effect | §7, §8a | the fold half is here (selectable ⇒ enabled); the item-effect half (`item_redundant` → tombstone → disabled) is 10b |
+| Tenure/expiry over policy revisions | §7 | kept: `Exposures` (applications + policy applications, Seq order) replace applications in the tenure rule and `LastActivity` |
+
+**Built.** `internal/learn/policy.go` — kinds `policy_selection`,
+`policy_application` (registry at 40; contracts 0/0); `Mechanism`,
+`Mechanisms` (defaults on), `PolicyRule`; `SelectPolicy` (pure; item
+order; `Basis` = the transition that made each enabled revision
+selectable); fold re-derives every selection, requires exactly one
+application per enabled revision carrying that revision's rule, and
+refuses a recall selection that does not obey its attempt's policy
+(`Query.Off` → every item excluded `policy:recall_off`; a continuation
+across a recall-policy change is refused). `run`: `ConfigSnapshot.Policy`
++ `.Mechanisms` (the door requires the whole vocabulary; with
+`model_judge` off the judge backend must be the executor); `Driver.policy`
+in the attempt command; `Driver.judge(a)`; the recall query reads the
+snapshot; `run.Fold` refuses a config that disagrees with its selection;
+`ReplayKey` clears the selection id (identity) and keeps the snapshot
+(input). `maro-go learn add --policy <mechanism>=on|off`; `learn list`
+shows the rule.
+
+**Edge tests.** `learn`: door (policy with text, unknown mechanism, lesson
+with a rule); candidate policy considered-not-enabled → defaults;
+restamped → enabled with the transition as basis, snapshot flips, one
+application, one exposure; recall under `recall=off` considers everything
+and excludes it all by policy; a recall claiming the lesson under
+recall-off, and a continuation across a policy change, refused; forged
+policies (snapshot that does not re-derive, candidate enabled, application
+for a non-enabled revision, foreign rule, enabled-but-not-applied, two
+selections for one attempt, wrong standing). `run`: a candidate policy
+changes nothing; a provisional `recall=off` makes the request the goal
+alone with no application and the selection saying why; a provisional
+`model_judge=off` runs all seven AGENDA calls on the executor, tool-less,
+with the snapshot naming it; a forged config disagreeing with its
+selection is refused.
+
+**Live.** Scratch workspace: `learn add --policy recall=off`, staged
+provisional; `now --model haiku` on a factual question answered normally;
+the journal holds one `policy_selection` with `{"model_judge":true,
+"recall":false}`, the recall selection with `"policy:recall_off":2`, and
+zero applications.

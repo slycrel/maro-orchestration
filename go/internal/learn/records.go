@@ -138,7 +138,8 @@ type LearnedRevision struct {
 	LearnedKind   LearnedKind     `json:"kind"`
 	Scope         ScopePath       `json:"scope"`
 	Family        string          `json:"family,omitempty"` // a FamilyKey; empty = any family
-	Text          thought.Ref     `json:"text"`
+	Text          thought.Ref     `json:"text,omitempty"`   // a lesson's whole text (lesson_text thought)
+	Policy        *PolicyRule     `json:"policy,omitempty"` // a policy's rule: process data, declared, never a thought
 	Provenance    Provenance      `json:"provenance"`
 }
 
@@ -165,14 +166,27 @@ func (r *LearnedRevision) ValidateWire() error {
 	if err := validScope(r.Scope); err != nil {
 		return fmt.Errorf("learned_revision: %w", err)
 	}
-	if err := r.Text.Validate(); err != nil {
-		return fmt.Errorf("learned_revision: text: %w", err)
-	}
-	if r.Text.Kind != thought.LessonText {
-		return fmt.Errorf("learned_revision: text must be a lesson_text thought, got %q", r.Text.Kind)
-	}
-	if r.Text.Bytes == 0 {
-		return errors.New("learned_revision: text is empty")
+	switch r.LearnedKind {
+	case Lesson:
+		if r.Policy != nil {
+			return errors.New("learned_revision: a lesson carries text, not a policy rule")
+		}
+		if err := r.Text.Validate(); err != nil {
+			return fmt.Errorf("learned_revision: text: %w", err)
+		}
+		if r.Text.Kind != thought.LessonText {
+			return fmt.Errorf("learned_revision: text must be a lesson_text thought, got %q", r.Text.Kind)
+		}
+		if r.Text.Bytes == 0 {
+			return errors.New("learned_revision: text is empty")
+		}
+	case Policy:
+		if r.Text != (thought.Ref{}) {
+			return errors.New("learned_revision: a policy carries its rule, not text")
+		}
+		if err := r.Policy.validate(); err != nil {
+			return fmt.Errorf("learned_revision: policy: %w", err)
+		}
 	}
 	if !sources[r.Provenance.Source] {
 		return fmt.Errorf("learned_revision: provenance source %q out of vocabulary", r.Provenance.Source)
@@ -303,14 +317,25 @@ const TenureBound = 3
 const ExpiryIdle = 30 * 24 * time.Hour
 
 // LastActivity is a revision's last application, else its own birth.
-func LastActivity(rev *LearnedRevision, apps []*Application) time.Time {
+func LastActivity(rev *LearnedRevision, exps []Exposure) time.Time {
 	last := rev.At
-	for _, a := range apps {
-		if a.At.After(last) {
-			last = a.At
+	for _, e := range exps {
+		if e.At.After(last) {
+			last = e.At
 		}
 	}
 	return last
+}
+
+// Exposure is one proof that a revision reached a run: an application (a
+// lesson in a request) or a policy application (a policy at the boundary).
+// Tenure and expiry count both — a policy revision is "used" when an
+// attempt ran under it.
+type Exposure struct {
+	ID       record.RecordID
+	Revision record.RecordID
+	Seq      uint64
+	At       time.Time
 }
 
 // tenureLegal are the edges tenure may take: candidate→observed, and
@@ -340,6 +365,10 @@ type RecallSelection struct {
 	// ledger that may have moved (§5a). The fold checks equality with it
 	// instead of recomputing.
 	Continues record.RecordID `json:"continues,omitempty"`
+	// Policy names the attempt's policy selection this recall obeyed: with
+	// MechRecall off every item is excluded (reason policy:recall_off) and
+	// the request is the goal alone.
+	Policy record.RecordID `json:"policy"`
 }
 
 // SampleK bounds the exclusion projection (§14: counts by reason + a
@@ -403,6 +432,9 @@ func (r *RecallSelection) ValidateWire() error {
 			return fmt.Errorf("recall_selection: continues: %w", err)
 		}
 	}
+	if err := record.ValidateID(r.Policy); err != nil {
+		return fmt.Errorf("recall_selection: policy: %w", err)
+	}
 	for i := 1; i < len(r.Included); i++ {
 		if r.Included[i-1].Item >= r.Included[i].Item {
 			return errors.New("recall_selection: included is not in item order")
@@ -429,6 +461,12 @@ func init() {
 	reg(KindApplication, Application{}, "the driver, after the invocation the lesson was rendered into exists",
 		"run.Fold (applications equal the recall's included set); exposure (ArmObservation, step 10)",
 		"proof that a revision reached a request: its representation is in the request hash")
+	reg(KindPolicySelection, PolicySelection{}, "the driver, in the attempt's own command (step 10)",
+		"learn.Fold (re-derives it); run.Fold (the attempt's config snapshot equals it); operators (why is mechanism X off)",
+		"which mechanisms this attempt runs with, and which policy revisions decided it")
+	reg(KindPolicyApplication, PolicyApplication{}, "the driver, with the selection that enabled the revision (step 10)",
+		"learn.Fold (one per enabled revision; exposure for tenure/expiry); evaluation of exposure (step 10)",
+		"proof that a policy revision reached the boundary: its rule was in the snapshot")
 	reg(KindRecall, RecallSelection{}, "the driver, before every recall-bearing invocation",
 		"the driver on resume (re-derive applications for a reused invocation); operators (why was X not recalled); evaluation of exposure (step 10)",
 		"which revisions reached the request, in what order, and why the rest did not")

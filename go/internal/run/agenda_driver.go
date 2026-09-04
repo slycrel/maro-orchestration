@@ -51,7 +51,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 	}
 	// Recall — one selection per attempt, continued from the recovered one
 	var continues *learn.RecallSelection
-	if prev != nil && prev.Recall != nil {
+	if prev != nil && prev.Recall != nil && d.sameRecallPolicy(rs, prev, n) {
 		continues = prev.Recall
 	}
 	sel, block, reps, err := d.recall(ctx, rs, n, continues)
@@ -68,7 +68,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 	invoke_ := func(purpose invoke.Purpose, prompt []byte, withBlock bool, tools bool) (*invoke.Outcome, []byte, error) {
 		b := d.Backend
 		if !tools {
-			b = d.Judge
+			b = d.judge(a)
 		}
 		sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n, CrashAt: strings.TrimPrefix(d.CrashAt, "invoke:")}
 		if !strings.HasPrefix(d.CrashAt, "invoke:") {

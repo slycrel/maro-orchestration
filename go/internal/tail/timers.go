@@ -77,13 +77,6 @@ func (t *Timers) Sweep(ctx context.Context) (uint64, error) {
 		return 0, err
 	}
 	tenure, expire := learn.TenureBound, learn.ExpiryIdle
-	// applications per revision, newest first
-	byRev := map[record.RecordID][]*learn.Application{}
-	for _, apps := range led.Applications {
-		for _, a := range apps {
-			byRev[a.Revision] = append(byRev[a.Revision], a)
-		}
-	}
 	ids := make([]string, 0, len(led.Items))
 	for id := range led.Items {
 		ids = append(ids, string(id))
@@ -93,16 +86,15 @@ func (t *Timers) Sweep(ctx context.Context) (uint64, error) {
 		it := led.Items[learn.LearnedID(id)]
 		cur := it.Current
 		stage := it.StageOf(cur.ID)
-		apps := byRev[cur.ID]
-		sort.Slice(apps, func(i, j int) bool { return apps[i].Seq < apps[j].Seq })
+		exps := led.Exposures[cur.ID] // applications + policy applications, Seq order
 		switch {
-		case stage == learn.Candidate && len(apps) >= tenure:
-			ev := apps[tenure-1]
-			if err := t.transition(ctx, it, cur, learn.Observed, ev.ID, fmt.Sprintf("tenure: %d applications (bound %d)", len(apps), tenure)); err != nil {
+		case stage == learn.Candidate && len(exps) >= tenure:
+			ev := exps[tenure-1]
+			if err := t.transition(ctx, it, cur, learn.Observed, ev.ID, fmt.Sprintf("tenure: %d exposures (bound %d)", len(exps), tenure)); err != nil {
 				return 0, err
 			}
-		case (stage == learn.Candidate || stage == learn.Observed) && t.now().Sub(learn.LastActivity(cur, apps)) > expire:
-			if err := t.transition(ctx, it, cur, learn.Tombstone, cur.ID, fmt.Sprintf("expiry: no application in %s", expire)); err != nil {
+		case (stage == learn.Candidate || stage == learn.Observed) && t.now().Sub(learn.LastActivity(cur, exps)) > expire:
+			if err := t.transition(ctx, it, cur, learn.Tombstone, cur.ID, fmt.Sprintf("expiry: no exposure in %s", expire)); err != nil {
 				return 0, err
 			}
 		}

@@ -1,0 +1,65 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "policy_selection",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/learn:TestPolicyIsDataAtTheBoundary",
+  "fields": {
+    "scope": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/learn:TestPolicyIsDataAtTheBoundary"
+    },
+    "family": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "routing",
+      "constraint": "unconstrained",
+      "unknown_value": "accepted-unchanged",
+      "measured_by": "internal/learn:TestPolicyIsDataAtTheBoundary"
+    },
+    "standing": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^\\[(\"(candidate|observed|provisional|effective|canon|contested|quarantined|tombstone)\",?)*\\]$",
+      "rejects": "[\"golden\"]",
+      "measured_by": "internal/learn:TestFoldRefusesForgedPolicies"
+    },
+    "considered": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/learn:TestFoldRefusesForgedPolicies"
+    },
+    "enabled": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/learn:TestFoldRefusesForgedPolicies"
+    },
+    "basis": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/learn:TestFoldRefusesForgedPolicies"
+    },
+    "snapshot": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^\\{(\"(recall|model_judge)\":(true|false),?)*\\}$",
+      "rejects": "{\"teleport\":true}",
+      "measured_by": "internal/learn:TestPolicyIsDataAtTheBoundary"
+    }
+  }
+}

@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "diagnosis",
+  "kind": "policy_application",
   "envelope": "production",
-  "schema": "diagnosis/1",
-  "go_type": "tail.Diagnosis",
+  "schema": "policy_application/1",
+  "go_type": "learn.PolicyApplication",
   "fields": [
     {
       "name": "header.ID",
@@ -78,37 +78,30 @@
       "from_header": true
     },
     {
-      "name": "Signals",
-      "wire": "signals",
-      "go_type": "[]tail.Signal",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Class",
-      "wire": "class",
-      "go_type": "tail.FailureClass",
+      "name": "Item",
+      "wire": "item",
+      "go_type": "learn.LearnedID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Why",
-      "wire": "why",
-      "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Lens",
-      "wire": "lens",
+      "name": "Revision",
+      "wire": "revision",
       "go_type": "record.RecordID",
-      "omittable": true,
+      "omittable": false,
       "is_thought": false
     },
     {
-      "name": "LensRule",
-      "wire": "lens_rule",
-      "go_type": "string",
+      "name": "Selection",
+      "wire": "selection",
+      "go_type": "record.RecordID",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Rule",
+      "wire": "rule",
+      "go_type": "learn.PolicyRule",
       "omittable": false,
       "is_thought": false
     }

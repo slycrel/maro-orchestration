@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
+	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 )
@@ -185,6 +186,11 @@ type ConfigSnapshot struct {
 	FamilyRule      string              `json:"family_rule"`
 	ResolverVer     string              `json:"resolver_ver"`
 	Confined        bool                `json:"confined,omitempty"` // every invocation tool-less (a fork child)
+	// Policy is the attempt's policy selection (same command as the
+	// attempt); Mechanisms is its snapshot, copied here so the attempt's
+	// config is complete on its own record. The fold checks equality.
+	Policy     record.RecordID          `json:"policy"`
+	Mechanisms map[learn.Mechanism]bool `json:"mechanisms"`
 }
 
 // RunAttempt starts an attempt generation of a goal. Attempt 1 is the first
@@ -231,6 +237,20 @@ func (r *RunAttempt) ValidateWire() error {
 	}
 	if r.Config.Backend.Name == "" {
 		return errors.New("run_attempt: backend snapshot has no name")
+	}
+	if err := record.ValidateID(r.Config.Policy); err != nil {
+		return fmt.Errorf("run_attempt: policy: %w", err)
+	}
+	if len(r.Config.Mechanisms) != len(learn.Mechanisms) {
+		return fmt.Errorf("run_attempt: config names %d mechanisms, the vocabulary has %d", len(r.Config.Mechanisms), len(learn.Mechanisms))
+	}
+	for m := range r.Config.Mechanisms {
+		if _, ok := learn.Mechanisms[m]; !ok {
+			return fmt.Errorf("run_attempt: mechanism %q out of vocabulary", m)
+		}
+	}
+	if !r.Config.Mechanisms[learn.MechModelJudge] && r.Config.Judge == JudgeModel && r.Config.JudgeBackend != r.Config.Backend {
+		return errors.New("run_attempt: with model_judge off, judgments run on the executor backend")
 	}
 	if (r.Attempt == 1) != (r.RecoversFrom == 0) {
 		return errors.New("run_attempt: attempt 1 recovers from nothing; later attempts name what they recover from")

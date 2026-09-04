@@ -176,7 +176,7 @@ func TestNowRunDeliversAndRecords(t *testing.T) {
 		}
 		stages = append(stages, e.Stage)
 	}
-	if got := strings.Join(stages, " "); got != "intake attempt executing recall execute judged recorded prepared presented delivered" {
+	if got := strings.Join(stages, " "); got != "intake policy attempt executing recall execute judged recorded prepared presented delivered" {
 		t.Fatalf("events: %s", got)
 	}
 	m := MissionOf(rs)
@@ -507,7 +507,7 @@ func TestJournalExecutesRunVocabulary(t *testing.T) {
 		return &Goal{Header: record.Header{ID: gid, Schema: "goal/1", Subject: record.Ref{Kind: "goal", ID: string(gid)}, At: time.Now().UTC()}, Root: gid, Text: goalRef, Origin: OriginCLI, Lane: LaneNow, Delivery: DeliveryPolicy{Required: TransportAccepted}}
 	}
 	goodAttempt := func() *RunAttempt {
-		x := &RunAttempt{Header: hd(runRef(run)), Goal: gid, Family: record.NewID(), Config: ConfigSnapshot{Lane: LaneNow, Backend: toolless, Judge: JudgeSelf, PlanCardinality: 1}}
+		x := &RunAttempt{Header: hd(runRef(run)), Goal: gid, Family: record.NewID(), Config: ConfigSnapshot{Lane: LaneNow, Backend: toolless, Judge: JudgeSelf, PlanCardinality: 1, Policy: record.NewID(), Mechanisms: learn.Defaults()}}
 		x.Schema = "run_attempt/1"
 		return x
 	}
@@ -1283,9 +1283,8 @@ func TestScopeAndPolicyAreHonored(t *testing.T) {
 	ref, _ := h.st.Put(thought.LessonText, []byte("only for the first goal"))
 	item := learn.LearnedID(record.NewID())
 	r := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()}, Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeGoal(rep.Goal), Text: ref, Provenance: learn.Provenance{Source: "operator", Why: "test"}}
-	pref, _ := h.st.Put(thought.LessonText, []byte("a policy: judge twice"))
 	pitem := learn.LearnedID(record.NewID())
-	p := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(pitem)}, At: time.Now().UTC()}, Item: pitem, LearnedKind: learn.Policy, Scope: learn.ScopeWorkspace, Text: pref, Provenance: learn.Provenance{Source: "operator", Why: "test"}}
+	p := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(pitem)}, At: time.Now().UTC()}, Item: pitem, LearnedKind: learn.Policy, Scope: learn.ScopeWorkspace, Policy: &learn.PolicyRule{Mechanism: learn.MechModelJudge, Enabled: true}, Provenance: learn.Provenance{Source: "operator", Why: "test"}}
 	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "scoped", Epoch: h.j.Epoch(), Records: []record.Record{r, p}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1344,5 +1343,111 @@ func TestSubprocessReceivesGoalAndRecall(t *testing.T) {
 	want := h.requestOf(t, h.only().Latest())
 	if !bytes.Equal(got, want) || !bytes.HasPrefix(got, []byte("Capital of France?\n\n## Recalled lessons\n- Answer in one word.\n")) {
 		t.Fatalf("subprocess stdin:\n%q\nrequest thought:\n%q", got, want)
+	}
+}
+
+func (h *harness) policy(t *testing.T, mech learn.Mechanism, enabled bool, stage learn.Stage) learn.ItemRev {
+	t.Helper()
+	item := learn.LearnedID(record.NewID())
+	r := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()}, Item: item, LearnedKind: learn.Policy, Scope: learn.ScopeWorkspace, Policy: &learn.PolicyRule{Mechanism: mech, Enabled: enabled}, Provenance: learn.Provenance{Source: "operator", Why: "test"}}
+	recs := []record.Record{r}
+	if stage != learn.Candidate {
+		recs = append(recs, &learn.LifecycleTransition{Header: record.Header{ID: record.NewID(), Schema: "learned_transition/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()}, Item: item, Revision: r.ID, From: learn.Candidate, To: stage, Actor: learn.ActorOperator, Why: "test"})
+	}
+	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "policy/" + string(item), Epoch: h.j.Epoch(), Records: recs}); err != nil {
+		t.Fatal(err)
+	}
+	return learn.ItemRev{Item: item, Revision: r.ID}
+}
+
+// The policy boundary (§7, D17): mechanisms are data the driver reads at
+// the start of an attempt. A selectable `recall=off` policy makes the
+// request the goal alone (no application, the recall selection says why),
+// with a policy_application as the proof; a candidate policy changes
+// nothing. A selectable `model_judge=off` policy runs AGENDA's judgments
+// on the executor backend, and the attempt's snapshot says so. A config
+// snapshot that disagrees with its policy selection is refused by the
+// fold.
+func TestPolicyBoundaryIsConsumed(t *testing.T) {
+	h := open(t)
+	h.lesson(t, "Cite sources.", learn.Effective)
+	off := h.policy(t, learn.MechRecall, false, learn.Candidate)
+	d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("42")}), nil)
+	if _, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	a := h.only().Latest()
+	if !bytes.Contains(h.requestOf(t, a), []byte("Cite sources.")) || len(a.Recall.Included) != 1 || len(a.Policy.Considered) != 1 || len(a.Policy.Enabled) != 0 || !a.Attempt.Config.Mechanisms[learn.MechRecall] {
+		t.Fatalf("candidate policy changed the attempt: recall %+v policy %+v", a.Recall, a.Policy)
+	}
+	h.stage(t, off, learn.Candidate, learn.Provisional)
+	d = h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("42")}), nil)
+	if _, err := d.Run(ctxBg, []byte("q again?"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	led := h.ledger()
+	var rs *RunState
+	for _, r := range led.Runs {
+		if rs == nil || r.Goal.Seq > rs.Goal.Seq {
+			rs = r
+		}
+	}
+	a = rs.Latest()
+	if got := h.requestOf(t, a); string(got) != "q again?" {
+		t.Fatalf("request under recall=off: %q", got)
+	}
+	if a.Attempt.Config.Mechanisms[learn.MechRecall] || a.Attempt.Config.Policy != a.Policy.ID || len(a.Policy.Enabled) != 1 || a.Policy.Enabled[0] != off {
+		t.Fatalf("config %+v policy %+v", a.Attempt.Config, a.Policy)
+	}
+	if len(a.Recall.Included) != 0 || a.Recall.ExcludedCounts["policy:recall_off"] != 2 || a.Recall.Policy != a.Policy.ID {
+		t.Fatalf("recall under recall=off: %+v", a.Recall)
+	}
+	if apps := led.Learned.PolicyApps[a.Policy.ID]; len(apps) != 1 || apps[0].Revision != off.Revision || !apps[0].Rule.Enabled == false && apps[0].Rule.Mechanism != learn.MechRecall {
+		t.Fatalf("policy application: %+v", apps)
+	}
+	for _, st := range a.Invocations {
+		if len(led.Learned.Applications[st.Invocation.ID]) != 0 {
+			t.Fatalf("an application under recall=off: %+v", led.Learned.Applications[st.Invocation.ID])
+		}
+	}
+	// model_judge=off: every AGENDA call runs on the executor, in order
+	h2 := open(t)
+	h2.policy(t, learn.MechModelJudge, false, learn.Provisional)
+	exec, judge := agendaBackends([]string{intentClear, planTwo, "Collected 12 rows", judgeDone, "Summary written", judgeDone, closureYes}, nil)
+	d2 := h2.agenda(exec, judge)
+	rep, err := d2.Run(ctxBg, []byte("Summarize the quarterly numbers into a short report"), DeliveryPolicy{Required: TransportAccepted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2 := h2.only().Latest()
+	if rep.Mission.Closure != "achieved" || len(exec.Seen) != 7 || len(judge.Seen) != 0 || a2.Attempt.Config.Mechanisms[learn.MechModelJudge] || a2.Attempt.Config.JudgeBackend.Name != "scripted-exec" || a2.Attempt.Config.Judge != JudgeModel {
+		t.Fatalf("model_judge=off: exec %d judge %d config %+v", len(exec.Seen), len(judge.Seen), a2.Attempt.Config)
+	}
+	for _, st := range a2.Invocations {
+		if st.Invocation.Backend.Name != "scripted-exec" || st.Invocation.Tools {
+			t.Fatalf("invocation %s ran on %s tools=%v", st.Invocation.Purpose, st.Invocation.Backend.Name, st.Invocation.Tools)
+		}
+	}
+	// forged: an attempt whose config disagrees with its policy selection
+	h3 := open(t)
+	ref, _ := h3.st.Put(thought.Goal, []byte("q?"))
+	goal, fam := Intake([]byte("q?"), ref, OriginCLI, LaneNow, DeliveryPolicy{Required: TransportAccepted})
+	if _, err := h3.j.Submit(ctxBg, journal.Command{IdempotencyKey: "goal", Epoch: h3.j.Epoch(), Records: []record.Record{goal, fam}}); err != nil {
+		t.Fatal(err)
+	}
+	run := record.RunID(record.NewID())
+	lled, _ := learn.Fold(h3.j.Production())
+	pol := learn.SelectPolicy(lled, learn.Query{Scope: scope(goal), Standing: learn.Selectable})
+	pol.Header = header(runRef(run), run, 1, "policy_selection/1")
+	d3 := h3.driver(scripted(toolless), nil)
+	d3.validate()
+	cfg := d3.config(LaneNow, pol)
+	cfg.Mechanisms[learn.MechRecall] = false // the snapshot says on
+	att := &RunAttempt{Header: header(runRef(run), run, 1, "run_attempt/1"), Goal: goal.ID, Family: fam.ID, Config: cfg}
+	if _, err := h3.j.Submit(ctxBg, journal.Command{IdempotencyKey: "forged", Epoch: h3.j.Epoch(), Records: []record.Record{pol, att, &Transition{Header: header(runRef(run), run, 1, "run_transition/1"), To: Created}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fold(h3.j.Production(), h3.st); err == nil || !strings.Contains(err.Error(), "config says recall=false") {
+		t.Fatalf("forged config folded: %v", err)
 	}
 }

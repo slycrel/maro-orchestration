@@ -78,6 +78,13 @@
       "used_for": "identity",
       "constraint": "unconstrained",
       "measured_by": "internal/run:TestRecoveredAttemptContinuesItsSelection"
+    },
+    "policy": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/learn:TestPolicyIsDataAtTheBoundary"
     }
   }
 }

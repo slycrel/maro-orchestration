@@ -82,6 +82,7 @@ type AttemptState struct {
 	Delivery    *Delivery     // at most one per attempt
 	Invocations []*invoke.State
 	Recall      *learn.RecallSelection // the attempt's recall selection, when it reached that stage
+	Policy      *learn.PolicySelection // the attempt's policy selection (always: same command as the attempt)
 	Stuck       *verdict.Resolution    // the sheriff's stuck resolution, when one exists
 	// AGENDA stages, as committed
 	Intent *IntentAssessment
@@ -476,7 +477,22 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if x.Attempt > 1 && rs.Attempts[x.Attempt-2].Current() != Recoverable {
 				return fmt.Errorf("run: %s attempt %d started but attempt %d is at %q, not recoverable", x.RunID, x.Attempt, x.Attempt-1, rs.Attempts[x.Attempt-2].Current())
 			}
-			a := &AttemptState{Attempt: x, Recall: learned.Recalls[learn.RecallKey(x.RunID, x.Attempt)]}
+			// the policy boundary: the attempt's config carries exactly the
+			// policy selection committed with it (same command), and the
+			// judge backend follows the snapshot
+			pol := learned.Policies[learn.PolicyKey(x.RunID, x.Attempt)]
+			if pol == nil || pol.ID != x.Config.Policy {
+				return fmt.Errorf("run: %s attempt %d names policy selection %s, which is not the attempt's", x.RunID, x.Attempt, x.Config.Policy)
+			}
+			if len(pol.Snapshot) != len(x.Config.Mechanisms) {
+				return fmt.Errorf("run: %s attempt %d config mechanisms disagree with its policy selection", x.RunID, x.Attempt)
+			}
+			for m, on := range pol.Snapshot {
+				if x.Config.Mechanisms[m] != on {
+					return fmt.Errorf("run: %s attempt %d config says %s=%v, its policy selection says %v", x.RunID, x.Attempt, m, x.Config.Mechanisms[m], on)
+				}
+			}
+			a := &AttemptState{Attempt: x, Recall: learned.Recalls[learn.RecallKey(x.RunID, x.Attempt)], Policy: pol}
 			if x.Attempt > 1 {
 				// a recovered attempt starts from the last committed idempotent
 				// stage: the earlier attempt's intent, plan, and done steps are
@@ -1198,14 +1214,17 @@ func ReplayKey(rs *RunState, a *AttemptState) (string, error) {
 			included = p.Recall.Included
 		}
 	}
-	// inputs only: the outcome is what a replay compares, not what names it
+	// inputs only: the outcome is what a replay compares, not what names it;
+	// the policy selection's id is identity, its snapshot is the input
+	cfg := a.Attempt.Config
+	cfg.Policy = ""
 	raw, err := json.Marshal(struct {
 		Ver      string          `json:"ver"`
 		Goal     string          `json:"goal"`
 		Config   ConfigSnapshot  `json:"config"`
 		Included []learn.ItemRev `json:"included"`
 		Request  string          `json:"request"`
-	}{"replay/1", rs.Goal.Text.Hash, a.Attempt.Config, included, request})
+	}{"replay/1", rs.Goal.Text.Hash, cfg, included, request})
 	if err != nil {
 		return "", err
 	}

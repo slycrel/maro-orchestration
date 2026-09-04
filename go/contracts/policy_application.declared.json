@@ -1,0 +1,40 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "policy_application",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/learn:TestPolicyIsDataAtTheBoundary",
+  "fields": {
+    "item": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/learn:TestFoldRefusesForgedPolicies"
+    },
+    "revision": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/learn:TestFoldRefusesForgedPolicies"
+    },
+    "selection": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/learn:TestFoldRefusesForgedPolicies"
+    },
+    "rule": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "\"mechanism\":\"(recall|model_judge)\"",
+      "rejects": "{\"mechanism\":\"teleport\",\"enabled\":true}",
+      "measured_by": "internal/learn:TestPolicyIsDataAtTheBoundary"
+    }
+  }
+}

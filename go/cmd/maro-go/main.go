@@ -453,10 +453,15 @@ func cmdLearn(args []string, out io.Writer) error {
 		}
 		switch args[0] {
 		case "add":
-			scope, family := learn.ScopeWorkspace, ""
+			scope, family, policy := learn.ScopeWorkspace, "", ""
 			var text []string
 			for i := 1; i < len(args); i++ {
 				switch args[i] {
+				case "--policy":
+					i++
+					if i < len(args) {
+						policy = args[i]
+					}
 				case "--scope":
 					i++
 					if i < len(args) {
@@ -471,21 +476,31 @@ func cmdLearn(args []string, out io.Writer) error {
 					text = append(text, args[i])
 				}
 			}
-			body := strings.TrimSpace(strings.Join(text, " "))
-			if body == "" {
-				return fmt.Errorf("learn add needs the lesson text")
-			}
-			ref, err := st.Put(thought.LessonText, []byte(body))
-			if err != nil {
-				return err
-			}
 			item := learn.LearnedID(record.NewID())
 			r := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()},
-				Item: item, LearnedKind: learn.Lesson, Scope: scope, Family: family, Text: ref, Provenance: learn.Provenance{Source: "operator", Why: "maro-go learn add"}}
+				Item: item, LearnedKind: learn.Lesson, Scope: scope, Family: family, Provenance: learn.Provenance{Source: "operator", Why: "maro-go learn add"}}
+			body := strings.TrimSpace(strings.Join(text, " "))
+			switch {
+			case policy != "":
+				// a policy is data, not text: --policy <mechanism>=on|off
+				mech, state, ok := strings.Cut(policy, "=")
+				if !ok || (state != "on" && state != "off") || body != "" {
+					return fmt.Errorf("learn add --policy <mechanism>=on|off (no text)")
+				}
+				r.LearnedKind, r.Policy = learn.Policy, &learn.PolicyRule{Mechanism: learn.Mechanism(mech), Enabled: state == "on"}
+			case body == "":
+				return fmt.Errorf("learn add needs the lesson text (or --policy)")
+			default:
+				ref, err := st.Put(thought.LessonText, []byte(body))
+				if err != nil {
+					return err
+				}
+				r.Text = ref
+			}
 			if _, err := j.Submit(context.Background(), journal.Command{IdempotencyKey: "learn/add/" + string(item), Epoch: j.Epoch(), Records: []record.Record{r}}); err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "added %s revision %s at candidate (scope %s)\n", item, r.ID, scope)
+			fmt.Fprintf(out, "added %s %s revision %s at candidate (scope %s)\n", r.LearnedKind, item, r.ID, scope)
 			return nil
 		case "stage":
 			if len(args) < 3 {
@@ -520,7 +535,12 @@ func cmdLearn(args []string, out io.Writer) error {
 			sort.Strings(ids)
 			for _, id := range ids {
 				it := led.Items[learn.LearnedID(id)]
-				body, _ := st.Get(it.Current.Text)
+				var body []byte
+				if it.Current.LearnedKind == learn.Policy {
+					body = []byte(fmt.Sprintf("%s=%v", it.Current.Policy.Mechanism, it.Current.Policy.Enabled))
+				} else {
+					body, _ = st.Get(it.Current.Text)
+				}
 				fmt.Fprintf(out, "%s  rev %d/%s  %-11s  %-9s scope=%s family=%q  %s\n", id, len(it.Revisions), it.Current.ID, it.StageOf(it.Current.ID), it.Current.LearnedKind, it.Current.Scope, it.Current.Family, string(body))
 			}
 			return nil

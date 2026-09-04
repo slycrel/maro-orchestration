@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "diagnosis",
+  "kind": "policy_selection",
   "envelope": "production",
-  "schema": "diagnosis/1",
-  "go_type": "tail.Diagnosis",
+  "schema": "policy_selection/1",
+  "go_type": "learn.PolicySelection",
   "fields": [
     {
       "name": "header.ID",
@@ -78,38 +78,52 @@
       "from_header": true
     },
     {
-      "name": "Signals",
-      "wire": "signals",
-      "go_type": "[]tail.Signal",
+      "name": "Scope",
+      "wire": "scope",
+      "go_type": "[]learn.ScopePath",
       "omittable": true,
       "is_thought": false
     },
     {
-      "name": "Class",
-      "wire": "class",
-      "go_type": "tail.FailureClass",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Why",
-      "wire": "why",
+      "name": "Family",
+      "wire": "family",
       "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Lens",
-      "wire": "lens",
-      "go_type": "record.RecordID",
       "omittable": true,
       "is_thought": false
     },
     {
-      "name": "LensRule",
-      "wire": "lens_rule",
-      "go_type": "string",
-      "omittable": false,
+      "name": "Standing",
+      "wire": "standing",
+      "go_type": "[]learn.Stage",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Considered",
+      "wire": "considered",
+      "go_type": "[]learn.ItemRev",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Enabled",
+      "wire": "enabled",
+      "go_type": "[]learn.ItemRev",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Basis",
+      "wire": "basis",
+      "go_type": "[]record.RecordID",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Snapshot",
+      "wire": "snapshot",
+      "go_type": "map[learn.Mechanism]bool",
+      "omittable": true,
       "is_thought": false
     }
   ],

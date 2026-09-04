@@ -154,14 +154,55 @@ func (d *Driver) validate() error {
 	return nil
 }
 
-func (d *Driver) config(lane Lane) ConfigSnapshot {
-	c := ConfigSnapshot{Lane: lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer, Confined: d.Confined}
+func (d *Driver) config(lane Lane, pol *learn.PolicySelection) ConfigSnapshot {
+	c := ConfigSnapshot{Lane: lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer, Confined: d.Confined, Policy: pol.ID, Mechanisms: map[learn.Mechanism]bool{}}
+	for m, on := range pol.Snapshot {
+		c.Mechanisms[m] = on
+	}
+	// the policy boundary: MechModelJudge decides which backend judges;
+	// the snapshot records it, the fold checks it, judge(a) consumes it
+	judge := d.Judge
+	if !c.Mechanisms[learn.MechModelJudge] {
+		judge = d.Backend
+	}
 	if lane == LaneAgenda {
-		c.Judge, c.PlanCardinality, c.JudgeBackend = JudgeModel, 0, d.Judge.Capabilities()
+		c.Judge, c.PlanCardinality, c.JudgeBackend = JudgeModel, 0, judge.Capabilities()
 	} else if d.ModelJudge {
-		c.Judge, c.JudgeBackend = JudgeModel, d.Judge.Capabilities()
+		c.Judge, c.JudgeBackend = JudgeModel, judge.Capabilities()
 	}
 	return c
+}
+
+// judge is the backend an attempt's judgments run on: the configured judge,
+// or the executor itself (tool-less) when policy switched the model judge
+// off. The ONE place the mechanism is consumed.
+func (d *Driver) judge(a *AttemptState) invoke.Backend {
+	if !a.Attempt.Config.Mechanisms[learn.MechModelJudge] {
+		return d.Backend
+	}
+	return d.Judge
+}
+
+// policy is the attempt's policy decision: the selection over the learned
+// fold as it stands and one application per enabled revision. Committed in
+// the attempt's own command, so an attempt never exists without it.
+func (d *Driver) policy(rs *RunState, n uint32) (*learn.PolicySelection, []record.Record, error) {
+	led, err := learn.Fold(d.J.Production())
+	if err != nil {
+		return nil, nil, err
+	}
+	family := ""
+	if rs.Family.Family != FamilyNone {
+		family = string(rs.Family.Family)
+	}
+	pol := learn.SelectPolicy(led, learn.Query{Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable})
+	pol.Header = header(runRef(rs.Run), rs.Run, n, "policy_selection/1")
+	recs := []record.Record{pol}
+	for i, rule := range led.PolicyRules(pol) {
+		ir := pol.Enabled[i]
+		recs = append(recs, &learn.PolicyApplication{Header: header(record.Ref{Kind: "policy_selection", ID: string(pol.ID)}, rs.Run, n, "policy_application/1"), Item: ir.Item, Revision: ir.Revision, Selection: pol.ID, Rule: rule})
+	}
+	return pol, recs, nil
 }
 
 func (d *Driver) crash(stage string) error {
@@ -251,14 +292,19 @@ func Intake(text []byte, ref thought.Ref, origin GoalOrigin, lane Lane, policy D
 // prev is the attempt being recovered from (nil for attempt 1).
 func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, forced *Outcome) (*Report, error) {
 	n := uint32(len(rs.Attempts) + 1)
-	att := &RunAttempt{Header: header(runRef(rs.Run), rs.Run, n, "run_attempt/1"), Goal: rs.Goal.ID, Family: rs.Family.ID, Config: d.config(rs.Goal.Lane)}
+	pol, papps, err := d.policy(rs, n)
+	if err != nil {
+		return nil, err
+	}
+	att := &RunAttempt{Header: header(runRef(rs.Run), rs.Run, n, "run_attempt/1"), Goal: rs.Goal.ID, Family: rs.Family.ID, Config: d.config(rs.Goal.Lane, pol)}
 	if prev != nil {
 		att.RecoversFrom = prev.Attempt.Attempt
 	}
 	created := &Transition{Header: header(runRef(rs.Run), rs.Run, n, "run_transition/1"), To: Created}
-	if err := d.commit(ctx, fmt.Sprintf("attempt/%s/%d", rs.Run, n), att, created); err != nil {
+	if err := d.commit(ctx, fmt.Sprintf("attempt/%s/%d", rs.Run, n), append([]record.Record{att, created}, papps...)...); err != nil {
 		return nil, err
 	}
+	d.emit(rs, n, "policy", Created, fmt.Sprintf("%d of %d policies enabled", len(pol.Enabled), len(pol.Considered)))
 	a := &AttemptState{Attempt: att, Transitions: []*Transition{created}}
 	rs.Attempts = append(rs.Attempts, a)
 	d.emit(rs, n, "attempt", Created, "")
@@ -285,7 +331,6 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 	}
 	var out *Outcome
 	var candidates []*verdict.Verdict
-	var err error
 	if rs.Goal.Lane == LaneAgenda {
 		out, candidates, err = d.agenda(ctx, rs, a, prev, forced)
 	} else {
@@ -418,7 +463,7 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 	// invocation it reached has an id. A recovered attempt that decided
 	// but never invoked is CONTINUED: the same selection, not a new one.
 	var continues *learn.RecallSelection
-	if prev != nil && prev.Recall != nil && !invoked(prev) {
+	if prev != nil && prev.Recall != nil && !invoked(prev) && d.sameRecallPolicy(rs, prev, n) {
 		continues = prev.Recall
 	}
 	sel, block, reps, err := d.recall(ctx, rs, n, continues)
@@ -460,6 +505,14 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 		out.Response = ref
 	}
 	return out, nil
+}
+
+// sameRecallPolicy: a recovered attempt continues the earlier selection
+// only when this attempt's policy says the same about recall; otherwise
+// the new attempt decides afresh (the fold refuses a continuation across
+// a policy change).
+func (d *Driver) sameRecallPolicy(rs *RunState, prev *AttemptState, n uint32) bool {
+	return prev.Attempt.Config.Mechanisms[learn.MechRecall] == rs.Attempts[n-1].Attempt.Config.Mechanisms[learn.MechRecall]
 }
 
 // scope is the run's memory scope chain: own goal → parents → root →
@@ -604,7 +657,7 @@ func (d *Driver) nowClosureJudge(ctx context.Context, rs *RunState, a *AttemptSt
 		}
 	}
 	sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n}
-	jo, err := sh.Invoke(ctx, d.Judge, invoke.Request{Purpose: invoke.PurposeJudge, Prompt: closurePrompt(goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}), Tools: false, Timeout: d.Timeout}, nil)
+	jo, err := sh.Invoke(ctx, d.judge(a), invoke.Request{Purpose: invoke.PurposeJudge, Prompt: closurePrompt(goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}), Tools: false, Timeout: d.Timeout}, nil)
 	if err != nil || jo.Err != nil || jo.Terminal == invoke.TerminalFailed {
 		return nil, err
 	}
@@ -658,6 +711,7 @@ func (d *Driver) recall(ctx context.Context, rs *RunState, n uint32, continues *
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	cfg := rs.Attempts[n-1].Attempt.Config
 	var sel *learn.RecallSelection
 	if continues != nil {
 		c := *continues
@@ -668,10 +722,13 @@ func (d *Driver) recall(ctx context.Context, rs *RunState, n uint32, continues *
 		if rs.Family.Family != FamilyNone {
 			family = string(rs.Family.Family)
 		}
-		sel = learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable})
+		// the policy boundary's second consumer: MechRecall off = every
+		// item excluded, the request is the goal alone
+		sel = learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable, Off: !cfg.Mechanisms[learn.MechRecall]})
 	}
 	sel.Header = header(runRef(rs.Run), rs.Run, n, "recall_selection/1")
 	sel.Purpose = invoke.PurposeExecute
+	sel.Policy = cfg.Policy
 	if err := d.commit(ctx, fmt.Sprintf("recall/%s/%d", rs.Run, n), sel); err != nil {
 		return nil, nil, nil, err
 	}

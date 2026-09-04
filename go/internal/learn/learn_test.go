@@ -2,6 +2,7 @@ package learn
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -56,7 +57,29 @@ func lessonRef(st *thought.Store, text string) thought.Ref {
 }
 
 func rev(item LearnedID, pred record.RecordID, kind LearnedKind, scope ScopePath, family string, text thought.Ref) *LearnedRevision {
-	return &LearnedRevision{Header: record.Header{ID: record.NewID(), Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()}, Item: item, Predecessor: pred, LearnedKind: kind, Scope: scope, Family: family, Text: text, Provenance: Provenance{Source: "operator", Why: "test"}}
+	r := &LearnedRevision{Header: record.Header{ID: record.NewID(), Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()}, Item: item, Predecessor: pred, LearnedKind: kind, Scope: scope, Family: family, Text: text, Provenance: Provenance{Source: "operator", Why: "test"}}
+	if kind == Policy { // a policy is a rule, not text
+		r.Text, r.Policy = thought.Ref{}, &PolicyRule{Mechanism: MechModelJudge, Enabled: true}
+	}
+	return r
+}
+
+// policyFor commits the attempt's honest policy selection (with its
+// applications) over the ledger as it stands and returns it: every recall
+// selection names one.
+func policyFor(t *testing.T, j *journal.Journal, run record.RunID, attempt uint32) *PolicySelection {
+	t.Helper()
+	led := fold(t, j)
+	pol := SelectPolicy(led, Query{Scope: []ScopePath{ScopeWorkspace}, Standing: Selectable})
+	pol.Header = record.Header{ID: record.NewID(), RunID: run, Attempt: attempt, Subject: record.Ref{Kind: "run", ID: string(run)}, At: time.Now().UTC()}
+	recs := []record.Record{pol}
+	for i, rule := range led.PolicyRules(pol) {
+		recs = append(recs, &PolicyApplication{Header: record.Header{ID: record.NewID(), RunID: run, Attempt: attempt, Subject: record.Ref{Kind: "policy_selection", ID: string(pol.ID)}, At: time.Now().UTC()}, Item: pol.Enabled[i].Item, Revision: pol.Enabled[i].Revision, Selection: pol.ID, Rule: rule})
+	}
+	if err := submit(t, j, fmt.Sprintf("policy/%s/%d", run, attempt), recs...); err != nil {
+		t.Fatal(err)
+	}
+	return pol
 }
 
 func tr(item LearnedID, r record.RecordID, from, to Stage) *LifecycleTransition {
@@ -459,6 +482,7 @@ func TestFoldRefusesForgedRecalls(t *testing.T) {
 		x.ExcludedSample = append([]Excluded{}, honest.ExcludedSample...)
 		x.Header = record.Header{ID: record.NewID(), RunID: run, Attempt: attempt, Subject: record.Ref{Kind: "run", ID: string(run)}, At: time.Now().UTC()}
 		x.Purpose = "execute"
+		x.Policy = policyFor(t, j, run, attempt).ID
 		mut(&x)
 		return &x
 	}
@@ -478,19 +502,27 @@ func TestFoldRefusesForgedRecalls(t *testing.T) {
 	}
 	cases := []struct {
 		name string
-		sel  *RecallSelection
+		sel  func() *RecallSelection // lazy: each forged case reopens the journal
 		want string
 	}{
-		{"honest", mk(1, func(s *RecallSelection) {}), ""},
-		{"old effective revision", mk(2, func(s *RecallSelection) { inc(s, ItemRev{Item: item, Revision: r1.ID}, "stage:candidate") }), "does not re-derive"},
-		{"candidate current", mk(3, func(s *RecallSelection) { inc(s, ItemRev{Item: item, Revision: r2.ID}, "stage:candidate") }), "does not re-derive"},
-		{"policy", mk(4, func(s *RecallSelection) { inc(s, ItemRev{Item: pol.Item, Revision: pol.ID}, "kind:policy") }), "does not re-derive"},
-		{"wrong standing", mk(5, func(s *RecallSelection) { s.Standing = []Stage{Candidate, Provisional, Effective, Canon, Contested} }), "selectable set"},
-		{"false projection", mk(6, func(s *RecallSelection) { s.ProjectedBytes = 999 }), "does not re-derive"},
-		{"continues nothing", mk(7, func(s *RecallSelection) { s.Continues = record.NewID() }), "not an earlier selection"},
+		{"honest", func() *RecallSelection { return mk(1, func(s *RecallSelection) {}) }, ""},
+		{"old effective revision", func() *RecallSelection {
+			return mk(2, func(s *RecallSelection) { inc(s, ItemRev{Item: item, Revision: r1.ID}, "stage:candidate") })
+		}, "does not re-derive"},
+		{"candidate current", func() *RecallSelection {
+			return mk(3, func(s *RecallSelection) { inc(s, ItemRev{Item: item, Revision: r2.ID}, "stage:candidate") })
+		}, "does not re-derive"},
+		{"policy", func() *RecallSelection {
+			return mk(4, func(s *RecallSelection) { inc(s, ItemRev{Item: pol.Item, Revision: pol.ID}, "kind:policy") })
+		}, "does not re-derive"},
+		{"wrong standing", func() *RecallSelection {
+			return mk(5, func(s *RecallSelection) { s.Standing = []Stage{Candidate, Provisional, Effective, Canon, Contested} })
+		}, "selectable set"},
+		{"false projection", func() *RecallSelection { return mk(6, func(s *RecallSelection) { s.ProjectedBytes = 999 }) }, "does not re-derive"},
+		{"continues nothing", func() *RecallSelection { return mk(7, func(s *RecallSelection) { s.Continues = record.NewID() }) }, "not an earlier selection"},
 	}
 	for _, c := range cases {
-		err := submit(t, j, c.name, c.sel)
+		err := submit(t, j, c.name, c.sel())
 		if c.want == "" {
 			if err != nil {
 				t.Fatalf("honest selection refused: %v", err)
@@ -528,5 +560,186 @@ func TestFoldRefusesForgedRecalls(t *testing.T) {
 	}
 	if _, err := Fold(j.Production()); err == nil || !strings.Contains(err.Error(), "content differs") {
 		t.Fatalf("differing continuation folded: %v", err)
+	}
+}
+
+// The policy apply surface is data at one boundary (§7, D17): a policy
+// revision is a declared rule, not text; a candidate policy is considered
+// and not enabled; a selectable one flips its mechanism in the snapshot
+// with the transition that enabled it as basis; with recall off the recall
+// selection considers everything and excludes it all by policy, and a
+// selection claiming otherwise, or continuing across a policy change, is
+// refused.
+func TestPolicyIsDataAtTheBoundary(t *testing.T) {
+	j, st := openJ(t)
+	run := record.RunID(record.NewID())
+	lesson := rev(LearnedID(record.NewID()), "", Lesson, ScopeWorkspace, "", lessonRef(st, "cite sources"))
+	if err := submit(t, j, "lesson", lesson, tr(lesson.Item, lesson.ID, Candidate, Effective)); err != nil {
+		t.Fatal(err)
+	}
+	// door: a policy with text, an unknown mechanism, a lesson with a rule
+	withText := rev(LearnedID(record.NewID()), "", Policy, ScopeWorkspace, "", thought.Ref{})
+	withText.Text = lessonRef(st, "x")
+	unknown := rev(LearnedID(record.NewID()), "", Policy, ScopeWorkspace, "", thought.Ref{})
+	unknown.Policy.Mechanism = "teleport"
+	ruled := rev(LearnedID(record.NewID()), "", Lesson, ScopeWorkspace, "", lessonRef(st, "y"))
+	ruled.Policy = &PolicyRule{Mechanism: MechRecall}
+	for name, r := range map[string]*LearnedRevision{"policy with text": withText, "unknown mechanism": unknown, "lesson with rule": ruled} {
+		if err := submit(t, j, name, r); err == nil {
+			t.Fatalf("%s accepted at the door", name)
+		}
+	}
+	// a candidate policy is considered, not enabled: defaults
+	off := rev(LearnedID(record.NewID()), "", Policy, ScopeWorkspace, "", thought.Ref{})
+	off.Policy = &PolicyRule{Mechanism: MechRecall, Enabled: false}
+	if err := submit(t, j, "off", off); err != nil {
+		t.Fatal(err)
+	}
+	p1 := policyFor(t, j, run, 1)
+	if len(p1.Considered) != 1 || len(p1.Enabled) != 0 || !p1.Snapshot[MechRecall] || !p1.Snapshot[MechModelJudge] {
+		t.Fatalf("candidate policy: %+v", p1)
+	}
+	r1 := Recall(fold(t, j), Query{Purpose: "execute", Scope: []ScopePath{ScopeWorkspace}, Standing: Selectable, Off: !p1.Snapshot[MechRecall]})
+	r1.Header = record.Header{ID: record.NewID(), RunID: run, Attempt: 1, Subject: record.Ref{Kind: "run", ID: string(run)}, At: time.Now().UTC()}
+	r1.Purpose, r1.Policy = "execute", p1.ID
+	if err := submit(t, j, "r1", r1); err != nil {
+		t.Fatal(err)
+	}
+	if len(r1.Included) != 1 {
+		t.Fatalf("recall on: %+v", r1)
+	}
+	// restamped selectable: enabled, basis = that transition, recall off
+	x := tr(off.Item, off.ID, Candidate, Provisional)
+	if err := submit(t, j, "restamp", x); err != nil {
+		t.Fatal(err)
+	}
+	p2 := policyFor(t, j, run, 2)
+	if len(p2.Enabled) != 1 || p2.Basis[0] != x.ID || p2.Snapshot[MechRecall] || !p2.Snapshot[MechModelJudge] {
+		t.Fatalf("selectable policy: %+v", p2)
+	}
+	led := fold(t, j)
+	if apps := led.PolicyApps[p2.ID]; len(apps) != 1 || apps[0].Rule != *off.Policy || len(led.Exposures[off.ID]) != 1 {
+		t.Fatalf("policy application: %+v exposures %+v", apps, led.Exposures[off.ID])
+	}
+	r2 := Recall(led, Query{Purpose: "execute", Scope: []ScopePath{ScopeWorkspace}, Standing: Selectable, Off: !p2.Snapshot[MechRecall]})
+	if len(r2.Included) != 0 || r2.Considered != 2 || r2.ExcludedCounts["policy:recall_off"] != 2 {
+		t.Fatalf("recall off: %+v", r2)
+	}
+	r2.Header = record.Header{ID: record.NewID(), RunID: run, Attempt: 2, Subject: record.Ref{Kind: "run", ID: string(run)}, At: time.Now().UTC()}
+	r2.Purpose, r2.Policy = "execute", p2.ID
+	if err := submit(t, j, "r2", r2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fold(j.Production()); err != nil {
+		t.Fatalf("honest history: %v", err)
+	}
+	// forged: attempt 3 under recall-off policy claims the lesson was recalled
+	p3 := policyFor(t, j, run, 3)
+	r3 := Recall(fold(t, j), Query{Purpose: "execute", Scope: []ScopePath{ScopeWorkspace}, Standing: Selectable})
+	r3.Header = record.Header{ID: record.NewID(), RunID: run, Attempt: 3, Subject: record.Ref{Kind: "run", ID: string(run)}, At: time.Now().UTC()}
+	r3.Purpose, r3.Policy = "execute", p3.ID
+	if err := submit(t, j, "r3", r3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fold(j.Production()); err == nil || !strings.Contains(err.Error(), "does not re-derive") {
+		t.Fatalf("recall against policy folded: %v", err)
+	}
+	// forged: a continuation across the policy change (attempt 1 recalled
+	// under recall-on; attempt 4 continues it under recall-off)
+	j2, st2 := openJ(t)
+	lesson2 := rev(LearnedID(record.NewID()), "", Lesson, ScopeWorkspace, "", lessonRef(st2, "cite sources"))
+	off2 := rev(LearnedID(record.NewID()), "", Policy, ScopeWorkspace, "", thought.Ref{})
+	off2.Policy = &PolicyRule{Mechanism: MechRecall, Enabled: false}
+	if err := submit(t, j2, "base", lesson2, tr(lesson2.Item, lesson2.ID, Candidate, Effective), off2); err != nil {
+		t.Fatal(err)
+	}
+	q1 := policyFor(t, j2, run, 1)
+	c1 := Recall(fold(t, j2), Query{Purpose: "execute", Scope: []ScopePath{ScopeWorkspace}, Standing: Selectable})
+	c1.Header = record.Header{ID: record.NewID(), RunID: run, Attempt: 1, Subject: record.Ref{Kind: "run", ID: string(run)}, At: time.Now().UTC()}
+	c1.Purpose, c1.Policy = "execute", q1.ID
+	if err := submit(t, j2, "c1", c1, tr(off2.Item, off2.ID, Candidate, Provisional)); err != nil {
+		t.Fatal(err)
+	}
+	q2 := policyFor(t, j2, run, 2)
+	c2 := *c1
+	c2.Header = record.Header{ID: record.NewID(), RunID: run, Attempt: 2, Subject: record.Ref{Kind: "run", ID: string(run)}, At: time.Now().UTC()}
+	c2.Continues, c2.Policy = c1.ID, q2.ID
+	if err := submit(t, j2, "c2", &c2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fold(j2.Production()); err == nil || !strings.Contains(err.Error(), "different recall policy") {
+		t.Fatalf("continuation across a policy change folded: %v", err)
+	}
+}
+
+// The fold refuses policy histories no driver could have written: a
+// snapshot that does not re-derive, a candidate policy enabled, an
+// application for a revision the selection did not enable, a selection
+// whose enabled revisions were not all applied, two selections for one
+// attempt, a standing that is not the selectable set.
+func TestFoldRefusesForgedPolicies(t *testing.T) {
+	run := record.RunID(record.NewID())
+	type forgery struct {
+		name string
+		want string
+		recs func(j *journal.Journal, st *thought.Store, off *LearnedRevision, on *LearnedRevision) []record.Record
+	}
+	hdr := func(attempt uint32) record.Header {
+		return record.Header{ID: record.NewID(), RunID: run, Attempt: attempt, Subject: record.Ref{Kind: "run", ID: string(run)}, At: time.Now().UTC()}
+	}
+	app := func(sel *PolicySelection, r *LearnedRevision, rule PolicyRule) *PolicyApplication {
+		return &PolicyApplication{Header: record.Header{ID: record.NewID(), RunID: run, Attempt: sel.Attempt, Subject: record.Ref{Kind: "policy_selection", ID: string(sel.ID)}, At: time.Now().UTC()}, Item: r.Item, Revision: r.ID, Selection: sel.ID, Rule: rule}
+	}
+	honest := func(j *journal.Journal, attempt uint32) *PolicySelection {
+		sel := SelectPolicy(fold(t, j), Query{Scope: []ScopePath{ScopeWorkspace}, Standing: Selectable})
+		sel.Header = hdr(attempt)
+		return sel
+	}
+	for _, f := range []forgery{
+		{"snapshot that does not re-derive", "does not re-derive", func(j *journal.Journal, st *thought.Store, off, on *LearnedRevision) []record.Record {
+			sel := honest(j, 1)
+			sel.Snapshot[MechRecall] = true
+			return []record.Record{sel, app(sel, off, *off.Policy)}
+		}},
+		{"candidate policy enabled", "does not re-derive", func(j *journal.Journal, st *thought.Store, off, on *LearnedRevision) []record.Record {
+			sel := honest(j, 1)
+			sel.Enabled = append(sel.Enabled, ItemRev{Item: on.Item, Revision: on.ID})
+			sel.Basis = append(sel.Basis, sel.Basis[0])
+			return []record.Record{sel, app(sel, off, *off.Policy), app(sel, on, *on.Policy)}
+		}},
+		{"application for a revision not enabled", "is not enabled revision", func(j *journal.Journal, st *thought.Store, off, on *LearnedRevision) []record.Record {
+			sel := honest(j, 1)
+			return []record.Record{sel, app(sel, on, *on.Policy)}
+		}},
+		{"application with a foreign rule", "not revision", func(j *journal.Journal, st *thought.Store, off, on *LearnedRevision) []record.Record {
+			sel := honest(j, 1)
+			return []record.Record{sel, app(sel, off, PolicyRule{Mechanism: MechRecall, Enabled: true})}
+		}},
+		{"enabled but not applied", "were applied", func(j *journal.Journal, st *thought.Store, off, on *LearnedRevision) []record.Record {
+			return []record.Record{honest(j, 1)}
+		}},
+		{"two selections for one attempt", "two policy selections", func(j *journal.Journal, st *thought.Store, off, on *LearnedRevision) []record.Record {
+			a, b := honest(j, 1), honest(j, 1)
+			return []record.Record{a, app(a, off, *off.Policy), b, app(b, off, *off.Policy)}
+		}},
+		{"wrong standing", "selectable set", func(j *journal.Journal, st *thought.Store, off, on *LearnedRevision) []record.Record {
+			sel := honest(j, 1)
+			sel.Standing = []Stage{Candidate, Provisional, Effective, Canon, Contested}
+			return []record.Record{sel, app(sel, off, *off.Policy)}
+		}},
+	} {
+		j, st := openJ(t)
+		off := rev(LearnedID(record.NewID()), "", Policy, ScopeWorkspace, "", thought.Ref{})
+		off.Policy = &PolicyRule{Mechanism: MechRecall, Enabled: false}
+		on := rev(LearnedID(record.NewID()), "", Policy, ScopeWorkspace, "", thought.Ref{}) // model_judge on, candidate
+		if err := submit(t, j, "base", off, tr(off.Item, off.ID, Candidate, Provisional), on); err != nil {
+			t.Fatal(err)
+		}
+		if err := submit(t, j, f.name, f.recs(j, st, off, on)...); err != nil {
+			t.Fatalf("%s: refused at the door (fixture bug): %v", f.name, err)
+		}
+		if _, err := Fold(j.Production()); err == nil || !strings.Contains(err.Error(), f.want) {
+			t.Fatalf("%s: folded: %v (want %q)", f.name, err, f.want)
+		}
 	}
 }

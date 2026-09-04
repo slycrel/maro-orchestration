@@ -30,10 +30,17 @@ func (it *Item) StageOf(rev record.RecordID) Stage {
 // Ledger is the fold of the learned population.
 type Ledger struct {
 	Items        map[LearnedID]*Item
-	Applications map[record.RecordID][]*Application // by invocation, in Seq order
-	Recalls      map[string]*RecallSelection        // by "<run>/<attempt>"
+	Applications map[record.RecordID][]*Application       // by invocation, in Seq order
+	Recalls      map[string]*RecallSelection              // by "<run>/<attempt>"
+	Policies     map[string]*PolicySelection              // by "<run>/<attempt>"
+	PolicyApps   map[record.RecordID][]*PolicyApplication // by selection, in Seq order
+	Exposures    map[record.RecordID][]Exposure           // by revision, in Seq order: applications + policy applications
 	byID         map[record.RecordID]*RecallSelection
+	policyByID   map[record.RecordID]*PolicySelection
 }
+
+// PolicyOf returns a policy selection by id.
+func (led *Ledger) PolicyOf(id record.RecordID) *PolicySelection { return led.policyByID[id] }
 
 // Selection returns a recall selection by id.
 func (led *Ledger) Selection(id record.RecordID) *RecallSelection { return led.byID[id] }
@@ -41,6 +48,12 @@ func (led *Ledger) Selection(id record.RecordID) *RecallSelection { return led.b
 // checkRecall executes the derived-record rule for a selection against the
 // ledger as it stands (the scan is in Seq order, so "as it stood" holds).
 func (led *Ledger) checkRecall(x *RecallSelection) error {
+	// the recall obeys THIS attempt's policy selection, which precedes it
+	pol := led.Policies[PolicyKey(x.RunID, x.Attempt)]
+	if pol == nil || pol.ID != x.Policy {
+		return fmt.Errorf("learn: recall %s names policy selection %s, which is not the attempt's", x.ID, x.Policy)
+	}
+	off := !pol.Snapshot[MechRecall]
 	if x.Continues != "" {
 		prior := led.byID[x.Continues]
 		if prior == nil || prior.RunID != x.RunID || prior.Attempt >= x.Attempt {
@@ -48,6 +61,9 @@ func (led *Ledger) checkRecall(x *RecallSelection) error {
 		}
 		if !sameSelection(prior, x) {
 			return fmt.Errorf("learn: recall %s claims to continue %s but its content differs", x.ID, x.Continues)
+		}
+		if priorPol := led.policyByID[prior.Policy]; priorPol == nil || !priorPol.Snapshot[MechRecall] != off {
+			return fmt.Errorf("learn: recall %s continues %s, which was decided under a different recall policy", x.ID, x.Continues)
 		}
 		return nil
 	}
@@ -58,7 +74,7 @@ func (led *Ledger) checkRecall(x *RecallSelection) error {
 	if x.Purpose == "execute" && !sameStages(standing, Selectable) {
 		return fmt.Errorf("learn: recall %s for execute used standing %v, not the selectable set", x.ID, x.Standing)
 	}
-	want := Recall(led, Query{Purpose: string(x.Purpose), Scope: x.Scope, Family: x.Family, Standing: standing})
+	want := Recall(led, Query{Purpose: string(x.Purpose), Scope: x.Scope, Family: x.Family, Standing: standing, Off: off})
 	if !sameSelection(want, x) {
 		return fmt.Errorf("learn: recall %s does not re-derive from the ledger (included %v vs %v; considered %d vs %d; excluded %v vs %v)", x.ID, x.Included, want.Included, x.Considered, want.Considered, x.ExcludedCounts, want.ExcludedCounts)
 	}
@@ -111,11 +127,12 @@ func RecallKey(run record.RunID, attempt uint32) string { return fmt.Sprintf("%s
 // an unknown revision, two recalls for one attempt.
 func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 	pr = pr.Pin() // one prefix for every scan this fold composes
-	led := &Ledger{Items: map[LearnedID]*Item{}, Applications: map[record.RecordID][]*Application{}, Recalls: map[string]*RecallSelection{}, byID: map[record.RecordID]*RecallSelection{}}
+	led := &Ledger{Items: map[LearnedID]*Item{}, Applications: map[record.RecordID][]*Application{}, Recalls: map[string]*RecallSelection{}, Policies: map[string]*PolicySelection{}, PolicyApps: map[record.RecordID][]*PolicyApplication{}, Exposures: map[record.RecordID][]Exposure{}, byID: map[record.RecordID]*RecallSelection{}, policyByID: map[record.RecordID]*PolicySelection{}}
 	seen := map[record.RecordID]bool{}
 	goals := map[record.RecordID]bool{}
-	appByID := map[record.RecordID]*Application{}
-	appsOf := map[record.RecordID][]*Application{} // by revision, in Seq order
+	expose := func(h record.Header, rev record.RecordID) {
+		led.Exposures[rev] = append(led.Exposures[rev], Exposure{ID: h.ID, Revision: rev, Seq: h.Seq, At: h.At})
+	}
 	err := pr.Scan(0, func(r record.Record) error {
 		// a record is "seen" only AFTER its own checks: nothing may cite itself
 		defer func() { seen[r.Head().ID] = true }()
@@ -157,22 +174,16 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 			}
 			if x.Actor == ActorTenure {
 				// a tenure transition is DERIVED: it must equal the timers'
-				// rule over the applications as they stood
-				apps := appsOf[x.Revision]
+				// rule over the exposures as they stood
+				exps := led.Exposures[x.Revision]
 				switch x.To {
 				case Observed:
-					ev := appByID[x.Evidence]
-					if ev == nil || ev.Revision != x.Revision || len(apps) < TenureBound || apps[TenureBound-1].ID != x.Evidence {
-						return fmt.Errorf("learn: tenure transition %s does not re-derive: evidence must be application %d of revision %s (has %d)", x.ID, TenureBound, x.Revision, len(apps))
+					if len(exps) < TenureBound || exps[TenureBound-1].ID != x.Evidence {
+						return fmt.Errorf("learn: tenure transition %s does not re-derive: evidence must be exposure %d of revision %s (has %d)", x.ID, TenureBound, x.Revision, len(exps))
 					}
 				case Tombstone:
-					var rev *LearnedRevision
-					for _, r := range it.Revisions {
-						if r.ID == x.Revision {
-							rev = r
-						}
-					}
-					if x.Evidence != x.Revision || !x.At.After(LastActivity(rev, apps).Add(ExpiryIdle)) {
+					rev := revisionOf(it, x.Revision)
+					if x.Evidence != x.Revision || !x.At.After(LastActivity(rev, exps).Add(ExpiryIdle)) {
 						return fmt.Errorf("learn: expiry transition %s does not re-derive: revision %s was active within %s of it", x.ID, x.Revision, ExpiryIdle)
 					}
 				}
@@ -190,8 +201,33 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 				}
 			}
 			led.Applications[x.Invocation] = append(led.Applications[x.Invocation], x)
-			appByID[x.ID] = x
-			appsOf[x.Revision] = append(appsOf[x.Revision], x)
+			expose(x.Header, x.Revision)
+		case *PolicySelection:
+			k := PolicyKey(x.RunID, x.Attempt)
+			if led.Policies[k] != nil {
+				return fmt.Errorf("learn: two policy selections for attempt %s", k)
+			}
+			// a DERIVED record: it must equal the selection over the ledger
+			// as it stood
+			if err := led.checkPolicy(x); err != nil {
+				return err
+			}
+			led.Policies[k] = x
+			led.policyByID[x.ID] = x
+		case *PolicyApplication:
+			sel := led.policyByID[x.Selection]
+			if sel == nil || sel.RunID != x.RunID || sel.Attempt != x.Attempt {
+				return fmt.Errorf("learn: policy application %s cites selection %s, which is not its attempt's", x.ID, x.Selection)
+			}
+			have := led.PolicyApps[x.Selection]
+			if len(have) >= len(sel.Enabled) || sel.Enabled[len(have)] != (ItemRev{Item: x.Item, Revision: x.Revision}) {
+				return fmt.Errorf("learn: policy application %s is not enabled revision %d of selection %s", x.ID, len(have)+1, x.Selection)
+			}
+			if rule := revisionOf(led.Items[x.Item], x.Revision).Policy; rule == nil || *rule != x.Rule {
+				return fmt.Errorf("learn: policy application %s carries a rule that is not revision %s's", x.ID, x.Revision)
+			}
+			led.PolicyApps[x.Selection] = append(have, x)
+			expose(x.Header, x.Revision)
 		case *RecallSelection:
 			k := RecallKey(x.RunID, x.Attempt)
 			if led.Recalls[k] != nil {
@@ -210,6 +246,13 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	// every selection's enabled revisions were applied (same command, so a
+	// prefix never splits them): the snapshot is only as true as its proofs
+	for k, sel := range led.Policies {
+		if n := len(led.PolicyApps[sel.ID]); n != len(sel.Enabled) {
+			return nil, fmt.Errorf("learn: policy selection of attempt %s enables %d revisions but %d were applied", k, len(sel.Enabled), n)
+		}
 	}
 	return led, nil
 }
@@ -231,6 +274,10 @@ type Query struct {
 	Scope    []ScopePath
 	Family   string
 	Standing map[Stage]bool
+	// Off is the recall mechanism switched off by policy: every item is
+	// considered and excluded (reason policy:recall_off), so the selection
+	// still says what WOULD have been recalled and why it was not.
+	Off bool
 }
 
 // Recall is pure over the ledger. Every item is considered; each is either
@@ -259,6 +306,8 @@ func Recall(led *Ledger, q Query) *RecallSelection {
 		sel.Considered++
 		reason := ""
 		switch {
+		case q.Off:
+			reason = "policy:recall_off"
 		case cur.LearnedKind != Lesson:
 			reason = "kind:" + string(cur.LearnedKind)
 		case !q.Standing[it.StageOf(cur.ID)]:
