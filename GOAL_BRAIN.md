@@ -4190,3 +4190,24 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   the artifact boundary across separate workspaces. Learned outputs still
   travel between engines as pack DATA. Further contract-testing nuance
   incoming from Jeremy's work side.
+
+- **2026-09-04 (Phase 2 re-sequenced: vision audit BEFORE the design note —
+  Jeremy):** on hearing the Phase 2 backbone framed around contract mechanics:
+  *"What you just said about contracts concerns me... that's still zoomed in
+  too closely. We have the vision, laid out in a number of iterations within
+  our repo, goal brain, and related documents. Maybe we need to start with
+  auditing or updating our memory... or doing a full audit of our history,
+  where we started and why we are here, essentially in a major refactor to
+  move forward with go for a working-but-incomplete python prototype."* Same
+  sitting: *"implementation, per usual, is yours. I'm here for the
+  conceptuals and guidance on vision"* and *"mostly we kept trying for
+  metaphors to help guide the implementation at a higher level; I think we
+  found some good ones, but those are easier talked about than
+  implemented."* Applied same day: the 07-17 holistic drift review
+  (MILESTONES -6) executed — `docs/history/2026-09-04-holistic-drift-review.md`
+  (verdict: right mountain, heavy pack; metaphor ledger; §8 = the nine
+  vision-level commitments the successor carries); auto-memory vision anchor
+  written; the Phase 2 design note now starts from §8, with CONTRACTS.md +
+  the behavior suite as the check, not the brief. Three decisions queued for
+  Jeremy in §9 (learn-to-get-cheaper as v1 bar; always-on inside the app; the
+  Manti envelope as a v1 gate) — none block the design note.
