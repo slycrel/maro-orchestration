@@ -4150,3 +4150,28 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   artifacts as data, not embed them as Go constants. Engine mechanism/
   policy (e.g. the injection-guard scanner itself) staying code is fine;
   its LEARNED inputs are not.
+
+- **2026-09-04 (Successor decrees D1–D9 — Jeremy; SF-13 catch-up for the
+  2026-08-28 pivot that only reached `planning/successor-plan.md`):** the
+  Go work is no longer a port. 08-28: *"look at what our python project
+  does, and implement that in go -- the reasoning, the pattern, the
+  modules... a spiritual successor in golang."* D1 contract-not-port (CPython
+  fidelity renounced); D2 same `~/.maro/workspace/` is the compatibility
+  boundary; D3 contracts may be upgraded on both sides, versioned and
+  written down (→ `docs/CONTRACTS.md`, Phase 1a), never silently; D4 `go-port`
+  frozen, mined only through design notes; D5 reference-allowed clean-room
+  (self-improvement + director hierarchy lean pure-clean-room to INTENT); D6
+  subagents allowed, box serialization is the real limit. Plan-first mode
+  held: *"The plan is the goal for the moment, then we commit to how to
+  implement the plan as phase 2."* Phase 1 (contracts registry 5r fixpoint +
+  behavior suite 6r fixpoint, mutation kill-proof) landed 90f9f601..c7e673ba.
+  09-04, the three phase-2 gates: **D7 v1 scope** = *"Backbone + memory
+  recording, along with the proper hooks for the self-improvement (that we
+  add later). Design should be modular and anti-fragile, with the
+  expectation that we are updating the processing over time (forwards
+  compatible for our internal systems, allowing for rewriting processes and
+  keeping contracts stable)."* **D8** Python lift while the successor builds
+  = contract-sharpening PLUS real defects the suite/reviews surface, no
+  Python behavior redesign. **D9** branch `successor`, Go code rebuilt fresh
+  in this repo's `go/`. Phase 2 commit UNBLOCKED; the full plan lives at
+  `planning/successor-plan.md` on `successor`.
