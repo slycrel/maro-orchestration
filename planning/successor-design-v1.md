@@ -2,17 +2,16 @@
 status: living
 ---
 
-# Successor v1 — design note (Phase 2, the whole system) — v1.3
+# Successor v1 — design note (Phase 2, the whole system) — v1.4
 
 *2026-09-04. Implementation is mine (Jeremy: "implementation, per usual, is
 yours"); this note comes to him as a vision read. Brief = the drift review's
 §8 (`docs/history/2026-09-04-holistic-drift-review.md`, main) as amended by
 D7–D17 in `successor-plan.md`; contract practice =
 `contract-testing-input.md`; boundary spec = `docs/CONTRACTS.md` + the Phase 1
-behavior suite. v1.3 = v1.2 amended against the r3 design review (codex, Architect +
-Skeptic, whole document; ledgers `verdict-r1..3.md` in the review dir — r3
-confirmed every r2 root cause resolved and left 18 precise items). §18 lists
-what changed. Inherited shapes
+behavior suite. v1.4 = v1.3 amended against r4 (codex, Architect + Skeptic; ledgers
+`verdict-r1..4.md` in the review dir — r4 confirmed 14 of 18 r3 items
+resolved and left 8, two of them new). §18 lists what changed by round. Inherited shapes
 carry their justifying sentence beside them (anti-lift).*
 
 ## 0. What v1 is
@@ -58,9 +57,12 @@ type RecordHeader struct {
 }
 ```
 
-Records come in two **disjoint envelope types**, `ProductionRecord` and
-`ExperimentalRecord` (§9); a reader API is typed to one or the other, so a
-production query cannot return experimental rows by construction.
+Records come in **three disjoint envelope types** — `ProductionRecord`,
+`ControlRecord`, `ExperimentalRecord` (§9) — and **one registry maps every
+record kind to exactly one envelope**; encoding, decoding, the generated
+contracts, and the capability matrix are all derived from that registry.
+A reader API is typed to one envelope, so a production query cannot return
+control or experimental rows by construction.
 
 Status, standing, "current verdict", and lifecycle stage are **folds** over
 records. No record carries a mutable status field.
@@ -194,13 +196,25 @@ two-level scenario needs one early-return policy to exercise cancellation;
 Goal ancestry (own → parents → root → workspace). Child runs are goroutines
 under the parent's context; cancellation *executes* a committed decision.
 
+**Siblings never share a mutable working tree.** Before a fork dispatches,
+the parent declares each member's **write set** (paths/resources it may
+mutate). Overlapping write sets force sequential execution; disjoint sets
+get **exclusive path leases** recorded on the Fork; children that need the
+same repository get **per-attempt working copies** (worktree / copy-on-
+write snapshot) and the parent performs an explicit, recorded **merge/apply
+step** after `JoinSettled` — a merge conflict is a step outcome, not a
+race. Siblings' **outward effects are held** (recorded as `prepared`, not
+dispatched) until `JoinDecision` selects them; a cancelled sibling's held
+effects are never issued. This is what makes a fork replayable from the
+journal instead of from scheduler timing.
+
 ## 4. Backends — effectful boundary components, one invocation state machine
 
 ```go
-type Invocation struct { RecordHeader; Purpose Purpose; Request ThoughtRef; Backend BackendSnapshot; Target *Budget; Lens *LensRef; EffectToken Token /* committed BEFORE dispatch; outward-capable adapters pass it to every tool that accepts an idempotency key */ }
+type Invocation struct { RecordHeader; Purpose Purpose; Request ThoughtRef; Backend BackendSnapshot; Target *Budget; Lens *LensRef; EffectToken Token /* committed BEFORE dispatch; a NAMESPACE — see per-effect keys below */ }
 // states, each a record:  prepared → dispatched → terminal_observed → receipt_committed
 type Attempt   struct { RecordHeader; Invocation RecordID; N int; Terminal TerminalState }
-type ToolEffect struct { RecordHeader; Invocation RecordID; Attempt RecordID; Seq int; Class EffectClass /* read | write_local | outward */; EffectID string; Evidence ThoughtRef }
+type ToolEffect struct { RecordHeader; Invocation RecordID; Attempt RecordID; Ordinal int; Class EffectClass /* read | write_local | outward */; Key EffectKey /* = derive(EffectToken, Ordinal), allocated and committed BEFORE the action is allowed */; Evidence ThoughtRef }
 type Receipt   struct { RecordHeader; Invocation RecordID; Response ThoughtRef; Usage Usage }
 ```
 
@@ -208,7 +222,15 @@ Adapters are **effectful boundary components**, not pure: a subprocess agent
 does I/O, tool actions, and retries. The run shell owns the invocation state
 machine: it commits `prepared`, dispatches, commits every `Attempt` and every
 `ToolEffect` as the stream reports them, commits `terminal_observed`, then
-the `Receipt`. Partial-stream semantics are declared once per backend (a
+the `Receipt`. **Per-effect keys.** Before each outward action the adapter protocol asks
+the shell for the next key (`derive(EffectToken, Ordinal)`), the shell
+commits a `ToolEffect{prepared}` for it, and only then may the tool act with
+that key as its idempotency key where the provider accepts one. A subprocess
+that performs an outward action it did not announce (no key requested)
+makes the whole invocation `indeterminate_external_effect` on any restart —
+the protocol is the evidence, and an adapter that cannot participate in the
+handshake is declared outward-unreconcilable in its capabilities. Partial-
+stream semantics are declared once per backend (a
 malformed tool-event frame after a valid response = `terminal_observed` with
 `Terminal=partial`, receipt committed with the response, the frame recorded
 as evidence — never a silent retry, never a rejected receipt).
@@ -219,9 +241,10 @@ call on a tool-less adapter). An Invocation found `dispatched` without
 `terminal_observed` on an outward-capable adapter yields
 `indeterminate_external_effect` — absence of committed ToolEffects is not
 evidence of purity, because the frame may have died with the process; reconciliation is evidence-based per effect class (a `write_local`
-is re-checked against the filesystem; an `outward` effect is queried by the
-Invocation's `EffectToken` where the tool supports idempotency keys or lookup,
-otherwise escalated). Blind
+is re-checked against the filesystem; an `outward` effect is queried by its
+own `EffectKey` where the provider supports lookup, otherwise escalated;
+replay of an already-keyed effect is deduplicated by the provider or not
+attempted). Blind
 replay never happens. Kill tests: after dispatch, after each tool effect,
 after response, before receipt.
 
@@ -324,7 +347,8 @@ type LearnedRevision struct { RecordHeader; Item LearnedID; Predecessor RecordID
 type LifecycleTransition struct { RecordHeader; Item LearnedID; Revision RecordID; From, To Stage; Evidence RecordID }
 type Application struct { RecordHeader; Item LearnedID; Revision RecordID; Invocation RecordID; Representation ThoughtRef }   // recall injection
 type PolicyApplication struct { RecordHeader; Item LearnedID; Revision RecordID; Run AttemptRef; Snapshot PolicySnapshot }    // orchestration policy
-type PolicySelection struct { RecordHeader; Run AttemptRef; Considered []LearnedID; Enabled []LearnedID; Basis []RecordID /* the transitions that decided it */ }
+type PolicySelection struct { RecordHeader; Run AttemptRef; Considered []ItemRev; Enabled []ItemRev; Basis []RecordID /* the transitions that decided it */ }
+type ItemRev struct { Item LearnedID; Revision RecordID }   // the ONLY way an item is named where content matters
 ```
 
 Stage is a fold over `LifecycleTransition`s for the `LearnedID` (a revision
@@ -339,13 +363,20 @@ policy** — a `policy` item is versioned data (which mechanisms are enabled,
 decomposition depth, judge configuration) consumed at one policy boundary in
 the driver, proven by a `PolicyApplication` snapshot on the run. Mechanisms are
 therefore data the engine reads (D17). **The policy-selection fold is
-versioned data**: `EffectMeasurement.Verdict → LifecycleTransition →
-Enabled`. `harmful` → `contested` (still enabled, flagged); `equivalent` at
-the stopping rule → `tombstone` for that family → **disabled** in the next
-`PolicySelection` for that family; `helpful` → `effective`; conflicting later
-evidence reopens `contested`; rollback is a new transition citing the
-contrary evidence. The end-to-end test: an `ablate(m)` equivalence changes
-the next production run's `PolicySelection` and its observable driver path.
+versioned data over the normalized item effect** (§8a): `ItemEffect →
+LifecycleTransition → Enabled`. `item_harmful` at the predeclared
+confidence threshold → `quarantined` for that exact revision → **not
+selectable** for recall or policy in the next run (weaker harmful evidence →
+`contested`, still selectable, flagged, and it cannot satisfy any exit);
+`item_redundant` at the stopping rule → `tombstone` for that family →
+**disabled** in the next `PolicySelection`; `item_helpful` → `effective`;
+conflicting later evidence reopens `contested`; rollback is a new transition
+citing the contrary evidence. Selectable stages are exactly `provisional |
+effective | canon` (plus `contested`); `candidate | observed | quarantined |
+tombstone` are never selected. The end-to-end tests: an `ablate(m)`
+redundancy changes the next production run's `PolicySelection` and its
+observable driver path; a quarantined lesson is absent from the next
+request hash.
 
 **Recall is one query**, `Recall(purpose, scope, standing) → RecallSelection`
 (candidates, deterministic order, each inclusion/exclusion with reason,
@@ -370,10 +401,11 @@ Lifecycle a transition whose Evidence is an EffectMeasurement; tenure reaches `o
 ```go
 type Experiment struct {           // immutable protocol; nothing in it accrues
     RecordHeader
-    Hypothesis   RecordID          // exactly one learned item (one-item ablation)
+    Hypothesis   ItemRev           // exactly one item at one frozen revision; a later revision needs a new experiment version
+    Relation     TreatmentRelation // apply_item (treatment adds it) | ablate_item (treatment removes it); fixes the sign of the contrast
     Population   FamilyKey         // from FamilyAssessment (intake, treatment-blind)
     Assignment   AssignmentKind    // paired_replay | randomized_live | shadow_arm
-    Arms         []ArmSpec         // treatment/control snapshots: backend, model, version, config, applied-item SET, seed
+    Arms         []ArmSpec         // treatment/control snapshots: backend, model, version, config, applied set as []ItemRev, seed; the two arms differ by exactly the Hypothesis
     Outcome      OutcomeSpec       // predeclared dimensions, direction, equivalence margin
     Analysis     AnalysisSpec      // intention_to_treat AND per_protocol; missing-outcome policy; stopping rule; estimator; uncertainty threshold
     Oracle       OracleClass       // deterministic_fixture | external_observed | blinded_evaluator
@@ -382,7 +414,18 @@ type Experiment struct {           // immutable protocol; nothing in it accrues
 type Assignment        struct { RecordHeader; Experiment RecordID; Unit GoalID; Arm ArmID; Seed Hash; Rule RuleVer }   // committed at intake by the sequencer command in §5; one per unit; inherited by every attempt
 type ArmObservation    struct { RecordHeader; Assignment RecordID; Exposed bool /* Application/PolicyApplication present */; Artifacts []Ref /* complete, raw */; Missing MissingReason }   // raw terminal evidence ONLY — no scores
 type OutcomeAssessment struct { RecordHeader; ArmObservation RecordID; Evaluator EvaluatorRef; Inputs []Hash /* provably exclude the hypothesis revision */; Scores OutcomeVec; OracleResult OracleVerdict; Missingness Decision }
-type EffectMeasurement struct { RecordHeader; Experiment RecordID; Assessments []RecordID; AssignedN, ExposedN int; Delta Delta; Uncertainty Unc; Verdict EffectVerdict /* helpful | harmful | equivalent | insufficient */ }  // a DETERMINISTIC fold over its Assessments; a test recomputes it from the journal
+type EffectMeasurement struct { RecordHeader; Attestation RecordID; Delta Delta; Uncertainty Unc; Verdict EffectVerdict /* treatment_helpful | treatment_harmful | equivalent | insufficient */; ItemEffect ItemEffect /* normalized by Relation: item_helpful | item_harmful | item_redundant | insufficient */ }  // a DETERMINISTIC fold over its Attestation; a test recomputes it from the attestation alone
+
+// The ONE evaluator→production write. Self-contained: a production fold verifies a transition from this record and nothing else.
+type EffectAttestation struct {
+    RecordHeader                     // ProductionRecord
+    ProtocolHash  Hash               // hash of the immutable Experiment (protocol version, Hypothesis ItemRev, Relation, arms, outcome spec, analysis spec, oracle class, exclusions)
+    Units         []UnitRow          // EVERY eligible unit: GoalID, arm, assignment probability, exposed?, missing reason, assessment id + scores (or absent)
+    StopBoundary  StopRef            // which stopping rule fired, at which unit count
+    Estimator     EstimatorRef       // the estimator + its inputs as used
+    Evaluator     EvaluatorRef       // identity + version; Inputs hashes provably exclude the hypothesis revision
+}
+// Verifier: recomputes AssignedN/ExposedN, ITT and per-protocol deltas, and the verdict from Units + Estimator; refuses a transition whose measurement does not recompute. Mutation tests: drop a unit, change an arm, move the stop boundary, swap the estimator — each must fail verification.
 ```
 
 Counts are **derived from Assignment records**, never stored on the
@@ -401,8 +444,11 @@ established.
 
 **Loop closed** = `candidate` (run A) → Assignment → Application or
 PolicyApplication (run B) → OutcomeAssessment with an independent evaluator →
-EffectMeasurement → LifecycleTransition citing it → **a later production run
-whose Application/PolicySelection reflects the transition**. **v1 exit:** a
+EffectAttestation → EffectMeasurement (recomputed) → LifecycleTransition
+citing it → **a later production run whose request hash or driver path
+demonstrably changed because of it** (a quarantined lesson absent from the
+request; a tombstoned mechanism absent from PolicySelection; an effective
+lesson present). **v1 exit:** a
 blinded scripted scenario where a planted helpful item is promoted and a
 planted harmful item is demoted by the same machinery; then one live
 randomized experiment on this box, through the real subprocess path,
@@ -434,12 +480,10 @@ of the registry and is checked at compile time by the typed APIs:
 
 Every production reader is contract-tested with poisonous control and
 experimental rows before the first replay runs. The evaluator writes into
-production exactly one thing: an **attestation** — `OutcomeAssessment` and
-`EffectMeasurement` carrying the protocol hash, the assigned/exposed unit
-IDs, per-assessment scores, estimator inputs, and evaluator identity — so a
-production fold can verify a transition's evidence without reading any
-experimental artifact, and an auditor with the evaluator capability can
-recompute it.
+production exactly one thing: the `EffectAttestation` (§8a), from which the
+`EffectMeasurement` is a recomputable fold; a production verifier recomputes
+it without reading any control or experimental record, and an auditor with
+the evaluator capability can trace every unit back to its arm artifacts.
 
 **Attribution (D17).** `plain` and `star` shadow arms compare the *whole
 harness* to a 1-shot; a match updates a `HarnessChallenger` record only. An
@@ -590,9 +634,14 @@ edges.
     equivalence; HarnessChallenger.
 12. Native pack envelope, projection mapping table complete, import
     quarantine; import the Python workspace's learned data at `candidate`.
-13. Live acceptance: one goal family, one live experiment to its stopping
-    rule with a non-`insufficient` verdict, the Manti target measured and
-    reported, one mechanism removed with absence proof, one lens swap.
+13. Live acceptance, the full §8a predicate: one goal family; one live
+    randomized experiment through the real subprocess path reaching its
+    stopping rule with `item_helpful` or `item_harmful` (or `item_redundant`
+    followed by the policy tombstone); the predeclared LifecycleTransition
+    committed from a recomputed attestation; a subsequent production run
+    whose request hash or PolicySelection demonstrably changed because of
+    it; the Manti target measured and reported; one mechanism removed with
+    absence proof; one lens swap.
 
 ## 17. Conformance appendix (status is honest; each row names the observable edge, the test whose failure condition is stated, and the build step)
 
@@ -607,7 +656,7 @@ edges.
 | D8 Python lift rule | honored, plan-only | each shared-contract change classified; provider repairs are their own main-branch items | 2, 12 |
 | D9 home | honored | branch/path | — |
 | D11 measured behavior change | partial until step 13 | live experiment: helpful/harmful (or equivalent + policy change), transition committed, consequence observed in a later production run | 10–13 |
-| D12 one process, no cron | honored in design | two-process admission test; no cron in tree; supervisor heartbeats | 2, 9 |
+| D12 one process, no cron | honored in design | single-root admission (2); submission to the live process (5); supervised-lane restart (7); timer shutdown in the quiesce DAG (9) | 2, 5, 7, 9 |
 | D13 targets not constraints | honored | overage-continues test; thresholds reported | 3, 11 |
 | D14 full loop in v1 | partial until step 11 | discrimination scenario + live loop | 10–11 |
 | D15 no cost aborts | honored | no cost-stop path; grep + test | 3 |
@@ -624,6 +673,18 @@ edges.
 | §8.9 edges + removal | honored in design | subtraction artifact per step; one removal with absence proof | every step, 13 |
 
 ## 18. What changed by round
+
+**v1.4 (r4):** `ItemRev` everywhere content matters (Hypothesis, arms,
+applications, selection); `TreatmentRelation` and a normalized `ItemEffect`
+so an ablation's sign cannot promote the mechanism it disproved;
+`quarantined` stage and the selectable-stage set so harmful evidence changes
+the next request; a concrete self-contained `EffectAttestation` with a
+recomputing verifier and forgery/omission mutation tests; three envelopes
+stated in §1a with one kind→envelope registry; per-effect keys derived from
+the invocation token with a request-before-act handshake and an
+unannounced-action rule; sibling write sets, path leases, per-attempt
+working copies with a recorded merge/apply, and held outward effects until
+selection; step 13 = the full §8a predicate; D12's owning steps.
 
 **v1.3 (r3):** EffectToken committed before dispatch and presumed-effectful
 restart; overflow as capability-aware routing with escalation only when no
