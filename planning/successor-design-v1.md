@@ -2,16 +2,16 @@
 status: living
 ---
 
-# Successor v1 — design note (Phase 2, the whole system) — v1.5
+# Successor v1 — design note (Phase 2, the whole system) — v1.6
 
 *2026-09-04. Implementation is mine (Jeremy: "implementation, per usual, is
 yours"); this note comes to him as a vision read. Brief = the drift review's
 §8 (`docs/history/2026-09-04-holistic-drift-review.md`, main) as amended by
 D7–D17 in `successor-plan.md`; contract practice =
 `contract-testing-input.md`; boundary spec = `docs/CONTRACTS.md` + the Phase 1
-behavior suite. v1.5 = v1.4 amended against r5 (codex, Architect + Skeptic; ledgers
-`verdict-r1..5.md` in the review dir — r5 left four items, both lenses
-agreeing everything else is resolved). §18 lists what changed by round. Inherited shapes
+behavior suite. v1.6 = v1.5 amended against r6 (codex, Architect + Skeptic; ledgers
+`verdict-r1..6.md` in the review dir — r6 left three items, everything
+else resolved by both lenses). §18 lists what changed by round. Inherited shapes
 carry their justifying sentence beside them (anti-lift).*
 
 ## 0. What v1 is
@@ -203,22 +203,34 @@ get **exclusive path leases** recorded on the Fork; children that need the
 same repository get **per-attempt working copies** (worktree / copy-on-
 write snapshot) and the parent performs an explicit, recorded **merge/apply
 step** after `JoinSettled` — a merge conflict is a step outcome, not a
-race. **Outward effects in a fork, two classes, confined structurally.**
-*Queries and reversible effects* (reads, idempotent lookups, effects with a
-declared compensator) may run during a child attempt under per-effect
-reconciliation (§4). *Irreversible effects* are never issued by a child:
-the child produces a **prepared intent** (the exact action, key, and expected
-postcondition) that is judged as part of its proposal; after `JoinDecision`,
-the **parent** runs an explicit commit step — its own Invocation, Receipt,
-and postcondition verification — for the selected child's intents only.
+race. **Outward effects in a fork — v1 allows exactly two things inside a child
+attempt: `query` effects and writes to its own working copy.** Every outward
+*mutation*, reversible or not, is never issued by a child; the child commits
+a `PreparedEffectIntent` that is judged as part of its proposal, and after
+`JoinDecision` the **parent** adopts the selected child's intents and runs an
+explicit commit step for each — its own Invocation, per-effect key,
+Receipt, and postcondition verification. A goal whose child would need a
+mutation *during* the attempt to obtain its evidence is **fork-ineligible in
+v1** and runs sequentially (declared, tested). The compensation state
+machine for in-attempt reversible mutations (`prepared → applied →
+compensation_pending → compensated | indeterminate`, settlement before
+`JoinSettled`) is a registered v2 `Finding`, not a half-designed v1 path.
+
+```go
+type OperationClass = query | reversible | irreversible     // REGISTERED per operation in the broker's operation table; never adapter self-assertion
+type PreparedEffectIntent struct { RecordHeader; Fork RecordID; Child AttemptRef; Op OperationRef /* registered */; Request ThoughtRef; Key EffectKey; Authority AuthorityClass; Postcondition ThoughtRef }
+// lifecycle: prepared (child) → adopted (parent, cites JoinDecision) → dispatched → verified | failed | abandoned (loser's intents; never dispatched)
+```
+
 Confinement is at the OS/tool boundary, not by convention: fork children
 execute with outward authority **removed** (no network credentials, no
-send-capable tools; every outward-capable tool is brokered through the
-shell, which refuses irreversible classes during a fork). A backend that
-cannot be confined this way is **ineligible for speculative parallel
-execution** and runs sequentially or only after selection. A live,
-no-restart test has a losing child attempt an unannounced irreversible
-action and asserts it was structurally impossible, not merely recorded.
+send-capable tools); every outward-capable operation is brokered through
+the shell, which during a fork permits only registered `query` operations
+and refuses everything else. A backend that cannot be confined this way is
+**ineligible for speculative parallel execution**. The broker is built with
+the invocation layer (step 3) and adversarially tested before fork/join
+(step 8): a losing child attempts an unregistered or non-query operation and
+the test asserts it was structurally impossible, live, with no restart.
 This is what makes a fork replayable from the journal instead of from
 scheduler timing.
 
@@ -228,7 +240,7 @@ scheduler timing.
 type Invocation struct { RecordHeader; Purpose Purpose; Request ThoughtRef; Backend BackendSnapshot; Target *Budget; Lens *LensRef; EffectToken Token /* committed BEFORE dispatch; a NAMESPACE — see per-effect keys below */ }
 // states, each a record:  prepared → dispatched → terminal_observed → receipt_committed
 type Attempt   struct { RecordHeader; Invocation RecordID; N int; Terminal TerminalState }
-type ToolEffect struct { RecordHeader; Invocation RecordID; Attempt RecordID; Ordinal int; Class EffectClass /* read | write_local | outward */; Key EffectKey /* = derive(EffectToken, Ordinal), allocated and committed BEFORE the action is allowed */; Evidence ThoughtRef }
+type ToolEffect struct { RecordHeader; Invocation RecordID; Attempt RecordID; Ordinal int; Op OperationRef /* registered operation → its OperationClass: query | reversible | irreversible; write_local is a query-class op on the attempt's own working copy */; Key EffectKey /* = derive(EffectToken, Ordinal), allocated and committed BEFORE the action is allowed */; Evidence ThoughtRef }
 type Receipt   struct { RecordHeader; Invocation RecordID; Response ThoughtRef; Usage Usage }
 ```
 
@@ -437,7 +449,8 @@ type Experiment struct {           // immutable protocol; nothing in it accrues
     Assignment   AssignmentKind    // paired_replay | randomized_live | shadow_arm
     Arms         []ArmSpec         // treatment/control snapshots: backend, model, version, config, applied set as []ItemRev, seed; the two arms differ by exactly the Hypothesis
     Outcome      OutcomeSpec       // predeclared dimensions, direction, equivalence margin
-    Analysis     AnalysisSpec      // intention_to_treat AND per_protocol; missing-outcome policy; stopping rule; estimator; uncertainty threshold
+    N            int               // fixed cohort size; closure is exactly at N (v1: no adaptive stopping)
+    Analysis     AnalysisSpec      // intention_to_treat AND per_protocol; missing-outcome policy; estimator; uncertainty threshold
     Oracle       OracleClass       // deterministic_fixture | external_observed | blinded_evaluator
     Exclusions   []Rule            // fixed before observation
 }
@@ -446,21 +459,29 @@ type ArmObservation    struct { RecordHeader; Assignment RecordID; Exposed bool 
 type OutcomeAssessment struct { RecordHeader; ArmObservation RecordID; Evaluator EvaluatorRef; Inputs []Hash /* provably exclude the hypothesis revision */; Scores OutcomeVec; OracleResult OracleVerdict; Missingness Decision }
 type EffectMeasurement struct { RecordHeader; Attestation RecordID; Delta Delta; Uncertainty Unc; Verdict EffectVerdict /* treatment_helpful | treatment_harmful | equivalent | insufficient */; ItemEffect ItemEffect /* normalized by Relation: item_helpful | item_harmful | item_redundant | insufficient */ }  // a DETERMINISTIC fold over its Attestation; a test recomputes it from the attestation alone
 
-// Written by the SEQUENCER (not the evaluator) into production when an experiment's assignment window closes:
-// the authenticated denominator. Production-readable; the evaluator cannot alter it.
+// CLOSURE is one sequencer command, `CloseCohort`, with preconditions checked by the sequencer:
+//   protocol version matches; next assignment ordinal == Protocol.N (v1 = FIXED-N closure only — no adaptive/outcome-dependent stopping in v1;
+//   sequential stopping is a v2 Finding); no assignment in flight. The same framed envelope: marks the experiment closed (further
+//   assignments refused), and commits the CohortCommitment. Recovery: an experiment with N assignments and no closure record is
+//   closed by the fold on next start (deterministic). Attestations MUST cite the closure record.
 type CohortCommitment struct { RecordHeader; Experiment ExperimentID; Protocol ProtocolProjection; Units []AssignedUnit /* GoalID, arm, probability */; Root Hash /* Merkle root over Units */; Count int }
+
+// Per-unit EVIDENCE, committed by the arm's own run driver (NOT the evaluator) when the unit reaches terminal:
+// the Merkle root over that attempt's committed artifacts (receipts, verdicts, deliverables by hash) + exposure facts + missingness.
+// Production envelope for production arms; the sequencer mirrors a production-readable copy for experimental arms.
+type UnitEvidence struct { RecordHeader; Assignment RecordID; Unit GoalID; Attempt AttemptRef; Exposed bool /* an Application/PolicyApplication cites the hypothesis ItemRev */; ArtifactRoot Hash; Missing MissingReason }
 
 // The ONE evaluator→production write. Self-contained together with its CohortCommitment.
 type EffectAttestation struct {
     RecordHeader                     // ProductionRecord
     Cohort        RecordID           // the CohortCommitment this attests over
     Protocol      ProtocolProjection // the CANONICAL production-safe projection of the immutable Experiment, embedded, not hashed: id/version, Hypothesis ItemRev, Relation, arm definitions (as []ItemRev), outcome spec (dimensions, direction, margin), analysis spec (ITT/per-protocol, estimator, uncertainty threshold, stopping rule), exclusions, oracle class
-    Units         []UnitRow          // one per AssignedUnit in the cohort, in cohort order: exposed?, missing reason, assessment id + scores (or absent) — each row carries its assignment proof (Merkle path to Cohort.Root)
+    Units         []UnitRow          // one per AssignedUnit, in cohort order. Each row binds THREE authenticated things: (a) its assignment proof (Merkle path to Cohort.Root); (b) its UnitEvidence RecordID (the driver-committed artifact root, exposure, missingness — the verifier reads these from that record, never from the row); (c) the EVALUATOR'S OWN sequencer-committed Invocation + Receipt for this unit, whose request hash the verifier recomputes from (ArtifactRoot manifest + OracleSpec) — so the evaluator's inputs are exactly the committed evidence and the hypothesis revision is excluded by construction, and whose Receipt carries the scores the row claims. For deterministic and external oracles the verifier recomputes the score from the manifest itself and ignores any evaluator.
     StopBoundary  StopRef            // which stopping rule fired, at which unit count
     Estimator     EstimatorRef       // the estimator + its inputs as used
     Evaluator     EvaluatorRef       // identity + version; Inputs hashes provably exclude the hypothesis revision
 }
-// Verifier (production, no control/experimental access): (1) Protocol equals the projection in the CohortCommitment; (2) every cohort unit appears exactly once with a valid Merkle path — completeness AND membership; (3) the transition's ItemRev equals Protocol.Hypothesis and the sign is normalized by Protocol.Relation; (4) the stop boundary is legal for Count and the stopping rule; (5) recomputes AssignedN/ExposedN, ITT and per-protocol deltas, uncertainty, and the verdict from Units + Estimator. Any failure refuses the transition. Mutation tests: drop a unit, add a unit, change an arm, alter a probability, substitute the transition's item/revision, flip Relation, move the stop boundary, swap the estimator — each must fail verification.
+// Verifier (production, no control/experimental access): (1) Protocol equals the projection in the CohortCommitment and the attestation cites the CloseCohort record; (2) every cohort unit appears exactly once with a valid Merkle path — completeness AND membership; (3) each row's UnitEvidence exists, matches unit+attempt, and its exposure/missingness are taken from it; (4) each row's evaluator Invocation request hash recomputes from that UnitEvidence's manifest + the protocol's OracleSpec, and the scores equal the ones in that Invocation's Receipt (or, for deterministic/external oracles, recompute from the manifest); (5) the transition's ItemRev equals Protocol.Hypothesis and the sign is normalized by Protocol.Relation; (6) Count == Protocol.N (fixed-N); (7) recomputes AssignedN/ExposedN, ITT and per-protocol deltas, uncertainty, and the verdict. Any failure refuses the transition. Mutation tests: drop a unit, add a unit, change an arm, alter a probability, alter a score, cite a nonexistent assessment, change exposure or missingness, feed the evaluator an input outside the manifest, substitute the transition's item/revision, flip Relation, close early — each must fail verification.
 ```
 
 Counts are **derived from Assignment records**, never stored on the
@@ -514,10 +535,13 @@ of the registry and is checked at compile time by the typed APIs:
   by the evaluator.
 
 Every production reader is contract-tested with poisonous control and
-experimental rows before the first replay runs. Two things cross into production, from two different writers: the
-**sequencer** commits the `CohortCommitment` (the authenticated denominator
-and the canonical protocol projection) when the assignment window closes;
-the **evaluator** commits the `EffectAttestation` over it. The
+experimental rows before the first replay runs. Three writers, three authenticated inputs: each arm's **run driver** commits
+`UnitEvidence` at terminal (the artifact root the scores must be computed
+from); the **sequencer** commits the `CohortCommitment` in the `CloseCohort`
+envelope (the authenticated denominator and the canonical protocol
+projection); the **evaluator** commits, per unit, its own Invocation/Receipt
+(its inputs and its scores, both sequencer-committed like any other call)
+and finally the `EffectAttestation` binding all of it. The
 `EffectMeasurement` is a recomputable fold over the pair; a production
 verifier recomputes it without reading any control or experimental record,
 and an auditor with the evaluator capability can trace every unit back to
@@ -711,6 +735,18 @@ edges.
 | §8.9 edges + removal | honored in design | subtraction artifact per step; one removal with absence proof | every step, 13 |
 
 ## 18. What changed by round
+
+**v1.6 (r6):** per-unit `UnitEvidence` committed by the arm's own driver,
+and the evaluator's scores bound to its own sequencer-committed
+Invocation/Receipt whose request hash recomputes from the evidence manifest
+(so inputs are authenticated and the hypothesis is excluded by
+construction); `CloseCohort` as one sequencer command with checked
+preconditions, v1 fixed-N closure only, adaptive stopping deferred;
+registered `OperationClass` per operation, `PreparedEffectIntent` with a
+lifecycle, and the v1 cut — fork children do queries and working-copy
+writes only, every outward mutation is parent-committed after selection,
+in-attempt-mutation goals are fork-ineligible, compensation machinery a v2
+Finding; broker built with the invocation layer and tested before fork.
 
 **v1.5 (r5):** `CohortCommitment` written by the sequencer as the
 authenticated denominator, with the canonical protocol projection embedded
