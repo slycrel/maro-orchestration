@@ -4175,3 +4175,18 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   Python behavior redesign. **D9** branch `successor`, Go code rebuilt fresh
   in this repo's `go/`. Phase 2 commit UNBLOCKED; the full plan lives at
   `planning/successor-plan.md` on `successor`.
+
+- **2026-09-04 (D10 — separate workspaces, the SPEC is shared — Jeremy;
+  AMENDS D2):** *"Let's keep the workspaces separate. From here on out
+  we're diverged in implementation... we have a target spec, we can
+  forwards-compat move that spec when we need to... input -> black box
+  process -> output should be consistent and the edges are where our
+  success/failures lie, with processing simply implementation... the
+  woven rope is the complexity, not the pattern. I suspect proper higher
+  level contract testing will serve us well."* Read: the Go successor gets
+  its own workspace root; no shared live store. Shared = `docs/CONTRACTS.md`
+  + the behavior suite (the spec), moved forwards-compatibly when needed.
+  Judge at the edges; processing is implementation. Phase 4 compares at
+  the artifact boundary across separate workspaces. Learned outputs still
+  travel between engines as pack DATA. Further contract-testing nuance
+  incoming from Jeremy's work side.
