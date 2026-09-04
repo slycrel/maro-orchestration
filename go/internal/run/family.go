@@ -18,6 +18,9 @@ const (
 
 var families = map[FamilyKey]bool{FamilyNone: true, FamilyAnswer: true, FamilyWriteLocal: true}
 
+// KnownFamily reports whether f is a registered population (none is not).
+func KnownFamily(f FamilyKey) bool { return f != FamilyNone && families[f] }
+
 var (
 	writeWords = regexp.MustCompile(`(?i)\b(write|create|edit|modify|update|refactor|implement|add|remove|delete|rename|fix|patch|generate)\b`)
 	fileWords  = regexp.MustCompile(`(?i)\b(file|files|directory|folder|repo|repository|script|code|function|module|package|test|tests)\b|\.[a-z]{1,4}\b`)

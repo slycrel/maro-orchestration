@@ -1330,3 +1330,110 @@ Five new tests, two extended; `unit_evidence.missing` contract now
 `^(no_deliverable|not_complete)$`. What the stricter fold found in the
 existing scenarios: nothing — the honest runner's arms already carried
 exactly the protocol's sets, which is the point of checking.
+
+## Step 11a — randomized live assignment at intake, the blinded evaluator, the evaluator lane (2026-09-05)
+
+Where D11 is actually established (§8a): a candidate is measured on the
+production goals that arrive while it is open, not on replays of past
+ones. The unit is the goal the user submitted; the arm is decided in the
+same command that admits the goal; the user gets the deliverable as
+always; a judge that sees only goal and deliverable scores it later;
+the measurement's transition changes the next production run.
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| Randomized live assignment at intake: sequencer-enforced command, GoalID as randomization unit, keyed seed, mutual exclusion across experiments, admit + stop atomic with the goal | §8a, §9 | kept: `run.IntakeCommand` submits goal + assessment + assignment under `ExpectHead` and re-decides on `ErrPrecondition` (three tries); `experiment.Admit` is the `run.AdmitFunc` — first open live experiment of the goal's family with room and a current hypothesis; ordinal = count so far; arm = `ArmFor(seed, ordinal, first)` (permuted blocks of two: balance is by construction, no run of four one-arm goals). `goal.arm` replaces `goal.replay`: one field for both assignment kinds (a replay arm is a goal too) |
+| The arm forced on the run, not suggested | §9 | kept: the goal carries the `ArmRef`; the driver hands it to policy and recall as before (step 10b); the fold checks a live arm's goal and selections against the assignment's protocol arm and refuses an unstarted goal whose arm is not an assignment's |
+| Blinded evaluator oracle | §8a "held-out blinded judge" | kept: `blinded_evaluator` = `judge/1`, a tool-less `evaluate` invocation (new purpose) over the unit's own run, prompt = goal text + deliverable, reply `achieved|not_achieved`; the hypothesis text is not an input by construction. Rows cite the evaluate invocation; the fold recomputes the score from its response and refuses `unevaluated` when a usable evaluation exists |
+| Estimator | §8a | `arm_diff/1`: mean(treatment) − mean(control) over per-protocol units; verdict by margin with `min_per_arm` (default 2) — the uncertainty control in place of an interval estimate, which is **cut** (n is small and declared; the per-arm floor is the honest bound) |
+| Evaluator lane | §9 (the measured loop runs without an operator) | kept: `experiment.Lane` (stage 2, every 20s): for each open live experiment, derive evidence for terminal units; when the cohort is full, close, attest, measure, transition — the same `Closer` the CLI uses, resumable at every seam including "measurement without its transition" |
+| Shadow arms + `HarnessChallenger` | §8a, D17 | **cut from v1**: a shadow arm needs experimental-envelope twins of the invocation records and only ever updates a challenger, never standing. D17 stays partial-by-scope: the bitter-lesson loop is inside the process for lessons and policies; harness challengers are a later envelope |
+| `ablate(m)` equivalence → mechanism off | §9, D17 | → step 11b: seed mechanisms as canon policy items so `ablate_item` on a seed withholds the mechanism; equivalent → redundant → tombstone → the next `PolicySelection` disables it with the absence proof |
+| Interval estimate, sequential stopping | §8a | cut: fixed n; per-arm minimums |
+
+**Built.** `run`: `Goal.Arm *learn.ArmRef` (door: replay ⇒ arm + parent;
+fork ⇒ no arm), `Driver.Admit`, `IntakeCommand`, `Ledger.Arms` (was
+Replays), `KnownFamily`. `learn`: `ArmRef.Validate/Equal`. `invoke`:
+`PurposeEvaluate`. `experiment`: kinds `randomized_live` /
+`blinded_evaluator`, `Protocol.validate` per kind, `Assignment.Arm`,
+`ArmFor`, `AnalysisSpec{MinPerArm}`, live `UnitRow` fields,
+`EffectMeasurement.TreatmentN/ControlN`, `Spec.Live/Population/N`,
+`Admit`, `Closer.Evidence`, `measureLive`, `EvaluatorPrompt/ParseEvaluation`,
+`liveRow` (reuses a usable evaluation; up to 3 tries; `unevaluated`
+otherwise), `evaluator.go` (`Lane`, `settled`), `fold.go` live rules
+(dense ordinals < n; the unit's goal is a plain production goal taken in
+by the SAME command — `Journal.SameCommand`; family = population; one
+experiment per goal; hypothesis current at the assignment; arm = `ArmFor`;
+goal arm = protocol arm; evidence arm = assigned arm; live attestation
+rows recomputed from the cited evaluation). `process`: evaluator lane;
+`submit` admits. CLI: `experiment open --live --population --n
+[--min-per-arm]`, `close [--judge-model]`, list/show for live cohorts;
+`now` admits too. Contracts 0/0 after `goal.arm`, `assignment.arm`,
+protocol/evaluator/estimator patterns widened, `effect_measurement.
+treatment_n/control_n`, `invocation.purpose` + `evaluate`.
+
+**Edge tests.** `TestLiveRandomizedAssignment` — the loop end to end
+with keyed backends: a write_local goal is not admitted; four answer
+goals are admitted 2/2 with ordinals 0..3, treatment requests carry the
+lesson and answer in meters, control requests do not and answer in feet,
+recall carries the arm; a fifth goal runs plain; the runner refuses a
+live experiment; one lane pass → `treatment_helpful`/`item_helpful`,
+`treatment_n = control_n = 2`, delta 1, the revision effective; every
+row cites an evaluate invocation whose request holds the deliverable and
+NOT the lesson and used no tools; the next production goal is answered
+in meters with no arm; a second pass writes nothing.
+`TestLiveVerdicts` — harmful → quarantined; a neutral lesson →
+equivalent → tombstone; a judge that never answers → three evaluate
+calls per unit, every row `unevaluated`, `insufficient`, the item
+unmoved. `TestLiveAdmissionIsAtomicAndResumes` — the head moves under
+the admission twice (a lesson lands between decide and commit): the
+sequencer refuses, the goal is re-decided and admitted; a third move is
+the caller's error and production continues; a superseded hypothesis
+stops admission (2/4 stays open, never closes); the closer killed after
+`close`, `attest`, `measure` in turn — re-open refused mid-close, the
+lane finishes with one measurement and one transition, four evaluate
+calls for four units (seams never re-judge). `TestLiveFoldRefusesForgeries`
+— an assignment outside the goal's intake command; the wrong arm; an
+ordinal out of order; a goal arm forcing an extra item; a write_local
+goal admitted; one goal in two experiments; evidence for the other arm;
+and at the attest seam: a flipped score, `unevaluated` beside a usable
+evaluation, a row citing another unit's evaluation, exposure flipped,
+pair fields under a live protocol; `Close` without a judge is `ErrConfig`.
+`TestOpenRefusesBadLiveProtocols` — units with live, population none /
+unknown, n of one, no why, a live-admitted goal offered as a paired
+unit; `ArmFor` parity and block balance.
+
+What the tests found in the code: the commitment door indexed
+`Protocol.Units[i]` for a live protocol (no units → panic on the first
+live close); the lane skipped a measured experiment whose transition
+had not been written (a crash between `measure` and `transition` was
+permanent) — `State.settled` now asks whether the measurement reached
+the item.
+
+**Live.** Scratch workspace, `serve --model haiku --judge-model haiku`.
+`learn add --family answer "Give every height in feet only, never in
+meters."`; `experiment open --live --population answer --n 4`. Four
+`submit`s (Everest, K2, Kilimanjaro, Denali): admitted
+treatment/control/control/treatment; treatment runs `applied 1` and
+answered in feet only ("Denali is 20,310 feet above sea level."),
+control runs `recall 0 included of 1` and answered in both units. The
+evaluator lane closed the cohort unprompted: `equivalent →
+item_redundant (assigned 4, analyzed 4, exposed 2/2, delta_pp 0.000)` —
+the blinded judge scored every deliverable achieved, so the lesson
+changed the form and not the outcome; `learn list` shows the revision
+`tombstone`. A fifth submit (Mont Blanc): `recall 0 included of 9` (the
+tail had minted candidates meanwhile; the tombstoned lesson is out), no
+arm. SIGTERM: lanes quiesced in order.
+
+**Residuals.** The evaluator is the same model family as the executor
+(haiku judging haiku) — held-out in inputs, not in weights; a second
+provider is a config choice, not a code one. `Exposed` on a live row
+means "ran the arm it was assigned" (per-protocol compliance), which
+`show` now labels `as_assigned`. An experiment with a stale hypothesis
+stays open forever at < n (nothing closes it); the operator surface
+shows it, and a `stale` closure is a small later record. Admission
+considers experiments in journal order, so two open live experiments on
+one family serialize by age — mutual exclusion is per goal, not
+fairness. Shadow arms and `ablate(m)` as above.

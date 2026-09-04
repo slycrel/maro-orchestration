@@ -11,7 +11,7 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "\"assignment\":\"paired_replay\",.*\"oracle\":\"deterministic_fixture\",.*\"relation\":\"(apply_item|ablate_item)\"",
+      "pattern": "\"assignment\":\"(paired_replay|randomized_live)\",.*\"oracle\":\"(deterministic_fixture|blinded_evaluator)\",.*\"relation\":\"(apply_item|ablate_item)\"",
       "rejects": "{\"assignment\":\"paired_replay\",\"oracle\":\"deterministic_fixture\",\"relation\":\"teleport\"}",
       "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
     },

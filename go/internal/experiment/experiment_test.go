@@ -250,7 +250,7 @@ func TestBlindedDiscrimination(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := h.state()
-	if n := len(st.Runs.Replays); n != 3 {
+	if n := len(st.Runs.Arms); n != 3 {
 		t.Fatalf("assignments with arm runs: %d", n)
 	}
 	for _, as := range st.Assignments {
@@ -259,15 +259,15 @@ func TestBlindedDiscrimination(t *testing.T) {
 		if tr == nil || ct == nil || !tr.Exposed || ct.Exposed || tr.Deliverable == nil || ct.Deliverable == nil {
 			t.Fatalf("evidence %+v %+v", tr, ct)
 		}
-		if d := h.deliverable(st.Runs.Replays[as.ID][Treatment]); d != "8,849 meters" {
+		if d := h.deliverable(st.Runs.Arms[as.ID][Treatment]); d != "8,849 meters" {
 			t.Fatalf("treatment deliverable %q", d)
 		}
-		if d := h.deliverable(st.Runs.Replays[as.ID][Control]); d != "29,032 feet" {
+		if d := h.deliverable(st.Runs.Arms[as.ID][Control]); d != "29,032 feet" {
 			t.Fatalf("control deliverable %q", d)
 		}
 		// the arm's selection carries the arm; the goal replays the unit
-		rs := st.Runs.Replays[as.ID][Treatment]
-		if rs.Goal.Parent != as.Unit || rs.Goal.Replay == nil || rs.Goal.Replay.Assignment != as.ID || rs.Latest().Recall.Arm == nil || rs.Latest().Recall.Arm.Arm != Treatment {
+		rs := st.Runs.Arms[as.ID][Treatment]
+		if rs.Goal.Parent != as.Unit || rs.Goal.Arm == nil || rs.Goal.Arm.Assignment != as.ID || rs.Latest().Recall.Arm == nil || rs.Latest().Recall.Arm.Arm != Treatment {
 			t.Fatalf("treatment run: goal %+v recall arm %+v", rs.Goal, rs.Latest().Recall.Arm)
 		}
 	}
@@ -334,7 +334,7 @@ func TestBlindedDiscrimination(t *testing.T) {
 		t.Fatal(err)
 	}
 	arms := 0
-	for _, byArm := range st.Runs.Replays {
+	for _, byArm := range st.Runs.Arms {
 		for _, rs := range byArm {
 			arms++
 			done := tled.Done[string(rs.Run)+"/1"]
@@ -588,8 +588,8 @@ func TestRunnerResumesAfterKill(t *testing.T) {
 		t.Fatalf("want a crash, got %v", err)
 	}
 	st := h.state()
-	if len(st.Runs.Replays) != 1 || len(st.Evidence) != 0 {
-		t.Fatalf("after kill 1: %d replays, %d evidence", len(st.Runs.Replays), len(st.Evidence))
+	if len(st.Runs.Arms) != 1 || len(st.Evidence) != 0 {
+		t.Fatalf("after kill 1: %d replays, %d evidence", len(st.Runs.Arms), len(st.Evidence))
 	}
 	h.restart()
 	// kill 2: dies after intake of the second arm (a goal with no run)
@@ -613,7 +613,7 @@ func TestRunnerResumesAfterKill(t *testing.T) {
 	}
 	st = h.state()
 	runs := 0
-	for _, byArm := range st.Runs.Replays {
+	for _, byArm := range st.Runs.Arms {
 		runs += len(byArm)
 	}
 	if runs != 6 || len(st.Assignments) != 3 || len(st.Runs.Unstarted) != 0 {
@@ -667,7 +667,7 @@ func TestOpenRefusesBadUnits(t *testing.T) {
 	}
 	st := h.state()
 	var arm record.RecordID
-	for _, byArm := range st.Runs.Replays {
+	for _, byArm := range st.Runs.Arms {
 		arm = byArm[Treatment].Goal.ID
 	}
 	if _, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: s.harmful, Relation: ApplyItem, Units: []UnitSpec{{Goal: arm, Fixture: fx}}, Why: "w"}); !errors.Is(err, ErrConfig) {
@@ -812,11 +812,11 @@ func TestFoldRefusesFirstForgedRecordsAndCloseResumes(t *testing.T) {
 	{
 		g := h.snapshot()
 		st := g.state()
-		if len(st.Evidence) != 0 || len(st.Runs.Replays) != 1 {
-			t.Fatalf("seam 1: %d evidence, %d replays", len(st.Evidence), len(st.Runs.Replays))
+		if len(st.Evidence) != 0 || len(st.Runs.Arms) != 1 {
+			t.Fatalf("seam 1: %d evidence, %d replays", len(st.Evidence), len(st.Runs.Arms))
 		}
 		as := st.assignment(x.ID, x.Units[0].Goal)
-		rs := st.Runs.Replays[as.ID][Treatment]
+		rs := st.Runs.Arms[as.ID][Treatment]
 		forged := EvidenceOf(rs, x.Hypothesis, x.ID, as.ID, as.Unit, Treatment)
 		forged.Exposed = !forged.Exposed
 		g.submit("forge/evidence", forged)
@@ -933,7 +933,7 @@ func TestFailedArmIsMissingNotScored(t *testing.T) {
 		t.Fatalf("evidence %+v %+v", tr, ct)
 	}
 	// the envelope the treatment delivered does contain the fixture
-	payload := h.deliverable(st.Runs.Replays[as.ID][Treatment])
+	payload := h.deliverable(st.Runs.Arms[as.ID][Treatment])
 	if Score([]byte(payload), []byte("failed")) != 1 {
 		t.Fatalf("the failure envelope %q does not contain the fixture; the test no longer shows the hazard", payload)
 	}

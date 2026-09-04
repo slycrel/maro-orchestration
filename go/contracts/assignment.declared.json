@@ -38,6 +38,16 @@
       "pattern": "^[0-9a-f]{64}$",
       "rejects": "abc",
       "measured_by": "internal/experiment:TestRunnerResumesAfterKill"
+    },
+    "arm": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(treatment|control)$",
+      "rejects": "placebo",
+      "measured_by": "internal/experiment:TestLiveFoldRefusesForgeries"
     }
   }
 }

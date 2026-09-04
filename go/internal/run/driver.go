@@ -108,11 +108,47 @@ type Driver struct {
 	// arm's forced sets, and the origin presents to no one. Set by the
 	// experiment package only.
 	Replay *ReplayContext
+	// Admit is the intake command's narrow assignment capability (§5, §9):
+	// called with the goal and its assessment BEFORE the intake commits,
+	// it may stamp an arm on the goal and return control records (an
+	// experiment assignment) that commit in the SAME command, together
+	// with the journal head the decision was made at — the command is
+	// refused if the head moved, so admit/stop and an intake cannot race.
+	// nil: no live experiment admits goals here.
+	Admit AdmitFunc
 	// CrashAt stops the driver dead (as if the process died) immediately
 	// AFTER the named stage commits; "invoke:<stage>" is forwarded to the
 	// invocation shell's seam. Test seam for the kill matrix; production
 	// never sets it.
 	CrashAt string
+}
+
+// AdmitFunc: see Driver.Admit.
+type AdmitFunc func(ctx context.Context, g *Goal, fam *FamilyAssessment) (recs []record.Record, head *uint64, err error)
+
+// IntakeCommand commits a goal and its assessment as ONE command with
+// whatever the admitter adds. An admission decided at a head that moved
+// is refused by the sequencer and decided again (bounded: a third refusal
+// is the caller's error to see).
+func IntakeCommand(ctx context.Context, j *journal.Journal, admit AdmitFunc, g *Goal, fam *FamilyAssessment) error {
+	var err error
+	for try := 0; try < 3; try++ {
+		recs := []record.Record{g, fam}
+		var head *uint64
+		if admit != nil {
+			g.Arm = nil
+			var extra []record.Record
+			extra, head, err = admit(ctx, g, fam)
+			if err != nil {
+				return err
+			}
+			recs = append(recs, extra...)
+		}
+		if _, err = j.Submit(ctx, journal.Command{IdempotencyKey: "goal/" + string(g.ID), Epoch: j.Epoch(), ExpectHead: head, Records: recs}); !errors.Is(err, journal.ErrPrecondition) {
+			return err
+		}
+	}
+	return err
 }
 
 // ReplayContext is what an arm forces on its run (§8a): the assignment,
@@ -129,9 +165,6 @@ type ReplayContext struct {
 }
 
 func (rc *ReplayContext) arm() *learn.ArmRef {
-	if rc == nil {
-		return nil
-	}
 	return &learn.ArmRef{Assignment: rc.Assignment, Arm: rc.Arm, Apply: rc.Apply, Withhold: rc.Withhold}
 }
 
@@ -230,7 +263,7 @@ func (d *Driver) policy(rs *RunState, n uint32) (*learn.PolicySelection, []recor
 	if rs.Family.Family != FamilyNone {
 		family = string(rs.Family.Family)
 	}
-	pol := learn.SelectPolicy(led, learn.Query{Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable, Arm: d.Replay.arm()})
+	pol := learn.SelectPolicy(led, learn.Query{Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable, Arm: rs.Goal.Arm})
 	pol.Header = header(runRef(rs.Run), rs.Run, n, "policy_selection/1")
 	recs := []record.Record{pol}
 	for i, rule := range led.PolicyRules(pol) {
@@ -290,10 +323,12 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 		return nil, fmt.Errorf("%w: a replay origin needs a replay context, and only it", ErrConfig)
 	}
 	if d.Replay != nil {
-		goal.Replay = &ReplayRef{Assignment: d.Replay.Assignment, Arm: d.Replay.Arm}
+		goal.Arm = d.Replay.arm()
 		goal.Parent, goal.Root = d.Replay.Unit, d.Replay.Root
-	}
-	if err := d.commit(ctx, "goal/"+string(goal.ID), goal, fam); err != nil {
+		if err := d.commit(ctx, "goal/"+string(goal.ID), goal, fam); err != nil {
+			return nil, err
+		}
+	} else if err := IntakeCommand(ctx, d.J, d.Admit, goal, fam); err != nil {
 		return nil, err
 	}
 	rs := &RunState{Run: record.RunID(record.NewID()), Goal: goal, Family: fam}
@@ -766,7 +801,7 @@ func (d *Driver) recall(ctx context.Context, rs *RunState, n uint32, continues *
 		}
 		// the policy boundary's second consumer: MechRecall off = every
 		// item excluded, the request is the goal alone
-		sel = learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable, Off: !cfg.Mechanisms[learn.MechRecall], Arm: d.Replay.arm()})
+		sel = learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable, Off: !cfg.Mechanisms[learn.MechRecall], Arm: rs.Goal.Arm})
 	}
 	sel.Header = header(runRef(rs.Run), rs.Run, n, "recall_selection/1")
 	sel.Purpose = invoke.PurposeExecute

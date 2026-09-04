@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -15,6 +16,7 @@ import (
 // State is the fold of every experiment record over one journal prefix,
 // composed over the run fold (which carries the learned fold).
 type State struct {
+	Head         uint64 // the journal head this state was folded through
 	Runs         *run.Ledger
 	Experiments  map[record.RecordID]*Experiment
 	Assignments  map[record.RecordID]*Assignment                     // by id
@@ -25,7 +27,19 @@ type State struct {
 	Measurements map[record.RecordID]*EffectMeasurement              // by experiment
 	Order        []record.RecordID                                   // experiments in Seq order
 	byUnit       map[record.RecordID]map[record.RecordID]*Assignment // experiment → unit → assignment
+	byOrdinal    map[record.RecordID][]*Assignment                   // experiment → assignments in ordinal order (dense for live)
+	claimed      map[record.RecordID]*Assignment                     // unit → its live assignment (mutual exclusion)
 	byGoal       map[record.RecordID]*run.RunState
+}
+
+// ordinal returns the experiment's assignment at ordinal i (nil if none).
+func (st *State) ordinal(exp record.RecordID, i int) *Assignment {
+	for _, as := range st.byOrdinal[exp] {
+		if as.Ordinal == i {
+			return as
+		}
+	}
+	return nil
 }
 
 // RunOf returns the run whose goal is id.
@@ -89,11 +103,13 @@ func Fold(j *journal.Journal, store *thought.Store) (*State, error) {
 	}
 	st := &State{Runs: led, Experiments: map[record.RecordID]*Experiment{}, Assignments: map[record.RecordID]*Assignment{}, Closed: map[record.RecordID]*Closed{},
 		Evidence: map[record.RecordID]map[string]*UnitEvidence{}, Commitments: map[record.RecordID]*CohortCommitment{}, Attestations: map[record.RecordID]*EffectAttestation{},
-		Measurements: map[record.RecordID]*EffectMeasurement{}, byUnit: map[record.RecordID]map[record.RecordID]*Assignment{}, byGoal: map[record.RecordID]*run.RunState{}}
+		Measurements: map[record.RecordID]*EffectMeasurement{}, byUnit: map[record.RecordID]map[record.RecordID]*Assignment{}, byOrdinal: map[record.RecordID][]*Assignment{},
+		claimed: map[record.RecordID]*Assignment{}, byGoal: map[record.RecordID]*run.RunState{}}
 	for _, rs := range led.Runs {
 		st.byGoal[rs.Goal.ID] = rs
 	}
 	head := pr.Head()
+	st.Head = head
 	// both envelopes, in ONE Seq order: production evidence cites control
 	// ids and a re-opened experiment cites a production attestation
 	var recs []record.Record
@@ -117,7 +133,7 @@ func Fold(j *journal.Journal, store *thought.Store) (*State, error) {
 		case *Experiment:
 			err = st.experiment(x, store)
 		case *Assignment:
-			err = st.assign(x)
+			err = st.assign(x, j)
 		case *Closed:
 			err = st.closed(x)
 		case *UnitEvidence:
@@ -143,74 +159,71 @@ func Fold(j *journal.Journal, store *thought.Store) (*State, error) {
 		}
 	}
 	// every arm run, evidence or not: its assignment is known and its
-	// selections force exactly the protocol's sets
-	for asID, byArm := range led.Replays {
+	// goal and selections force exactly the protocol's sets
+	for asID, byArm := range led.Arms {
 		as := st.Assignments[asID]
 		if as == nil {
 			return nil, fmt.Errorf("experiment: arm runs cite assignment %s, which is not a record", asID)
 		}
 		for arm, rs := range byArm {
-			if err := st.checkArm(as, arm, rs); err != nil {
+			if err := st.checkArm(as, arm, rs, j); err != nil {
 				return nil, err
+			}
+		}
+	}
+	// a live unit assigned but never started (a crash between intake and
+	// the run) is still an arm: its goal carries the arm
+	for _, g := range led.Unstarted {
+		if g.Arm != nil {
+			if as := st.Assignments[g.Arm.Assignment]; as == nil || !g.Arm.Equal(st.Experiments[as.Experiment].armRef(as.ID, g.Arm.Arm)) {
+				return nil, fmt.Errorf("experiment: unstarted goal %s carries arm %s/%s, which is not an assignment's protocol arm", g.ID, g.Arm.Assignment, g.Arm.Arm)
 			}
 		}
 	}
 	return st, nil
 }
 
-// checkArm executes the arm's contract on a replay run: its goal was taken
-// in after the assignment, while the hypothesis was still the item's
-// current revision (recall forces an item at its current revision, so a
-// stale arm administers nothing), and every attempt's recall and policy
-// selection carries EXACTLY the protocol's forced sets for the arm — the
-// two arms differ by the hypothesis and nothing else.
-func (st *State) checkArm(as *Assignment, arm string, rs *run.RunState) error {
+// checkArm executes the arm's contract on an arm run. A replay arm's goal
+// was taken in after the assignment; a live unit's goal was taken in IN
+// THE SAME COMMAND as its assignment (the sequencer-enforced intake), in
+// the assigned arm. Either way the hypothesis was still the item's
+// current revision when the goal was taken in (recall forces an item at
+// its current revision, so a stale arm administers nothing), the goal
+// carries EXACTLY the protocol's forced sets for the arm, and so does
+// every attempt's recall and policy selection — the two arms differ by
+// the hypothesis and nothing else.
+func (st *State) checkArm(as *Assignment, arm string, rs *run.RunState, j *journal.Journal) error {
 	x := st.Experiments[as.Experiment]
-	if rs.Goal.Seq < as.Seq {
-		return fmt.Errorf("experiment: arm run %s was taken in before its assignment %s", rs.Run, as.ID)
+	switch x.Assignment {
+	case PairedReplay:
+		if rs.Goal.Origin != run.OriginReplay || rs.Goal.Seq < as.Seq {
+			return fmt.Errorf("experiment: arm run %s is not a replay taken in after its assignment %s", rs.Run, as.ID)
+		}
+	case RandomizedLive:
+		if arm != as.Arm || !j.SameCommand(rs.Goal.Seq, as.Seq) {
+			return fmt.Errorf("experiment: live unit %s runs arm %s, but its assignment %s (arm %s) was not its intake command", rs.Goal.ID, arm, as.ID, as.Arm)
+		}
 	}
 	it := st.Runs.Learned.Items[x.Hypothesis.Item]
 	if cur := currentAt(it, rs.Goal.Seq); cur == nil || cur.ID != x.Hypothesis.Revision {
 		return fmt.Errorf("experiment: arm run %s started after hypothesis %s/%s was superseded", rs.Run, x.Hypothesis.Item, x.Hypothesis.Revision)
 	}
-	var spec *ArmSpec
-	for i := range x.Arms {
-		if x.Arms[i].Arm == arm {
-			spec = &x.Arms[i]
-		}
-	}
-	if spec == nil {
+	want := x.armRef(as.ID, arm)
+	if want == nil {
 		return fmt.Errorf("experiment: arm %q is not in the protocol of %s", arm, x.ID)
 	}
-	want := &learn.ArmRef{Assignment: as.ID, Arm: arm, Apply: spec.Apply, Withhold: spec.Withhold}
+	if !rs.Goal.Arm.Equal(want) {
+		return fmt.Errorf("experiment: arm run %s's goal forces %s, not the protocol's %s arm", rs.Run, describeArm(rs.Goal.Arm), arm)
+	}
 	for _, a := range rs.Attempts {
-		if a.Policy != nil && !sameArm(a.Policy.Arm, want) {
+		if a.Policy != nil && !a.Policy.Arm.Equal(want) {
 			return fmt.Errorf("experiment: arm run %s attempt %d policy selection forces %s, not the protocol's %s arm", rs.Run, a.Attempt.Attempt, describeArm(a.Policy.Arm), arm)
 		}
-		if a.Recall != nil && !sameArm(a.Recall.Arm, want) {
+		if a.Recall != nil && !a.Recall.Arm.Equal(want) {
 			return fmt.Errorf("experiment: arm run %s attempt %d recall selection forces %s, not the protocol's %s arm", rs.Run, a.Attempt.Attempt, describeArm(a.Recall.Arm), arm)
 		}
 	}
 	return nil
-}
-
-func sameArm(got, want *learn.ArmRef) bool {
-	if got == nil || got.Assignment != want.Assignment || got.Arm != want.Arm {
-		return false
-	}
-	return sameRevs(got.Apply, want.Apply) && sameRevs(got.Withhold, want.Withhold)
-}
-
-func sameRevs(a, b []learn.ItemRev) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func describeArm(a *learn.ArmRef) string {
@@ -241,8 +254,8 @@ func (st *State) experiment(x *Experiment, store *thought.Store) error {
 	texts := map[string]bool{}
 	for i, u := range x.Units {
 		rs := st.byGoal[u.Goal]
-		if rs == nil || rs.Goal.Origin == run.OriginReplay || rs.Goal.Origin == run.OriginFork {
-			return fmt.Errorf("experiment: %s unit %d (%s) is not a production run's goal", x.ID, i, u.Goal)
+		if rs == nil || rs.Goal.Origin == run.OriginReplay || rs.Goal.Origin == run.OriginFork || rs.Goal.Arm != nil {
+			return fmt.Errorf("experiment: %s unit %d (%s) is not a plain production run's goal", x.ID, i, u.Goal)
 		}
 		if texts[rs.Goal.Text.Hash] {
 			return fmt.Errorf("experiment: %s unit %d (%s) repeats another unit's goal text", x.ID, i, u.Goal)
@@ -281,7 +294,7 @@ func (st *State) experiment(x *Experiment, store *thought.Store) error {
 	return nil
 }
 
-func (st *State) assign(x *Assignment) error {
+func (st *State) assign(x *Assignment, j *journal.Journal) error {
 	x0 := st.Experiments[x.Experiment]
 	if x0 == nil {
 		return fmt.Errorf("experiment: assignment %s names experiment %s, which is not an earlier record", x.ID, x.Experiment)
@@ -289,14 +302,52 @@ func (st *State) assign(x *Assignment) error {
 	if st.Closed[x.Experiment] != nil {
 		return fmt.Errorf("experiment: assignment %s after %s closed", x.ID, x.Experiment)
 	}
-	if x.Ordinal >= len(x0.Units) || x0.Units[x.Ordinal].Goal != x.Unit {
-		return fmt.Errorf("experiment: assignment %s puts %s at ordinal %d, which is not the protocol's", x.ID, x.Unit, x.Ordinal)
-	}
 	if st.byUnit[x.Experiment][x.Unit] != nil {
 		return fmt.Errorf("experiment: unit %s assigned twice to %s", x.Unit, x.Experiment)
 	}
+	switch x0.Assignment {
+	case PairedReplay:
+		if x.Ordinal >= len(x0.Units) || x0.Units[x.Ordinal].Goal != x.Unit || x.Arm != "" {
+			return fmt.Errorf("experiment: assignment %s puts %s at ordinal %d, which is not the protocol's", x.ID, x.Unit, x.Ordinal)
+		}
+	case RandomizedLive:
+		// admission order, dense, under n; the unit is a plain production
+		// goal of the population taken in by THIS command, claimed by no
+		// other experiment, while the hypothesis is current, in the arm
+		// the keyed randomization names
+		if x.Ordinal != len(st.byOrdinal[x.Experiment]) || x.Ordinal >= x0.N {
+			return fmt.Errorf("experiment: assignment %s takes ordinal %d of %s; %d assigned of %d", x.ID, x.Ordinal, x.Experiment, len(st.byOrdinal[x.Experiment]), x0.N)
+		}
+		g := st.Runs.Goal(x.Unit)
+		fam := st.Runs.Families[x.Unit]
+		if g == nil || fam == nil || g.Origin == run.OriginReplay || g.Origin == run.OriginFork || g.Parent != "" || !j.SameCommand(g.Seq, x.Seq) {
+			return fmt.Errorf("experiment: live assignment %s of %s was not the goal's intake command", x.ID, x.Unit)
+		}
+		if string(fam.Family) != x0.Population {
+			return fmt.Errorf("experiment: live assignment %s admits a %s goal to a %s experiment", x.ID, fam.Family, x0.Population)
+		}
+		if prior := st.claimed[x.Unit]; prior != nil {
+			return fmt.Errorf("experiment: goal %s admitted to %s and to %s", x.Unit, prior.Experiment, x.Experiment)
+		}
+		it := st.Runs.Learned.Items[x0.Hypothesis.Item]
+		if cur := currentAt(it, x.Seq); cur == nil || cur.ID != x0.Hypothesis.Revision {
+			return fmt.Errorf("experiment: live assignment %s made after hypothesis %s/%s was superseded", x.ID, x0.Hypothesis.Item, x0.Hypothesis.Revision)
+		}
+		first := ""
+		if x.Ordinal%2 == 1 {
+			first = st.ordinal(x.Experiment, x.Ordinal-1).Arm
+		}
+		if x.Arm != ArmFor(x.Seed, x.Ordinal, first) {
+			return fmt.Errorf("experiment: live assignment %s names arm %s, the randomization names %s", x.ID, x.Arm, ArmFor(x.Seed, x.Ordinal, first))
+		}
+		if !g.Arm.Equal(x0.armRef(x.ID, x.Arm)) {
+			return fmt.Errorf("experiment: goal %s does not carry the %s arm of assignment %s", g.ID, x.Arm, x.ID)
+		}
+		st.claimed[x.Unit] = x
+	}
 	st.Assignments[x.ID] = x
 	st.byUnit[x.Experiment][x.Unit] = x
+	st.byOrdinal[x.Experiment] = append(st.byOrdinal[x.Experiment], x)
 	return nil
 }
 
@@ -309,7 +360,10 @@ func (st *State) evidence(x *UnitEvidence) error {
 	if st.Evidence[as.ID][x.Arm] != nil {
 		return fmt.Errorf("experiment: evidence for %s arm %s twice", as.ID, x.Arm)
 	}
-	rs := st.Runs.Replays[as.ID][x.Arm]
+	if x0.Assignment == RandomizedLive && x.Arm != as.Arm {
+		return fmt.Errorf("experiment: evidence %s is for arm %s of live assignment %s, which runs %s", x.ID, x.Arm, as.ID, as.Arm)
+	}
+	rs := st.Runs.Arms[as.ID][x.Arm]
 	if rs == nil || rs.Run != x.RunID {
 		return fmt.Errorf("experiment: evidence %s is about run %s, which is not the %s arm of %s", x.ID, x.RunID, x.Arm, as.ID)
 	}
@@ -341,12 +395,12 @@ func (st *State) commitment(x *CohortCommitment) error {
 	}
 	for i, u := range x.Units {
 		as := st.byUnit[x.Experiment][u.Unit]
-		if as == nil || as.ID != u.Assignment || as.Ordinal != u.Ordinal || as.Seq > x.Seq {
+		if as == nil || as.ID != u.Assignment || as.Ordinal != u.Ordinal || as.Ordinal != i || as.Seq > x.Seq {
 			return fmt.Errorf("experiment: commitment %s row %d is not the assignment of %s", x.ID, i, u.Unit)
 		}
-		for _, arm := range x0.Arms {
-			if ev := st.Evidence[as.ID][arm.Arm]; ev == nil || ev.Seq > x.Seq {
-				return fmt.Errorf("experiment: commitment %s closes over unit %d without its %s evidence", x.ID, i, arm.Arm)
+		for _, arm := range x0.armsOf(as) {
+			if ev := st.Evidence[as.ID][arm]; ev == nil || ev.Seq > x.Seq {
+				return fmt.Errorf("experiment: commitment %s closes over unit %d without its %s evidence", x.ID, i, arm)
 			}
 		}
 	}
@@ -367,6 +421,12 @@ func (st *State) attestation(x *EffectAttestation, store *thought.Store) error {
 		return fmt.Errorf("experiment: attestation %s carries a protocol that is not the commitment's", x.ID)
 	}
 	for i, u := range cm.Units {
+		if cm.Protocol.Assignment == RandomizedLive {
+			if err := st.checkLiveRow(store, cm.Protocol, i, u, x.Units[i], x.Seq); err != nil {
+				return fmt.Errorf("experiment: attestation %s row %d: %w", x.ID, i, err)
+			}
+			continue
+		}
 		want, err := st.row(store, cm.Protocol, i, u)
 		if err != nil {
 			return err
@@ -377,6 +437,79 @@ func (st *State) attestation(x *EffectAttestation, store *thought.Store) error {
 	}
 	st.Attestations[x.Experiment] = x
 	return nil
+}
+
+// checkLiveRow executes a live row's contract: it is the unit's one arm
+// and evidence with the evidence's missingness and exposure; a scored row
+// cites an evaluate invocation of the unit's run, committed before the
+// attestation, tool-less, whose request is EXACTLY the blinded prompt
+// re-rendered from the unit's goal and the evidence's deliverable, and
+// whose receipt parses to the row's score; an unevaluated row has at
+// least EvaluatorTries evaluate calls and no usable one.
+func (st *State) checkLiveRow(store *thought.Store, p Protocol, i int, u AssignedUnit, row UnitRow, before uint64) error {
+	as := st.Assignments[u.Assignment]
+	ev := st.Evidence[u.Assignment][as.Arm]
+	want := UnitRow{Unit: u.Unit, Assignment: u.Assignment, Arm: as.Arm, Evidence: ev.ID, Missing: ev.Missing, Exposed: ev.Exposed == intended(p.Relation, as.Arm)}
+	if ev.Missing != "" {
+		if row != want {
+			return fmt.Errorf("does not carry the evidence's missingness (%+v vs %+v)", row, want)
+		}
+		return nil
+	}
+	rs := st.Runs.Arms[as.ID][as.Arm]
+	goal, err := store.Get(rs.Goal.Text)
+	if err != nil {
+		return err
+	}
+	deliverable, err := store.Get(*ev.Deliverable)
+	if err != nil {
+		return err
+	}
+	prompt := thought.Address(thought.Prompt, EvaluatorPrompt(goal, deliverable))
+	if row.Missing == MissingUnevaluated {
+		want.Missing = MissingUnevaluated
+		if row != want {
+			return fmt.Errorf("unevaluated row does not match its evidence (%+v vs %+v)", row, want)
+		}
+		id, _, tries, err := st.evaluation(store, rs, prompt)
+		if err != nil {
+			return err
+		}
+		if id != "" || tries < EvaluatorTries {
+			return fmt.Errorf("unevaluated after %d evaluate calls (usable: %v); the bound is %d", tries, id != "", EvaluatorTries)
+		}
+		return nil
+	}
+	want.Score, want.Evaluation = row.Score, row.Evaluation
+	if row != want {
+		return fmt.Errorf("does not match its evidence (%+v vs %+v)", row, want)
+	}
+	for _, a := range rs.Attempts {
+		for _, is := range a.Invocations {
+			if is.Invocation.ID != row.Evaluation {
+				continue
+			}
+			if is.Invocation.Purpose != invoke.PurposeEvaluate || is.Invocation.Tools || is.Invocation.Seq > before {
+				return fmt.Errorf("cites %s, which is not an earlier tool-less evaluate call", row.Evaluation)
+			}
+			if is.Invocation.Request != prompt {
+				return fmt.Errorf("cites an evaluation asked something other than the blinded prompt over the goal and the deliverable")
+			}
+			if is.Receipt == nil {
+				return fmt.Errorf("cites an evaluation with no receipt")
+			}
+			b, err := store.Get(is.Receipt.Response)
+			if err != nil {
+				return err
+			}
+			sc, perr := ParseEvaluation(b)
+			if perr != nil || sc != row.Score {
+				return fmt.Errorf("score %v is not what the cited evaluation's receipt says (%v, %v)", row.Score, sc, perr)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("cites evaluation %s, which is not an invocation of the unit's run", row.Evaluation)
 }
 
 func (st *State) measurement(x *EffectMeasurement) error {

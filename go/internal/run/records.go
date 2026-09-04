@@ -91,17 +91,14 @@ type Goal struct {
 	Origin        GoalOrigin      `json:"origin"`
 	Lane          Lane            `json:"lane"` // the driver configuration this goal is routed to (explicit in v1)
 	Delivery      DeliveryPolicy  `json:"delivery"`
-	// Replay is set exactly when the origin is replay: this goal is one arm
-	// of an experiment assignment, re-running its parent (the unit).
-	Replay *ReplayRef `json:"replay,omitempty"`
-}
-
-// ReplayRef names the assignment and arm a replay goal serves. The
-// assignment is a control record: production readers carry its id as an
-// opaque reference and never read it (§9).
-type ReplayRef struct {
-	Assignment record.RecordID `json:"assignment"`
-	Arm        string          `json:"arm"` // treatment | control
+	// Arm is set when this goal runs as one arm of an experiment assignment:
+	// a replay goal (origin replay, re-running its parent, the unit) or a
+	// production goal admitted to a live experiment at intake (§5, §8a).
+	// It carries the assignment (a control id, opaque to production
+	// readers), the arm, and the forced sets — production truth every
+	// attempt's selections must match; the experiment verifier ties the
+	// sets to the protocol.
+	Arm *learn.ArmRef `json:"arm,omitempty"`
 }
 
 func (r *Goal) Head() *record.Header { return &r.Header }
@@ -134,19 +131,16 @@ func (r *Goal) ValidateWire() error {
 	if !requiredStates[r.Delivery.Required] {
 		return fmt.Errorf("goal: delivery.required %q out of vocabulary", r.Delivery.Required)
 	}
-	if (r.Origin == OriginReplay) != (r.Replay != nil) {
-		return errors.New("goal: a replay goal names its assignment and arm; no other goal does")
+	if err := r.Arm.Validate(); err != nil {
+		return fmt.Errorf("goal: %w", err)
 	}
-	if r.Replay != nil {
-		if err := record.ValidateID(r.Replay.Assignment); err != nil {
-			return fmt.Errorf("goal: replay: %w", err)
-		}
-		if !learn.Arms[r.Replay.Arm] {
-			return fmt.Errorf("goal: replay arm %q out of vocabulary", r.Replay.Arm)
-		}
-		if r.Parent == "" {
-			return errors.New("goal: a replay goal's parent is the unit it replays")
-		}
+	switch {
+	case r.Origin == OriginReplay && (r.Arm == nil || r.Parent == ""):
+		return errors.New("goal: a replay goal names its assignment and arm, and its parent is the unit it replays")
+	case r.Origin == OriginFork && r.Arm != nil:
+		return errors.New("goal: a fork's child goal is no experiment arm")
+	case r.Origin != OriginReplay && r.Origin != OriginFork && r.Parent != "":
+		return errors.New("goal: only a replay or a fork child has a parent")
 	}
 	return nil
 }

@@ -120,13 +120,13 @@
       "is_thought": false
     },
     {
-      "name": "Replay",
-      "wire": "replay",
-      "go_type": "*run.ReplayRef",
+      "name": "Arm",
+      "wire": "arm",
+      "go_type": "*learn.ArmRef",
       "omittable": true,
       "is_thought": false
     }
   ],
-  "source_ref": "9b1e5682",
+  "source_ref": "5751ec9c",
   "generator": "maro-go contracts gen v1"
 }

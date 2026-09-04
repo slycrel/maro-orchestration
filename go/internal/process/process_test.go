@@ -118,7 +118,7 @@ func TestSubmitDeliversOverTheSocket(t *testing.T) {
 	cl, _ = Dial(s.Socket())
 	st, err := cl.One(Request{Op: "status"})
 	cl.Close()
-	if err != nil || st.Type != "status" || len(st.Lanes) != 6 || len(st.Runs) != 2 || len(st.Health) != 0 {
+	if err != nil || st.Type != "status" || len(st.Lanes) != 7 || len(st.Runs) != 2 || len(st.Health) != 0 {
 		t.Fatalf("status: %v %+v", err, st)
 	}
 	for _, m := range st.Runs {

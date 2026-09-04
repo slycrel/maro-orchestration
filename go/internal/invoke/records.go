@@ -28,9 +28,10 @@ const (
 	PurposeIntent   Purpose = "intent"
 	PurposeRender   Purpose = "render"
 	PurposeDiagnose Purpose = "diagnose" // the tail's model lens over a recorded run
+	PurposeEvaluate Purpose = "evaluate" // the experiment evaluator's blinded score of a unit's deliverable
 )
 
-var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, PurposePlan: true, PurposeIntent: true, PurposeRender: true, PurposeDiagnose: true}
+var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, PurposePlan: true, PurposeIntent: true, PurposeRender: true, PurposeDiagnose: true, PurposeEvaluate: true}
 
 // Capabilities is what a backend declares about itself, snapshotted into the
 // Invocation at decision time so the decision and its receipt agree.

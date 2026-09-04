@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/slycrel/maro-orchestration/go/internal/experiment"
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
@@ -153,6 +154,7 @@ func Serve(ctx context.Context, opts Options) (*Server, error) {
 		&tail.Timers{J: j, Events: func(l string) { fmt.Fprintln(opts.Log, l) }},
 		&sheriff.Sheriff{J: j, Store: store, StallAfter: opts.StallAfter},
 		&tail.Tail{J: j, Store: store, Lens: opts.Judge, Timeout: opts.Timeout, Every: opts.TailEvery, Events: func(l string) { fmt.Fprintln(opts.Log, l) }},
+		&experiment.Lane{J: j, Store: store, Judge: opts.Judge, Timeout: opts.Timeout, Every: opts.TailEvery, Events: func(l string) { fmt.Fprintln(opts.Log, l) }},
 		&executor{s: s},
 		&publisher{s: s},
 	}
@@ -403,7 +405,9 @@ func (s *Server) submit(ctx context.Context, c net.Conn, enc *json.Encoder, req 
 	// the client is registered BEFORE the goal is visible in the journal:
 	// the executor may pick it up on its own poll the instant it commits
 	waiter := s.conns.register(goal.ID, enc)
-	if _, err := s.j.Submit(ctx, journal.Command{IdempotencyKey: "goal/" + string(goal.ID), Epoch: s.j.Epoch(), Records: []record.Record{goal, fam}}); err != nil {
+	// one command: the goal, its assessment, and — if an open live
+	// experiment of its family claims it — its assignment (§5)
+	if err := run.IntakeCommand(ctx, s.j, experiment.Admit(s.j, s.store), goal, fam); err != nil {
 		s.conns.unregister(goal.ID)
 		enc.Encode(Event{Type: "error", Error: err.Error()})
 		return

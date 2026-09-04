@@ -4,11 +4,13 @@
 // measurement that is a deterministic fold over the attestation — the ONE
 // thing a lifecycle transition may cite as measurement evidence.
 //
-// v1 assignment kind is paired replay: every unit (a past production goal
+// Two assignment kinds. Paired replay: every unit (a past production goal
 // of the population family) is re-run in both arms, which differ by
 // exactly the hypothesis; the oracle is a deterministic fixture per unit.
-// Randomized live assignment, shadow arms, and the blinded evaluator are
-// step 11.
+// Randomized live: production goals of the population are admitted at
+// intake, one arm each by keyed randomization in permuted blocks of two,
+// and a blinded evaluator scores each unit's deliverable against its goal
+// (step 11). Shadow arms are not in v1.
 package experiment
 
 import (
@@ -47,29 +49,40 @@ const (
 
 var relations = map[Relation]bool{ApplyItem: true, AblateItem: true}
 
-// AssignmentKind: v1 = paired_replay only.
+// AssignmentKind: paired_replay | randomized_live.
 type AssignmentKind string
 
-const PairedReplay AssignmentKind = "paired_replay"
+const (
+	PairedReplay   AssignmentKind = "paired_replay"
+	RandomizedLive AssignmentKind = "randomized_live"
+)
 
-var assignmentKinds = map[AssignmentKind]bool{PairedReplay: true}
+var assignmentKinds = map[AssignmentKind]bool{PairedReplay: true, RandomizedLive: true}
 
-// OracleClass: v1 = deterministic_fixture only (§8a: the historical
-// closure verdict is not an oracle).
+// OracleClass: deterministic_fixture (paired replay) | blinded_evaluator
+// (randomized live). §8a: the historical closure verdict is not one.
 type OracleClass string
 
-const DeterministicFixture OracleClass = "deterministic_fixture"
+const (
+	DeterministicFixture OracleClass = "deterministic_fixture"
+	BlindedEvaluator     OracleClass = "blinded_evaluator"
+)
 
-var oracles = map[OracleClass]bool{DeterministicFixture: true}
+var oracles = map[OracleClass]bool{DeterministicFixture: true, BlindedEvaluator: true}
 
 const (
 	Treatment = "treatment"
 	Control   = "control"
-	// Dimension and Estimator are the v1 vocabulary: one outcome dimension
-	// (the fixture matched), one estimator (paired mean difference).
+	// The paired-replay vocabulary: one outcome dimension (the fixture
+	// matched), the paired mean difference, the fixture oracle.
 	Dimension = "fixture_match"
 	Estimator = "paired_diff/1"
 	Evaluator = "fixture/1"
+	// The randomized-live vocabulary: the goal achieved (as the blinded
+	// judge scores it), the difference of arm means, the judge oracle.
+	DimensionAchieved = "goal_achieved"
+	EstimatorArms     = "arm_diff/1"
+	EvaluatorJudge    = "judge/1"
 )
 
 // ArmSpec is one arm's forced sets: the two arms of a protocol differ by
@@ -88,12 +101,17 @@ type OutcomeSpec struct {
 	Margin    float64 `json:"margin"`    // |delta| within it is "no difference"
 }
 
-// AnalysisSpec is predeclared: the estimator, how many discordant pairs a
-// direction needs, how many exposed pairs an equivalence needs, and what
-// a missing outcome does (v1: excluded from analysis).
+// AnalysisSpec is predeclared: the estimator; for paired replay how many
+// discordant pairs a direction needs and how many exposed pairs an
+// equivalence needs; for randomized live how many exposed units per arm a
+// direction needs (min_per_arm) and an equivalence needs (min_equivalent);
+// and what a missing outcome does (v1: excluded from analysis). v1 has no
+// interval estimate: these minimums ARE the uncertainty control, fixed
+// before the first unit is assigned.
 type AnalysisSpec struct {
 	Estimator     string `json:"estimator"`
-	MinDiscordant int    `json:"min_discordant"`
+	MinDiscordant int    `json:"min_discordant,omitempty"`
+	MinPerArm     int    `json:"min_per_arm,omitempty"`
 	MinEquivalent int    `json:"min_equivalent"`
 	Missing       string `json:"missing"` // exclude
 }
@@ -148,14 +166,33 @@ func (p *Protocol) validate() error {
 	if !oracles[p.Oracle] {
 		return fmt.Errorf("oracle %q out of vocabulary", p.Oracle)
 	}
-	if p.Outcome.Dimension != Dimension || p.Outcome.Direction != "higher" || p.Outcome.Margin < 0 || p.Outcome.Margin >= 1 {
-		return errors.New("outcome: dimension fixture_match, direction higher, margin in [0,1)")
+	if p.Outcome.Direction != "higher" || p.Outcome.Margin < 0 || p.Outcome.Margin >= 1 {
+		return errors.New("outcome: direction higher, margin in [0,1)")
 	}
-	if p.Analysis.Estimator != Estimator || p.Analysis.MinDiscordant < 1 || p.Analysis.MinEquivalent < 1 || p.Analysis.Missing != "exclude" {
-		return errors.New("analysis: estimator paired_diff/1, min_discordant ≥ 1, min_equivalent ≥ 1, missing exclude")
+	if p.Analysis.Missing != "exclude" || p.Analysis.MinEquivalent < 1 {
+		return errors.New("analysis: missing exclude, min_equivalent ≥ 1")
 	}
-	if p.N < 1 || len(p.Units) != p.N {
-		return fmt.Errorf("n is %d but %d units are fixed", p.N, len(p.Units))
+	switch p.Assignment {
+	case PairedReplay:
+		if p.Oracle != DeterministicFixture || p.Outcome.Dimension != Dimension || p.Analysis.Estimator != Estimator {
+			return errors.New("paired replay: oracle deterministic_fixture, dimension fixture_match, estimator paired_diff/1")
+		}
+		if p.Analysis.MinDiscordant < 1 || p.Analysis.MinPerArm != 0 {
+			return errors.New("paired replay: min_discordant ≥ 1, no min_per_arm")
+		}
+		if p.N < 1 || len(p.Units) != p.N {
+			return fmt.Errorf("n is %d but %d units are fixed", p.N, len(p.Units))
+		}
+	case RandomizedLive:
+		if p.Oracle != BlindedEvaluator || p.Outcome.Dimension != DimensionAchieved || p.Analysis.Estimator != EstimatorArms {
+			return errors.New("randomized live: oracle blinded_evaluator, dimension goal_achieved, estimator arm_diff/1")
+		}
+		if p.Analysis.MinPerArm < 1 || p.Analysis.MinDiscordant != 0 {
+			return errors.New("randomized live: min_per_arm ≥ 1, no min_discordant")
+		}
+		if p.N < 2 || len(p.Units) != 0 {
+			return errors.New("randomized live: n ≥ 2 and the units arrive at intake")
+		}
 	}
 	seen := map[record.RecordID]bool{}
 	for _, u := range p.Units {
@@ -235,9 +272,12 @@ func (r *Experiment) ValidateWire() error {
 }
 
 // Assignment (control): one unit's admission, keyed deterministically by
-// (experiment, unit). Ordinal is the unit's position in the protocol; Seed
-// is hash(experiment, unit) — with paired replay both arms run, so the
-// seed decides nothing yet and is recorded for the randomized kind.
+// (experiment, unit). Ordinal is the unit's position (the protocol's, for
+// paired replay; admission order, for randomized live); Seed is
+// hash(experiment, unit). With paired replay both arms run and Arm is
+// empty; with randomized live Arm is the one arm the unit runs, decided
+// by ArmFor over the seed in permuted blocks of two, and committed in the
+// SAME command as the unit's goal (the sequencer-enforced intake).
 type Assignment struct {
 	record.ControlRecord
 	record.Header `json:"header"`
@@ -245,6 +285,7 @@ type Assignment struct {
 	Unit          record.RecordID `json:"unit"`
 	Ordinal       int             `json:"ordinal"`
 	Seed          string          `json:"seed"`
+	Arm           string          `json:"arm,omitempty"`
 }
 
 func (r *Assignment) Head() *record.Header { return &r.Header }
@@ -268,7 +309,28 @@ func (r *Assignment) ValidateWire() error {
 	if r.Seed != Seed(r.Experiment, r.Unit) {
 		return errors.New("assignment: seed is not hash(experiment, unit)")
 	}
+	if r.Arm != "" && !learn.Arms[r.Arm] {
+		return fmt.Errorf("assignment: arm %q out of vocabulary", r.Arm)
+	}
 	return nil
+}
+
+// ArmFor is the keyed randomization in permuted blocks of two: the first
+// unit of a block takes the arm its seed's low bit names, the second takes
+// the other — so every two admissions balance the arms and a fixed-n
+// cohort with even n is exactly half and half. `first` is the arm of the
+// block's first unit (ignored for a block's first).
+func ArmFor(seed string, ordinal int, first string) string {
+	if ordinal%2 == 1 {
+		if first == Treatment {
+			return Control
+		}
+		return Treatment
+	}
+	if len(seed) > 0 && (seed[len(seed)-1]-'0')%2 == 0 { // hex: the last nibble's parity
+		return Treatment
+	}
+	return Control
 }
 
 // Seed is the keyed deterministic randomization: hex sha256 over a
@@ -376,10 +438,12 @@ func (r *UnitEvidence) ValidateWire() error {
 // Missing reasons: the arm's recorded outcome was not complete (a failed
 // or partial run delivers the framework's envelope, never a scoreable
 // answer), or a complete run prepared no delivery. Either excludes the
-// pair from analysis.
+// unit from analysis. A live unit's row may also be `unevaluated`: the
+// blinded judge gave no usable score in EvaluatorTries calls.
 const (
 	MissingNoDeliverable = "no_deliverable"
 	MissingNotComplete   = "not_complete"
+	MissingUnevaluated   = "unevaluated"
 )
 
 // AssignedUnit is one cohort row: the unit, its assignment, its ordinal
@@ -423,8 +487,16 @@ func (r *CohortCommitment) ValidateWire() error {
 		return errors.New("cohort_commitment: count = units = n (fixed-n closure)")
 	}
 	for i, u := range r.Units {
-		if u.Ordinal != i || u.Unit != r.Protocol.Units[i].Goal || u.Seed != Seed(r.Experiment, u.Unit) {
-			return fmt.Errorf("cohort_commitment: unit %d is not the protocol's unit %d with its seed", i, i)
+		if r.Protocol.Assignment == PairedReplay && u.Unit != r.Protocol.Units[i].Goal {
+			return fmt.Errorf("cohort_commitment: unit %d is not the protocol's unit %d", i, i)
+		}
+		// a live protocol names no units: the fold checks each row's unit
+		// against the assignment the intake command wrote
+		if err := record.ValidateID(u.Unit); err != nil {
+			return fmt.Errorf("cohort_commitment: unit %d: %w", i, err)
+		}
+		if u.Ordinal != i || u.Seed != Seed(r.Experiment, u.Unit) {
+			return fmt.Errorf("cohort_commitment: unit %d is not ordinal %d with its seed", i, i)
 		}
 		if err := record.ValidateID(u.Assignment); err != nil {
 			return fmt.Errorf("cohort_commitment: unit %d assignment: %w", i, err)
@@ -442,19 +514,29 @@ func CohortRoot(units []AssignedUnit) string {
 	return digest("cohort", string(raw))
 }
 
-// UnitRow is one attestation row: the pair's evidence ids and the
-// evaluator's scores, plus whether the arms' exposure held as the
-// protocol intended (per-protocol membership).
+// UnitRow is one attestation row. Paired replay: the pair's evidence ids
+// and the oracle's two scores. Randomized live: the unit's one arm, its
+// evidence, the blinded judge's score and the evaluate invocation that
+// scored it (the verifier recomputes the request from the evidence and
+// reads the score off that invocation's receipt). Both: whether exposure
+// held as the protocol intended (per-protocol membership).
 type UnitRow struct {
-	Unit             record.RecordID `json:"unit"`
-	Assignment       record.RecordID `json:"assignment"`
-	Treatment        record.RecordID `json:"treatment"` // unit_evidence
-	Control          record.RecordID `json:"control"`   // unit_evidence
+	Unit       record.RecordID `json:"unit"`
+	Assignment record.RecordID `json:"assignment"`
+	// paired replay
+	Treatment        record.RecordID `json:"treatment,omitempty"` // unit_evidence
+	Control          record.RecordID `json:"control,omitempty"`   // unit_evidence
 	TreatmentScore   float64         `json:"treatment_score"`
 	ControlScore     float64         `json:"control_score"`
 	TreatmentMissing string          `json:"treatment_missing,omitempty"`
 	ControlMissing   string          `json:"control_missing,omitempty"`
-	Exposed          bool            `json:"exposed"` // both arms' exposure as intended
+	// randomized live
+	Arm        string          `json:"arm,omitempty"`
+	Evidence   record.RecordID `json:"evidence,omitempty"` // unit_evidence
+	Score      float64         `json:"score"`
+	Missing    string          `json:"missing,omitempty"`
+	Evaluation record.RecordID `json:"evaluation,omitempty"` // the evaluate invocation
+	Exposed    bool            `json:"exposed"`
 }
 
 // EffectAttestation (production) binds the cohort, the protocol, and one
@@ -494,24 +576,61 @@ func (r *EffectAttestation) ValidateWire() error {
 	if err := r.Protocol.validate(); err != nil {
 		return fmt.Errorf("effect_attestation: %w", err)
 	}
-	if r.Evaluator != Evaluator || r.Estimator != Estimator {
-		return errors.New("effect_attestation: evaluator fixture/1 and estimator paired_diff/1 (v1)")
-	}
 	if len(r.Units) != r.Protocol.N {
 		return errors.New("effect_attestation: one row per cohort unit")
 	}
 	for i, u := range r.Units {
-		if u.Unit != r.Protocol.Units[i].Goal {
-			return fmt.Errorf("effect_attestation: row %d is not the protocol's unit %d", i, i)
+		if err := record.ValidateID(u.Assignment); err != nil {
+			return fmt.Errorf("effect_attestation: row %d assignment: %w", i, err)
 		}
-		for name, id := range map[string]record.RecordID{"assignment": u.Assignment, "treatment": u.Treatment, "control": u.Control} {
-			if err := record.ValidateID(id); err != nil {
-				return fmt.Errorf("effect_attestation: row %d %s: %w", i, name, err)
+		for _, sc := range []float64{u.TreatmentScore, u.ControlScore, u.Score} {
+			if sc != 0 && sc != 1 {
+				return fmt.Errorf("effect_attestation: row %d: a score is 0 or 1", i)
 			}
 		}
-		for _, sc := range []float64{u.TreatmentScore, u.ControlScore} {
-			if sc != 0 && sc != 1 {
-				return fmt.Errorf("effect_attestation: row %d: a fixture score is 0 or 1", i)
+		switch r.Protocol.Assignment {
+		case PairedReplay:
+			if r.Evaluator != Evaluator || r.Estimator != Estimator {
+				return errors.New("effect_attestation: paired replay is evaluated by fixture/1 and estimated by paired_diff/1")
+			}
+			if u.Unit != r.Protocol.Units[i].Goal {
+				return fmt.Errorf("effect_attestation: row %d is not the protocol's unit %d", i, i)
+			}
+			for name, id := range map[string]record.RecordID{"treatment": u.Treatment, "control": u.Control} {
+				if err := record.ValidateID(id); err != nil {
+					return fmt.Errorf("effect_attestation: row %d %s: %w", i, name, err)
+				}
+			}
+			if u.Arm != "" || u.Evidence != "" || u.Score != 0 || u.Missing != "" || u.Evaluation != "" {
+				return fmt.Errorf("effect_attestation: row %d carries live-arm fields under paired replay", i)
+			}
+		case RandomizedLive:
+			if r.Evaluator != EvaluatorJudge || r.Estimator != EstimatorArms {
+				return errors.New("effect_attestation: randomized live is evaluated by judge/1 and estimated by arm_diff/1")
+			}
+			if err := record.ValidateID(u.Unit); err != nil {
+				return fmt.Errorf("effect_attestation: row %d unit: %w", i, err)
+			}
+			if !learn.Arms[u.Arm] {
+				return fmt.Errorf("effect_attestation: row %d arm %q out of vocabulary", i, u.Arm)
+			}
+			if err := record.ValidateID(u.Evidence); err != nil {
+				return fmt.Errorf("effect_attestation: row %d evidence: %w", i, err)
+			}
+			if u.Treatment != "" || u.Control != "" || u.TreatmentScore != 0 || u.ControlScore != 0 || u.TreatmentMissing != "" || u.ControlMissing != "" {
+				return fmt.Errorf("effect_attestation: row %d carries pair fields under randomized live", i)
+			}
+			switch u.Missing {
+			case "":
+				if err := record.ValidateID(u.Evaluation); err != nil {
+					return fmt.Errorf("effect_attestation: row %d: a scored row cites its evaluation: %w", i, err)
+				}
+			case MissingNoDeliverable, MissingNotComplete, MissingUnevaluated:
+				if u.Score != 0 || u.Evaluation != "" {
+					return fmt.Errorf("effect_attestation: row %d is missing yet scored", i)
+				}
+			default:
+				return fmt.Errorf("effect_attestation: row %d missing %q out of vocabulary", i, u.Missing)
 			}
 		}
 	}
@@ -542,9 +661,11 @@ type EffectMeasurement struct {
 	Hypothesis    learn.ItemRev    `json:"hypothesis"`
 	Relation      Relation         `json:"relation"`
 	Assigned      int              `json:"assigned"`
-	Analyzed      int              `json:"analyzed"` // both arms present (ITT denominator)
-	Exposed       int              `json:"exposed"`  // analyzed and exposed as intended (per-protocol denominator)
-	Discordant    int              `json:"discordant"`
+	Analyzed      int              `json:"analyzed"`              // both arms present (ITT denominator)
+	Exposed       int              `json:"exposed"`               // analyzed and exposed as intended (per-protocol denominator)
+	Discordant    int              `json:"discordant"`            // paired replay
+	TreatmentN    int              `json:"treatment_n,omitempty"` // randomized live: exposed units per arm
+	ControlN      int              `json:"control_n,omitempty"`
 	DeltaITT      float64          `json:"delta_itt"`
 	DeltaPP       float64          `json:"delta_pp"`
 	Verdict       EffectVerdict    `json:"verdict"`
@@ -581,6 +702,9 @@ func (r *EffectMeasurement) ValidateWire() error {
 	if r.Assigned < r.Analyzed || r.Analyzed < r.Exposed || r.Exposed < r.Discordant || r.Discordant < 0 {
 		return errors.New("effect_measurement: assigned ≥ analyzed ≥ exposed ≥ discordant ≥ 0")
 	}
+	if r.TreatmentN < 0 || r.ControlN < 0 || (r.TreatmentN+r.ControlN != 0 && r.TreatmentN+r.ControlN != r.Exposed) {
+		return errors.New("effect_measurement: the per-arm counts sum to exposed")
+	}
 	return nil
 }
 
@@ -616,23 +740,23 @@ func init() {
 	reg := func(k record.Kind, env record.Envelope, ty any, writer, reader, decision string) {
 		record.Register(record.Spec{Kind: k, Envelope: env, Version: 1, Type: reflect.TypeOf(ty), Writer: writer, Reader: reader, Decision: decision, Retention: record.Forever})
 	}
-	reg(KindExperiment, record.Control, Experiment{}, "Open (operator CLI in v1; the tail's proposals in step 11)",
-		"experiment.Fold (control side: fishing guard, assignments, closure); the runner",
-		"the immutable protocol: hypothesis, relation, population, arms, outcome, n, analysis, oracle, units")
-	reg(KindAssignment, record.Control, Assignment{}, "the runner, one per unit, keyed by (experiment, unit)",
-		"experiment.Fold (the denominator); the runner (which arms are owed)",
-		"that a unit entered the cohort, once, at this ordinal")
+	reg(KindExperiment, record.Control, Experiment{}, "Open (operator CLI)",
+		"experiment.Fold (control side: fishing guard, assignments, closure); the runner; Admit (the intake command's assignment capability)",
+		"the immutable protocol: hypothesis, relation, population, assignment kind, arms, outcome, n, analysis, oracle, units")
+	reg(KindAssignment, record.Control, Assignment{}, "the runner, one per unit (paired replay); Admit, in the goal's intake command (randomized live)",
+		"experiment.Fold (the denominator); the runner (which arms are owed); the evaluator lane (which units are owed evidence)",
+		"that a unit entered the cohort, once, at this ordinal — and for a live unit, in which arm")
 	reg(KindClosed, record.Control, Closed{}, "Close, with the commitment in one command",
 		"experiment.Fold (no assignment after it); the attestation cites it",
 		"that the cohort is closed at n: further assignments are refused")
-	reg(KindEvidence, record.Production, UnitEvidence{}, "the runner, when an arm run is terminal (derived over the run fold)",
+	reg(KindEvidence, record.Production, UnitEvidence{}, "the runner (paired replay) or the evaluator lane / Close (randomized live), when an arm run is terminal (derived over the run fold)",
 		"experiment.Fold (recomputed from the run fold); the attestation's rows",
 		"the arm's terminal evidence: exposure, deliverable, artifact root, missingness")
 	reg(KindCommitment, record.Production, CohortCommitment{}, "Close (the sequencer's closure)",
 		"experiment.Fold (protocol projection and cohort root the attestation is checked against); production verifiers",
 		"the authenticated denominator and the canonical protocol")
-	reg(KindAttestation, record.Production, EffectAttestation{}, "Close (the evaluator's one production write)",
-		"experiment.Fold (every row recomputed: evidence, scores, exposure); Measure",
+	reg(KindAttestation, record.Production, EffectAttestation{}, "Close (the evaluator's one production write; for a live cohort each scored row cites the evaluator's own evaluate invocation)",
+		"experiment.Fold (every row recomputed: evidence, scores — from the fixture, or the cited evaluate receipt whose request re-renders from the evidence — exposure); Measure",
 		"the scored cohort the measurement folds over")
 	reg(KindMeasurement, record.Production, EffectMeasurement{}, "Close (Measure over the attestation)",
 		"experiment.Fold (recomputed); learn.Fold (the evidence a measurement transition cites: item and effect)",

@@ -449,6 +449,29 @@ type ArmRef struct {
 // Arms is the arm vocabulary.
 var Arms = map[string]bool{"treatment": true, "control": true}
 
+// Validate executes the arm's vocabulary (ids and the arm name).
+func (a *ArmRef) Validate() error { return a.validate() }
+
+// Equal: same assignment, arm, and forced sets in order — nil equals nil.
+func (a *ArmRef) Equal(b *ArmRef) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Assignment == b.Assignment && a.Arm == b.Arm && sameRevs(a.Apply, b.Apply) && sameRevs(a.Withhold, b.Withhold)
+}
+
+func sameRevs(a, b []ItemRev) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *ArmRef) validate() error {
 	if a == nil {
 		return nil

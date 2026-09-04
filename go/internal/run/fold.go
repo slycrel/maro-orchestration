@@ -189,8 +189,9 @@ type Ledger struct {
 	// Forks by fork id; goals by id (a child goal may not have a run yet).
 	Forks map[record.RecordID]*ForkState
 	goals map[record.RecordID]*Goal
-	// Replays: the arm runs by assignment id, then arm (one each).
-	Replays map[record.RecordID]map[string]*RunState
+	// Arms: the experiment arm runs (replay arms and live-admitted goals)
+	// by assignment id, then arm (one each).
+	Arms map[record.RecordID]map[string]*RunState
 }
 
 // Goal returns a folded goal by id.
@@ -255,7 +256,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	err = pr.Scan(0, func(r record.Record) error {
 		switch x := r.(type) {
 		case *Goal:
-			if x.Replay != nil {
+			if x.Origin == OriginReplay {
 				unit := goals[x.Parent]
 				if unit == nil || unit.Origin == OriginReplay || unit.Origin == OriginFork || x.Root != unit.Root {
 					return fmt.Errorf("run: replay goal %s replays %s, which is not an earlier production unit of the same root", x.ID, x.Parent)
@@ -513,16 +514,16 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 					return fmt.Errorf("run: %s attempt %d recall selection: %w", x.RunID, x.Attempt, err)
 				}
 			}
-			if x.Attempt == 1 && rs.Goal.Replay != nil {
-				arms := replays[rs.Goal.Replay.Assignment]
+			if x.Attempt == 1 && rs.Goal.Arm != nil {
+				arms := replays[rs.Goal.Arm.Assignment]
 				if arms == nil {
 					arms = map[string]*RunState{}
-					replays[rs.Goal.Replay.Assignment] = arms
+					replays[rs.Goal.Arm.Assignment] = arms
 				}
-				if arms[rs.Goal.Replay.Arm] != nil {
-					return fmt.Errorf("run: %s is a second run of assignment %s arm %s", x.RunID, rs.Goal.Replay.Assignment, rs.Goal.Replay.Arm)
+				if arms[rs.Goal.Arm.Arm] != nil {
+					return fmt.Errorf("run: %s is a second run of assignment %s arm %s", x.RunID, rs.Goal.Arm.Assignment, rs.Goal.Arm.Arm)
 				}
-				arms[rs.Goal.Replay.Arm] = rs
+				arms[rs.Goal.Arm.Arm] = rs
 			}
 			a := &AttemptState{Attempt: x, Recall: learned.Recalls[learn.RecallKey(x.RunID, x.Attempt)], Policy: pol}
 			if x.Attempt > 1 {
@@ -747,7 +748,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	led := &Ledger{Runs: runs, Families: fams, Learned: learned, Interrupts: interrupts, Acks: acks, Forks: forks, goals: goals, Replays: replays}
+	led := &Ledger{Runs: runs, Families: fams, Learned: learned, Interrupts: interrupts, Acks: acks, Forks: forks, goals: goals, Arms: replays}
 	for _, g := range goalOrder {
 		if !started[g.ID] {
 			led.Unstarted = append(led.Unstarted, g)
@@ -1051,7 +1052,7 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 				var sum invoke.Usage
 				for _, p := range rs.Attempts {
 					for _, is := range p.Invocations {
-						if is.Receipt != nil && is.Invocation.Purpose != invoke.PurposeDiagnose {
+						if is.Receipt != nil && is.Invocation.Purpose != invoke.PurposeDiagnose && is.Invocation.Purpose != invoke.PurposeEvaluate {
 							sum = add(sum, is.Receipt.Usage)
 						}
 					}
@@ -1264,17 +1265,18 @@ func ReplayKey(rs *RunState, a *AttemptState) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// armMatches: a selection's arm is exactly the goal's replay reference
-// (assignment and arm), and absent for a goal that is no arm. The forced
-// sets are the experiment verifier's to check against the protocol.
+// armMatches: a selection's arm is exactly the goal's — assignment, arm,
+// and forced sets — and absent for a goal that is no arm. The goal is the
+// production truth of what the arm forces; whether that is the protocol's
+// arm is the experiment verifier's to check.
 func armMatches(g *Goal, arm *learn.ArmRef) error {
 	switch {
-	case g.Replay == nil && arm != nil:
-		return fmt.Errorf("carries arm %s/%s but the goal is not a replay", arm.Assignment, arm.Arm)
-	case g.Replay != nil && arm == nil:
-		return fmt.Errorf("carries no arm but the goal replays assignment %s", g.Replay.Assignment)
-	case g.Replay != nil && (arm.Assignment != g.Replay.Assignment || arm.Arm != g.Replay.Arm):
-		return fmt.Errorf("carries arm %s/%s but the goal is arm %s/%s", arm.Assignment, arm.Arm, g.Replay.Assignment, g.Replay.Arm)
+	case g.Arm == nil && arm != nil:
+		return fmt.Errorf("carries arm %s/%s but the goal is no experiment arm", arm.Assignment, arm.Arm)
+	case g.Arm != nil && arm == nil:
+		return fmt.Errorf("carries no arm but the goal is arm %s/%s", g.Arm.Assignment, g.Arm.Arm)
+	case g.Arm != nil && !arm.Equal(g.Arm):
+		return fmt.Errorf("forces %v/%v as arm %s/%s but the goal's arm %s/%s forces %v/%v", arm.Apply, arm.Withhold, arm.Assignment, arm.Arm, g.Arm.Assignment, g.Arm.Arm, g.Arm.Apply, g.Arm.Withhold)
 	}
 	return nil
 }

@@ -32,7 +32,7 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "\"assignment\":\"paired_replay\",.*\"oracle\":\"deterministic_fixture\",.*\"relation\":\"(apply_item|ablate_item)\"",
+      "pattern": "\"assignment\":\"(paired_replay|randomized_live)\",.*\"oracle\":\"(deterministic_fixture|blinded_evaluator)\",.*\"relation\":\"(apply_item|ablate_item)\"",
       "rejects": "{\"assignment\":\"paired_replay\",\"oracle\":\"deterministic_fixture\",\"relation\":\"teleport\"}",
       "measured_by": "internal/experiment:TestFoldRefusesForgedExperiments"
     },
@@ -49,7 +49,7 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^fixture/1$",
+      "pattern": "^(fixture/1|judge/1)$",
       "rejects": "vibes/1",
       "measured_by": "internal/experiment:TestEstimatorAndOracle"
     },
@@ -59,7 +59,7 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^paired_diff/1$",
+      "pattern": "^(paired_diff/1|arm_diff/1)$",
       "rejects": "eyeball/1",
       "measured_by": "internal/experiment:TestEstimatorAndOracle"
     }

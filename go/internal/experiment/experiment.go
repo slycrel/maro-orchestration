@@ -22,66 +22,38 @@ var (
 	ErrRefused = errors.New("experiment: refused")
 )
 
-// Spec is what Open takes: the hypothesis, the relation, and the units
-// (past production goals of one family) with their fixtures. Everything
-// else in the protocol is the v1 vocabulary or derived.
+// Spec is what Open takes: the hypothesis, the relation, and either the
+// units (paired replay: past production goals of one family, with their
+// fixtures) or a population and a cohort size (randomized live: the units
+// are the next N production goals of that family, admitted at intake).
+// Everything else in the protocol is the vocabulary or derived.
 type Spec struct {
 	Hypothesis learn.ItemRev
 	Relation   Relation
 	Units      []UnitSpec
-	// Margin, MinDiscordant, MinEquivalent: zero ⇒ defaults (0, 1, 2).
+	// Live selects randomized live assignment over Population with N units.
+	Live       bool
+	Population string
+	N          int
+	// Margin, MinDiscordant, MinPerArm, MinEquivalent: zero ⇒ defaults
+	// (0, 1, 2, 2).
 	Margin        float64
 	MinDiscordant int
+	MinPerArm     int
 	MinEquivalent int
 	Why           string
 }
 
 // Open commits the protocol: the units are checked against the production
-// fold (terminal, non-replay, non-fork, all of one family — the
-// population), the hypothesis against the learned fold (an existing
-// revision), and the fishing guard against the experiment fold (one open
-// experiment per hypothesis and population; a re-open is Version+1 citing
-// the prior attestation).
+// fold (terminal, non-replay, non-fork, never themselves an arm, all of
+// one family — the population), the hypothesis against the learned fold
+// (an existing revision), and the fishing guard against the experiment
+// fold (one open experiment per hypothesis and population; a re-open is
+// Version+1 citing the prior attestation).
 func Open(ctx context.Context, j *journal.Journal, store *thought.Store, spec Spec) (*Experiment, error) {
 	st, err := Fold(j, store)
 	if err != nil {
 		return nil, err
-	}
-	if len(spec.Units) == 0 {
-		return nil, fmt.Errorf("%w: at least one unit", ErrConfig)
-	}
-	family := ""
-	texts := map[string]bool{}
-	for _, u := range spec.Units {
-		rs := st.RunOf(u.Goal)
-		if rs == nil {
-			return nil, fmt.Errorf("%w: unit %s is not a run's goal", ErrConfig, u.Goal)
-		}
-		if texts[rs.Goal.Text.Hash] {
-			return nil, fmt.Errorf("%w: unit %s repeats another unit's goal text (one observation, not two)", ErrConfig, u.Goal)
-		}
-		texts[rs.Goal.Text.Hash] = true
-		if err := checkFixture(store, u.Fixture); err != nil {
-			return nil, fmt.Errorf("%w: unit %s: %v", ErrConfig, u.Goal, err)
-		}
-		if rs.Goal.Origin == run.OriginReplay || rs.Goal.Origin == run.OriginFork {
-			return nil, fmt.Errorf("%w: unit %s is a %s goal, not production", ErrConfig, u.Goal, rs.Goal.Origin)
-		}
-		if !rs.Terminal() {
-			return nil, fmt.Errorf("%w: unit %s is not terminal", ErrConfig, u.Goal)
-		}
-		f := string(rs.Family.Family)
-		if f == string(run.FamilyNone) {
-			return nil, fmt.Errorf("%w: unit %s is of no family", ErrConfig, u.Goal)
-		}
-		if family != "" && f != family {
-			return nil, fmt.Errorf("%w: units span families %s and %s", ErrConfig, family, f)
-		}
-		family = f
-	}
-	it := st.Runs.Learned.Items[spec.Hypothesis.Item]
-	if it == nil || !hasRevision(it, spec.Hypothesis.Revision) {
-		return nil, fmt.Errorf("%w: hypothesis %s/%s is not a learned revision", ErrConfig, spec.Hypothesis.Item, spec.Hypothesis.Revision)
 	}
 	if spec.MinDiscordant == 0 {
 		spec.MinDiscordant = 1
@@ -89,11 +61,64 @@ func Open(ctx context.Context, j *journal.Journal, store *thought.Store, spec Sp
 	if spec.MinEquivalent == 0 {
 		spec.MinEquivalent = 2
 	}
+	if spec.MinPerArm == 0 {
+		spec.MinPerArm = 2
+	}
 	id := record.NewID()
 	x := &Experiment{Header: record.Header{ID: id, Schema: "experiment/1", Subject: record.Ref{Kind: "experiment", ID: string(id)}, At: now()}, Why: spec.Why}
-	x.Protocol = Protocol{Experiment: id, Version: 1, Hypothesis: spec.Hypothesis, Relation: spec.Relation, Population: family, Assignment: PairedReplay,
-		Arms: Arms(spec.Hypothesis, spec.Relation), Outcome: OutcomeSpec{Dimension: Dimension, Direction: "higher", Margin: spec.Margin}, N: len(spec.Units),
-		Analysis: AnalysisSpec{Estimator: Estimator, MinDiscordant: spec.MinDiscordant, MinEquivalent: spec.MinEquivalent, Missing: "exclude"}, Oracle: DeterministicFixture, Units: spec.Units}
+	x.Protocol = Protocol{Experiment: id, Version: 1, Hypothesis: spec.Hypothesis, Relation: spec.Relation, Arms: Arms(spec.Hypothesis, spec.Relation),
+		Outcome: OutcomeSpec{Direction: "higher", Margin: spec.Margin}, Analysis: AnalysisSpec{MinEquivalent: spec.MinEquivalent, Missing: "exclude"}}
+	family := ""
+	if spec.Live {
+		if len(spec.Units) != 0 {
+			return nil, fmt.Errorf("%w: a live experiment's units arrive at intake", ErrConfig)
+		}
+		if !run.KnownFamily(run.FamilyKey(spec.Population)) {
+			return nil, fmt.Errorf("%w: population %q is not a family", ErrConfig, spec.Population)
+		}
+		family = spec.Population
+		x.Assignment, x.Oracle, x.Outcome.Dimension, x.N = RandomizedLive, BlindedEvaluator, DimensionAchieved, spec.N
+		x.Analysis.Estimator, x.Analysis.MinPerArm = EstimatorArms, spec.MinPerArm
+	} else {
+		if len(spec.Units) == 0 {
+			return nil, fmt.Errorf("%w: at least one unit", ErrConfig)
+		}
+		texts := map[string]bool{}
+		for _, u := range spec.Units {
+			rs := st.RunOf(u.Goal)
+			if rs == nil {
+				return nil, fmt.Errorf("%w: unit %s is not a run's goal", ErrConfig, u.Goal)
+			}
+			if texts[rs.Goal.Text.Hash] {
+				return nil, fmt.Errorf("%w: unit %s repeats another unit's goal text (one observation, not two)", ErrConfig, u.Goal)
+			}
+			texts[rs.Goal.Text.Hash] = true
+			if err := checkFixture(store, u.Fixture); err != nil {
+				return nil, fmt.Errorf("%w: unit %s: %v", ErrConfig, u.Goal, err)
+			}
+			if rs.Goal.Origin == run.OriginReplay || rs.Goal.Origin == run.OriginFork || rs.Goal.Arm != nil {
+				return nil, fmt.Errorf("%w: unit %s is not a plain production goal (origin %s, arm %v)", ErrConfig, u.Goal, rs.Goal.Origin, rs.Goal.Arm != nil)
+			}
+			if !rs.Terminal() {
+				return nil, fmt.Errorf("%w: unit %s is not terminal", ErrConfig, u.Goal)
+			}
+			f := string(rs.Family.Family)
+			if f == string(run.FamilyNone) {
+				return nil, fmt.Errorf("%w: unit %s is of no family", ErrConfig, u.Goal)
+			}
+			if family != "" && f != family {
+				return nil, fmt.Errorf("%w: units span families %s and %s", ErrConfig, family, f)
+			}
+			family = f
+		}
+		x.Assignment, x.Oracle, x.Outcome.Dimension, x.N, x.Units = PairedReplay, DeterministicFixture, Dimension, len(spec.Units), spec.Units
+		x.Analysis.Estimator, x.Analysis.MinDiscordant = Estimator, spec.MinDiscordant
+	}
+	x.Population = family
+	it := st.Runs.Learned.Items[spec.Hypothesis.Item]
+	if it == nil || !hasRevision(it, spec.Hypothesis.Revision) {
+		return nil, fmt.Errorf("%w: hypothesis %s/%s is not a learned revision", ErrConfig, spec.Hypothesis.Item, spec.Hypothesis.Revision)
+	}
 	// the fishing guard, as the fold applies it
 	if prior := st.openFor(spec.Hypothesis, family); prior != nil {
 		return nil, fmt.Errorf("%w: experiment %s on %s/%s over %s is open; close it first", ErrRefused, prior.ID, spec.Hypothesis.Item, spec.Hypothesis.Revision, family)
@@ -107,12 +132,64 @@ func Open(ctx context.Context, j *journal.Journal, store *thought.Store, spec Sp
 		x.Prior = att.ID
 	}
 	if err := x.ValidateWire(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrConfig, err)
 	}
 	if _, err := j.Submit(ctx, journal.Command{IdempotencyKey: "experiment/" + string(id) + "/open", Epoch: j.Epoch(), Records: []record.Record{x}}); err != nil {
 		return nil, err
 	}
 	return x, nil
+}
+
+// Admit is the intake command's assignment capability (§5, §8a, §9): the
+// one production-side reader of the control plane, and it reads it only
+// to decide, for a goal being taken in, whether an open live experiment
+// of the goal's family claims it. If one does — the first opened, with
+// room, whose hypothesis is still the item's current revision — the goal
+// is stamped with the arm the keyed randomization names and the
+// assignment commits IN THE GOAL'S INTAKE COMMAND at the head this
+// decision was folded at. Mutual exclusion is by construction: a goal is
+// admitted once, and the fold refuses a second claim on it.
+func Admit(j *journal.Journal, store *thought.Store) run.AdmitFunc {
+	return func(ctx context.Context, g *run.Goal, fam *run.FamilyAssessment) ([]record.Record, *uint64, error) {
+		if !run.KnownFamily(fam.Family) || g.Parent != "" || g.Origin == run.OriginReplay || g.Origin == run.OriginFork {
+			return nil, nil, nil
+		}
+		st, err := Fold(j, store)
+		if err != nil {
+			return nil, nil, err
+		}
+		head := st.Head
+		for _, id := range st.Order {
+			x := st.Experiments[id]
+			if x.Assignment != RandomizedLive || x.Population != string(fam.Family) || st.Closed[id] != nil || len(st.byUnit[id]) >= x.N {
+				continue
+			}
+			if it := st.Runs.Learned.Items[x.Hypothesis.Item]; it == nil || it.Current.ID != x.Hypothesis.Revision {
+				continue // stale: production intake is never blocked by an experiment
+			}
+			ordinal := len(st.byUnit[id])
+			first := ""
+			if ordinal%2 == 1 {
+				first = st.ordinal(id, ordinal-1).Arm
+			}
+			seed := Seed(id, g.ID)
+			as := &Assignment{Header: record.Header{ID: record.NewID(), Schema: "assignment/1", Subject: record.Ref{Kind: "experiment", ID: string(id)}, At: now()},
+				Experiment: id, Unit: g.ID, Ordinal: ordinal, Seed: seed, Arm: ArmFor(seed, ordinal, first)}
+			g.Arm = x.armRef(as.ID, as.Arm)
+			return []record.Record{as}, &head, nil
+		}
+		return nil, &head, nil
+	}
+}
+
+// armRef is the arm's forced sets as the goal and the selections carry them.
+func (p *Protocol) armRef(as record.RecordID, arm string) *learn.ArmRef {
+	for _, a := range p.Arms {
+		if a.Arm == arm {
+			return &learn.ArmRef{Assignment: as, Arm: arm, Apply: a.Apply, Withhold: a.Withhold}
+		}
+	}
+	return nil
 }
 
 // checkFixture reads the fixture and refuses one the oracle could never
@@ -179,6 +256,9 @@ func (r *Runner) Run(ctx context.Context, exp record.RecordID) error {
 	if st.Closed[exp] != nil {
 		return fmt.Errorf("%w: experiment %s is closed", ErrRefused, exp)
 	}
+	if x.Assignment != PairedReplay {
+		return fmt.Errorf("%w: experiment %s is %s: its arms are production runs admitted at intake; the evaluator lane closes it", ErrRefused, exp, x.Assignment)
+	}
 	for i, u := range x.Units {
 		as := st.assignment(exp, u.Goal)
 		if as == nil {
@@ -225,7 +305,7 @@ func (r *Runner) arm(ctx context.Context, st *State, x *Experiment, as *Assignme
 	if err := d.Validate(); err != nil {
 		return err
 	}
-	rs := st.Runs.Replays[as.ID][arm.Arm]
+	rs := st.Runs.Arms[as.ID][arm.Arm]
 	switch {
 	case rs != nil && rs.Terminal():
 	case rs != nil:
@@ -235,7 +315,7 @@ func (r *Runner) arm(ctx context.Context, st *State, x *Experiment, as *Assignme
 	default:
 		var g *run.Goal
 		for _, u := range st.Runs.Unstarted {
-			if u.Replay != nil && u.Replay.Assignment == as.ID && u.Replay.Arm == arm.Arm {
+			if u.Arm != nil && u.Arm.Assignment == as.ID && u.Arm.Arm == arm.Arm {
 				g = u
 			}
 		}
@@ -258,7 +338,7 @@ func (r *Runner) arm(ctx context.Context, st *State, x *Experiment, as *Assignme
 	if err != nil {
 		return err
 	}
-	rs = led.Replays[as.ID][arm.Arm]
+	rs = led.Arms[as.ID][arm.Arm]
 	if rs == nil || !rs.Terminal() {
 		return fmt.Errorf("%w: arm %s of %s did not reach terminal", ErrRefused, arm.Arm, as.ID)
 	}
@@ -389,12 +469,51 @@ func Close(ctx context.Context, j *journal.Journal, store *thought.Store, exp re
 	return (&Closer{J: j, Store: store}).Close(ctx, exp)
 }
 
-// Closer is Close with the kill matrix's seam: CrashAt stops it dead after
+// Closer is Close with what a live cohort needs — the blinded judge that
+// scores each unit (tool-less; its calls are the evaluator's own
+// invocations) — and the kill matrix's seam: CrashAt stops it dead after
 // the named commit (close | attest | measure). Production never sets it.
 type Closer struct {
 	J       *journal.Journal
 	Store   *thought.Store
+	Judge   invoke.Backend
+	Timeout time.Duration
+	Events  func(string)
 	CrashAt string
+}
+
+// EvaluatorTries bounds the evaluate calls for one unit before its row is
+// `unevaluated`. Why 3: as the tail's lens — one failure is a blip, three
+// in a row is the backend's answer, and the unit leaves the analysis
+// rather than holding the cohort open forever.
+const EvaluatorTries = 3
+
+// Evidence commits the evidence a live experiment's terminal units are
+// owed (keyed, idempotent) and reports how many units still lack it.
+func (c *Closer) Evidence(ctx context.Context, exp record.RecordID) (owed int, err error) {
+	st, err := Fold(c.J, c.Store)
+	if err != nil {
+		return 0, err
+	}
+	x := st.Experiments[exp]
+	if x == nil {
+		return 0, fmt.Errorf("%w: no experiment %s", ErrConfig, exp)
+	}
+	for _, as := range st.byUnit[exp] {
+		if st.Evidence[as.ID][as.Arm] != nil {
+			continue
+		}
+		rs := st.Runs.Arms[as.ID][as.Arm]
+		if rs == nil || !rs.Terminal() {
+			owed++
+			continue
+		}
+		ev := EvidenceOf(rs, x.Hypothesis, exp, as.ID, as.Unit, as.Arm)
+		if _, err := c.J.Submit(ctx, journal.Command{IdempotencyKey: fmt.Sprintf("experiment/%s/evidence/%s/%s", exp, as.ID, as.Arm), Epoch: c.J.Epoch(), Records: []record.Record{ev}}); err != nil {
+			return 0, err
+		}
+	}
+	return owed + (x.N - len(st.byUnit[exp])), nil
 }
 
 // Close: see the package function.
@@ -423,18 +542,28 @@ func (c *Closer) Close(ctx context.Context, exp record.RecordID) (*EffectMeasure
 		return err
 	}
 	if st.Closed[exp] == nil {
-		units := make([]AssignedUnit, 0, x.N)
-		for i, u := range x.Units {
-			as := st.assignment(exp, u.Goal)
-			if as == nil {
-				return nil, fmt.Errorf("%w: unit %d (%s) is not assigned", ErrRefused, i, u.Goal)
+		if x.Assignment == RandomizedLive {
+			if owed, err := c.Evidence(ctx, exp); err != nil {
+				return nil, err
+			} else if owed > 0 {
+				return nil, fmt.Errorf("%w: %d of %d live units are not yet assigned or terminal", ErrRefused, owed, x.N)
 			}
-			for _, arm := range x.Arms {
-				if st.Evidence[as.ID][arm.Arm] == nil {
-					return nil, fmt.Errorf("%w: unit %d (%s) has no %s evidence", ErrRefused, i, u.Goal, arm.Arm)
+			if err := refold(); err != nil {
+				return nil, err
+			}
+		}
+		units := make([]AssignedUnit, 0, x.N)
+		for i := 0; i < x.N; i++ {
+			as := st.ordinal(exp, i)
+			if as == nil {
+				return nil, fmt.Errorf("%w: unit %d is not assigned", ErrRefused, i)
+			}
+			for _, arm := range x.armsOf(as) {
+				if st.Evidence[as.ID][arm] == nil {
+					return nil, fmt.Errorf("%w: unit %d (%s) has no %s evidence", ErrRefused, i, as.Unit, arm)
 				}
 			}
-			units = append(units, AssignedUnit{Unit: u.Goal, Assignment: as.ID, Ordinal: i, Seed: as.Seed})
+			units = append(units, AssignedUnit{Unit: as.Unit, Assignment: as.ID, Ordinal: i, Seed: as.Seed})
 		}
 		cm := &CohortCommitment{Header: record.Header{ID: record.NewID(), Schema: "cohort_commitment/1", Subject: sub, At: now()}, Experiment: exp, Protocol: x.Protocol, Units: units, Root: CohortRoot(units), Count: len(units)}
 		cl := &Closed{Header: record.Header{ID: record.NewID(), Schema: "cohort_closed/1", Subject: sub, At: now()}, Experiment: exp, Commitment: cm.ID, Count: len(units)}
@@ -448,8 +577,17 @@ func (c *Closer) Close(ctx context.Context, exp record.RecordID) (*EffectMeasure
 	cm := st.Commitments[exp]
 	if st.Attestations[exp] == nil {
 		att := &EffectAttestation{Header: record.Header{ID: record.NewID(), Schema: "effect_attestation/1", Subject: sub, At: now()}, Experiment: exp, Cohort: cm.ID, Closure: st.Closed[exp].ID, Protocol: cm.Protocol, Evaluator: Evaluator, Estimator: Estimator}
+		if cm.Protocol.Assignment == RandomizedLive {
+			att.Evaluator, att.Estimator = EvaluatorJudge, EstimatorArms
+		}
 		for i, u := range cm.Units {
-			row, err := st.row(store, cm.Protocol, i, u)
+			var row UnitRow
+			var err error
+			if cm.Protocol.Assignment == RandomizedLive {
+				row, err = c.liveRow(ctx, st, cm.Protocol, i, u)
+			} else {
+				row, err = st.row(store, cm.Protocol, i, u)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -553,6 +691,9 @@ func (st *State) row(store *thought.Store, p Protocol, i int, u AssignedUnit) (U
 func Measure(att *EffectAttestation) *EffectMeasurement {
 	p := att.Protocol
 	m := &EffectMeasurement{Experiment: att.Experiment, Attestation: att.ID, Hypothesis: p.Hypothesis, Relation: p.Relation, Assigned: len(att.Units)}
+	if p.Assignment == RandomizedLive {
+		return measureLive(m, att)
+	}
 	var itt, pp float64
 	for _, u := range att.Units {
 		if u.TreatmentMissing != "" || u.ControlMissing != "" {
@@ -588,4 +729,189 @@ func Measure(att *EffectAttestation) *EffectMeasurement {
 	}
 	m.ItemEffect = Normalize(m.Verdict, p.Relation)
 	return m
+}
+
+// measureLive is the estimator arm_diff/1: analyzed = units with a
+// score; ITT delta = mean(treatment) − mean(control) over them (0 when an
+// arm is empty); per-protocol likewise over the units whose exposure held;
+// treatment_helpful when delta_pp exceeds the margin with at least
+// min_per_arm exposed units in EACH arm, treatment_harmful when it falls
+// below −margin likewise, equivalent when |delta_pp| is within the margin
+// with at least min_equivalent per arm, else insufficient. No interval:
+// the per-arm minimums are the predeclared uncertainty control (v1).
+func measureLive(m *EffectMeasurement, att *EffectAttestation) *EffectMeasurement {
+	p := att.Protocol
+	var sum, sumPP [2]float64
+	var n, nPP [2]int
+	idx := func(arm string) int {
+		if arm == Treatment {
+			return 0
+		}
+		return 1
+	}
+	for _, u := range att.Units {
+		if u.Missing != "" {
+			continue
+		}
+		m.Analyzed++
+		i := idx(u.Arm)
+		n[i]++
+		sum[i] += u.Score
+		if u.Exposed {
+			m.Exposed++
+			nPP[i]++
+			sumPP[i] += u.Score
+		}
+	}
+	m.TreatmentN, m.ControlN = nPP[0], nPP[1]
+	mean := func(s float64, k int) float64 {
+		if k == 0 {
+			return 0
+		}
+		return s / float64(k)
+	}
+	if n[0] > 0 && n[1] > 0 {
+		m.DeltaITT = mean(sum[0], n[0]) - mean(sum[1], n[1])
+	}
+	if nPP[0] > 0 && nPP[1] > 0 {
+		m.DeltaPP = mean(sumPP[0], nPP[0]) - mean(sumPP[1], nPP[1])
+	}
+	least := nPP[0]
+	if nPP[1] < least {
+		least = nPP[1]
+	}
+	margin := p.Outcome.Margin
+	switch {
+	case least >= p.Analysis.MinPerArm && m.DeltaPP > margin:
+		m.Verdict = TreatmentHelpful
+	case least >= p.Analysis.MinPerArm && m.DeltaPP < -margin:
+		m.Verdict = TreatmentHarmful
+	case least >= p.Analysis.MinEquivalent && math.Abs(m.DeltaPP) <= margin:
+		m.Verdict = Equivalent
+	default:
+		m.Verdict = Insufficient
+	}
+	m.ItemEffect = Normalize(m.Verdict, p.Relation)
+	return m
+}
+
+// armsOf: the arms a unit runs — both for paired replay, its one assigned
+// arm for randomized live.
+func (p *Protocol) armsOf(as *Assignment) []string {
+	if p.Assignment == RandomizedLive {
+		return []string{as.Arm}
+	}
+	return []string{Treatment, Control}
+}
+
+// EvaluatorPrompt is the blinded judge's request, rendered from the unit's
+// goal and the arm's deliverable and NOTHING else — no lesson text, no
+// arm, no hypothesis — so the verifier can re-render it from the evidence
+// and refuse an evaluation that was asked anything more.
+func EvaluatorPrompt(goal, deliverable []byte) []byte {
+	var b bytes.Buffer
+	b.WriteString("You are a blinded evaluator. Decide whether the deliverable achieves the goal. Judge only what is written; do not assume context.\n\n")
+	b.WriteString("Goal:\n")
+	b.Write(bytes.TrimSpace(goal))
+	b.WriteString("\n\nDeliverable:\n")
+	b.Write(bytes.TrimSpace(deliverable))
+	b.WriteString("\n\nReply with JSON only: {\"outcome\":\"achieved\"|\"not_achieved\",\"confidence\":0..1,\"why\":\"one sentence\"}\n")
+	return b.Bytes()
+}
+
+// ParseEvaluation reads the judge's answer: 1 for achieved, 0 for
+// not_achieved; anything else is unusable.
+func ParseEvaluation(response []byte) (float64, error) {
+	r, err := run.ParseJudge(response, "achieved", "not_achieved")
+	if err != nil {
+		return 0, err
+	}
+	if r.Outcome == "achieved" {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+// evaluation finds a usable evaluate invocation for the unit among the
+// arm run's invocations: purpose evaluate, tool-less, asked EXACTLY the
+// blinded prompt, with a receipt that parses. It also counts every
+// evaluate call made (usable or not) so the tries bound and the
+// unevaluated verdict re-derive.
+func (st *State) evaluation(store *thought.Store, rs *run.RunState, want thought.Ref) (id record.RecordID, score float64, tries int, err error) {
+	for _, a := range rs.Attempts {
+		for _, is := range a.Invocations {
+			if is.Invocation.Purpose != invoke.PurposeEvaluate {
+				continue
+			}
+			tries++
+			if id != "" || is.Invocation.Tools || is.Invocation.Request != want || is.Receipt == nil {
+				continue
+			}
+			b, err := store.Get(is.Receipt.Response)
+			if err != nil {
+				return "", 0, tries, err
+			}
+			if sc, perr := ParseEvaluation(b); perr == nil {
+				id, score = is.Invocation.ID, sc
+			}
+		}
+	}
+	return id, score, tries, nil
+}
+
+// liveRow builds one live attestation row: the unit's evidence; if it has
+// a deliverable, the blinded judge's score from a usable evaluate
+// invocation — reused when one exists, made now otherwise, up to
+// EvaluatorTries — else unevaluated.
+func (c *Closer) liveRow(ctx context.Context, st *State, p Protocol, i int, u AssignedUnit) (UnitRow, error) {
+	as := st.Assignments[u.Assignment]
+	ev := st.Evidence[u.Assignment][as.Arm]
+	if ev == nil {
+		return UnitRow{}, fmt.Errorf("%w: unit %d has no evidence", ErrRefused, i)
+	}
+	row := UnitRow{Unit: u.Unit, Assignment: u.Assignment, Arm: as.Arm, Evidence: ev.ID, Missing: ev.Missing, Exposed: ev.Exposed == intended(p.Relation, as.Arm)}
+	if ev.Missing != "" {
+		return row, nil
+	}
+	rs := st.Runs.Arms[as.ID][as.Arm]
+	goal, err := c.Store.Get(rs.Goal.Text)
+	if err != nil {
+		return UnitRow{}, err
+	}
+	deliverable, err := c.Store.Get(*ev.Deliverable)
+	if err != nil {
+		return UnitRow{}, err
+	}
+	prompt := EvaluatorPrompt(goal, deliverable)
+	want := thought.Address(thought.Prompt, prompt)
+	id, score, tries, err := st.evaluation(c.Store, rs, want)
+	if err != nil {
+		return UnitRow{}, err
+	}
+	for id == "" && tries < EvaluatorTries {
+		if c.Judge == nil {
+			return UnitRow{}, fmt.Errorf("%w: a live cohort needs a judge to score unit %d", ErrConfig, i)
+		}
+		sh := &invoke.Shell{J: c.J, Store: c.Store, Run: rs.Run, Attempt: ev.Attempt}
+		o, err := sh.Invoke(ctx, c.Judge, invoke.Request{Purpose: invoke.PurposeEvaluate, Prompt: prompt, Tools: false, Timeout: c.Timeout}, nil)
+		if err != nil && !(o != nil && o.Terminal == invoke.TerminalFailed && o.Err == nil) {
+			return UnitRow{}, err
+		}
+		tries++
+		if o.Terminal != invoke.TerminalFailed {
+			if sc, perr := ParseEvaluation(o.Response); perr == nil {
+				id, score = o.Invocation, sc
+			} else if c.Events != nil {
+				c.Events(fmt.Sprintf("evaluator: unit %d try %d unusable: %v", i, tries, perr))
+			}
+		} else if c.Events != nil {
+			c.Events(fmt.Sprintf("evaluator: unit %d try %d failed: %s", i, tries, o.Reason))
+		}
+	}
+	if id == "" {
+		row.Missing = MissingUnevaluated
+		return row, nil
+	}
+	row.Score, row.Evaluation = score, id
+	return row, nil
 }

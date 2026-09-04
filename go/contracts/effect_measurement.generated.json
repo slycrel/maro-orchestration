@@ -134,6 +134,20 @@
       "is_thought": false
     },
     {
+      "name": "TreatmentN",
+      "wire": "treatment_n",
+      "go_type": "int",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "ControlN",
+      "wire": "control_n",
+      "go_type": "int",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
       "name": "DeltaITT",
       "wire": "delta_itt",
       "go_type": "float64",
@@ -162,6 +176,6 @@
       "is_thought": false
     }
   ],
-  "source_ref": "9b1e5682",
+  "source_ref": "5751ec9c",
   "generator": "maro-go contracts gen v1"
 }

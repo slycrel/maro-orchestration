@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/contracts"
+	"github.com/slycrel/maro-orchestration/go/internal/experiment"
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
@@ -80,7 +81,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | experiment open|run|close|list|show | serve [--model m] [--judge-model m] | submit [--lane now|agenda] [--ack] <goal> | interrupt <handle> --why <text> | status")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | experiment open [--live --population f --n k]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] | submit [--lane now|agenda] [--ack] <goal> | interrupt <handle> --why <text> | status")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -282,7 +283,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		return fmt.Errorf("unknown backend %q (subprocess|scripted)", backend)
 	}
 	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute,
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st),
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}
