@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "goal",
+  "kind": "intent_assessment",
   "envelope": "production",
-  "schema": "goal/1",
-  "go_type": "run.Goal",
+  "schema": "intent_assessment/1",
+  "go_type": "run.IntentAssessment",
   "fields": [
     {
       "name": "header.ID",
@@ -78,38 +78,31 @@
       "from_header": true
     },
     {
-      "name": "Parent",
-      "wire": "parent",
+      "name": "Invocation",
+      "wire": "invocation",
       "go_type": "record.RecordID",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Clear",
+      "wire": "clear",
+      "go_type": "bool",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Interpretation",
+      "wire": "interpretation",
+      "go_type": "string",
       "omittable": true,
       "is_thought": false
     },
     {
-      "name": "Root",
-      "wire": "root",
-      "go_type": "record.RecordID",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Text",
-      "wire": "text",
-      "go_type": "thought.Ref",
-      "omittable": false,
-      "is_thought": true
-    },
-    {
-      "name": "Origin",
-      "wire": "origin",
-      "go_type": "run.GoalOrigin",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Delivery",
-      "wire": "delivery",
-      "go_type": "run.DeliveryPolicy",
-      "omittable": false,
+      "name": "Question",
+      "wire": "question",
+      "go_type": "string",
+      "omittable": true,
       "is_thought": false
     }
   ],

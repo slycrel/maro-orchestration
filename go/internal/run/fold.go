@@ -80,6 +80,11 @@ type AttemptState struct {
 	Delivery    *Delivery     // at most one per attempt
 	Invocations []*invoke.State
 	Recall      *learn.RecallSelection // the attempt's recall selection, when it reached that stage
+	Stuck       *verdict.Resolution    // the sheriff's stuck resolution, when one exists
+	// AGENDA stages, as committed
+	Intent *IntentAssessment
+	Plan   *Plan
+	Steps  []*StepDone // by ordinal, dense from 1
 }
 
 // Current is the attempt's latest state.
@@ -226,6 +231,11 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 			observations[x.ID] = x
 		case *verdict.Resolution:
 			resolutions[x.ID] = x
+			if x.VerdictKind == verdict.KindStuck && x.Outcome == "stuck" && x.RunID != "" {
+				if rs := runs[x.RunID]; rs != nil && x.Attempt > 0 && int(x.Attempt) <= len(rs.Attempts) {
+					rs.Attempts[x.Attempt-1].Stuck = x
+				}
+			}
 		case *invoke.Invocation:
 			// invocations are folded up front (receipts, terminals, reconciliation);
 			// attach each to the attempt it ran under as its record arrives
@@ -252,6 +262,14 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 				return fmt.Errorf("run: %s attempt %d started but attempt %d is at %q, not recoverable", x.RunID, x.Attempt, x.Attempt-1, rs.Attempts[x.Attempt-2].Current())
 			}
 			a := &AttemptState{Attempt: x, Recall: learned.Recalls[learn.RecallKey(x.RunID, x.Attempt)]}
+			if x.Attempt > 1 {
+				// a recovered attempt starts from the last committed idempotent
+				// stage: the earlier attempt's intent, plan, and done steps are
+				// this attempt's too (they are the run's evidence, not the
+				// attempt's), and it may not remake them
+				p := rs.Attempts[x.Attempt-2]
+				a.Intent, a.Plan, a.Steps = p.Intent, p.Plan, append([]*StepDone{}, p.Steps...)
+			}
 			rs.Attempts = append(rs.Attempts, a)
 		case *Transition:
 			rs := get(x.RunID)
@@ -266,6 +284,52 @@ func Fold(pr *journal.ProductionReader, st *thought.Store) (*Ledger, error) {
 				return err
 			}
 			a.Transitions = append(a.Transitions, x)
+		case *IntentAssessment:
+			a, err := attempt(get(x.RunID), x.Attempt, "intent")
+			if err != nil {
+				return err
+			}
+			if a.Intent != nil || a.Attempt.Config.Lane != LaneAgenda || a.Current() != Executing {
+				return fmt.Errorf("run: %s attempt %d intent out of place (lane %s, state %s, prior intent %v)", x.RunID, x.Attempt, a.Attempt.Config.Lane, a.Current(), a.Intent != nil)
+			}
+			if st := inv[x.Invocation]; st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposeIntent {
+				return fmt.Errorf("run: %s attempt %d intent cites invocation %s that is not its intent call", x.RunID, x.Attempt, x.Invocation)
+			}
+			a.Intent = x
+		case *Plan:
+			a, err := attempt(get(x.RunID), x.Attempt, "plan")
+			if err != nil {
+				return err
+			}
+			if a.Plan != nil || a.Intent == nil || !a.Intent.Clear {
+				return fmt.Errorf("run: %s attempt %d plan without a clear intent before it (or a second plan)", x.RunID, x.Attempt)
+			}
+			if st := inv[x.Invocation]; st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposePlan {
+				return fmt.Errorf("run: %s attempt %d plan cites invocation %s that is not its plan call", x.RunID, x.Attempt, x.Invocation)
+			}
+			a.Plan = x
+		case *StepDone:
+			a, err := attempt(get(x.RunID), x.Attempt, "step")
+			if err != nil {
+				return err
+			}
+			if a.Plan == nil || x.Ordinal != len(a.Steps)+1 || x.Ordinal > len(a.Plan.Steps) || x.Step != a.Plan.Steps[x.Ordinal-1] {
+				return fmt.Errorf("run: %s attempt %d step %d out of order or not the plan's step", x.RunID, x.Attempt, x.Ordinal)
+			}
+			if len(a.Steps) > 0 && a.Steps[len(a.Steps)-1].Outcome == StepBlocked {
+				return fmt.Errorf("run: %s attempt %d step %d after a blocked step", x.RunID, x.Attempt, x.Ordinal)
+			}
+			st := inv[x.Invocation]
+			if st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Purpose != invoke.PurposeExecute || st.Receipt == nil || st.Receipt.Response != x.Result {
+				return fmt.Errorf("run: %s attempt %d step %d cites invocation %s that is not an execute call with this result", x.RunID, x.Attempt, x.Ordinal, x.Invocation)
+			}
+			if x.Verdict != "" {
+				v := verdicts[x.Verdict]
+				if v == nil || v.VerdictKind != verdict.KindStep || string(v.Outcome) != string(x.Outcome) || v.RunID != x.RunID || v.Attempt != x.Attempt {
+					return fmt.Errorf("run: %s attempt %d step %d cites verdict %s that does not say %s", x.RunID, x.Attempt, x.Ordinal, x.Verdict, x.Outcome)
+				}
+			}
+			a.Steps = append(a.Steps, x)
 		case *DeliveryPrepared:
 			rs := get(x.RunID)
 			a, err := attempt(rs, x.Attempt, "delivery")
@@ -355,6 +419,9 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 	switch x.To {
 	case Recorded:
 		o := x.Outcome
+		if o.Lane != a.Attempt.Config.Lane {
+			return fmt.Errorf("run: %s attempt %d recorded lane %s but ran %s", rs.Run, x.Attempt, o.Lane, a.Attempt.Config.Lane)
+		}
 		if o.GoalText != rs.Goal.Text {
 			return fmt.Errorf("run: %s attempt %d recorded an outcome for a different goal thought", rs.Run, x.Attempt)
 		}
@@ -366,20 +433,53 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 			if st.Invocation.Backend.Model != o.Model {
 				return fmt.Errorf("run: %s attempt %d recorded model %q but the invocation ran %q", rs.Run, x.Attempt, o.Model, st.Invocation.Backend.Model)
 			}
-			// exposure: the request is EXACTLY the goal plus the recall's
-			// rendering, and the applications on the invocation are exactly
-			// that rendering — item, revision, and representation bytes
-			sel := learned.Recalls[learn.RecallKey(rs.Run, o.Produced)]
-			if sel == nil || sel.ID != o.Recall {
-				return fmt.Errorf("run: %s attempt %d recorded recall %s that attempt %d did not make", rs.Run, x.Attempt, o.Recall, o.Produced)
-			}
-			if err := checkExposure(rs, sel, store.Get, learned, store.Get, o.Invocation, st.Invocation, o.Produced); err != nil {
-				return fmt.Errorf("run: %s attempt %d: %w", rs.Run, x.Attempt, err)
-			}
 			if o.Receipt != "" {
-				if st.Receipt == nil || st.Receipt.ID != o.Receipt || o.Response == nil || *o.Response != st.Receipt.Response || o.Usage != st.Receipt.Usage {
+				if st.Receipt == nil || st.Receipt.ID != o.Receipt || o.Response == nil || *o.Response != st.Receipt.Response {
 					return fmt.Errorf("run: %s attempt %d recorded receipt %s that disagrees with invocation %s", rs.Run, x.Attempt, o.Receipt, o.Invocation)
 				}
+			}
+			agenda := a.Attempt.Config.Lane == LaneAgenda
+			if agenda {
+				// usage is what the goal cost so far: every receipt of every attempt
+				var sum invoke.Usage
+				for _, p := range rs.Attempts {
+					for _, is := range p.Invocations {
+						if is.Receipt != nil {
+							sum = add(sum, is.Receipt.Usage)
+						}
+					}
+				}
+				if o.Usage != sum || o.Steps != len(a.Steps) {
+					return fmt.Errorf("run: %s attempt %d recorded usage/steps that are not the sum of its receipts (%d steps)", rs.Run, x.Attempt, len(a.Steps))
+				}
+			} else if o.Receipt != "" && o.Usage != st.Receipt.Usage {
+				return fmt.Errorf("run: %s attempt %d recorded usage that disagrees with receipt %s", rs.Run, x.Attempt, o.Receipt)
+			}
+			// exposure: the recall the request was rendered from is the
+			// producing attempt's; NOW: the request is EXACTLY goal+rendering;
+			// AGENDA: every plan/execute request ENDS with the rendering and
+			// carries the applications; judge/intent requests carry neither
+			recallBy := o.Produced
+			if agenda {
+				recallBy = x.Attempt // AGENDA: the recording attempt's selection (continued from the recovered one)
+			}
+			sel := learned.Recalls[learn.RecallKey(rs.Run, recallBy)]
+			if sel == nil || sel.ID != o.Recall {
+				return fmt.Errorf("run: %s attempt %d recorded recall %s that attempt %d did not make", rs.Run, x.Attempt, o.Recall, recallBy)
+			}
+			if agenda {
+				for _, p := range rs.Attempts {
+					if p.Recall == nil || (p.Recall.ID != o.Recall && !continuesTo(learned, p.Recall, o.Recall)) {
+						continue // an attempt whose requests were rendered from another decision (or none)
+					}
+					for _, is := range p.Invocations {
+						if err := checkExposure(rs, sel, store.Get, learned, store.Get, is.Invocation.ID, is.Invocation, is.Invocation.Attempt, true); err != nil {
+							return fmt.Errorf("run: %s attempt %d: %w", rs.Run, x.Attempt, err)
+						}
+					}
+				}
+			} else if err := checkExposure(rs, sel, store.Get, learned, store.Get, o.Invocation, st.Invocation, o.Produced, false); err != nil {
+				return fmt.Errorf("run: %s attempt %d: %w", rs.Run, x.Attempt, err)
 			}
 		} else {
 			if o.Model != "" {
@@ -464,6 +564,7 @@ type Mission struct {
 	Delivery     DeliveryState  // best state the latest attempt's delivery reached ("" = none)
 	Required     DeliveryState  // the policy
 	MayDuplicate int            // presentations the process died inside: each may have reached the user
+	Stuck        string         // the sheriff's stuck resolution id, when the latest attempt was called stuck
 	Outcome      MissionOutcome // the label
 	Reason       string
 }
@@ -479,6 +580,9 @@ func MissionOf(rs *RunState) Mission {
 		return m
 	}
 	m.Attempt, m.Execution = a.Attempt.Attempt, a.Current()
+	if a.Stuck != nil {
+		m.Stuck = string(a.Stuck.ID)
+	}
 	rec := a.Has(Recorded)
 	if rec == nil {
 		return m
@@ -554,10 +658,17 @@ func ReplayKey(rs *RunState, a *AttemptState) (string, error) {
 // thought plus the selection's deterministic rendering must be BYTE-EQUAL
 // to the invocation's request thought, and each application must be that
 // rendering's bullet for its item, scoped to the producing attempt.
-func checkExposure(rs *RunState, sel *learn.RecallSelection, get func(thought.Ref) ([]byte, error), learned *learn.Ledger, text func(thought.Ref) ([]byte, error), invID record.RecordID, invRec *invoke.Invocation, produced uint32) error {
+func checkExposure(rs *RunState, sel *learn.RecallSelection, get func(thought.Ref) ([]byte, error), learned *learn.Ledger, text func(thought.Ref) ([]byte, error), invID record.RecordID, invRec *invoke.Invocation, produced uint32, suffix bool) error {
 	goal, err := get(rs.Goal.Text)
 	if err != nil {
 		return err
+	}
+	apps := learned.Applications[invID]
+	if suffix && invRec.Purpose != invoke.PurposeExecute && invRec.Purpose != invoke.PurposePlan {
+		if len(apps) != 0 {
+			return fmt.Errorf("%s invocation %s carries applications", invRec.Purpose, invID)
+		}
+		return nil
 	}
 	block, reps, err := learn.Render(sel, func(ir learn.ItemRev) ([]byte, error) {
 		it := learned.Items[ir.Item]
@@ -574,11 +685,20 @@ func checkExposure(rs *RunState, sel *learn.RecallSelection, get func(thought.Re
 	if err != nil {
 		return err
 	}
-	want := thought.Address(thought.Prompt, append(append([]byte{}, goal...), block...))
-	if invRec.Request != want {
-		return fmt.Errorf("invocation %s request is not goal+recall (%s vs %s)", invID, invRec.Request.Hash, want.Hash)
+	if suffix {
+		req, err := get(invRec.Request)
+		if err != nil {
+			return err
+		}
+		if len(block) > 0 && !bytesHasSuffix(req, block) {
+			return fmt.Errorf("invocation %s request does not end with the recall rendering", invID)
+		}
+	} else {
+		want := thought.Address(thought.Prompt, append(append([]byte{}, goal...), block...))
+		if invRec.Request != want {
+			return fmt.Errorf("invocation %s request is not goal+recall (%s vs %s)", invID, invRec.Request.Hash, want.Hash)
+		}
 	}
-	apps := learned.Applications[invID]
 	if len(apps) != len(reps) {
 		return fmt.Errorf("%d applications on invocation %s but the recall rendered %d", len(apps), invID, len(reps))
 	}
@@ -589,4 +709,24 @@ func checkExposure(rs *RunState, sel *learn.RecallSelection, get func(thought.Re
 		}
 	}
 	return nil
+}
+
+// continuesTo reports whether the selection `from` is continued (directly
+// or through a chain) by the selection named `to`.
+func continuesTo(learned *learn.Ledger, from *learn.RecallSelection, to record.RecordID) bool {
+	if from == nil {
+		return false
+	}
+	cur := learned.Selection(to)
+	for cur != nil && cur.Continues != "" {
+		if cur.Continues == from.ID {
+			return true
+		}
+		cur = learned.Selection(cur.Continues)
+	}
+	return false
+}
+
+func bytesHasSuffix(b, suf []byte) bool {
+	return len(b) >= len(suf) && string(b[len(b)-len(suf):]) == string(suf)
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -26,7 +27,8 @@ type Lease struct {
 
 	lock      *os.File
 	root      *Announced
-	Recovered string // non-empty when a prior lease.json was malformed and was replaced under the lock
+	Recovered string     // non-empty when a prior lease.json was malformed and was replaced under the lock
+	mu        sync.Mutex // Live vs Release: a writer's last check may race the shutdown's release
 }
 
 var (
@@ -156,11 +158,20 @@ func (l *Lease) Root() *Announced { return l.root }
 
 // Live reports whether this process still holds the lock. Released leases
 // are dead; every writer re-checks this before acting.
-func (l *Lease) Live() bool { return l != nil && l.lock != nil && l.Epoch > 0 }
+func (l *Lease) Live() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lock != nil && l.Epoch > 0
+}
 
 // Release removes lease.json if it still describes this lease and drops the
 // lock. Errors are returned with their path; the epoch is never decremented.
 func (l *Lease) Release() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.lock == nil {
 		return nil
 	}

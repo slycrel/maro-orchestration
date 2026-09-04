@@ -519,8 +519,13 @@ func TestJournalExecutesRunVocabulary(t *testing.T) {
 		{"goal foreign policy", func() record.Record { g := goodGoal(); g.Delivery.Required = "endpoint_accepted"; return g }(), "out of vocabulary"},
 		{"goal text not a goal thought", func() record.Record { g := goodGoal(); g.Text.Kind = thought.Prompt; return g }(), "goal thought"},
 		{"root goal must be its own root", func() record.Record { g := goodGoal(); g.Root = record.NewID(); return g }(), "root"},
-		{"attempt foreign lane", func() record.Record { a := goodAttempt(); a.Config.Lane = "agenda"; return a }(), "lane"},
-		{"attempt cardinality 2", func() record.Record { a := goodAttempt(); a.Config.PlanCardinality = 2; return a }(), "cardinality"},
+		{"attempt foreign lane", func() record.Record { a := goodAttempt(); a.Config.Lane = "later"; return a }(), "lane"},
+		{"agenda without a judge backend", func() record.Record {
+			a := goodAttempt()
+			a.Config.Lane, a.Config.Judge, a.Config.PlanCardinality = LaneAgenda, JudgeModel, 0
+			return a
+		}(), "named backend"},
+		{"attempt cardinality 2", func() record.Record { a := goodAttempt(); a.Config.PlanCardinality = 2; return a }(), "one execute"},
 		{"attempt 1 recovers", func() record.Record { a := goodAttempt(); a.RecoversFrom = 1; return a }(), "recovers"},
 		{"attempt no run scope", func() record.Record { a := goodAttempt(); a.RunID = ""; return a }(), "run_id"},
 		{"illegal transition", tr(Created, Recorded), "not a legal"},
@@ -533,12 +538,12 @@ func TestJournalExecutesRunVocabulary(t *testing.T) {
 		{"unknown state", tr(Created, "paused"), "out of vocabulary"},
 		{"recorded outcome foreign terminal", func() record.Record {
 			x := tr(Judged, Recorded)
-			x.Outcome = &Outcome{Terminal: "hung", GoalText: goalRef, Closure: record.NewID(), ClosureOut: "unknown"}
+			x.Outcome = &Outcome{Lane: LaneNow, Terminal: "hung", GoalText: goalRef, Closure: record.NewID(), ClosureOut: "unknown"}
 			return x
 		}(), "terminal"},
 		{"recorded complete without receipt", func() record.Record {
 			x := tr(Judged, Recorded)
-			x.Outcome = &Outcome{Terminal: invoke.TerminalComplete, GoalText: goalRef, Closure: record.NewID(), ClosureOut: "unknown"}
+			x.Outcome = &Outcome{Lane: LaneNow, Terminal: invoke.TerminalComplete, GoalText: goalRef, Closure: record.NewID(), ClosureOut: "unknown"}
 			return x
 		}(), "names its receipt"},
 		{"ack bad token", func() record.Record {
@@ -561,7 +566,7 @@ func TestJournalExecutesRunVocabulary(t *testing.T) {
 		}(), "carries a reason"},
 		{"outcome with invocation but no producer", func() record.Record {
 			x := tr(Judged, Recorded)
-			x.Outcome = &Outcome{Terminal: invoke.TerminalFailed, Reason: "r", Invocation: record.NewID(), GoalText: goalRef, Closure: record.NewID(), ClosureOut: "unknown"}
+			x.Outcome = &Outcome{Lane: LaneNow, Terminal: invoke.TerminalFailed, Reason: "r", Invocation: record.NewID(), GoalText: goalRef, Closure: record.NewID(), ClosureOut: "unknown"}
 			return x
 		}(), "produced"},
 		{"attempted n zero", func() record.Record {
@@ -623,7 +628,7 @@ func TestRecordedOutcomeIsAFold(t *testing.T) {
 	}
 	rc := inv[0].Receipt
 	resp := rc.Response
-	re := &Outcome{Terminal: inv[0].Terminal.State, Invocation: inv[0].Invocation.ID, Produced: 1, Recall: rs.Latest().Recall.ID, Receipt: rc.ID, Response: &resp, Usage: rc.Usage, Model: rs.Latest().Attempt.Config.Backend.Model, GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
+	re := &Outcome{Lane: LaneNow, Terminal: inv[0].Terminal.State, Invocation: inv[0].Invocation.ID, Produced: 1, Recall: rs.Latest().Recall.ID, Receipt: rc.ID, Response: &resp, Usage: rc.Usage, Model: rs.Latest().Attempt.Config.Backend.Model, GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
 	a, _ := json.Marshal(stamped)
 	b, _ := json.Marshal(re)
 	if string(a) != string(b) {
@@ -788,7 +793,7 @@ func TestFoldRefusesForgedHistories(t *testing.T) {
 				t.Fatal(err)
 			}
 			resp := inv.Receipt.Response
-			o := &Outcome{Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Recall: a.Recall.ID, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
+			o := &Outcome{Lane: LaneNow, Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Recall: a.Recall.ID, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
 			mut(o, rs, h)
 			return forge(t, h, "lie", &Transition{Header: hd(rs, runRef(rs.Run)), From: Judged, To: Recorded, Outcome: o})
 		}
@@ -801,7 +806,8 @@ func TestFoldRefusesForgedHistories(t *testing.T) {
 			{"honest", func(o *Outcome, rs *RunState, h *harness) {}, ""},
 			{"other goal", func(o *Outcome, rs *RunState, h *harness) { o.GoalText = otherGoal }, "different goal"},
 			{"other model", func(o *Outcome, rs *RunState, h *harness) { o.Model = "gpt-9" }, "recorded model"},
-			{"other usage", func(o *Outcome, rs *RunState, h *harness) { o.Usage.InputTokens = 999 }, "disagrees with invocation"},
+			{"other usage", func(o *Outcome, rs *RunState, h *harness) { o.Usage.InputTokens = 999 }, "usage"},
+			{"other lane", func(o *Outcome, rs *RunState, h *harness) { o.Lane = LaneAgenda }, "recorded lane"},
 			{"promoted closure", func(o *Outcome, rs *RunState, h *harness) { o.ClosureOut = "achieved" }, "resolution says"},
 			{"invented source", func(o *Outcome, rs *RunState, h *harness) { o.ClosureSrc = "operator" }, "effective verdict"},
 			{"foreign closure", func(o *Outcome, rs *RunState, h *harness) { o.Closure = record.NewID() }, "not this attempt's closure"},
@@ -833,7 +839,7 @@ func TestFoldRefusesForgedHistories(t *testing.T) {
 		inv := rs.Latest().Invocations[0]
 		res := &verdict.Resolution{Header: hd(rs, runRef(rs.Run)), VerdictKind: verdict.KindClosure, Outcome: "achieved", Effective: vs[0].ID, Candidates: []record.RecordID{vs[0].ID}, ResolverVer: verdict.ResolverVer, Thresholds: verdict.DefaultThresholds, Rule: "standing:self", Confidence: 0.5}
 		resp := inv.Receipt.Response
-		o := &Outcome{Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Recall: rs.Latest().Recall.ID, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: "achieved", ClosureCnf: 0.5, ClosureSrc: "self"}
+		o := &Outcome{Lane: LaneNow, Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Recall: rs.Latest().Recall.ID, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: "achieved", ClosureCnf: 0.5, ClosureSrc: "self"}
 		if err := forge(t, h, "forged-res", res, &Transition{Header: hd(rs, runRef(rs.Run)), From: Judged, To: Recorded, Outcome: o}); err == nil || !strings.Contains(err.Error(), "disagrees with its recompute") {
 			t.Fatalf("forged resolution folded: %v", err)
 		}
@@ -1136,7 +1142,7 @@ func TestFoldRefusesForgedExposure(t *testing.T) {
 			t.Fatal(err)
 		}
 		resp := inv.Receipt.Response
-		o := &Outcome{Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Recall: a.Recall.ID, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
+		o := &Outcome{Lane: LaneNow, Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Recall: a.Recall.ID, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
 		hd := func() record.Header {
 			return record.Header{ID: record.NewID(), RunID: rs.Run, Attempt: 1, Subject: runRef(rs.Run), At: time.Now().UTC()}
 		}

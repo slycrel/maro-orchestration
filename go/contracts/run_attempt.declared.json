@@ -25,8 +25,8 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "\"lane\":\"now\"",
-      "rejects": "{\"lane\":\"agenda\"}",
+      "pattern": "\"lane\":\"(now|agenda)\"",
+      "rejects": "{\"lane\":\"later\"}",
       "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
     },
     "recovers_from": {

@@ -13,6 +13,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/run"
+	"github.com/slycrel/maro-orchestration/go/internal/supervise"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	"github.com/slycrel/maro-orchestration/go/internal/verdict"
 )
@@ -80,6 +81,8 @@ func samples() map[record.Kind]any {
 	goalRef := thought.Ref{Hash: "s256v1:" + strings.Repeat("ab", 32), Kind: thought.Goal, Bytes: 3, Encoding: thought.UTF8}
 	deliverable := thought.Ref{Hash: "s256v1:" + strings.Repeat("cd", 32), Kind: thought.Deliverable, Bytes: 3, Encoding: thought.UTF8}
 	lesson := thought.Ref{Hash: "s256v1:" + strings.Repeat("ef", 32), Kind: thought.LessonText, Bytes: 9, Encoding: thought.UTF8}
+	step := thought.Ref{Hash: "s256v1:" + strings.Repeat("12", 32), Kind: thought.Step, Bytes: 5, Encoding: thought.UTF8}
+	resp := thought.Ref{Hash: "s256v1:" + strings.Repeat("34", 32), Kind: thought.Response, Bytes: 5, Encoding: thought.UTF8}
 	return map[record.Kind]any{
 		record.KindLease:            &record.LeaseRecord{Header: withSchema(h, "lease/1"), PID: 4242, Epoch: 3, Host: "mini"},
 		record.KindThoughtStored:    &record.ThoughtStored{Header: withSchema(h, "thought_stored/1"), Hash: "s256v1:" + strings.Repeat("ab", 32), Thought: "goal", Bytes: 12, Encoding: "utf8"},
@@ -95,7 +98,7 @@ func samples() map[record.Kind]any {
 		invoke.KindReconciled:       &invoke.Reconciled{Header: withSchema(h, "invocation_reconciled/1"), Invocation: inv, Disposition: invoke.DispositionAbandoned, Evidence: "tool-less"},
 		run.KindGoal:                &run.Goal{Header: withSubject(withSchema(h, "goal/1"), record.Ref{Kind: "goal", ID: string(h.ID)}), Parent: inv, Root: inv, Text: goalRef, Origin: run.OriginCLI, Delivery: run.DeliveryPolicy{Required: run.TransportAccepted}},
 		run.KindFamilyAssessment:    &run.FamilyAssessment{Header: withSubject(withSchema(h, "family_assessment/1"), record.Ref{Kind: "goal", ID: string(inv)}), Goal: inv, Family: run.FamilyAnswer, Rule: run.FamilyRule, Reason: "question shape"},
-		run.KindRunAttempt:          &run.RunAttempt{Header: withSchema(h, "run_attempt/1"), Goal: inv, Family: inv, Config: run.ConfigSnapshot{Lane: run.LaneNow, Backend: caps, Judge: run.JudgeSelf, PlanCardinality: 1, FamilyRule: run.FamilyRule, ResolverVer: verdict.ResolverVer}, RecoversFrom: 1},
+		run.KindRunAttempt:          &run.RunAttempt{Header: withSchema(h, "run_attempt/1"), Goal: inv, Family: inv, Config: run.ConfigSnapshot{Lane: run.LaneAgenda, Backend: caps, Judge: run.JudgeModel, JudgeBackend: caps, PlanCardinality: 0, FamilyRule: run.FamilyRule, ResolverVer: verdict.ResolverVer}, RecoversFrom: 1},
 		run.KindTransition:          &run.Transition{Header: withSchema(h, "run_transition/1"), From: run.Recorded, To: run.Delivered, Reason: "transport took it", Delivery: run.TransportAccepted, Evidence: []record.Ref{{Kind: "delivery_attempted", ID: "x"}}},
 		run.KindDeliveryPrepared:    &run.DeliveryPrepared{Header: withSubject(withSchema(h, "delivery_prepared/1"), record.Ref{Kind: "delivery", ID: string(h.ID)}), Payload: deliverable, Origin: run.OriginCLI, Required: run.UserAcknowledged, Nonce: strings.Repeat("0f", 16)},
 		run.KindDeliveryStarted:     &run.DeliveryStarted{Header: withSubject(withSchema(h, "delivery_started/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, N: 1},
@@ -104,6 +107,11 @@ func samples() map[record.Kind]any {
 		learn.KindTransition:        &learn.LifecycleTransition{Header: withSubject(withSchema(h, "learned_transition/1"), record.Ref{Kind: "learned", ID: string(inv)}), Item: learn.LearnedID(inv), Revision: inv, From: learn.Candidate, To: learn.Provisional, Actor: learn.ActorOperator, Why: "restamp"},
 		learn.KindApplication:       &learn.Application{Header: withSubject(withSchema(h, "application/1"), record.Ref{Kind: "invocation", ID: string(inv)}), Item: learn.LearnedID(inv), Revision: inv, Invocation: inv, Representation: lesson},
 		learn.KindRecall:            &learn.RecallSelection{Header: withSubject(withSchema(h, "recall_selection/1"), record.Ref{Kind: "run", ID: "run-1"}), Purpose: invoke.PurposeExecute, Scope: []learn.ScopePath{learn.ScopeWorkspace}, Family: "answer", Standing: []learn.Stage{learn.Provisional}, Considered: 2, Included: []learn.ItemRev{{Item: learn.LearnedID(inv), Revision: inv}}, ExcludedCounts: map[string]int{"stage:candidate": 1}, ExcludedSample: []learn.Excluded{{ItemRev: learn.ItemRev{Item: learn.LearnedID(inv), Revision: inv}, Reason: "stage:candidate"}}, ProjectedBytes: 40},
+		supervise.KindLaneEvent:     &supervise.LaneEvent{Header: withSubject(record.Header{ID: record.NewID(), Seq: 7, Schema: "lane_event/1", Subject: record.Ref{Kind: "lane", ID: "sheriff"}, Supersedes: record.NewID(), At: time.Now().UTC()}, record.Ref{Kind: "lane", ID: "sheriff"}), Lane: "sheriff", Event: supervise.LanePanicked, Generation: 2, Reason: "panic: x"},
+		supervise.KindLaneHeartbeat: &supervise.LaneHeartbeat{Header: record.Header{ID: record.NewID(), Seq: 7, Schema: "lane_heartbeat/1", Subject: record.Ref{Kind: "lane", ID: "sheriff"}, Supersedes: record.NewID(), At: time.Now().UTC()}, Lane: "sheriff", Generation: 1, Watermark: 99},
+		run.KindIntentAssessment:    &run.IntentAssessment{Header: withSchema(h, "intent_assessment/1"), Invocation: inv, Clear: true, Interpretation: "summarize", Question: "which quarter?"},
+		run.KindPlan:                &run.Plan{Header: withSchema(h, "plan/1"), Invocation: inv, Steps: []thought.Ref{step}},
+		run.KindStepDone:            &run.StepDone{Header: withSchema(h, "step_done/1"), Ordinal: 1, Step: step, Invocation: inv, Result: resp, Verdict: inv, Outcome: run.StepDoneOK},
 		run.KindDeliveryAcked:       &run.DeliveryAcked{Header: withSubject(withSchema(h, "delivery_acked/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, Token: strings.Repeat("a1", 16), PayloadHash: deliverable.Hash},
 	}
 }

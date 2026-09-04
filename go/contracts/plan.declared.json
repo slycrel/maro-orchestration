@@ -1,0 +1,23 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "plan",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/run:TestAgendaHappyPath",
+  "fields": {
+    "invocation": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesAgendaVocabulary"
+    },
+    "steps": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestJournalExecutesAgendaVocabulary"
+    }
+  }
+}

@@ -48,7 +48,7 @@ type outcomeRow struct {
 func (v OutcomesView) Line(r record.Record) ([]byte, error) {
 	t := r.(*Transition)
 	o := t.Outcome
-	row := outcomeRow{OutcomeID: HandleOf(record.RunID(t.ID)), TaskType: string(LaneNow), Lessons: []string{},
+	row := outcomeRow{OutcomeID: HandleOf(record.RunID(t.ID)), TaskType: string(o.Lane), Lessons: []string{},
 		TokensIn: o.Usage.InputTokens, TokensOut: o.Usage.OutputTokens, ElapsedMS: o.Usage.WallMillis, CostUSD: o.Usage.CostUSD, Model: o.Model,
 		RecordedAt: t.At.UTC().Format("2006-01-02T15:04:05.000000Z"), HandleID: HandleOf(t.RunID)}
 	// the goal text is a thought; the view reads it whole
@@ -63,7 +63,7 @@ func (v OutcomesView) Line(r record.Record) ([]byte, error) {
 	default:
 		row.Status = "stuck"
 	}
-	row.Summary = fmt.Sprintf("%s: terminal %s, closure %s", LaneNow, o.Terminal, o.ClosureOut)
+	row.Summary = fmt.Sprintf("%s: terminal %s, closure %s", o.Lane, o.Terminal, o.ClosureOut)
 	if o.Reason != "" {
 		row.Summary += " (" + o.Reason + ")"
 	}

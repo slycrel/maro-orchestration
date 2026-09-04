@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "goal",
-  "envelope": "production",
-  "schema": "goal/1",
-  "go_type": "run.Goal",
+  "kind": "lane_event",
+  "envelope": "control",
+  "schema": "lane_event/1",
+  "go_type": "supervise.LaneEvent",
   "fields": [
     {
       "name": "header.ID",
@@ -78,38 +78,31 @@
       "from_header": true
     },
     {
-      "name": "Parent",
-      "wire": "parent",
-      "go_type": "record.RecordID",
+      "name": "Lane",
+      "wire": "lane",
+      "go_type": "string",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Event",
+      "wire": "event",
+      "go_type": "supervise.LaneEventKind",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Generation",
+      "wire": "generation",
+      "go_type": "int",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Reason",
+      "wire": "reason",
+      "go_type": "string",
       "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Root",
-      "wire": "root",
-      "go_type": "record.RecordID",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Text",
-      "wire": "text",
-      "go_type": "thought.Ref",
-      "omittable": false,
-      "is_thought": true
-    },
-    {
-      "name": "Origin",
-      "wire": "origin",
-      "go_type": "run.GoalOrigin",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Delivery",
-      "wire": "delivery",
-      "go_type": "run.DeliveryPolicy",
-      "omittable": false,
       "is_thought": false
     }
   ],

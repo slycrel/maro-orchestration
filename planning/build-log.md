@@ -633,3 +633,59 @@ continuation, scope/policy, subprocess). Contracts 0 errors / 0 warnings.
 Not done, recorded: byte-level exposure needs the thought store, so
 `run.Fold` now takes it (every caller has one); an evidence vocabulary for
 non-operator transitions arrives with their producers.
+
+## Step 7a — supervisor + lanes, Sheriff, AGENDA configuration (2026-09-05)
+
+Step 7 is landed as two chunks (fan-out decree 2026-07-31: honest slices with
+upgrade edges = chunk points): **7a** = supervisor, generic lane lifecycle,
+Sheriff, AGENDA driver configuration, in-process; **7b** = the always-on
+process (socket intake, `submit`, interrupts, the supervisor wired into
+`serve`).
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| `Supervisor`: lane registration, per-lane goroutine with panic capture, bounded restart (why in code), heartbeat + progress watermark, stall detection, quiesce by stage, `Health` line | §10, §2, D12 | kept |
+| `lane_event`, `lane_heartbeat` records | §10 | kept, CONTROL envelope (about the process, never a run; production readers never see them); retention bounded |
+| Sheriff as a supervised lane emitting `stuck` verdicts that name their evidence; thresholds config with a why, reported never enforced | §6, §10 | kept; one verdict per (run, attempt), resolved; `runs` prints STUCK; nothing is killed |
+| AGENDA = driver configuration: Intent → Plan → per-step execute + judge → closure judge | §5 | kept; `JudgeSelection model`, `Lane agenda` added additively as planned in step 5 |
+| Interpretation boundaries validated once (`ParseIntent/Plan/Judge`; strict JSON; typed `ErrBoundary`) | §1b, §13 | kept; a refused judge output = `unjudged`, continue; a refused plan = recorded failure naming the boundary; a refused closure = self claim alone |
+| Plan cardinality | §5 | uncapped — what the model produced (D13/D15: no chopping) |
+| Deliverable = every step's whole result in order; unexecuted steps named; the question when unclear | D16, §8.1 | kept |
+| Recovery mid-plan: inherit committed stages, reuse in-flight invocations with receipts, continue the recall selection | §5a | kept; fold inherits the same way and executes stage order and citations |
+| Interrupts at stage boundaries | §5, behavior FINDINGS #1 | **7b** — an in-process CLI run cannot receive one; they ride the socket |
+| Always-on submission (`serve`/`submit`) | §10 | **7b** |
+| Routing NOW vs AGENDA by classifier | vision "routes it" | **not in v1** — explicit verbs (`now`, `agenda`); the director-clarification memory's ask-first stays a later arc |
+| Clarification loop (unclear goal → ask → continue) | §5 Intent | **not in v1** — an unclear goal delivers its question as an honest failed execution; a conversation loop is a later Finding |
+
+**Built.** `internal/supervise` (2 control kinds), `internal/sheriff`, run
+AGENDA (3 kinds; registry at 29; contracts 0/0): `Driver.Lane/Judge/Health`,
+`agenda_driver.go`, lane-aware fold (usage as the goal's total cost, per-
+invocation exposure with a byte-suffix rule for templated prompts, stage
+order/citation rules), `Outcome.Lane/Steps`, B6 `task_type` = lane. CLI
+`agenda [--model] [--judge-model]`. Side-fix: `workspace.Lease` mutex (Live
+vs Release raced at shutdown under `-race`).
+
+**Edge tests.** supervise: panic contained, restart bounded, gave-up in
+the health line, control-envelope isolation; stall reported not enforced,
+heartbeats once per watermark move; quiesce order intake → sheriff →
+executor → delivery, failure restart, a non-quiescing lane named. sheriff:
+stuck once with the last evidence as basis, idempotent across ticks, never
+for delivered runs, mission carries it; supervised lifecycle. run: the
+behavior suite's agenda-happy-path (7 invocations, judge falsifiers as
+thoughts, step prompt carries plan + prior results whole); blocked step
+honest (later steps not run, deliverable names them, row judged
+not_achieved); unclear goal delivers the question; boundaries refuse
+malformed outputs (empty plan, non-JSON judge, confidence 7, unknown
+fields, trailing content); kill matrix over after_intent / after_plan /
+after_step_execute / after_step / invoke:terminal — each resumed to one
+delivered run with exact executor and judge call counts; door + fold
+vocabulary (second plan, step after blocked, plan citing a non-plan call).
+
+**Live.** `maro-go agenda --model haiku "Name the three largest moons of
+Jupiter by diameter, then state which is larger than Mercury"`: intent
+clear → 6-step plan → 6 steps each judged done → closure `achieved` 0.98
+(judge) → delivered; B6 row `task_type agenda`, `goal_achieved true`,
+source `closure`, cost 0.40 over 14 calls. The first judged-achieved run
+of the successor.

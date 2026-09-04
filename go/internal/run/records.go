@@ -171,7 +171,8 @@ type ConfigSnapshot struct {
 	Lane            Lane                `json:"lane"`
 	Backend         invoke.Capabilities `json:"backend"`
 	Judge           JudgeSelection      `json:"judge"`
-	PlanCardinality int                 `json:"plan_cardinality"`
+	JudgeBackend    invoke.Capabilities `json:"judge_backend,omitempty"` // the tool-less backend judges run on (model judge)
+	PlanCardinality int                 `json:"plan_cardinality"`        // 1 for now; 0 for agenda (the plan decides)
 	TimeoutMillis   int64               `json:"timeout_ms"`
 	FamilyRule      string              `json:"family_rule"`
 	ResolverVer     string              `json:"resolver_ver"`
@@ -209,8 +210,15 @@ func (r *RunAttempt) ValidateWire() error {
 	if !judges[r.Config.Judge] {
 		return fmt.Errorf("run_attempt: judge %q out of vocabulary", r.Config.Judge)
 	}
-	if r.Config.PlanCardinality != 1 {
-		return fmt.Errorf("run_attempt: plan cardinality %d has no driver configuration (now = 1)", r.Config.PlanCardinality)
+	switch r.Config.Lane {
+	case LaneNow:
+		if r.Config.PlanCardinality != 1 || r.Config.Judge != JudgeSelf {
+			return errors.New("run_attempt: now = one execute with the self judge")
+		}
+	case LaneAgenda:
+		if r.Config.PlanCardinality != 0 || r.Config.Judge != JudgeModel || r.Config.JudgeBackend.Name == "" {
+			return errors.New("run_attempt: agenda = the plan's cardinality with the model judge on a named backend")
+		}
 	}
 	if r.Config.Backend.Name == "" {
 		return errors.New("run_attempt: backend snapshot has no name")
@@ -253,6 +261,7 @@ var next = map[State]map[State]bool{
 // records it committed and stamps on the `recorded` transition. A test
 // recomputes it from the journal alone.
 type Outcome struct {
+	Lane       Lane                 `json:"lane"`     // the configuration the attempt ran (equals the attempt's config)
 	Terminal   invoke.TerminalState `json:"terminal"` // complete | partial | failed
 	Reason     string               `json:"reason,omitempty"`
 	Invocation record.RecordID      `json:"invocation,omitempty"`  // the execute invocation (absent when none was made)
@@ -262,6 +271,7 @@ type Outcome struct {
 	Usage      invoke.Usage         `json:"usage"`
 	Model      string               `json:"model,omitempty"`  // the model of the invocation that produced the evidence (never the recovering attempt's config)
 	Recall     record.RecordID      `json:"recall,omitempty"` // the RecallSelection the invocation's request was rendered from
+	Steps      int                  `json:"steps,omitempty"`  // AGENDA: steps executed (usage is the sum over the attempt's invocations)
 	GoalText   thought.Ref          `json:"goal"`             // the goal thought this attempt ran (whole)
 	Closure    record.RecordID      `json:"closure"`          // the closure Resolution
 	ClosureOut string               `json:"closure_outcome"`
@@ -322,6 +332,9 @@ func (r *Transition) ValidateWire() error {
 }
 
 func (o *Outcome) validate() error {
+	if !lanes[o.Lane] {
+		return fmt.Errorf("lane %q out of vocabulary", o.Lane)
+	}
 	switch o.Terminal {
 	case invoke.TerminalComplete, invoke.TerminalPartial, invoke.TerminalFailed:
 	default:

@@ -51,7 +51,7 @@ type ThoughtStored struct {
 func (r *ThoughtStored) Head() *Header { return &r.Header }
 func (r *ThoughtStored) Kind() Kind    { return KindThoughtStored }
 
-var thoughtKinds = map[string]bool{"goal": true, "prompt": true, "response": true, "step_result": true, "deliverable": true, "lesson_text": true}
+var thoughtKinds = map[string]bool{"goal": true, "prompt": true, "response": true, "step_result": true, "deliverable": true, "lesson_text": true, "step": true}
 
 // ValidateWire executes the declared vocabulary: kind and encoding are closed
 // sets, the hash carries the versioned algorithm prefix. The hash's CONTENT

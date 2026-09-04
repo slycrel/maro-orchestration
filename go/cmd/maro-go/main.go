@@ -20,6 +20,8 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	spine "github.com/slycrel/maro-orchestration/go/internal/run"
+	_ "github.com/slycrel/maro-orchestration/go/internal/sheriff"   // registers nothing yet; the lane is wired by serve (step 7b)
+	_ "github.com/slycrel/maro-orchestration/go/internal/supervise" // registers the lane kinds
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	_ "github.com/slycrel/maro-orchestration/go/internal/verdict" // registers the judging kinds
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
@@ -45,7 +47,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "journal":
 		err = cmdJournal(args[1:], stdout)
 	case "now":
-		err = cmdNow(args[1:], stdout, stderr)
+		err = cmdNow(spine.LaneNow, args[1:], stdout, stderr)
+	case "agenda":
+		err = cmdNow(spine.LaneAgenda, args[1:], stdout, stderr)
 	case "ack":
 		err = cmdAck(args[1:], stdout)
 	case "runs":
@@ -64,7 +68,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now [--backend b] [--model m] [--ack] <goal> | ack <delivery> <token> | runs [resume] | learn add|stage|list")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume] | learn add|stage|list")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -215,9 +219,9 @@ func cmdContracts(args []string, out, errw io.Writer) error {
 //
 // The always-on submission path (a Goal written into the running process
 // via the lease's socket) arrives with the supervisor (step 7).
-func cmdNow(args []string, out, errw io.Writer) error {
+func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	var text []string
-	backend, model, policy := "subprocess", "haiku", spine.DeliveryPolicy{Required: spine.TransportAccepted}
+	backend, model, judgeModel, policy := "subprocess", "haiku", "", spine.DeliveryPolicy{Required: spine.TransportAccepted}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--backend":
@@ -230,6 +234,11 @@ func cmdNow(args []string, out, errw io.Writer) error {
 			if i < len(args) {
 				model = args[i]
 			}
+		case "--judge-model":
+			i++
+			if i < len(args) {
+				judgeModel = args[i]
+			}
 		case "--ack":
 			policy.Required = spine.UserAcknowledged
 		default:
@@ -240,7 +249,7 @@ func cmdNow(args []string, out, errw io.Writer) error {
 	if goal == "" {
 		return fmt.Errorf("now needs a goal: maro-go now [--backend subprocess|scripted] [--model m] [--ack] <goal text>")
 	}
-	var b invoke.Backend
+	var b, jb invoke.Backend
 	switch backend {
 	case "subprocess":
 		s, err := invoke.NewSubprocess(model)
@@ -248,13 +257,20 @@ func cmdNow(args []string, out, errw io.Writer) error {
 			return err
 		}
 		b = s
+		if judgeModel != "" {
+			js, err := invoke.NewSubprocess(judgeModel)
+			if err != nil {
+				return err
+			}
+			jb = js
+		}
 	case "scripted":
 		b = &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted", Model: "scripted"}, Calls: []invoke.ScriptedCall{{Response: []byte("scripted response to: " + goal)}}}
 	default:
 		return fmt.Errorf("unknown backend %q (subprocess|scripted)", backend)
 	}
 	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
-		d := &spine.Driver{J: j, Store: st, Backend: b, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute,
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}
@@ -326,6 +342,9 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 			dup := ""
 			if m.MayDuplicate > 0 {
 				dup = fmt.Sprintf(" may_duplicate=%d", m.MayDuplicate)
+			}
+			if m.Stuck != "" {
+				dup += " STUCK(" + m.Stuck + ")"
 			}
 			fmt.Fprintf(out, "%s attempt %d  %-24s execution=%s terminal=%s closure=%s delivery=%s/%s%s\n", m.Handle, m.Attempt, m.Outcome, m.Execution, m.Terminal, m.Closure, m.Delivery, m.Required, dup)
 		}

@@ -66,6 +66,9 @@ func (d *Driver) drain(ctx context.Context, rs *RunState, a *AttemptState) error
 		if dl.Prepared.Required == UserAcknowledged {
 			pres.Token = TokenFor(dl.Prepared.ID, dl.Prepared.Payload.Hash, dl.Prepared.Nonce)
 		}
+		if d.Health != nil {
+			pres.Health = d.Health()
+		}
 		perr := present(ctx, d.Origin, pres)
 		if err := d.crash("after_present"); err != nil {
 			return err // the user may have seen it; the start is on record, the result is not
@@ -177,6 +180,9 @@ func (o CLIOrigin) Present(ctx context.Context, p Presentation) error {
 	buf = append(buf, fmt.Sprintf("\n---\nrun %s attempt %d · terminal %s · closure %s · delivery %s\n", p.Handle, p.Attempt, p.Terminal, p.Closure, p.Delivery)...)
 	if p.MayDuplicate > 0 {
 		buf = append(buf, fmt.Sprintf("(re-presented: %d earlier presentation(s) ended with the process dying; you may have seen this already)\n", p.MayDuplicate)...)
+	}
+	for _, h := range p.Health {
+		buf = append(buf, "degraded: "+h+"\n"...)
 	}
 	if p.Token != "" {
 		buf = append(buf, fmt.Sprintf("acknowledge with: maro-go ack %s %s\n", p.Delivery, p.Token)...)

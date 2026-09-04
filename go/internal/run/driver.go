@@ -56,6 +56,8 @@ type Presentation struct {
 	// MayDuplicate counts earlier presentations of this payload the process
 	// died inside; the origin says so, because the user may have seen it.
 	MayDuplicate int
+	// Health is the supervisor's degraded line (lanes down or stalled).
+	Health []string
 }
 
 // Origin is the user-facing edge for a goal's origin. Present returns nil
@@ -71,9 +73,18 @@ type Driver struct {
 	J       *journal.Journal
 	Store   *thought.Store
 	Backend invoke.Backend
+	// Judge is the tool-less backend for intent, plan, and judge invocations
+	// (AGENDA). Nil ⇒ Backend, asked to run tool-less.
+	Judge invoke.Backend
+	// Lane selects the configuration: now (one execute, self judge) or
+	// agenda (intent → plan → steps with a model judge each → closure judge).
+	Lane    Lane
 	Origin  Origin
 	Events  func(Event)
 	Timeout time.Duration
+	// Health, when set, is the supervisor's degraded line; every delivery
+	// carries it while it is non-empty (§10).
+	Health func() []string
 	// MaxDeliveryAttempts bounds the outbox. Why 3: a CLI origin fails only
 	// when its writer is gone (closed pipe), which a retry never repairs; the
 	// bound exists so a dead origin becomes delivery_failed with a reason
@@ -115,6 +126,15 @@ func (d *Driver) validate() error {
 	case d.Backend.Capabilities().Name == "":
 		return fmt.Errorf("%w: backend declares no name", ErrConfig)
 	}
+	if d.Lane == "" {
+		d.Lane = LaneNow
+	}
+	if !lanes[d.Lane] {
+		return fmt.Errorf("%w: lane %q", ErrConfig, d.Lane)
+	}
+	if d.Judge == nil {
+		d.Judge = d.Backend
+	}
 	if d.MaxDeliveryAttempts < 0 || d.MaxAttempts < 0 {
 		return fmt.Errorf("%w: bounds must be positive (0 = default)", ErrConfig)
 	}
@@ -128,7 +148,11 @@ func (d *Driver) validate() error {
 }
 
 func (d *Driver) config() ConfigSnapshot {
-	return ConfigSnapshot{Lane: LaneNow, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer}
+	c := ConfigSnapshot{Lane: d.Lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer}
+	if d.Lane == LaneAgenda {
+		c.Judge, c.PlanCardinality, c.JudgeBackend = JudgeModel, 0, d.Judge.Capabilities()
+	}
+	return c
 }
 
 func (d *Driver) crash(stage string) error {
@@ -227,7 +251,14 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 	}
 	// Execute — from the previous attempt's evidence when it exists (§5a:
 	// a new attempt starts from the last committed idempotent stage).
-	out, err := d.execute(ctx, rs, n, prev, forced)
+	var out *Outcome
+	var candidates []*verdict.Verdict
+	var err error
+	if d.Lane == LaneAgenda {
+		out, candidates, err = d.agenda(ctx, rs, a, prev, forced)
+	} else {
+		out, err = d.execute(ctx, rs, n, prev, forced)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -235,28 +266,40 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 	if err := d.crash("after_execute"); err != nil {
 		return nil, err
 	}
-	// Judge — the self claim; observations arrive with the checks (step 7).
+	// Judge — the self claim (NOW), or the closure judge's verdict plus the
+	// self claim (AGENDA); observations arrive with the deterministic checks.
 	self := SelfVerdict(rs.Run, n, out)
 	if err := d.commit(ctx, fmt.Sprintf("verdict/%s/%d/self", rs.Run, n), self); err != nil {
 		return nil, err
 	}
-	if err := d.transition(ctx, rs, a, Judged, "", []record.Ref{{Kind: verdict.KindVerdict, ID: string(self.ID)}}); err != nil {
+	candidates = append(candidates, self)
+	ev := make([]record.Ref, 0, len(candidates))
+	for _, v := range candidates {
+		ev = append(ev, record.Ref{Kind: verdict.KindVerdict, ID: string(v.ID)})
+	}
+	if err := d.transition(ctx, rs, a, Judged, "", ev); err != nil {
 		return nil, err
 	}
 	if err := d.crash("after_judged"); err != nil {
 		return nil, err
 	}
 	// Record — the resolution, then the execution outcome as a fold.
-	res, err := verdict.Commit(ctx, d.J, rs.Run, n, verdict.Candidates{Subject: runRef(rs.Run), VerdictKind: verdict.KindClosure, Verdicts: []*verdict.Verdict{self}}, verdict.DefaultThresholds)
+	res, err := verdict.Commit(ctx, d.J, rs.Run, n, verdict.Candidates{Subject: runRef(rs.Run), VerdictKind: verdict.KindClosure, Verdicts: candidates}, verdict.DefaultThresholds)
 	if err != nil && !errors.Is(err, verdict.ErrAlreadyResolved) {
 		return nil, err
 	}
 	rs.Closure = res
-	out.GoalText, out.Closure, out.ClosureOut, out.ClosureCnf = rs.Goal.Text, res.ID, res.Outcome, res.Confidence
-	if res.Effective == self.ID {
-		out.ClosureSrc = string(self.Source.Standing)
-	} else if res.Effective != "" {
-		return nil, fmt.Errorf("run: resolution %s names an effective verdict %s this driver did not commit", res.ID, res.Effective)
+	out.Lane, out.GoalText, out.Closure, out.ClosureOut, out.ClosureCnf = d.Lane, rs.Goal.Text, res.ID, res.Outcome, res.Confidence
+	if res.Effective != "" {
+		found := false
+		for _, v := range candidates {
+			if v.ID == res.Effective {
+				out.ClosureSrc, found = string(v.Source.Standing), true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("run: resolution %s names an effective verdict %s this driver did not commit", res.ID, res.Effective)
+		}
 	}
 	if err := d.transition(ctx, rs, a, Recorded, "", nil, out); err != nil {
 		return nil, err
@@ -575,7 +618,15 @@ func (d *Driver) deliver(ctx context.Context, rs *RunState, a *AttemptState) (*R
 			}
 			response = b
 		}
-		ref, err := d.Store.Put(thought.Deliverable, Render(rec.Outcome, response))
+		payload := Render(rec.Outcome, response)
+		if rec.Outcome.Lane == LaneAgenda {
+			p, err := d.renderAgendaOutcome(rec.Outcome, a)
+			if err != nil {
+				return nil, err
+			}
+			payload = p
+		}
+		ref, err := d.Store.Put(thought.Deliverable, payload)
 		if err != nil {
 			return nil, err
 		}
