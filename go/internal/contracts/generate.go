@@ -30,7 +30,8 @@ func GenerateAll(sourceRef string) []Generated {
 
 func generate(s record.Spec, sourceRef string) Generated {
 	g := Generated{
-		Kind: string(s.Kind), Envelope: s.Envelope.String(),
+		FormatVersion: FormatVersion,
+		Kind:          string(s.Kind), Envelope: s.Envelope.String(),
 		Schema: fmt.Sprintf("%s/%d", s.Kind, s.Version), GoType: s.Type.String(),
 		SourceRef: sourceRef, Generator: generatorID,
 	}
@@ -122,10 +123,68 @@ func digest(g Generated) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// Change classifies a regeneration diff for one kind (contract input §22,
+// the standard's rule 2): ADDITIVE (a field added, a version bumped) may
+// land with the regenerated pair; BREAKING (a field removed or renamed,
+// retyped, presence class changed, envelope changed) may not land as "no
+// drift" — it needs the deprecation lifecycle (D3), and `check` says so.
+type Change struct {
+	Kind    string
+	Class   string // "additive" | "breaking" | "none"
+	Details []string
+}
+
+// Classify compares a committed generated file with fresh generation.
+func Classify(have, fresh Generated) Change {
+	c := Change{Kind: fresh.Kind, Class: "none"}
+	hb := map[string]GeneratedField{}
+	for _, f := range have.Fields {
+		hb[f.Wire] = f
+	}
+	fb := map[string]GeneratedField{}
+	for _, f := range fresh.Fields {
+		fb[f.Wire] = f
+	}
+	breaking := func(d string) { c.Details = append(c.Details, d); c.Class = "breaking" }
+	additive := func(d string) {
+		c.Details = append(c.Details, d)
+		if c.Class == "none" {
+			c.Class = "additive"
+		}
+	}
+	if have.Envelope != fresh.Envelope {
+		breaking(fmt.Sprintf("envelope %s → %s", have.Envelope, fresh.Envelope))
+	}
+	if have.Schema != fresh.Schema {
+		additive(fmt.Sprintf("schema %s → %s", have.Schema, fresh.Schema))
+	}
+	for wire, hf := range hb {
+		ff, ok := fb[wire]
+		switch {
+		case !ok:
+			breaking("field removed (or renamed — a rename is a remove plus an add): " + wire)
+		case hf.GoType != ff.GoType:
+			breaking(fmt.Sprintf("field retyped: %s %s → %s", wire, hf.GoType, ff.GoType))
+		case hf.Omittable != ff.Omittable:
+			breaking(fmt.Sprintf("presence class changed: %s omittable %v → %v", wire, hf.Omittable, ff.Omittable))
+		case hf.IsThought != ff.IsThought:
+			breaking("thought-ness changed: " + wire)
+		}
+	}
+	for wire := range fb {
+		if _, ok := hb[wire]; !ok {
+			additive("field added: " + wire)
+		}
+	}
+	return c
+}
+
 // Drift compares the committed directory against fresh generation on
 // CANONICAL BYTES (source_ref blanked), censuses orphan generated files, and
 // checks the manifest. Any line means the contract changed or the directory
-// was edited by hand: regenerate and commit in the same change.
+// was edited by hand: regenerate and commit in the same change. Where a
+// committed file decodes, the change is CLASSIFIED so a breaking source change
+// is named as such.
 func Drift(dir Dir, fresh []Generated) ([]string, error) {
 	var drift []string
 	want := map[string]bool{}
@@ -150,7 +209,15 @@ func Drift(dir Dir, fresh []Generated) ([]string, error) {
 		// decodes to the same struct but is not byte-canonical is drift.
 		rawBlank := blankSourceRef(raw)
 		if !bytes.Equal(hb, fb) || !bytes.Equal(rawBlank, hb) {
-			drift = append(drift, fmt.Sprintf("%s: committed generated contract differs from fresh generation", g.Kind))
+			ch := Classify(have, g)
+			line := fmt.Sprintf("%s: committed generated contract differs from fresh generation [%s]", g.Kind, ch.Class)
+			if len(ch.Details) > 0 {
+				line += ": " + strings.Join(ch.Details, "; ")
+			}
+			if ch.Class == "breaking" {
+				line += " — BREAKING: walk the deprecation lifecycle (D3), do not land as a regeneration"
+			}
+			drift = append(drift, line)
 		}
 	}
 	entries, err := os.ReadDir(string(dir))

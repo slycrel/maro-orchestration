@@ -141,3 +141,80 @@ govern process artifacts; thoughts flow through unconstrained.*
   cases first, thresholds second (D13, D16).
 - The behavior suite is restated as the provider's reference reader; the
   Python suite becomes a consumer of the shared spec.
+
+## v5 fold (2026-09-04) and the standard behind it — distilled
+
+The standard the practice serves has four rules, applied to every payload
+that crosses a boundary: **contracts are owned** (the definition lives with
+the writer); **writers only add** (never remove, rename, retype, or change
+meaning of anything published — a rename is a remove plus an add);
+**readers tolerate growth** (unknown fields, unknown values, longer lists);
+**nothing is deleted directly** (only through a deprecation lifecycle:
+alias → deprecated → removed, each state held a full round or 90 days).
+Rules 2 and 3 are the two halves of compatibility; both are needed or every
+release still has to be coordinated.
+
+What the fold adds to the practice, in the order it matters to us:
+
+18. **The format is itself a contract, one level up.** Every generated and
+    declared file carries a `format_version` (the date of the answer-key
+    revision it was emitted against; absent reads as the founding date).
+    Vocabulary and filenames rename only through the alias → deprecated →
+    removed window. The answer key is the changelog: every key carries
+    `since`, and later `alias-of` / `deprecated-in` / `removed-in`; a key
+    without `since` cannot be cited.
+19. **Readers of pair files tolerate unknown keys — warn, never fail.** An
+    unrecognised key is a vocabulary WARNING row naming the key and file,
+    never a parse error, never dropped on regeneration, never a reason to
+    refuse a pair. (This corrects step 1's strict decode: the typo must be
+    caught, but by a report row and a test pin, not by refusing to read.)
+20. **Improvised keys are legal and marked.** A key the vocabulary lacks is
+    written `x-<name>`, listed in the run's insufficiency report with the
+    search that was done for a prior name. Adoption needs a second
+    independent citation. **Enforced by a guard, not discipline:** every
+    pair carries a register of its improvised keys, and a test pin goes red
+    on any key — at any nesting — that is neither in the answer key nor
+    `x-`-prefixed. Measured: a run that had marked eight keys correctly wrote
+    the ninth bare; the pin caught it, review did not.
+21. **A structural key the answer key names must also be SHAPED there**
+    (required sub-fields and an example), or every run spells it
+    differently; a list needs a mapping wrapper the moment anything must be
+    asserted about it (a count, a per-entry consequence).
+22. **A pair diff and a source diff are classified differently.** A source
+    change is additive, breaking, or a tightening. A regenerated pair can
+    also be a *drift correction* (source moved, pair was right at its ref),
+    a *derivation improvement* (pair now derives more), or an *error
+    correction* (pair was wrong). Calling a correction a tightening sends
+    the wrong review to the wrong reviewer.
+23. **Every assertion names the mutation it catches.** If no one-token
+    change to production code turns it red, it is decoration. And it must be
+    red on breaking changes and GREEN on the additive edits rule 2 permits
+    — several shipped guards were inverted (red on added getters, green on
+    renames).
+24. **Two tiers, two instruments.** Mechanical facts (routes, names, types,
+    presence, null/empty encoding, nesting) belong to a generated spec and an
+    additivity diff — not to hand-written pins (twelve structural pins per
+    edge is a robot's job done badly). Semantic facts (what a value means,
+    which namespace an id is in, what the reader does with the unknown, sink
+    capacity, failure distinguishability) are hand-written tests forever.
+    Reader tolerance is its own tier: unknown fields at every nesting level,
+    unknown enum values never throw, the handler's least-privileged default
+    when the unknown gates behaviour, grown lists, absent optionals →
+    documented default, field-order independence.
+25. **The insufficiency report is a fixed six-item shape**, never a
+    narrative: pair diff and its class; warnings; errors; stated-source
+    conflicts and design flags; insufficiency (improvised keys, underivables
+    with the limit that made them so); deliverable class (tests / warnings /
+    design escalation).
+26. **Delete the sharp edges:** source-text pins (`contains("...")`),
+    annotation-presence-without-value, anything that goes red on an additive
+    edit.
+
+**Applied to the successor's foundation (step 3½):** `format_version` on
+every generated and declared file; tolerant decode with unknown keys as
+vocabulary warnings and `x-` keys registered; the committed-pair test pins
+zero unknown-key warnings and every improvised key registered; `since` on
+every answer-key entry; `contracts check` classifies a regeneration diff as
+additive / breaking (removed field, retyped, presence class changed) so a
+breaking source change cannot land as "no drift"; `contracts report` renders
+the six-item block.

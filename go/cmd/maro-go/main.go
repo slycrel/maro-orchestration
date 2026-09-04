@@ -160,6 +160,8 @@ func cmdContracts(args []string, out, errw io.Writer) error {
 			return err
 		}
 		fmt.Fprint(out, contracts.Render(fs))
+		drift, _ := contracts.Drift(dir, gens)
+		fmt.Fprint(out, contracts.Insufficiency(dir, gens, fs, drift))
 		fmt.Fprintf(out, "report: %d error(s), %d warning(s)\n", len(contracts.Errors(fs)), len(contracts.Warnings(fs)))
 		if e := contracts.Errors(fs); len(e) > 0 {
 			return fmt.Errorf("%d contract error(s)", len(e))

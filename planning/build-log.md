@@ -298,3 +298,30 @@ findings, every cited line real, all fixed in one commit:
 process mid-syscall (the journal's own kill tests cover torn frames);
 `Reconcile` finalizes but does not retry abandoned invocations (the driver's
 job, step 5); the broker does not yet refuse operation classes (step 8).
+
+## Step 3½ — contracts foundation, v5 fold (2026-09-05)
+
+Jeremy updated the work-side practice (v5, "promotion fold"); distilled in
+`contract-testing-input.md` §18–§26 and applied:
+
+- `format_version` on every generated and declared file (absent reads as the
+  founding revision); the answer key carries `since` per key.
+- Declared files are read TOLERANTLY: an unknown key at any nesting is a
+  vocabulary WARNING naming key and path, never a refusal (corrects step 1's
+  strict decode); `x-` keys are legal, kept verbatim, and must have a row in
+  the file's `improvised` register (a bare one is an error). The committed
+  pair pins zero unknown keys and zero unregistered improvised keys — the
+  guard the practice says discipline cannot replace. Generated files stay
+  strict (machine-written: an unknown key there is a hand edit).
+- Regeneration diffs are CLASSIFIED: added field / bumped schema → additive;
+  removed or renamed field, retype, presence-class flip, envelope change →
+  BREAKING, named as such by `contracts check` so it cannot land as "no
+  drift" (the standard's rule 2; D3's lifecycle is the path).
+- `contracts report` ends with the six-item "what this run could not settle"
+  block: pair diff and class; warnings; errors; design flags; insufficiency
+  (improvised keys, undefined dimensions); deliverable class.
+
+Not applied (recorded): the rename window (alias → deprecated → removed,
+≥ 90 days) has no instrument yet — nothing has been renamed; `Change` is the
+place it plugs in. Vendored-pair reading under an older answer-key SHA is a
+consumer concern that arrives with the pack (step 12).

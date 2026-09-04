@@ -68,16 +68,22 @@ func set[T ~string](vs ...T) map[string]bool {
 	return m
 }
 
+// FormatVersion is the answer-key revision every contract file is emitted
+// against (contract input §18). A file without one reads as the founding
+// date.
+const FormatVersion = "2026-09-04"
+
 // Generated is derived from the Go type; never hand-edited. If regeneration
 // changes it, the contract changed: the diff is the review.
 type Generated struct {
-	Kind      string           `json:"kind"`
-	Envelope  string           `json:"envelope"`
-	Schema    string           `json:"schema"`
-	GoType    string           `json:"go_type"`
-	Fields    []GeneratedField `json:"fields"`
-	SourceRef string           `json:"source_ref"`
-	Generator string           `json:"generator"`
+	FormatVersion string           `json:"format_version"`
+	Kind          string           `json:"kind"`
+	Envelope      string           `json:"envelope"`
+	Schema        string           `json:"schema"`
+	GoType        string           `json:"go_type"`
+	Fields        []GeneratedField `json:"fields"`
+	SourceRef     string           `json:"source_ref"`
+	Generator     string           `json:"generator"`
 }
 
 // GeneratedField is what reflection can know.
@@ -95,24 +101,46 @@ type GeneratedField struct {
 // which gates whether tests exist. Header fields are declared ONCE in
 // _header.declared.json and merged into every kind.
 type Declared struct {
-	Kind       string                   `json:"kind"`
-	Lifecycle  Lifecycle                `json:"lifecycle"`
-	Provenance Provenance               `json:"provenance"`
-	DesignFlag string                   `json:"design_flag,omitempty"`
-	MeasuredBy string                   `json:"measured_by,omitempty"` // "<pkg>:<TestName>" resolvable in the tree; "not-re-runnable-here" is legal
-	Fields     map[string]DeclaredField `json:"fields"`
+	FormatVersion string                   `json:"format_version,omitempty"`
+	Kind          string                   `json:"kind"`
+	Lifecycle     Lifecycle                `json:"lifecycle"`
+	Provenance    Provenance               `json:"provenance"`
+	DesignFlag    string                   `json:"design_flag,omitempty"`
+	MeasuredBy    string                   `json:"measured_by,omitempty"` // "<pkg>:<TestName>" resolvable in the tree; "not-re-runnable-here" is legal
+	Fields        map[string]DeclaredField `json:"fields"`
+	// Improvised registers every `x-` key this file uses, with the search
+	// that was done for a prior name (contract input §20). A bare key that is
+	// neither vocabulary nor x- is a vocabulary warning; the committed-pair
+	// test pins zero of them.
+	Improvised map[string]Improvised `json:"improvised,omitempty"`
+
+	// Unknown keys found while reading, at any nesting: warned, never fatal.
+	Unknown []UnknownKey `json:"-"`
+}
+
+// Improvised is one register row.
+type Improvised struct {
+	UsedAt string `json:"used_at"` // "field:<name>" or "top"
+	Search string `json:"search"`  // what was searched for a prior name
+}
+
+// UnknownKey is a vocabulary warning: a key the reader did not recognise.
+type UnknownKey struct {
+	Path string // e.g. "fields.hash.on_absense"
+	Key  string
 }
 
 // DeclaredField carries the dimensions no generator can derive.
 type DeclaredField struct {
-	Absence      string     `json:"absence,omitempty"`
-	OnAbsence    string     `json:"on_absence,omitempty"`
-	UnknownValue string     `json:"unknown_value,omitempty"`
-	UsedFor      string     `json:"used_for,omitempty"`
-	Constraint   Constraint `json:"constraint,omitempty"`
-	Pattern      string     `json:"pattern,omitempty"`
-	MeasuredBy   string     `json:"measured_by,omitempty"`
-	Rejects      string     `json:"rejects,omitempty"` // a value that must NOT match Pattern (the negative fixture); required when Pattern is set
+	Absence      string                     `json:"absence,omitempty"`
+	OnAbsence    string                     `json:"on_absence,omitempty"`
+	UnknownValue string                     `json:"unknown_value,omitempty"`
+	UsedFor      string                     `json:"used_for,omitempty"`
+	Constraint   Constraint                 `json:"constraint,omitempty"`
+	Pattern      string                     `json:"pattern,omitempty"`
+	MeasuredBy   string                     `json:"measured_by,omitempty"`
+	Rejects      string                     `json:"rejects,omitempty"` // a value that must NOT match Pattern (the negative fixture); required when Pattern is set
+	Extra        map[string]json.RawMessage `json:"-"`                 // x- keys, kept verbatim
 }
 
 var (
@@ -132,8 +160,8 @@ const headerDeclared = "_header"
 func (d Dir) genPath(kind string) string { return filepath.Join(string(d), kind+".generated.json") }
 func (d Dir) decPath(kind string) string { return filepath.Join(string(d), kind+".declared.json") }
 
-// decodeStrict rejects unknown keys and trailing content: a typo in a key is
-// an error, never a silently dropped line.
+// decodeStrict rejects unknown keys and trailing content. Used for GENERATED
+// files (machine-written: an unknown key there is a hand edit).
 func decodeStrict(path string, raw []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -170,10 +198,11 @@ func (d Dir) ReadDeclared(kind string) (*Declared, error) {
 	if err != nil {
 		return nil, err
 	}
-	var dc Declared
-	if err := decodeStrict(d.decPath(kind), raw, &dc); err != nil {
+	dcp, err := decodeDeclared(d.decPath(kind), raw)
+	if err != nil {
 		return nil, err
 	}
+	dc := *dcp
 	if err := dc.validate(d.decPath(kind)); err != nil {
 		return nil, err
 	}
@@ -202,10 +231,11 @@ func (d Dir) readHeaderDeclared() (map[string]DeclaredField, error) {
 	if err != nil {
 		return nil, err
 	}
-	var h Declared
-	if err := decodeStrict(d.decPath(headerDeclared), raw, &h); err != nil {
+	hp, err := decodeDeclared(d.decPath(headerDeclared), raw)
+	if err != nil {
 		return nil, err
 	}
+	h := *hp
 	if err := h.validate(d.decPath(headerDeclared)); err != nil {
 		return nil, err
 	}
@@ -215,6 +245,79 @@ func (d Dir) readHeaderDeclared() (map[string]DeclaredField, error) {
 		}
 	}
 	return h.Fields, nil
+}
+
+// declaredTop and declaredField are the vocabularies a reader recognises.
+var (
+	declaredTop   = set("format_version", "kind", "lifecycle", "provenance", "design_flag", "measured_by", "fields", "improvised")
+	declaredField = set("absence", "on_absence", "unknown_value", "used_for", "constraint", "pattern", "measured_by", "rejects")
+)
+
+// decodeDeclared reads a declared file TOLERANTLY (contract input §19): the
+// JSON must parse and be a single object, but unknown keys at any nesting are
+// recorded as vocabulary warnings, `x-` keys are kept verbatim, and nothing
+// is refused for a key the reader does not know.
+func decodeDeclared(path string, raw []byte) (*Declared, error) {
+	var top map[string]json.RawMessage
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if err := dec.Decode(&top); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrStrict, path, err)
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("%w: %s: trailing content", ErrStrict, path)
+	}
+	var dc Declared
+	if err := json.Unmarshal(raw, &dc); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrStrict, path, err)
+	}
+	for k := range top {
+		if declaredTop[k] || strings.HasPrefix(k, "x-") {
+			continue
+		}
+		dc.Unknown = append(dc.Unknown, UnknownKey{Path: k, Key: k})
+	}
+	if rawFields, ok := top["fields"]; ok {
+		var fields map[string]map[string]json.RawMessage
+		if err := json.Unmarshal(rawFields, &fields); err != nil {
+			return nil, fmt.Errorf("%w: %s: fields: %v", ErrStrict, path, err)
+		}
+		for name, keys := range fields {
+			f := dc.Fields[name]
+			for k, v := range keys {
+				switch {
+				case declaredField[k]:
+				case strings.HasPrefix(k, "x-"):
+					if f.Extra == nil {
+						f.Extra = map[string]json.RawMessage{}
+					}
+					f.Extra[k] = v
+				default:
+					dc.Unknown = append(dc.Unknown, UnknownKey{Path: "fields." + name + "." + k, Key: k})
+				}
+			}
+			dc.Fields[name] = f
+		}
+	}
+	sort.Slice(dc.Unknown, func(i, j int) bool { return dc.Unknown[i].Path < dc.Unknown[j].Path })
+	if dc.FormatVersion == "" {
+		dc.FormatVersion = FormatVersion
+	}
+	return &dc, nil
+}
+
+// UnregisteredImprovised lists x- keys used without a register row — the
+// guard behind contract input §20.
+func (dc *Declared) UnregisteredImprovised() []string {
+	var out []string
+	for name := range dc.Fields {
+		for k := range dc.Fields[name].Extra {
+			if _, ok := dc.Improvised[k]; !ok {
+				out = append(out, "fields."+name+"."+k)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (dc *Declared) validate(path string) error {

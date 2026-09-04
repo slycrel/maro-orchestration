@@ -48,6 +48,15 @@ func Report(dir Dir, gens []Generated, repoRoot string) ([]Finding, error) {
 			}
 			continue
 		}
+		for _, u := range dc.Unknown {
+			out = append(out, Finding{Kind: g.Kind, Field: u.Path, Dim: "vocabulary", State: UndefinedS, Severity: "warning", Msg: fmt.Sprintf("unknown key %q — not vocabulary and not x-prefixed (a typo, or an improvised key that must be written x-<name> and registered)", u.Key)})
+		}
+		for _, x := range dc.UnregisteredImprovised() {
+			out = append(out, Finding{Kind: g.Kind, Field: x, Dim: "vocabulary", State: DeclaredS, Severity: "error", Msg: "improvised key used without a register row (improvised: {key: {used_at, search}})"})
+		}
+		if dc.FormatVersion != FormatVersion {
+			out = append(out, Finding{Kind: g.Kind, Dim: "format_version", State: DeclaredS, Severity: "info", Msg: fmt.Sprintf("declared at format %s, current %s — read under its own version", dc.FormatVersion, FormatVersion)})
+		}
 		if dc.Kind != g.Kind {
 			out = append(out, Finding{Kind: g.Kind, Dim: "generated", Severity: "error", Msg: fmt.Sprintf("declared file names kind %q", dc.Kind)})
 		}
@@ -186,4 +195,80 @@ func Render(fs []Finding) string {
 		fmt.Fprintf(&b, "%-7s %-16s %-24s %-13s %s\n", f.Severity, f.Kind, f.Field, f.Dim, f.Msg)
 	}
 	return b.String()
+}
+
+// Insufficiency renders the six-item "what this run could not settle" block
+// (contract input §25): never a narrative.
+func Insufficiency(dir Dir, gens []Generated, fs []Finding, drift []string) string {
+	var b strings.Builder
+	b.WriteString("## What this run could not settle\n\n")
+	// 1. pair diff and class
+	if len(drift) == 0 {
+		b.WriteString("1. Pair: committed generated files equal fresh generation; no diff.\n")
+	} else {
+		b.WriteString("1. Pair diff:\n")
+		for _, d := range drift {
+			b.WriteString("   - " + d + "\n")
+		}
+	}
+	// 2. warnings, 3. errors
+	w, e := Warnings(fs), Errors(fs)
+	fmt.Fprintf(&b, "2. Warnings: %d\n", len(w))
+	for _, f := range w {
+		fmt.Fprintf(&b, "   - %s %s %s: %s\n", f.Kind, f.Field, f.Dim, f.Msg)
+	}
+	fmt.Fprintf(&b, "3. Errors: %d\n", len(e))
+	for _, f := range e {
+		fmt.Fprintf(&b, "   - %s %s %s: %s\n", f.Kind, f.Field, f.Dim, f.Msg)
+	}
+	// 4. design flags
+	flags := 0
+	for _, g := range gens {
+		if dc, err := dir.ReadDeclared(g.Kind); err == nil && dc != nil && dc.DesignFlag != "" {
+			flags++
+			fmt.Fprintf(&b, "4. design_flag %s: %s\n", g.Kind, dc.DesignFlag)
+		}
+	}
+	if flags == 0 {
+		b.WriteString("4. Stated-source conflicts / design flags: none this run.\n")
+	}
+	// 5. insufficiency: improvised keys + undefined dimensions
+	imp, undef := 0, 0
+	for _, g := range gens {
+		if dc, err := dir.ReadDeclared(g.Kind); err == nil && dc != nil {
+			for k, row := range dc.Improvised {
+				imp++
+				fmt.Fprintf(&b, "5. improvised %s in %s at %s (search: %s)\n", k, g.Kind, row.UsedAt, row.Search)
+			}
+		}
+	}
+	for _, f := range fs {
+		if f.State == UndefinedS {
+			undef++
+		}
+	}
+	if imp == 0 {
+		fmt.Fprintf(&b, "5. Insufficiency: no improvised keys; %d undefined dimension(s) (each a warning above).\n", undef)
+	}
+	// 6. deliverable class
+	switch {
+	case len(e) > 0:
+		b.WriteString("6. Deliverable: NONE until the errors above are fixed.\n")
+	case pendingDesign(dir, gens):
+		b.WriteString("6. Deliverable: design escalation (a kind is design-pending).\n")
+	case len(w) > 0:
+		b.WriteString("6. Deliverable: tests + warnings (shape settled, some semantics undeclared).\n")
+	default:
+		b.WriteString("6. Deliverable: tests (every shape settled, every dimension declared).\n")
+	}
+	return b.String()
+}
+
+func pendingDesign(dir Dir, gens []Generated) bool {
+	for _, g := range gens {
+		if dc, err := dir.ReadDeclared(g.Kind); err == nil && dc != nil && dc.Lifecycle == DesignPending {
+			return true
+		}
+	}
+	return false
 }

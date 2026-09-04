@@ -1,4 +1,5 @@
 {
+  "format_version": "2026-09-04",
   "kind": "invocation_reconciled",
   "envelope": "production",
   "schema": "invocation_reconciled/1",
@@ -98,6 +99,6 @@
       "is_thought": false
     }
   ],
-  "source_ref": "3555e7bb",
+  "source_ref": "d0afa11c",
   "generator": "maro-go contracts gen v1"
 }

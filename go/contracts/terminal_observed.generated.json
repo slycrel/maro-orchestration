@@ -1,4 +1,5 @@
 {
+  "format_version": "2026-09-04",
   "kind": "terminal_observed",
   "envelope": "production",
   "schema": "terminal_observed/1",
@@ -126,6 +127,6 @@
       "is_thought": false
     }
   ],
-  "source_ref": "3555e7bb",
+  "source_ref": "d0afa11c",
   "generator": "maro-go contracts gen v1"
 }

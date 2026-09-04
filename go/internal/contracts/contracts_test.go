@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,7 +221,6 @@ func TestDeclaredLoadMustDetect(t *testing.T) {
 		}
 	}
 	bad := []struct{ name, body, want string }{
-		{"typo key", `{"kind":"thought_stored","lifecycle":"stable","provenance":"supplied","fields":{"hash":{"on_absense":"rejected"}}}`, "does not decode strictly"},
 		{"unknown lifecycle", `{"kind":"thought_stored","lifecycle":"retired","provenance":"supplied","fields":{}}`, "bad lifecycle"},
 		{"hardened without flag", `{"kind":"thought_stored","lifecycle":"hardened-legacy","provenance":"supplied","fields":{}}`, "design_flag"},
 		{"bad provenance", `{"kind":"thought_stored","lifecycle":"stable","provenance":"guessed","fields":{}}`, "closed vocabulary"},
@@ -342,5 +342,153 @@ func TestGeneratedShapeIsDerivedFromTheType(t *testing.T) {
 	}
 	if g.Envelope != "production" || g.Schema != "thought_stored/1" {
 		t.Fatalf("%+v", g)
+	}
+}
+
+// Contract input §19–§20: readers of pair files tolerate unknown keys (a
+// vocabulary WARNING naming key and path, never a refusal); x- keys are
+// legal only with a register row; the committed pair pins zero of either.
+func TestUnknownAndImprovisedKeys(t *testing.T) {
+	tmp := Dir(t.TempDir())
+	gens := GenerateAll("test")
+	_ = WriteGenerated(tmp, gens)
+	raw := func(s string) {
+		if err := os.WriteFile(tmp.decPath("thought_stored"), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a typo at field level and a bare unknown at top level: both warned, file still read
+	raw(`{"kind":"thought_stored","lifecycle":"stable","provenance":"supplied","notes":"hi","fields":{"hash":{"absence":"never","constraint":"unconstrained","on_absense":"rejected"}}}`)
+	dc, err := tmp.ReadDeclared("thought_stored")
+	if err != nil || dc == nil {
+		t.Fatalf("tolerant read failed: %v", err)
+	}
+	if len(dc.Unknown) != 2 || dc.Unknown[0].Path != "fields.hash.on_absense" || dc.Unknown[1].Key != "notes" {
+		t.Fatalf("unknown keys: %+v", dc.Unknown)
+	}
+	if dc.FormatVersion != FormatVersion {
+		t.Fatalf("missing format_version must read as the founding revision, got %q", dc.FormatVersion)
+	}
+	fs, _ := Report(tmp, gens, "")
+	vocab := 0
+	for _, f := range Warnings(fs) {
+		if f.Dim == "vocabulary" {
+			vocab++
+		}
+	}
+	if vocab != 2 {
+		t.Fatalf("expected 2 vocabulary warnings, got %d:\n%s", vocab, Render(fs))
+	}
+	// an x- key without a register row is an ERROR; with one it is legal and kept verbatim
+	raw(`{"kind":"thought_stored","lifecycle":"stable","provenance":"supplied","fields":{"hash":{"absence":"never","constraint":"unconstrained","x-status-variants":["a","b"]}}}`)
+	fs, _ = Report(tmp, gens, "")
+	found := false
+	for _, e := range Errors(fs) {
+		if strings.Contains(e.Msg, "without a register row") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("unregistered x- key not caught:\n%s", Render(fs))
+	}
+	raw(`{"kind":"thought_stored","lifecycle":"stable","provenance":"supplied","improvised":{"x-status-variants":{"used_at":"field:hash","search":"grep -r status-variants contracts/"}},"fields":{"hash":{"absence":"never","constraint":"unconstrained","x-status-variants":["a","b"]}}}`)
+	dc, _ = tmp.ReadDeclared("thought_stored")
+	if string(dc.Fields["hash"].Extra["x-status-variants"]) != `["a","b"]` || len(dc.UnregisteredImprovised()) != 0 {
+		t.Fatalf("registered x- key not kept verbatim: %+v", dc.Fields["hash"].Extra)
+	}
+	fs, _ = Report(tmp, gens, "")
+	for _, e := range Errors(fs) {
+		if strings.Contains(e.Msg, "register") {
+			t.Fatal("registered x- key reported as an error")
+		}
+	}
+}
+
+// The committed pair carries no unknown keys and no unregistered improvised
+// keys — the pin the practice says discipline cannot replace.
+func TestCommittedPairHasNoBareKeys(t *testing.T) {
+	dir, _ := committed(t)
+	for _, g := range GenerateAll("test") {
+		dc, err := dir.ReadDeclared(g.Kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(dc.Unknown) != 0 || len(dc.UnregisteredImprovised()) != 0 {
+			t.Fatalf("%s: unknown=%v unregistered=%v", g.Kind, dc.Unknown, dc.UnregisteredImprovised())
+		}
+		if dc.FormatVersion == "" {
+			t.Fatalf("%s: no format_version", g.Kind)
+		}
+	}
+	for _, g := range GenerateAll("test") {
+		have, _ := dir.ReadGenerated(g.Kind)
+		if have.FormatVersion != FormatVersion {
+			t.Fatalf("%s generated at format %q", g.Kind, have.FormatVersion)
+		}
+	}
+}
+
+// A regeneration diff is CLASSIFIED: added field → additive; removed,
+// retyped, presence-flipped → breaking (the standard's rule 2).
+func TestClassifyRegenerationDiff(t *testing.T) {
+	base := Generated{Kind: "k", Envelope: "production", Schema: "k/1", Fields: []GeneratedField{
+		{Wire: "a", GoType: "string"}, {Wire: "b", GoType: "int64", Omittable: true},
+	}}
+	clone := func() Generated { g := base; g.Fields = append([]GeneratedField{}, base.Fields...); return g }
+	if c := Classify(base, clone()); c.Class != "none" {
+		t.Fatalf("identical: %+v", c)
+	}
+	g := clone()
+	g.Fields = append(g.Fields, GeneratedField{Wire: "c", GoType: "bool", Omittable: true})
+	if c := Classify(base, g); c.Class != "additive" {
+		t.Fatalf("added field: %+v", c)
+	}
+	g = clone()
+	g.Fields = g.Fields[:1]
+	if c := Classify(base, g); c.Class != "breaking" || !strings.Contains(c.Details[0], "removed") {
+		t.Fatalf("removed field: %+v", c)
+	}
+	g = clone()
+	g.Fields[0].GoType = "int"
+	if c := Classify(base, g); c.Class != "breaking" {
+		t.Fatalf("retyped: %+v", c)
+	}
+	g = clone()
+	g.Fields[1].Omittable = false
+	if c := Classify(base, g); c.Class != "breaking" {
+		t.Fatalf("presence flip: %+v", c)
+	}
+	g = clone()
+	g.Fields[0].Wire = "renamed"
+	if c := Classify(base, g); c.Class != "breaking" {
+		t.Fatalf("rename must be breaking (remove + add): %+v", c)
+	}
+	// and Drift names the class on a real committed dir
+	tmp := Dir(t.TempDir())
+	gens := GenerateAll("test")
+	_ = WriteGenerated(tmp, gens)
+	raw, _ := os.ReadFile(tmp.genPath("lease"))
+	edited := strings.Replace(string(raw), `"wire": "host"`, `"wire": "hostname"`, 1)
+	os.WriteFile(tmp.genPath("lease"), []byte(edited), 0o644)
+	drift, _ := Drift(tmp, gens)
+	if len(drift) == 0 || !strings.Contains(strings.Join(drift, "\n"), "BREAKING") {
+		t.Fatalf("drift did not classify the rename as breaking: %v", drift)
+	}
+}
+
+// The insufficiency report has exactly six numbered items, never a narrative.
+func TestInsufficiencyIsSixItems(t *testing.T) {
+	dir, root := committed(t)
+	gens := GenerateAll("test")
+	fs, _ := Report(dir, gens, root)
+	drift, _ := Drift(dir, gens)
+	block := Insufficiency(dir, gens, fs, drift)
+	for i := 1; i <= 6; i++ {
+		if !strings.Contains(block, fmt.Sprintf("%d. ", i)) {
+			t.Fatalf("item %d missing:\n%s", i, block)
+		}
+	}
+	if !strings.Contains(block, "6. Deliverable: tests") {
+		t.Fatalf("committed pair should yield the tests deliverable:\n%s", block)
 	}
 }
