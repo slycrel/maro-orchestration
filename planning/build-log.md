@@ -149,3 +149,53 @@ to a contiguous prefix; cursor durable/bounded/strict; committed vs published
 `.building` dir from a dead process never becomes `current`; a greedy
 production view cannot see control rows; path-traversing view names refused;
 CLI status/publish.
+
+**Review round (one pass, Skeptic + Expert QA; `step2-*.md` in the review
+dir).** 12 + 13 findings, every cited line real, all fixed in one commit:
+
+- **Lease is the only door.** `journal.Open(lease)` — the root comes from the
+  lease; a released, nil, or zero-epoch lease refuses; every `Submit`
+  re-checks `Live()`.
+- **One strict validator** (`decodeEnvelope`) shared by recovery, scan, and
+  `Decode`: non-empty tx_id, epoch > 0, records non-empty, `last_seq`
+  arithmetic, contiguous record seqs, stamp = registry envelope, body seq =
+  frame seq, body kind = stamp, tx_id uniqueness; payload length bounded
+  (zero and > 16 MiB refused).
+- **Recovery discards only a genuinely short tail** (a short read at EOF).
+  Bad magic, bad checksum, or an invalid envelope with bytes after it is
+  `ErrCorrupt`: refuse to open, modify nothing, name the offset. Nine forged
+  valid-CRC shapes are must-detect fixtures, each checked to leave the log
+  untouched.
+- **Poison on write/fsync failure**: commit state is indeterminate; every
+  later Submit refuses until reopen recovers the truth (partial frame
+  truncated back to the known-good offset on the way).
+- **Refused commands mutate nothing**: validation before any Seq is stamped;
+  a valid-then-invalid command leaves the first record's Seq at zero and the
+  corrected retry succeeds.
+- **Scans prove coverage**: `ScanThrough(after, through)` fails with
+  `ErrIncomplete` unless every frame through `through` read and validated;
+  a corrupt committed frame can never become a short successful scan. The
+  projector cuts every view at ONE captured head (a record committed
+  mid-publish is not in that generation — tested with a gated view).
+- **Cursors**: one object per lane per journal, methods locked, `Advance`
+  re-reads the durable value and refuses regression against memory or disk;
+  five concurrent advances under `-race` leave 5.
+- **Projector commit point = the `current` swap**, with a manifest (head,
+  view hashes) inside the generation. `Published` derives the head from the
+  current manifest, validates every view's hash, checks the watermark copy
+  against it, and refuses dangling links, loops, escapes, tampered views,
+  and a watermark without a current. Nothing `current` points at is ever
+  deleted; a publish at the same head repairs a lost watermark or cursor;
+  staging dirs are unique per attempt; publishers serialize on the lane
+  lock; view names are checked for traversal and duplicates; file handles
+  are closed on every path.
+- Directory entries fsynced on first open; `Close` idempotent; closed
+  journals refuse scans and cursors.
+
+**Residuals (recorded):** a scan that fails with `ErrIncomplete` does not
+itself quarantine or report the corruption to an operator surface — the CLI
+`journal status` shows recovery, but corruption found by a reader at runtime
+is only the error the caller gets (step 9's supervisor/health line is where
+that surfaces); power-loss durability of directory entries is tested by
+inspection, not by fault injection; a lease's `Live()` is "we still hold the
+fd", not a re-probe of the kernel lock.

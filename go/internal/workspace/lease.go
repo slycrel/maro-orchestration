@@ -150,6 +150,14 @@ func bumpEpoch(path string) (uint64, error) {
 	return next, nil
 }
 
+// Root is the announced root this lease protects. A journal opened from a
+// lease inherits its root; there is no way to open a journal on another.
+func (l *Lease) Root() *Announced { return l.root }
+
+// Live reports whether this process still holds the lock. Released leases
+// are dead; every writer re-checks this before acting.
+func (l *Lease) Live() bool { return l != nil && l.lock != nil && l.Epoch > 0 }
+
 // Release removes lease.json if it still describes this lease and drops the
 // lock. Errors are returned with their path; the epoch is never decremented.
 func (l *Lease) Release() error {

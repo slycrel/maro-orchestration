@@ -100,7 +100,7 @@ func cmdJournal(args []string, out io.Writer) error {
 		return err
 	}
 	defer l.Release()
-	j, err := journal.Open(a, l)
+	j, err := journal.Open(l)
 	if err != nil {
 		return err
 	}
@@ -112,13 +112,13 @@ func cmdJournal(args []string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "journal: head=%d frames=%d epoch=%d published=%d\n", rec.Head, rec.Frames, j.Epoch(), pub)
 	if rec.Discarded > 0 {
-		fmt.Fprintf(out, "journal: RECOVERED — discarded %d bytes of torn tail (%s)\n", rec.Discarded, rec.Reason)
+		fmt.Fprintf(out, "journal: RECOVERED — discarded %d bytes of short tail\n", rec.Discarded)
 	}
 	switch args[0] {
 	case "status":
 		return nil
 	case "publish":
-		p, err := projector.New(a, j, projector.ThoughtsView{})
+		p, err := projector.New(j, projector.ThoughtsView{})
 		if err != nil {
 			return err
 		}
