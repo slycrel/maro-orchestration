@@ -17,6 +17,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
@@ -169,7 +170,7 @@ func TestNowRunDeliversAndRecords(t *testing.T) {
 		}
 		stages = append(stages, e.Stage)
 	}
-	if got := strings.Join(stages, " "); got != "intake attempt executing execute judged recorded prepared presented delivered" {
+	if got := strings.Join(stages, " "); got != "intake attempt executing recall execute judged recorded prepared presented delivered" {
 		t.Fatalf("events: %s", got)
 	}
 	m := MissionOf(rs)
@@ -348,10 +349,12 @@ func TestKillMatrixResumesExactlyOnce(t *testing.T) {
 		{"after_intake", toolless, 1, 1, "complete", 1, 0},
 		{"after_start", toolless, 2, 1, "complete", 1, 0},
 		{"after_executing", toolless, 2, 1, "complete", 1, 0},
-		{"invoke:prepared", toolless, 2, 1, "complete", 1, 0},   // invocation prepared, never dispatched: run again
-		{"invoke:dispatched", toolless, 2, 1, "complete", 1, 0}, // died after `dispatched` landed, before the backend ran; tool-less: abandoned → run again
-		{"invoke:dispatched", outward, 2, 0, "failed", 1, 0},    // outward-capable: indeterminate → honest failure, NO replay
-		{"invoke:terminal", toolless, 2, 1, "complete", 1, 0},   // terminal without receipt: reconcile finalizes, the work is reused
+		{"after_recall", toolless, 2, 1, "complete", 1, 0},       // selection committed, no request: run again (a new selection for the new attempt)
+		{"after_applications", toolless, 2, 1, "complete", 1, 0}, // invocation + applications landed, receipt not: reconcile finalizes, reused
+		{"invoke:prepared", toolless, 2, 1, "complete", 1, 0},    // invocation prepared, never dispatched: run again
+		{"invoke:dispatched", toolless, 2, 1, "complete", 1, 0},  // died after `dispatched` landed, before the backend ran; tool-less: abandoned → run again
+		{"invoke:dispatched", outward, 2, 0, "failed", 1, 0},     // outward-capable: indeterminate → honest failure, NO replay
+		{"invoke:terminal", toolless, 2, 1, "complete", 1, 0},    // terminal without receipt: reconcile finalizes, the work is reused
 		{"after_execute", toolless, 2, 1, "complete", 1, 0},
 		{"after_judged", toolless, 2, 1, "complete", 1, 0},
 		{"after_recorded", toolless, 1, 1, "complete", 1, 0},
@@ -363,6 +366,7 @@ func TestKillMatrixResumesExactlyOnce(t *testing.T) {
 	for _, s := range seams {
 		t.Run(s.at+"/"+s.caps.Name, func(t *testing.T) {
 			h := open(t)
+			h.lesson(t, "always cite the file", learn.Provisional)
 			b := scripted(s.caps, invoke.ScriptedCall{Response: []byte("answer")}, invoke.ScriptedCall{Response: []byte("answer")})
 			d := h.driver(b, nil)
 			d.CrashAt = s.at
@@ -405,8 +409,11 @@ func TestKillMatrixResumesExactlyOnce(t *testing.T) {
 			if s.unknown > 0 && (!strings.Contains(h.out.String(), "re-presented: 1 earlier") || rs.Latest().Delivery.Attempts[0].Result != DeliveryUnknown) {
 				t.Fatalf("duplicate presentation not visible: %+v\n%s", m, h.out.String())
 			}
-			if got := rs.Latest().Has(Recorded).Outcome; got.Invocation != "" && (got.Produced == 0 || got.Model != "m") {
+			if got := rs.Latest().Has(Recorded).Outcome; got.Invocation != "" && (got.Produced == 0 || got.Model != "m" || got.Recall == "") {
 				t.Fatalf("provenance: %+v", got)
+			}
+			if got := rs.Latest().Has(Recorded).Outcome; got.Invocation != "" && len(h.ledger().Learned.Applications[got.Invocation]) != 1 {
+				t.Fatalf("the promoted lesson's application did not survive the seam: %+v", got)
 			}
 			if s.attempts == 2 {
 				first := rs.Attempts[0]
@@ -616,7 +623,7 @@ func TestRecordedOutcomeIsAFold(t *testing.T) {
 	}
 	rc := inv[0].Receipt
 	resp := rc.Response
-	re := &Outcome{Terminal: inv[0].Terminal.State, Invocation: inv[0].Invocation.ID, Produced: 1, Receipt: rc.ID, Response: &resp, Usage: rc.Usage, Model: rs.Latest().Attempt.Config.Backend.Model, GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
+	re := &Outcome{Terminal: inv[0].Terminal.State, Invocation: inv[0].Invocation.ID, Produced: 1, Recall: rs.Latest().Recall.ID, Receipt: rc.ID, Response: &resp, Usage: rc.Usage, Model: rs.Latest().Attempt.Config.Backend.Model, GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
 	a, _ := json.Marshal(stamped)
 	b, _ := json.Marshal(re)
 	if string(a) != string(b) {
@@ -781,7 +788,7 @@ func TestFoldRefusesForgedHistories(t *testing.T) {
 				t.Fatal(err)
 			}
 			resp := inv.Receipt.Response
-			o := &Outcome{Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
+			o := &Outcome{Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Recall: a.Recall.ID, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
 			mut(o, rs, h)
 			return forge(t, h, "lie", &Transition{Header: hd(rs, runRef(rs.Run)), From: Judged, To: Recorded, Outcome: o})
 		}
@@ -798,6 +805,7 @@ func TestFoldRefusesForgedHistories(t *testing.T) {
 			{"promoted closure", func(o *Outcome, rs *RunState, h *harness) { o.ClosureOut = "achieved" }, "resolution says"},
 			{"invented source", func(o *Outcome, rs *RunState, h *harness) { o.ClosureSrc = "operator" }, "effective verdict"},
 			{"foreign closure", func(o *Outcome, rs *RunState, h *harness) { o.Closure = record.NewID() }, "not this attempt's closure"},
+			{"foreign recall", func(o *Outcome, rs *RunState, h *harness) { o.Recall = record.NewID() }, "did not make"},
 		}
 		for _, c := range cases {
 			err := mk(t, c.mut)
@@ -825,7 +833,7 @@ func TestFoldRefusesForgedHistories(t *testing.T) {
 		inv := rs.Latest().Invocations[0]
 		res := &verdict.Resolution{Header: hd(rs, runRef(rs.Run)), VerdictKind: verdict.KindClosure, Outcome: "achieved", Effective: vs[0].ID, Candidates: []record.RecordID{vs[0].ID}, ResolverVer: verdict.ResolverVer, Thresholds: verdict.DefaultThresholds, Rule: "standing:self", Confidence: 0.5}
 		resp := inv.Receipt.Response
-		o := &Outcome{Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: "achieved", ClosureCnf: 0.5, ClosureSrc: "self"}
+		o := &Outcome{Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Recall: rs.Latest().Recall.ID, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: "m", GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: "achieved", ClosureCnf: 0.5, ClosureSrc: "self"}
 		if err := forge(t, h, "forged-res", res, &Transition{Header: hd(rs, runRef(rs.Run)), From: Judged, To: Recorded, Outcome: o}); err == nil || !strings.Contains(err.Error(), "disagrees with its recompute") {
 			t.Fatalf("forged resolution folded: %v", err)
 		}
@@ -958,5 +966,151 @@ func TestDriverBoundaries(t *testing.T) {
 	rep, err := d.Run(ctxBg, []byte("q?"), DeliveryPolicy{Required: TransportAccepted})
 	if err != nil || rep.Mission.Outcome != MissionFailedDelivery || o.calls != 3 || !strings.Contains(rep.Mission.Reason, "origin panicked") {
 		t.Fatalf("%v %+v calls=%d", err, rep.Mission, o.calls)
+	}
+}
+
+// lesson adds a workspace-scoped lesson at the given stage (via the
+// operator path) and returns its item id and revision.
+func (h *harness) lesson(t *testing.T, text string, stage learn.Stage) learn.ItemRev {
+	t.Helper()
+	ref, err := h.st.Put(thought.LessonText, []byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := learn.LearnedID(record.NewID())
+	r := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()}, Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeWorkspace, Text: ref, Provenance: learn.Provenance{Source: "operator", Why: "test"}}
+	recs := []record.Record{r}
+	if stage != learn.Candidate {
+		recs = append(recs, &learn.LifecycleTransition{Header: record.Header{ID: record.NewID(), Schema: "learned_transition/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()}, Item: item, Revision: r.ID, From: learn.Candidate, To: stage, Actor: learn.ActorOperator, Why: "test"})
+	}
+	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "lesson/" + string(item), Epoch: h.j.Epoch(), Records: recs}); err != nil {
+		t.Fatal(err)
+	}
+	return learn.ItemRev{Item: item, Revision: r.ID}
+}
+
+func (h *harness) stage(t *testing.T, ir learn.ItemRev, from, to learn.Stage) {
+	t.Helper()
+	x := &learn.LifecycleTransition{Header: record.Header{ID: record.NewID(), Schema: "learned_transition/1", Subject: record.Ref{Kind: "learned", ID: string(ir.Item)}, At: time.Now().UTC()}, Item: ir.Item, Revision: ir.Revision, From: from, To: to, Actor: learn.ActorOperator, Why: "test"}
+	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "stage/" + string(x.ID), Epoch: h.j.Epoch(), Records: []record.Record{x}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// requestOf returns the bytes of the attempt's execute request thought.
+func (h *harness) requestOf(t *testing.T, a *AttemptState) []byte {
+	t.Helper()
+	for _, st := range a.Invocations {
+		if st.Invocation.Purpose == invoke.PurposeExecute {
+			b, err := h.st.Get(st.Invocation.Request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}
+	}
+	t.Fatal("no execute invocation")
+	return nil
+}
+
+// The design's end-to-end test (§7): a candidate lesson never reaches a
+// request; promoted, it does — proven by an Application whose exact
+// representation is in the request thought and by the recall selection;
+// quarantined, the next run's request hash no longer carries it and no
+// Application is written.
+func TestRecallReachesTheRequestOnlyWhenSelectable(t *testing.T) {
+	h := open(t)
+	ir := h.lesson(t, "Always cite the file and line.", learn.Candidate)
+	run := func() (*AttemptState, []byte) {
+		d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+		if _, err := d.Run(ctxBg, []byte("What is the capital of France?"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+			t.Fatal(err)
+		}
+		led := h.ledger()
+		var newest *RunState
+		for _, rs := range led.Runs {
+			if newest == nil || rs.Latest().Attempt.Seq > newest.Latest().Attempt.Seq {
+				newest = rs
+			}
+		}
+		a := newest.Latest()
+		return a, h.requestOf(t, a)
+	}
+	a1, req1 := run()
+	if strings.Contains(string(req1), "cite the file") || len(a1.Recall.Included) != 0 || a1.Recall.ExcludedCounts["stage:candidate"] != 1 {
+		t.Fatalf("candidate reached the request: %q %+v", req1, a1.Recall)
+	}
+	h.stage(t, ir, learn.Candidate, learn.Provisional)
+	a2, req2 := run()
+	apps := h.ledger().Learned.Applications[a2.Has(Recorded).Outcome.Invocation]
+	if len(a2.Recall.Included) != 1 || a2.Recall.Included[0] != ir || len(apps) != 1 || apps[0].Revision != ir.Revision {
+		t.Fatalf("promoted lesson not applied: %+v apps=%d", a2.Recall, len(apps))
+	}
+	rep, err := h.st.Get(apps[0].Representation)
+	if err != nil || !bytes.Contains(req2, rep) || !strings.HasPrefix(string(req2), "What is the capital of France?") {
+		t.Fatalf("representation %q not in request %q (%v)", rep, req2, err)
+	}
+	if !strings.Contains(string(rep), "Always cite the file and line.") {
+		t.Fatalf("representation %q does not carry the lesson", rep)
+	}
+	h.stage(t, ir, learn.Provisional, learn.Quarantined)
+	a3, req3 := run()
+	if bytes.Contains(req3, rep) || len(a3.Recall.Included) != 0 || a3.Recall.ExcludedCounts["stage:quarantined"] != 1 || len(h.ledger().Learned.Applications[a3.Has(Recorded).Outcome.Invocation]) != 0 {
+		t.Fatalf("quarantined lesson reached the request: %+v", a3.Recall)
+	}
+	if bytes.Equal(req2, req3) || !bytes.Equal(req1, req3) {
+		t.Fatal("request hashes: the quarantined run must equal the candidate run and differ from the promoted one")
+	}
+	// the applications are exactly the selection: a forged extra application
+	// on the promoted invocation is refused by the fold
+	other := h.lesson(t, "another", learn.Provisional)
+	inv := a2.Has(Recorded).Outcome.Invocation
+	ref, _ := h.st.Put(thought.LessonText, []byte("- another\n"))
+	forged := &learn.Application{Header: record.Header{ID: record.NewID(), Schema: "application/1", RunID: a2.Attempt.RunID, Attempt: 1, Subject: record.Ref{Kind: "invocation", ID: string(inv)}, At: time.Now().UTC()}, Item: other.Item, Revision: other.Revision, Invocation: inv, Representation: ref}
+	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "forged-app", Epoch: h.j.Epoch(), Records: []record.Record{forged}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fold(h.j.Production()); err == nil || !strings.Contains(err.Error(), "applications on invocation") {
+		t.Fatalf("forged application folded: %v", err)
+	}
+}
+
+// Re-run identity: two attempts with the same goal, config, applied
+// revisions and request are replays of each other; a change in what
+// reached the request changes the key.
+func TestReplayKey(t *testing.T) {
+	h := open(t)
+	ir := h.lesson(t, "lesson", learn.Provisional)
+	keys := func() []string {
+		d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+		if _, err := d.Run(ctxBg, []byte("same goal"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+			t.Fatal(err)
+		}
+		led := h.ledger()
+		var out []string
+		ids := []string{}
+		for id := range led.Runs {
+			ids = append(ids, string(id))
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			rs := led.Runs[record.RunID(id)]
+			k, err := ReplayKey(rs, rs.Latest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, k)
+		}
+		return out
+	}
+	k := keys()
+	k = keys()
+	if k[0] != k[1] {
+		t.Fatal("identical re-runs have different replay keys")
+	}
+	h.stage(t, ir, learn.Provisional, learn.Quarantined)
+	k = keys()
+	if k[2] == k[0] {
+		t.Fatal("a different applied set has the same replay key")
 	}
 }

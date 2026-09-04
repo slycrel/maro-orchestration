@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "delivery_attempted",
+  "kind": "recall_selection",
   "envelope": "production",
-  "schema": "delivery_attempted/1",
-  "go_type": "run.DeliveryAttempted",
+  "schema": "recall_selection/1",
+  "go_type": "learn.RecallSelection",
   "fields": [
     {
       "name": "header.ID",
@@ -78,31 +78,66 @@
       "from_header": true
     },
     {
-      "name": "Delivery",
-      "wire": "delivery",
-      "go_type": "record.RecordID",
+      "name": "Purpose",
+      "wire": "purpose",
+      "go_type": "invoke.Purpose",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "N",
-      "wire": "n",
+      "name": "Scope",
+      "wire": "scope",
+      "go_type": "[]learn.ScopePath",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Family",
+      "wire": "family",
+      "go_type": "string",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Standing",
+      "wire": "standing",
+      "go_type": "[]learn.Stage",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Considered",
+      "wire": "considered",
       "go_type": "int",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Result",
-      "wire": "result",
-      "go_type": "run.DeliveryState",
-      "omittable": false,
+      "name": "Included",
+      "wire": "included",
+      "go_type": "[]learn.ItemRev",
+      "omittable": true,
       "is_thought": false
     },
     {
-      "name": "Reason",
-      "wire": "reason",
-      "go_type": "string",
+      "name": "ExcludedCounts",
+      "wire": "excluded_counts",
+      "go_type": "map[string]int",
       "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "ExcludedTop",
+      "wire": "excluded_top",
+      "go_type": "[]learn.Excluded",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "ProjectedBytes",
+      "wire": "projected_bytes",
+      "go_type": "int64",
+      "omittable": false,
       "is_thought": false
     }
   ],

@@ -528,3 +528,47 @@ unlanded step, so no version bump; the pre-fix scratch journal is refused
 by the new rule, which is the rule working. Test count in `internal/run`
 10 → 16 (+ 7 forged-history subtests, + 15 kill seams); registry at 20
 kinds; contracts report 0 errors / 0 warnings.
+
+## Step 6 — memory: learned revisions, lifecycle standing, one recall query, applications, re-run identity (2026-09-05)
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| `LearnedRevision` (item id minted once; predecessor chain; kind lesson\|policy; scope; family; text as a whole `lesson_text` thought; provenance) | §7 | kept |
+| `LifecycleTransition` per EXACT revision; the 8-stage vocabulary and the legal-edge table | §7 (single authoritative vocabulary) | kept; executed at the door (edge legality) and the fold (from-stage, evidence precedence) |
+| Transition actors | §7 | `operator` only — the one producer that exists (CLI restamp); `tenure` (step 9) and `measurement` (steps 10–11) are added with their producers |
+| Two folds kept apart (standing per ItemRev; current revision per item) | §7 | kept; a new revision starts at candidate whatever its predecessor earned |
+| `Recall(purpose, scope, standing) → RecallSelection` — one query | §7 | kept; item-id order; exclusions as counts by reason + top-5 (§14) |
+| Projected size | §7, D13 | reported, never a cap — no truncation anywhere on the block or the request |
+| `Application` proving a revision reached a request (representation = exact bytes in the request thought) | §7, §8a exposure | kept; committed after the invocation exists; re-derived on recovery from the committed selection |
+| `PolicyApplication`, `PolicySelection`, the policy apply surface | §7, D17 | **step 10** — `policy` revisions can exist (vocabulary is the design's) and recall never injects them (tested) |
+| Re-run identity | §16 step 6 | `ReplayKey` over committed evidence only: goal thought, config snapshot, included ItemRevs, request thought, terminal |
+| Scope chain own → parents → root → workspace | §3 | kept and walked; v1 goals are roots, so the chain is [goal, workspace] until fork (step 8) |
+| B7 lesson-store projection (`memory/lessons.jsonl`) | §13 shared edge | **step 12** with the import — the Python readers of B7 need the whole store semantics, not a row per revision |
+
+**Built.** `internal/learn` (4 kinds; registry at 24; contracts 0/0):
+records, `Fold`, `Recall`, `Render`. Driver: recall committed before every
+execute invocation, applications after it, `Outcome.Recall`; recovery
+re-derives applications from the recovered attempt's selection; the run
+fold refuses a recorded outcome whose applications are not exactly the
+selection's included set. CLI `learn add|stage|list`.
+
+**Edge tests.** learn: standing is per revision (predecessor's `effective`
+does not select a `candidate` successor; quarantine on the old one stays
+there); recall determinism, scope/family/kind/stage exclusions with
+reasons, bounded top-k, projected size, render contains every
+representation; 5 door refusals + 7 fold refusals. run: the design's
+end-to-end — candidate absent from the request, promoted present as an
+Application whose bytes are in the request thought, quarantined absent
+again with the request hash back to the candidate run's; a forged extra
+application refused by the fold; replay keys equal across identical
+re-runs and different after a quarantine; kill matrix now carries a
+promoted lesson on every seam plus `after_recall` and
+`after_applications`, each resumed with the application intact.
+
+**Live.** `learn add --family answer "…reply in UPPERCASE…"` → `learn
+stage provisional` → `now --model haiku "chemical symbol for gold"` →
+recall 1 of 1, applied 1, answer `AU`. The lesson reached the request and
+the answer followed it: the first measured-by-eye behavior change from
+learned data (D11 is still owed its measurement, steps 10–11).

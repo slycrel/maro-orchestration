@@ -1,7 +1,8 @@
 {
   "generator": "maro-go contracts gen v1",
-  "source_ref": "970601ef",
+  "source_ref": "7cb6b555",
   "kinds": {
+    "application": "ddab4335dd49232e8a3a7056daa72ae181e21794f25b5ab5d38a3dbd52305385",
     "delivery_acked": "261d54b5a58c86b22bc492c977ecc0e34249b94890f2e8982e7119f6c8eb12c9",
     "delivery_attempted": "bc3aaee593730b05360ba6e86b7b92c645f347a68ce73ac96d72f67db6689925",
     "delivery_prepared": "1568c6f7898371acf8241845bdd9d13083823b0c4b3da150bff43e040cf5edaf",
@@ -11,8 +12,11 @@
     "invocation": "ff3c0e41c2ddbf0c14b6fd8687d7eaf7fb0868c524ed63978b3eaac8bde7075b",
     "invocation_dispatched": "f9277d84d50aa6f4ffddc8a6b16c58a3514684adc897c77853bc90214752c5a2",
     "invocation_reconciled": "2f92a10602f8f0cc0cd963bf8ce0aff2f9f53ed9d6f435891ca3f9906bd7abb5",
+    "learned_revision": "f79ef434507b0b5d01e68cd2ff2eedcf19dbd1268e6d42e4cbc2e0065d3f1aed",
+    "learned_transition": "9253c1516fdbfdee5ea8901c8480ba1e4401ed93f51cc1d8afd08bc716f11f59",
     "lease": "e7fe2d8c53af8a54ff530269c2a3ed2893b6cfdce933b9ec63c09d2051c01a7e",
     "observation": "2c6cd406a86d780b75ab1f591fca0e1dcdf42211e9e6c92c70f5262ea370aace",
+    "recall_selection": "c7d80d3d1e3b999c725484d6d6239393ac9eb086831afa88dde0c0eda954c193",
     "receipt": "99af36863095c2df0b351b941eba62378a4b4b500ba19417d178fd262cf74e37",
     "resolution": "cbd87868a7a4d7a6a193fb2b67df544fe84d3bf965c74b543681d9d718456765",
     "run_attempt": "23db6be1847e26e78389831bd047b35941c096663a79559394d0a273a8c9025a",

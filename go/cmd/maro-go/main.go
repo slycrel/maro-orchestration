@@ -16,6 +16,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/contracts"
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	spine "github.com/slycrel/maro-orchestration/go/internal/run"
@@ -49,6 +50,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdAck(args[1:], stdout)
 	case "runs":
 		err = cmdRuns(args[1:], stdout, stderr)
+	case "learn":
+		err = cmdLearn(args[1:], stdout)
 	default:
 		usage(stderr)
 		return 2
@@ -61,7 +64,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now [--backend b] [--model m] [--ack] <goal> | ack <delivery> <token> | runs [resume]")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now [--backend b] [--model m] [--ack] <goal> | ack <delivery> <token> | runs [resume] | learn add|stage|list")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -359,4 +362,97 @@ func withJournal(out io.Writer, fn func(*journal.Journal, *thought.Store) error)
 		return err
 	}
 	return fn(j, st)
+}
+
+// cmdLearn is the operator's memory surface (§7, v1 producer of learned
+// revisions and lifecycle transitions):
+//
+//	learn add [--scope workspace|goal:<id>] [--family f] <text>   → a lesson at candidate
+//	learn stage <item> <to> --why <text>                          → an operator transition of the CURRENT revision
+//	learn list                                                     → items, current revision, standing
+func cmdLearn(args []string, out io.Writer) error {
+	if len(args) < 1 {
+		return fmt.Errorf("learn needs add|stage|list")
+	}
+	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+		led, err := learn.Fold(j.Production())
+		if err != nil {
+			return err
+		}
+		switch args[0] {
+		case "add":
+			scope, family := learn.ScopeWorkspace, ""
+			var text []string
+			for i := 1; i < len(args); i++ {
+				switch args[i] {
+				case "--scope":
+					i++
+					if i < len(args) {
+						scope = learn.ScopePath(args[i])
+					}
+				case "--family":
+					i++
+					if i < len(args) {
+						family = args[i]
+					}
+				default:
+					text = append(text, args[i])
+				}
+			}
+			body := strings.TrimSpace(strings.Join(text, " "))
+			if body == "" {
+				return fmt.Errorf("learn add needs the lesson text")
+			}
+			ref, err := st.Put(thought.LessonText, []byte(body))
+			if err != nil {
+				return err
+			}
+			item := learn.LearnedID(record.NewID())
+			r := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()},
+				Item: item, LearnedKind: learn.Lesson, Scope: scope, Family: family, Text: ref, Provenance: learn.Provenance{Source: "operator", Why: "maro-go learn add"}}
+			if _, err := j.Submit(context.Background(), journal.Command{IdempotencyKey: "learn/add/" + string(item), Epoch: j.Epoch(), Records: []record.Record{r}}); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "added %s revision %s at candidate (scope %s)\n", item, r.ID, scope)
+			return nil
+		case "stage":
+			if len(args) < 3 {
+				return fmt.Errorf("learn stage <item> <to> --why <text>")
+			}
+			item, to, why := learn.LearnedID(args[1]), learn.Stage(args[2]), ""
+			for i := 3; i < len(args); i++ {
+				if args[i] == "--why" && i+1 < len(args) {
+					why = args[i+1]
+				}
+			}
+			if why == "" {
+				return fmt.Errorf("learn stage needs --why")
+			}
+			it := led.Items[item]
+			if it == nil {
+				return fmt.Errorf("no item %s", item)
+			}
+			from := it.StageOf(it.Current.ID)
+			x := &learn.LifecycleTransition{Header: record.Header{ID: record.NewID(), Schema: "learned_transition/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()},
+				Item: item, Revision: it.Current.ID, From: from, To: to, Actor: learn.ActorOperator, Why: why}
+			if _, err := j.Submit(context.Background(), journal.Command{IdempotencyKey: "learn/stage/" + string(x.ID), Epoch: j.Epoch(), Records: []record.Record{x}}); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "%s revision %s: %s → %s\n", item, it.Current.ID, from, to)
+			return nil
+		case "list":
+			ids := make([]string, 0, len(led.Items))
+			for id := range led.Items {
+				ids = append(ids, string(id))
+			}
+			sort.Strings(ids)
+			for _, id := range ids {
+				it := led.Items[learn.LearnedID(id)]
+				body, _ := st.Get(it.Current.Text)
+				fmt.Fprintf(out, "%s  rev %d/%s  %-11s  %-9s scope=%s family=%q  %s\n", id, len(it.Revisions), it.Current.ID, it.StageOf(it.Current.ID), it.Current.LearnedKind, it.Current.Scope, it.Current.Family, string(body))
+			}
+			return nil
+		}
+		return fmt.Errorf("unknown learn subcommand %q", args[0])
+	})
 }

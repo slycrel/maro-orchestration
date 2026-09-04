@@ -260,9 +260,10 @@ type Outcome struct {
 	Receipt    record.RecordID      `json:"receipt,omitempty"`
 	Response   *thought.Ref         `json:"response,omitempty"`
 	Usage      invoke.Usage         `json:"usage"`
-	Model      string               `json:"model,omitempty"` // the model of the invocation that produced the evidence (never the recovering attempt's config)
-	GoalText   thought.Ref          `json:"goal"`            // the goal thought this attempt ran (whole)
-	Closure    record.RecordID      `json:"closure"`         // the closure Resolution
+	Model      string               `json:"model,omitempty"`  // the model of the invocation that produced the evidence (never the recovering attempt's config)
+	Recall     record.RecordID      `json:"recall,omitempty"` // the RecallSelection the invocation's request was rendered from
+	GoalText   thought.Ref          `json:"goal"`             // the goal thought this attempt ran (whole)
+	Closure    record.RecordID      `json:"closure"`          // the closure Resolution
 	ClosureOut string               `json:"closure_outcome"`
 	ClosureSrc string               `json:"closure_source,omitempty"` // standing of the effective verdict ("" when none)
 	ClosureCnf float64              `json:"closure_confidence"`
@@ -341,6 +342,14 @@ func (o *Outcome) validate() error {
 		}
 	} else if o.Produced != 0 || o.Receipt != "" {
 		return errors.New("produced_by and receipt need an invocation")
+	}
+	if o.Invocation != "" && o.Recall == "" {
+		return errors.New("an invocation names the recall its request was rendered from")
+	}
+	if o.Recall != "" {
+		if err := record.ValidateID(o.Recall); err != nil {
+			return fmt.Errorf("recall: %w", err)
+		}
 	}
 	if o.Receipt != "" {
 		if err := record.ValidateID(o.Receipt); err != nil {

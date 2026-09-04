@@ -1,10 +1,14 @@
 package run
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/verdict"
 )
@@ -74,6 +78,7 @@ type AttemptState struct {
 	Transitions []*Transition // in Seq order
 	Delivery    *Delivery     // at most one per attempt
 	Invocations []*invoke.State
+	Recall      *learn.RecallSelection // the attempt's recall selection, when it reached that stage
 }
 
 // Current is the attempt's latest state.
@@ -149,6 +154,7 @@ type Ledger struct {
 	Runs      map[record.RunID]*RunState
 	Unstarted []*Goal                               // in Seq order
 	Families  map[record.RecordID]*FamilyAssessment // by goal; exactly one per goal
+	Learned   *learn.Ledger                         // the learned population, folded alongside
 }
 
 // Fold folds the production population into per-run state and REFUSES any
@@ -173,6 +179,10 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 	// invocation states are folded up front so transitions can be checked
 	// against evidence in one pass
 	inv, err := invoke.Fold(pr)
+	if err != nil {
+		return nil, err
+	}
+	learned, err := learn.Fold(pr)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +250,7 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 			if x.Attempt > 1 && rs.Attempts[x.Attempt-2].Current() != Recoverable {
 				return fmt.Errorf("run: %s attempt %d started but attempt %d is at %q, not recoverable", x.RunID, x.Attempt, x.Attempt-1, rs.Attempts[x.Attempt-2].Current())
 			}
-			a := &AttemptState{Attempt: x}
+			a := &AttemptState{Attempt: x, Recall: learned.Recalls[learn.RecallKey(x.RunID, x.Attempt)]}
 			rs.Attempts = append(rs.Attempts, a)
 		case *Transition:
 			rs := get(x.RunID)
@@ -251,7 +261,7 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 			if cur := a.Current(); cur != x.From {
 				return fmt.Errorf("run: %s attempt %d transition %s→%s but the attempt is at %q", x.RunID, x.Attempt, x.From, x.To, cur)
 			}
-			if err := checkTransition(rs, a, x, inv, resolutions, verdicts, observations); err != nil {
+			if err := checkTransition(rs, a, x, inv, learned, resolutions, verdicts, observations); err != nil {
 				return err
 			}
 			a.Transitions = append(a.Transitions, x)
@@ -320,7 +330,7 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	led := &Ledger{Runs: runs, Families: fams}
+	led := &Ledger{Runs: runs, Families: fams, Learned: learned}
 	for _, g := range goalOrder {
 		if !started[g.ID] {
 			led.Unstarted = append(led.Unstarted, g)
@@ -340,7 +350,7 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 }
 
 // checkTransition executes the cross-record rules a transition claims.
-func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[record.RecordID]*invoke.State, resolutions map[record.RecordID]*verdict.Resolution, verdicts map[record.RecordID]*verdict.Verdict, observations map[record.RecordID]*verdict.Observation) error {
+func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[record.RecordID]*invoke.State, learned *learn.Ledger, resolutions map[record.RecordID]*verdict.Resolution, verdicts map[record.RecordID]*verdict.Verdict, observations map[record.RecordID]*verdict.Observation) error {
 	switch x.To {
 	case Recorded:
 		o := x.Outcome
@@ -354,6 +364,21 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 			}
 			if st.Invocation.Backend.Model != o.Model {
 				return fmt.Errorf("run: %s attempt %d recorded model %q but the invocation ran %q", rs.Run, x.Attempt, o.Model, st.Invocation.Backend.Model)
+			}
+			// exposure: the applications on the invocation are exactly the
+			// recall's included set (the selection the request was rendered from)
+			sel := learned.Recalls[learn.RecallKey(rs.Run, o.Produced)]
+			if sel == nil || sel.ID != o.Recall {
+				return fmt.Errorf("run: %s attempt %d recorded recall %s that attempt %d did not make", rs.Run, x.Attempt, o.Recall, o.Produced)
+			}
+			apps := learned.Applications[o.Invocation]
+			if len(apps) != len(sel.Included) {
+				return fmt.Errorf("run: %s attempt %d: %d applications on invocation %s but the recall included %d", rs.Run, x.Attempt, len(apps), o.Invocation, len(sel.Included))
+			}
+			for i, ir := range sel.Included {
+				if apps[i].Item != ir.Item || apps[i].Revision != ir.Revision {
+					return fmt.Errorf("run: %s attempt %d: application %d is %s/%s, the recall included %s/%s", rs.Run, x.Attempt, i, apps[i].Item, apps[i].Revision, ir.Item, ir.Revision)
+				}
 			}
 			if o.Receipt != "" {
 				if st.Receipt == nil || st.Receipt.ID != o.Receipt || o.Response == nil || *o.Response != st.Receipt.Response || o.Usage != st.Receipt.Usage {
@@ -479,4 +504,47 @@ func MissionOf(rs *RunState) Mission {
 		m.Outcome = MissionUnacknowledged
 	}
 	return m
+}
+
+// ReplayKey is the re-run identity of an attempt: what would have to be
+// equal for another attempt to be a replay of this one — the goal thought,
+// the config it ran under, the exact revisions that reached the request,
+// and the request thought itself. Derived from committed records only.
+func ReplayKey(rs *RunState, a *AttemptState) (string, error) {
+	rec := a.Has(Recorded)
+	if rec == nil {
+		return "", fmt.Errorf("run: %s attempt %d is not recorded", rs.Run, a.Attempt.Attempt)
+	}
+	o := rec.Outcome
+	var included []learn.ItemRev
+	request := ""
+	if o.Invocation != "" {
+		st, _ := rs.invocation(o.Invocation)
+		if st == nil {
+			return "", fmt.Errorf("run: invocation %s not in the run", o.Invocation)
+		}
+		request = st.Invocation.Request.Hash
+		if a.Recall != nil && a.Recall.ID == o.Recall {
+			included = a.Recall.Included
+		} else {
+			for _, p := range rs.Attempts {
+				if p.Recall != nil && p.Recall.ID == o.Recall {
+					included = p.Recall.Included
+				}
+			}
+		}
+	}
+	raw, err := json.Marshal(struct {
+		Ver      string          `json:"ver"`
+		Goal     string          `json:"goal"`
+		Config   ConfigSnapshot  `json:"config"`
+		Included []learn.ItemRev `json:"included"`
+		Request  string          `json:"request"`
+		Terminal string          `json:"terminal"`
+	}{"replay/1", rs.Goal.Text.Hash, a.Attempt.Config, included, request, string(o.Terminal)})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }

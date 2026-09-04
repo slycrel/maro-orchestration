@@ -13,6 +13,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	"github.com/slycrel/maro-orchestration/go/internal/verdict"
@@ -279,14 +280,28 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 			}
 			// provenance is the invocation's, never the recovering attempt's
 			model := st.Invocation.Backend.Model
+			var out *Outcome
 			switch {
 			case st.Receipt != nil:
 				resp := st.Receipt.Response
-				return &Outcome{Terminal: st.Terminal.State, Reason: st.Terminal.Reason, Invocation: st.Invocation.ID, Produced: p, Receipt: st.Receipt.ID, Response: &resp, Usage: st.Receipt.Usage, Model: model}, nil
+				out = &Outcome{Terminal: st.Terminal.State, Reason: st.Terminal.Reason, Invocation: st.Invocation.ID, Produced: p, Receipt: st.Receipt.ID, Response: &resp, Usage: st.Receipt.Usage, Model: model}
 			case st.Terminal != nil && st.Terminal.State == invoke.TerminalFailed:
-				return &Outcome{Terminal: invoke.TerminalFailed, Reason: "attempt " + fmt.Sprint(p) + ": " + st.Terminal.Reason, Invocation: st.Invocation.ID, Produced: p, Usage: st.Terminal.Usage, Model: model}, nil
+				out = &Outcome{Terminal: invoke.TerminalFailed, Reason: "attempt " + fmt.Sprint(p) + ": " + st.Terminal.Reason, Invocation: st.Invocation.ID, Produced: p, Usage: st.Terminal.Usage, Model: model}
 			case st.Reconciled != nil && st.Reconciled.Disposition == invoke.DispositionIndeterminate:
-				return &Outcome{Terminal: invoke.TerminalFailed, Reason: string(invoke.DispositionIndeterminate) + ": " + st.Reconciled.Evidence, Invocation: st.Invocation.ID, Produced: p, Model: model}, nil
+				out = &Outcome{Terminal: invoke.TerminalFailed, Reason: string(invoke.DispositionIndeterminate) + ": " + st.Reconciled.Evidence, Invocation: st.Invocation.ID, Produced: p, Model: model}
+			}
+			if out != nil {
+				// the request was rendered from the recovered attempt's recall;
+				// its applications may not have landed before the crash — they
+				// are derivable from that selection, so commit them now
+				if prev.Recall == nil {
+					return nil, fmt.Errorf("run: attempt %d invoked without a recall selection", p)
+				}
+				out.Recall = prev.Recall.ID
+				if err := d.apply(ctx, rs, p, prev.Recall, st.Invocation.ID); err != nil {
+					return nil, err
+				}
+				return out, nil
 			}
 			// abandoned (or never dispatched): safe to run again
 		}
@@ -298,11 +313,23 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 	if err != nil {
 		return nil, err
 	}
+	// Recall — one query over the learned fold, committed as the decision
+	// BEFORE the request exists; the request is the goal plus the rendered
+	// block, and every included revision becomes an Application once the
+	// invocation it reached has an id.
+	sel, block, reps, err := d.recall(ctx, rs, n)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.crash("after_recall"); err != nil {
+		return nil, err
+	}
 	sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n, CrashAt: strings.TrimPrefix(d.CrashAt, "invoke:")}
 	if !strings.HasPrefix(d.CrashAt, "invoke:") {
 		sh.CrashAt = ""
 	}
-	o, err := sh.Invoke(ctx, d.Backend, invoke.Request{Purpose: invoke.PurposeExecute, Prompt: text, Tools: d.Backend.Capabilities().ActsOutward, Timeout: d.Timeout}, nil)
+	prompt := append(append([]byte{}, text...), block...)
+	o, err := sh.Invoke(ctx, d.Backend, invoke.Request{Purpose: invoke.PurposeExecute, Prompt: prompt, Tools: d.Backend.Capabilities().ActsOutward, Timeout: d.Timeout}, nil)
 	var inc *invoke.Incapable
 	if errors.As(err, &inc) {
 		// a refusal the shell makes BEFORE writing anything (input over the
@@ -317,7 +344,13 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 	if o.Err != nil {
 		return nil, o.Err
 	}
-	out := &Outcome{Terminal: o.Terminal, Reason: o.Reason, Invocation: o.Invocation, Produced: n, Receipt: o.Receipt, Usage: o.Usage, Model: d.Backend.Capabilities().Model}
+	if err := d.applications(ctx, rs, n, o.Invocation, reps); err != nil {
+		return nil, err
+	}
+	if err := d.crash("after_applications"); err != nil {
+		return nil, err
+	}
+	out := &Outcome{Terminal: o.Terminal, Reason: o.Reason, Invocation: o.Invocation, Produced: n, Receipt: o.Receipt, Usage: o.Usage, Model: d.Backend.Capabilities().Model, Recall: sel.ID}
 	if o.Terminal != invoke.TerminalFailed {
 		ref, err := receiptResponse(d.J, o.Receipt)
 		if err != nil {
@@ -326,6 +359,95 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 		out.Response = ref
 	}
 	return out, nil
+}
+
+// scope is the run's memory scope chain: own goal → parents → root →
+// workspace (§3). v1 runs one level deep; the chain is still walked.
+func scope(g *Goal) []learn.ScopePath {
+	chain := []learn.ScopePath{learn.ScopeGoal(g.ID)}
+	if g.Parent != "" {
+		chain = append(chain, learn.ScopeGoal(g.Parent))
+	}
+	if g.Root != g.ID && g.Root != g.Parent {
+		chain = append(chain, learn.ScopeGoal(g.Root))
+	}
+	return append(chain, learn.ScopeWorkspace)
+}
+
+// recall runs the one query for attempt n, commits the selection, and
+// renders the block. Idempotent by (run, attempt).
+func (d *Driver) recall(ctx context.Context, rs *RunState, n uint32) (*learn.RecallSelection, []byte, []learn.Rendered, error) {
+	led, err := learn.Fold(d.J.Production())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	family := ""
+	if rs.Family.Family != FamilyNone {
+		family = string(rs.Family.Family)
+	}
+	sel := learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable})
+	sel.Header = header(runRef(rs.Run), rs.Run, n, "recall_selection/1")
+	sel.Purpose = invoke.PurposeExecute
+	if err := d.commit(ctx, fmt.Sprintf("recall/%s/%d", rs.Run, n), sel); err != nil {
+		return nil, nil, nil, err
+	}
+	block, reps, err := d.render(led, sel)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	d.emit(rs, n, "recall", Executing, fmt.Sprintf("%d included of %d", len(sel.Included), sel.Considered))
+	return sel, block, reps, nil
+}
+
+func (d *Driver) render(led *learn.Ledger, sel *learn.RecallSelection) ([]byte, []learn.Rendered, error) {
+	return learn.Render(sel, func(ir learn.ItemRev) ([]byte, error) {
+		it := led.Items[ir.Item]
+		for _, r := range it.Revisions {
+			if r.ID == ir.Revision {
+				return d.Store.Get(r.Text)
+			}
+		}
+		return nil, fmt.Errorf("run: recall names revision %s of %s that the fold does not hold", ir.Revision, ir.Item)
+	})
+}
+
+// applications commits one Application per rendered revision, citing the
+// invocation the representation reached. One command, keyed by invocation.
+func (d *Driver) applications(ctx context.Context, rs *RunState, n uint32, inv record.RecordID, reps []learn.Rendered) error {
+	if len(reps) == 0 {
+		return nil
+	}
+	recs := make([]record.Record, 0, len(reps))
+	for _, r := range reps {
+		ref, err := d.Store.Put(thought.LessonText, r.Representation)
+		if err != nil {
+			return err
+		}
+		recs = append(recs, &learn.Application{Header: header(record.Ref{Kind: "invocation", ID: string(inv)}, rs.Run, n, "application/1"), Item: r.Item, Revision: r.Revision, Invocation: inv, Representation: ref})
+	}
+	if err := d.commit(ctx, "applications/"+string(inv), recs...); err != nil {
+		return err
+	}
+	d.emit(rs, n, "applied", Executing, fmt.Sprintf("%d", len(reps)))
+	return nil
+}
+
+// apply re-derives and commits the applications for a recovered attempt's
+// invocation from its committed recall selection (the render is
+// deterministic, so the representations are the same bytes).
+func (d *Driver) apply(ctx context.Context, rs *RunState, n uint32, sel *learn.RecallSelection, inv record.RecordID) error {
+	led, err := learn.Fold(d.J.Production())
+	if err != nil {
+		return err
+	}
+	if len(led.Applications[inv]) == len(sel.Included) {
+		return nil
+	}
+	_, reps, err := d.render(led, sel)
+	if err != nil {
+		return err
+	}
+	return d.applications(ctx, rs, n, inv, reps)
 }
 
 // receiptResponse reads the response ref off the committed receipt: the

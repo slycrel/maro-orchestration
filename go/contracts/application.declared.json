@@ -1,0 +1,37 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "application",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/run:TestRecallReachesTheRequestOnlyWhenSelectable",
+  "fields": {
+    "item": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/learn:TestFoldRefusesIllegalLearnedHistories"
+    },
+    "revision": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/learn:TestFoldRefusesIllegalLearnedHistories"
+    },
+    "invocation": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestRecallReachesTheRequestOnlyWhenSelectable"
+    },
+    "representation": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestRecallReachesTheRequestOnlyWhenSelectable"
+    }
+  }
+}

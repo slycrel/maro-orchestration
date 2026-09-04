@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
+	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/run"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
@@ -78,6 +79,7 @@ func samples() map[record.Kind]any {
 	caps := invoke.Capabilities{Name: "scripted", Model: "m", ActsOutward: true}
 	goalRef := thought.Ref{Hash: "s256v1:" + strings.Repeat("ab", 32), Kind: thought.Goal, Bytes: 3, Encoding: thought.UTF8}
 	deliverable := thought.Ref{Hash: "s256v1:" + strings.Repeat("cd", 32), Kind: thought.Deliverable, Bytes: 3, Encoding: thought.UTF8}
+	lesson := thought.Ref{Hash: "s256v1:" + strings.Repeat("ef", 32), Kind: thought.LessonText, Bytes: 9, Encoding: thought.UTF8}
 	return map[record.Kind]any{
 		record.KindLease:            &record.LeaseRecord{Header: withSchema(h, "lease/1"), PID: 4242, Epoch: 3, Host: "mini"},
 		record.KindThoughtStored:    &record.ThoughtStored{Header: withSchema(h, "thought_stored/1"), Hash: "s256v1:" + strings.Repeat("ab", 32), Thought: "goal", Bytes: 12, Encoding: "utf8"},
@@ -98,6 +100,10 @@ func samples() map[record.Kind]any {
 		run.KindDeliveryPrepared:    &run.DeliveryPrepared{Header: withSubject(withSchema(h, "delivery_prepared/1"), record.Ref{Kind: "delivery", ID: string(h.ID)}), Payload: deliverable, Origin: run.OriginCLI, Required: run.UserAcknowledged, Nonce: strings.Repeat("0f", 16)},
 		run.KindDeliveryStarted:     &run.DeliveryStarted{Header: withSubject(withSchema(h, "delivery_started/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, N: 1},
 		run.KindDeliveryAttempted:   &run.DeliveryAttempted{Header: withSubject(withSchema(h, "delivery_attempted/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, N: 1, Result: run.DeliveryFailed, Reason: "pipe closed"},
+		learn.KindRevision:          &learn.LearnedRevision{Header: withSubject(withSchema(h, "learned_revision/1"), record.Ref{Kind: "learned", ID: string(inv)}), Item: learn.LearnedID(inv), Predecessor: inv, LearnedKind: learn.Lesson, Scope: learn.ScopeWorkspace, Family: "answer", Text: lesson, Provenance: learn.Provenance{Source: "operator", Ref: inv, Why: "seen twice"}},
+		learn.KindTransition:        &learn.LifecycleTransition{Header: withSubject(withSchema(h, "learned_transition/1"), record.Ref{Kind: "learned", ID: string(inv)}), Item: learn.LearnedID(inv), Revision: inv, From: learn.Candidate, To: learn.Provisional, Actor: learn.ActorOperator, Evidence: inv, Why: "restamp"},
+		learn.KindApplication:       &learn.Application{Header: withSubject(withSchema(h, "application/1"), record.Ref{Kind: "invocation", ID: string(inv)}), Item: learn.LearnedID(inv), Revision: inv, Invocation: inv, Representation: lesson},
+		learn.KindRecall:            &learn.RecallSelection{Header: withSubject(withSchema(h, "recall_selection/1"), record.Ref{Kind: "run", ID: "run-1"}), Purpose: invoke.PurposeExecute, Scope: []learn.ScopePath{learn.ScopeWorkspace}, Family: "answer", Standing: []learn.Stage{learn.Provisional}, Considered: 2, Included: []learn.ItemRev{{Item: learn.LearnedID(inv), Revision: inv}}, ExcludedCounts: map[string]int{"stage:candidate": 1}, ExcludedTop: []learn.Excluded{{ItemRev: learn.ItemRev{Item: learn.LearnedID(inv), Revision: inv}, Reason: "stage:candidate"}}, ProjectedBytes: 40},
 		run.KindDeliveryAcked:       &run.DeliveryAcked{Header: withSubject(withSchema(h, "delivery_acked/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, Token: strings.Repeat("a1", 16), PayloadHash: deliverable.Hash},
 	}
 }

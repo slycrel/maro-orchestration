@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "delivery_attempted",
+  "kind": "application",
   "envelope": "production",
-  "schema": "delivery_attempted/1",
-  "go_type": "run.DeliveryAttempted",
+  "schema": "application/1",
+  "go_type": "learn.Application",
   "fields": [
     {
       "name": "header.ID",
@@ -78,32 +78,32 @@
       "from_header": true
     },
     {
-      "name": "Delivery",
-      "wire": "delivery",
+      "name": "Item",
+      "wire": "item",
+      "go_type": "learn.LearnedID",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Revision",
+      "wire": "revision",
       "go_type": "record.RecordID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "N",
-      "wire": "n",
-      "go_type": "int",
+      "name": "Invocation",
+      "wire": "invocation",
+      "go_type": "record.RecordID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Result",
-      "wire": "result",
-      "go_type": "run.DeliveryState",
+      "name": "Representation",
+      "wire": "representation",
+      "go_type": "thought.Ref",
       "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Reason",
-      "wire": "reason",
-      "go_type": "string",
-      "omittable": true,
-      "is_thought": false
+      "is_thought": true
     }
   ],
   "source_ref": "7cb6b555",
