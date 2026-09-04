@@ -948,3 +948,98 @@ Tests: run +3 (decision/cancellation gap; asymmetric and three-member
 forks; twins, forged decisions, cancellation of a terminal member, a child
 panic). 14 packages green under `-race`; contracts 36 kinds, 0 errors / 0
 warnings.
+
+## Step 9 — tail lane and timers: observe → diagnose → propose (2026-09-05)
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| Observe after `recorded`: receipts, verdicts, usage, friction | §8 | kept as the tail's pure signal classifier over the run fold (`Signals`): unclear_goal, backend_failed, blocked_step, partial_output, interrupted, unjudged, not_achieved, delivery_failed, recovered, stuck, confined_effect |
+| "deterministic classifiers → Observations" as separate records | §8 | **folded into one record**: a `diagnosis` carries the signals inline and the fold re-derives them (a signal is a pure function of the run's fold; one derived record per signal would be N records saying what one already says). The verdict package's `observation` stays what it is: a claim about a result |
+| A model lens second → FailureClass | §8 | kept; the lens is a tool-less `diagnose` invocation of the attempt (reused across a crash by its receipt), and may name only a class the signals allow: the signal-established class, or — when nothing failed mechanically — `none`, `wrong_answer`, `incomplete_answer`. A malformed or failed lens leaves `lens_rule: no_lens:<why>`; no lens configured = `signals_only` |
+| Propose a Learned revision at `candidate` (lesson, policy) | §8 | lessons kept (`learned_revision` provenance `tail`, Ref = the diagnosis, family = the run's); at most 3 per attempt. **Policy proposals wait for the policy apply surface (step 11)** |
+| Learning from fork members | §3 | a `cancelled` or `completed_late` member gets a `tail_done{skipped}`: never diagnosed, never proposed from |
+| Tenure candidate → observed | §7 | kept in the timers sweep (≥ 3 applications; evidence = the application that crossed the bound) — **cannot fire in v1**: only selectable revisions are recalled, so a candidate accrues no applications until experiments apply candidates (step 10). The rule is in place; its live proof is owed there |
+| Expiry → tombstone | §7 | kept: a candidate or observed revision idle 30 days is tombstoned by the sweep (evidence = the revision). Design amended: `candidate→tombstone` added to the legal table (an idle candidate expires instead of accruing forever) |
+| Timers: in-process sweeps with a Why, no cron | §10 | kept (`Timers` lane, stage 1, every 1m; idempotent by keyed commits) |
+| Evaluator lane | §10 | not yet — step 11 |
+
+**Built.** `internal/tail/{records,tail,timers}.go` — kinds `diagnosis`
+(signals, class, why, lens, lens_rule) and `tail_done` (exactly one of
+diagnosis | skipped; proposals), registry at 38; contracts 0/0. `Tail`
+lane (stage 2; one pass per recorded attempt without a tail_done; the
+diagnosis, its proposals and the tail_done in ONE keyed command). `Timers`
+lane (stage 1; tenure + expiry; `learned_transition` actor `tenure` with
+its own legal edges, refused at the door for anything else — and
+candidate→observed is tenure's alone: the operator cannot write it).
+`invoke.PurposeDiagnose`; `learn` source `tail` and actor `tenure`; `now`/
+`agenda` run one tail pass in-process after the run; `serve` gets both
+lanes. `invoke.Keyed` (the ordered-rule test backend from step 8, promoted
+so the tail and process tests can build forks).
+
+**Edge tests.** A recorded run is diagnosed once with deterministic signals
+and the lens's class inside what the signals allow, proposals as candidate
+revisions citing the diagnosis, a second pass a no-op, a crash after the
+lens call reuses it; signals are a pure function of the fold (same run,
+same signals, whatever the pass); the fold refuses forged diagnoses (wrong
+signals, a class the signals don't allow without a lens, a lens that is
+not a diagnose call of the attempt, a tail_done citing a foreign diagnosis
+or a proposal that does not cite it); door vocabulary (foreign signal/
+class, lens without its rule, both-or-neither in tail_done); a cancelled
+fork member is skipped while the winner and parent are diagnosed and
+nothing is learned from the loser; tenure does not touch a selectable
+stage, expiry tombstones an idle candidate with a tenure transition, the
+sweep is idempotent, tenure cannot promote.
+
+**Live.** `now --model haiku` on a two-part question: closure unknown →
+signal `unjudged` → lens class `incomplete_answer`, 3 proposals. The first
+proposals were about the ENGINE ("route through a validation layer",
+"escalate to manual verification"); the lens prompt now says a lesson is
+one sentence of instruction to the model that answers a later goal like
+this one, placed verbatim in its request — the re-run proposed "cite
+authoritative sources for measurable quantities". `serve --model haiku`:
+timers and tail lanes up; two submits 6s apart both diagnosed; SIGTERM
+clean.
+
+**Two bugs the live serve found, neither reachable from `now`:**
+
+- *The executor's resume reconciled the tail's live lens call.* `Resume`
+  runs restart reconciliation on every pass; with the tail holding a
+  diagnose call open across a submit, the call was marked abandoned, its
+  terminal then broke the invocation history, and the tail lane failed on
+  every pass after. Reconciliation is now epoch-aware: the reader exposes
+  each record's committing lease epoch (`ScanEpochs`), the invoke fold
+  records the dispatch epoch, and only a dispatch from an EARLIER epoch is
+  a dead process's. The invoke restart harness now re-acquires the lease
+  (a new epoch) as a real restart does — it used to reopen under the same
+  lease, which is why no test saw this. Tests: a call dispatched under this
+  epoch is left alone by `Reconcile` and finishes; the same call seen from
+  the next epoch is reconciled; a process test holds the lens open across
+  a second submit and proves no reconciliation and the tail lane at gen 1.
+- *A fold composed of several scans read two prefixes.* The tail's fold
+  ran the run fold (to head H1) and then scanned tail records (to head
+  H2 > H1) and saw a diagnosis citing a receipt the run fold had not read.
+  `ProductionReader.Pin()` fixes a reader at the head; every production
+  fold pins first (pinning is idempotent, so composed folds share one
+  prefix). This was latent in every multi-scan fold since step 3½; only a
+  concurrent writer exposed it.
+
+**And a third, in the fork, that pinning exposed.** With folds pinned the
+fork kill matrix started failing (4 of ~30 seams per run): the recorded
+first_verdict decision cancelled a member the journal showed terminal
+BEFORE the decision, so the fold refused it. The decision was computed
+under the fork's in-process mutex (fold → decide → commit) but a sibling's
+child-terminal commit was not, so it could land between the fold and the
+decision commit; the slower pinned fold widened a window that was always
+there. The fork now has an `order` lock that both take: a child's terminal
+commit, and the decision's fold-decide-commit. The fold's decision error
+now prints both sides (recorded vs the rule's), which is how this was read
+in one look. Its resume-side twin: a member that finished (late) while
+the process died between the decision and its cancellations needs no
+cancellation — the repair now skips terminal members, since the fold
+refuses a cancellation of one. Three consecutive clean runs of the fork
+tests, the seam looped six times.
+
+Tests: tail 6, invoke +1, process +1; 14 packages green under `-race`;
+contracts 38 kinds, 0 errors / 0 warnings.

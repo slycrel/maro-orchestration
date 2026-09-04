@@ -200,6 +200,7 @@ type Ledger struct {
 // resolution that does not re-derive). A reader must not paper over these:
 // the mission and the shared ledger are folds of exactly this.
 func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
+	pr = pr.Pin() // one prefix for every scan this fold composes
 	goals := map[record.RecordID]*Goal{}
 	var goalOrder []*Goal
 	started := map[record.RecordID]bool{}
@@ -303,7 +304,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				return ""
 			})
 			if want == nil || !sameDecision(want, x) {
-				return fmt.Errorf("run: join decision %s does not re-derive from the join rule over the fork's state", x.ID)
+				return fmt.Errorf("run: join decision %s does not re-derive from the join rule over the fork's state (recorded selected=%v cancel=%v; rule says %s)", x.ID, x.Selected, x.Cancel, describeDecision(want))
 			}
 			fs.Decision = x
 			if a := attemptNoErr(runs, x.RunID, x.Attempt); a != nil {
@@ -1284,4 +1285,11 @@ func continuesTo(learned *learn.Ledger, from *learn.RecallSelection, to record.R
 
 func bytesHasSuffix(b, suf []byte) bool {
 	return len(b) >= len(suf) && string(b[len(b)-len(suf):]) == string(suf)
+}
+
+func describeDecision(d *JoinDecision) string {
+	if d == nil {
+		return "no decision yet"
+	}
+	return fmt.Sprintf("selected=%v cancel=%v", d.Selected, d.Cancel)
 }

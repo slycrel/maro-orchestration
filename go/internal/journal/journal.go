@@ -323,6 +323,7 @@ func (j *Journal) scanThrough(after, through uint64, fn func(Encoded) error) err
 				return nil
 			}
 			if rec.Seq > after {
+				rec.Epoch = e.Epoch
 				if err := fn(rec); err != nil {
 					return err
 				}

@@ -338,11 +338,16 @@ func subj(id record.RecordID) record.Ref { return record.Ref{Kind: KindInvocatio
 type State struct {
 	Invocation *Invocation
 	Dispatched bool
-	Effects    []*ToolEffect
-	Results    map[int]*ToolEffectResult
-	Terminal   *TerminalObserved
-	Receipt    *Receipt
-	Reconciled *Reconciled
+	// DispatchEpoch is the lease epoch that dispatched the call: a dispatch
+	// of the current epoch without a terminal is a call some lane of THIS
+	// process is still making; one from an earlier epoch is a dead
+	// process's, and reconciliation's business.
+	DispatchEpoch uint64
+	Effects       []*ToolEffect
+	Results       map[int]*ToolEffectResult
+	Terminal      *TerminalObserved
+	Receipt       *Receipt
+	Reconciled    *Reconciled
 }
 
 // Phase names the state machine position.
@@ -383,6 +388,7 @@ var ErrFoldCorrupt = errors.New("invoke: invocation history violates the state m
 // reconciliations after terminals, and dispositions that contradict the
 // evidence. A corrupt history is an error, never a plausible phase.
 func Fold(pr *journal.ProductionReader) (map[record.RecordID]*State, error) {
+	pr = pr.Pin() // one prefix for every scan this fold composes
 	states := map[record.RecordID]*State{}
 	get := func(id record.RecordID) *State {
 		s, ok := states[id]
@@ -393,7 +399,7 @@ func Fold(pr *journal.ProductionReader) (map[record.RecordID]*State, error) {
 		return s
 	}
 	bad := func(id record.RecordID, why string) error { return fmt.Errorf("%w: %s: %s", ErrFoldCorrupt, id, why) }
-	err := pr.Scan(0, func(r record.Record) error {
+	err := pr.ScanEpochs(0, func(epoch uint64, r record.Record) error {
 		switch v := r.(type) {
 		case *Invocation:
 			s := get(v.ID)
@@ -406,7 +412,7 @@ func Fold(pr *journal.ProductionReader) (map[record.RecordID]*State, error) {
 			if s.Invocation == nil || s.Dispatched {
 				return bad(v.Invocation, "dispatched without prepared, or twice")
 			}
-			s.Dispatched = true
+			s.Dispatched, s.DispatchEpoch = true, epoch
 		case *ToolEffect:
 			s := get(v.Invocation)
 			if s.Invocation == nil || !s.Dispatched || s.Terminal != nil {
@@ -507,6 +513,9 @@ func Reconcile(ctx context.Context, sh *Shell) ([]*Reconciled, []*Receipt, error
 				fins = append(fins, rc)
 			}
 			continue
+		}
+		if s.DispatchEpoch == sh.J.Epoch() {
+			continue // dispatched under this lease: a lane of this process is still making the call (the always-on process resumes runs while its tail holds a lens call open)
 		}
 		rc := &Reconciled{Header: sh.header(subj(id)), Invocation: id, Disposition: dispositionFor(s)}
 		rc.Evidence = fmt.Sprintf("backend %s acts_outward=%v reconcilable=%v; %d effects observed (%d unanswered) before the process died", s.Invocation.Backend.Name, s.Invocation.Backend.ActsOutward, s.Invocation.Backend.OutwardReconcilable, len(s.Effects), len(s.Unanswered()))

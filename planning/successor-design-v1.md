@@ -447,8 +447,9 @@ effective | canon | contested | quarantined | tombstone`. Legal transitions:
 (measured), `provisional→effective→canon` (measured), any selectable→
 `contested` (conflicting evidence), any→`quarantined` (item_harmful at
 threshold; exits only to `tombstone` or, after a new experiment on the same
-revision, back to `provisional`), `quarantined|contested|observed→tombstone`
-(redundancy at the stopping rule, expiry, or removal). Older readers treat
+revision, back to `provisional`), `quarantined|contested|observed|candidate→tombstone`
+(redundancy at the stopping rule, expiry, or removal; `candidate→tombstone`
+added at step 9 so an idle candidate expires instead of accruing forever). Older readers treat
 `quarantined` as unknown-value → not selectable (declared).
 
 **Two apply surfaces in v1**, because D17 needs the second: (1) **recall

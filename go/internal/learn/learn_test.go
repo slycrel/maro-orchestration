@@ -278,8 +278,9 @@ func TestLegalEdgesMatchTheDesign(t *testing.T) {
 	}
 	edge(Quarantined, Tombstone) // exits only to tombstone or, after a new experiment, provisional
 	edge(Quarantined, Provisional)
-	edge(Contested, Tombstone) // quarantined|contested|observed → tombstone
+	edge(Contested, Tombstone) // quarantined|contested|observed|candidate → tombstone
 	edge(Observed, Tombstone)
+	edge(Candidate, Tombstone)   // expiry of an idle candidate (step 9)
 	edge(Contested, Provisional) // contested is re-measured
 	edge(Contested, Effective)
 	for _, from := range all {

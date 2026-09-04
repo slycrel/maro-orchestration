@@ -282,6 +282,7 @@ func better(a, b *Verdict) bool {
 // applies to. Records failing decode (wire validation runs there) fail the
 // fold: a corrupt journal is an error, not a plausible set.
 func Fold(pr *journal.ProductionReader) (map[string]*Candidates, error) {
+	pr = pr.Pin() // one prefix for every scan this fold composes
 	groups := map[string]*Candidates{}
 	get := func(s record.Ref, k VerdictKind) *Candidates {
 		key := groupKey(s, k)

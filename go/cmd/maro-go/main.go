@@ -23,6 +23,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	spine "github.com/slycrel/maro-orchestration/go/internal/run"
+	"github.com/slycrel/maro-orchestration/go/internal/tail"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	_ "github.com/slycrel/maro-orchestration/go/internal/verdict" // registers the judging kinds
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
@@ -288,6 +289,16 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(errw, "mission: %s (execution %s, closure %s, delivery %s)\n", rep.Mission.Outcome, rep.Mission.Terminal, rep.Mission.Closure, rep.Mission.Delivery)
+		// the tail, in-process: one pass over what is recorded (the always-on
+		// process has a lane for it)
+		lens := jb
+		if lens == nil {
+			lens = b
+		}
+		tl := &tail.Tail{J: j, Store: st, Lens: lens, Timeout: 5 * time.Minute, Events: func(l string) { fmt.Fprintln(errw, l) }}
+		if _, err := tl.Pass(context.Background()); err != nil {
+			fmt.Fprintln(errw, "tail:", err)
+		}
 		return nil
 	})
 }

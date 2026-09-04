@@ -12,72 +12,11 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
-// keyed answers by ordered rules over the prompt (the first matching rule
-// wins; a prefix rule matches the prompt's start, a plain rule any
-// substring), so concurrent children get deterministic responses whatever
-// their order and however much of the plan a prompt quotes. A blocking rule
-// holds the call until released or cancelled; an effect rule reports a
-// tool effect first.
-type rule struct {
-	key    string
-	answer string
-	prefix bool
-	block  chan struct{}
-	effect *invoke.ScriptedEffect
-}
-
-type keyed struct {
-	caps  invoke.Capabilities
-	rules []rule
-	def   string
-	mu    sync.Mutex
-	seen  []invoke.Request
-	usage int64
-}
-
-func (r rule) matches(prompt string) bool {
-	if r.prefix {
-		return strings.HasPrefix(prompt, r.key)
-	}
-	return strings.Contains(prompt, r.key)
-}
-
-func (k *keyed) Capabilities() invoke.Capabilities { return k.caps }
-func (k *keyed) Complete(ctx context.Context, req invoke.Request, sink invoke.Sink) (*invoke.Result, error) {
-	k.mu.Lock()
-	k.seen = append(k.seen, req)
-	k.usage++
-	u := k.usage
-	k.mu.Unlock()
-	prompt := string(req.Prompt)
-	for _, r := range k.rules {
-		if !r.matches(prompt) {
-			continue
-		}
-		if r.block != nil {
-			select {
-			case <-r.block:
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		if r.effect != nil {
-			if _, _, err := sink.Observe(invoke.EffectEvent{Op: r.effect.Op, Input: r.effect.Input}); err != nil {
-				return nil, err
-			}
-		}
-		if r.answer != "" {
-			return &invoke.Result{Response: []byte(r.answer), Terminal: invoke.TerminalComplete, Usage: invoke.Usage{InputTokens: u}}, nil
-		}
-	}
-	return &invoke.Result{Response: []byte(k.def), Terminal: invoke.TerminalComplete, Usage: invoke.Usage{InputTokens: u}}, nil
-}
-
-func (k *keyed) calls() int {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return len(k.seen)
-}
+// keyed is the shared ordered-rule test backend (invoke.Keyed).
+type (
+	keyed = invoke.Keyed
+	rule  = invoke.Rule
+)
 
 const planFork = `{"steps": ["Warm up", {"parallel": ["sub-goal A: name a prime", "sub-goal B: name a square"], "join": "%s"}, "Wrap up"]}`
 
@@ -106,8 +45,8 @@ func TestTwoLevelScenarioSurvivesEveryKill(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			h := open(t)
-			exec := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, rules: execRules(), def: "?"}
-			judge := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: judgeRules(s.policy), def: judgeDone}
+			exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(), Def: "?"}
+			judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(s.policy), Def: judgeDone}
 			d := h.agenda(exec, judge)
 			d.CrashAt = s.at
 			rep, err := d.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted})
@@ -195,18 +134,18 @@ func planForPolicy(p JoinPolicy) string {
 // quotes the whole plan, so sub-goal texts alone would be ambiguous), the
 // children by their goal text at the prompt's start.
 func execRules(extra ...rule) []rule {
-	base := []rule{{key: "## Your step (1 of", answer: "warmed"}, {key: "## Your step (3 of", answer: "wrapped"}}
+	base := []rule{{Key: "## Your step (1 of", Answer: "warmed"}, {Key: "## Your step (3 of", Answer: "wrapped"}}
 	base = append(base, extra...)
-	return append(base, rule{key: "sub-goal A", answer: "7 is prime", prefix: true}, rule{key: "sub-goal B", answer: "9 is a square", prefix: true})
+	return append(base, rule{Key: "sub-goal A", Answer: "7 is prime", Prefix: true}, rule{Key: "sub-goal B", Answer: "9 is a square", Prefix: true})
 }
 
 func judgeRules(policy JoinPolicy) []rule {
 	return []rule{
-		{key: "intake of an orchestration engine", answer: intentClear},
-		{key: "planner", answer: planForPolicy(policy)},
-		{key: "## Step 1: sub-goal A", answer: `{"outcome": "achieved", "confidence": 0.9, "why": "prime named", "falsifiers": []}`},
-		{key: "## Step 1: sub-goal B", answer: `{"outcome": "not_achieved", "confidence": 0.9, "why": "no square", "falsifiers": []}`},
-		{key: "closure judge", answer: closureYes},
+		{Key: "intake of an orchestration engine", Answer: intentClear},
+		{Key: "planner", Answer: planForPolicy(policy)},
+		{Key: "## Step 1: sub-goal A", Answer: `{"outcome": "achieved", "confidence": 0.9, "why": "prime named", "falsifiers": []}`},
+		{Key: "## Step 1: sub-goal B", Answer: `{"outcome": "not_achieved", "confidence": 0.9, "why": "no square", "falsifiers": []}`},
+		{Key: "closure judge", Answer: closureYes},
 	}
 }
 
@@ -216,8 +155,8 @@ func judgeRules(policy JoinPolicy) []rule {
 // fold refuses a child attempt that is not confined.
 func TestForkChildrenAreConfined(t *testing.T) {
 	h := open(t)
-	exec := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec", ActsOutward: true}, rules: execRules(rule{key: "sub-goal B", prefix: true, answer: "wrote a file", effect: &invoke.ScriptedEffect{Op: "Write", Input: []byte(`{"path":"x"}`)}}), def: "?"}
-	judge := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: judgeRules(JoinAll), def: judgeDone}
+	exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec", ActsOutward: true}, Rules: execRules(rule{Key: "sub-goal B", Prefix: true, Answer: "wrote a file", Effect: &invoke.ScriptedEffect{Op: "Write", Input: []byte(`{"path":"x"}`)}}), Def: "?"}
+	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(JoinAll), Def: judgeDone}
 	d := h.agenda(exec, judge)
 	rep, err := d.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted})
 	if err != nil || rep.Mission.Outcome != MissionDelivered {
@@ -257,7 +196,7 @@ func TestForkChildrenAreConfined(t *testing.T) {
 		t.Fatalf("terminals: failed=%d completed=%d decision=%+v", failed, completed, fs.Decision)
 	}
 	// the parent's step 1 (not a fork) ran with tools on the outward backend
-	if !exec.seen[0].Tools {
+	if !exec.Seen[0].Tools {
 		t.Fatal("the parent's own step lost its tools")
 	}
 }
@@ -268,8 +207,8 @@ func TestForkChildrenAreConfined(t *testing.T) {
 // attempt, a settled join before the barrier.
 func TestJournalExecutesForkVocabulary(t *testing.T) {
 	h := open(t)
-	exec := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, rules: execRules(), def: "?"}
-	judge := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: judgeRules(JoinAll), def: judgeDone}
+	exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(), Def: "?"}
+	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(JoinAll), Def: judgeDone}
 	d := h.agenda(exec, judge)
 	d.CrashAt = "after_fork"
 	if _, err := d.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
@@ -324,8 +263,8 @@ func TestJournalExecutesForkVocabulary(t *testing.T) {
 	}
 	for _, c := range fold {
 		h2 := open(t)
-		exec2 := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, rules: execRules(), def: "?"}
-		judge2 := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: judgeRules(JoinAll), def: judgeDone}
+		exec2 := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(), Def: "?"}
+		judge2 := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(JoinAll), Def: judgeDone}
 		d2 := h2.agenda(exec2, judge2)
 		d2.CrashAt = "after_fork"
 		if _, err := d2.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
@@ -370,8 +309,8 @@ func TestFirstVerdictCancelsARunningLoser(t *testing.T) {
 func firstVerdictRunningLoser(t *testing.T, seam string) {
 	h := open(t)
 	hold := make(chan struct{})
-	exec := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, rules: execRules(rule{key: "sub-goal B", prefix: true, block: hold, answer: "9 is a square"}), def: "?"}
-	judge := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: judgeRules(JoinFirstVerdict), def: judgeDone}
+	exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(rule{Key: "sub-goal B", Prefix: true, Block: hold, Answer: "9 is a square"}), Def: "?"}
+	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(JoinFirstVerdict), Def: judgeDone}
 	d := h.agenda(exec, judge)
 	d.CrashAt = seam
 	rep, err := d.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted})
@@ -406,7 +345,7 @@ func firstVerdictRunningLoser(t *testing.T, seam string) {
 		t.Fatalf("loser: terminal %+v attempts %d", fs.Terminals[loser.Run], len(loser.Attempts))
 	}
 	bCalls := 0
-	for _, r := range exec.seen {
+	for _, r := range exec.Seen {
 		if strings.HasPrefix(string(r.Prompt), "sub-goal B") { // the child's own prompt; the parent's step prompts quote the plan
 			bCalls++
 		}
@@ -434,8 +373,8 @@ func firstVerdictRunningLoser(t *testing.T, seam string) {
 func TestCrashBetweenDecisionAndCancellationDoesNotReexecuteTheLoser(t *testing.T) {
 	h := open(t)
 	hold := make(chan struct{})
-	exec := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, rules: execRules(rule{key: "sub-goal B", prefix: true, block: hold, answer: "9 is a square"}), def: "?"}
-	judge := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: judgeRules(JoinFirstVerdict), def: judgeDone}
+	exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(rule{Key: "sub-goal B", Prefix: true, Block: hold, Answer: "9 is a square"}), Def: "?"}
+	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(JoinFirstVerdict), Def: judgeDone}
 	d := h.agenda(exec, judge)
 	d.CrashAt = "after_join_decision"
 	_, err := d.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted})
@@ -450,7 +389,7 @@ func TestCrashBetweenDecisionAndCancellationDoesNotReexecuteTheLoser(t *testing.
 		t.Fatalf("resume: %v %+v", err, reps)
 	}
 	bCalls := 0
-	for _, r := range exec.seen {
+	for _, r := range exec.Seen {
 		if strings.HasPrefix(string(r.Prompt), "sub-goal B") {
 			bCalls++
 		}
@@ -473,8 +412,8 @@ func TestAsymmetricChildCrashAndThreeMembers(t *testing.T) {
 	for _, at := range []string{"child:1:after_execute", "child:2:after_recorded", "child:2:after_child_terminal"} {
 		t.Run(at, func(t *testing.T) {
 			h := open(t)
-			exec := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, rules: execRules(), def: "?"}
-			judge := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: judgeRules(JoinAll), def: judgeDone}
+			exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(), Def: "?"}
+			judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(JoinAll), Def: judgeDone}
 			d := h.agenda(exec, judge)
 			d.CrashAt = at
 			if _, err := d.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) && !errors.Is(err, invoke.ErrCrashed) {
@@ -492,7 +431,7 @@ func TestAsymmetricChildCrashAndThreeMembers(t *testing.T) {
 				fs = f
 			}
 			execs := map[string]int{}
-			for _, r := range exec.seen {
+			for _, r := range exec.Seen {
 				for _, k := range []string{"sub-goal A", "sub-goal B"} {
 					if strings.HasPrefix(string(r.Prompt), k) {
 						execs[k]++
@@ -507,15 +446,15 @@ func TestAsymmetricChildCrashAndThreeMembers(t *testing.T) {
 	// three members, two achieve: member order decides, the rest are cancelled or late
 	h := open(t)
 	plan := `{"steps": ["Warm up", {"parallel": ["sub-goal A: name a prime", "sub-goal B: name a square", "sub-goal C: name a cube"], "join": "first_verdict"}, "Wrap up"]}`
-	exec := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, rules: execRules(rule{key: "sub-goal C", prefix: true, answer: "8 is a cube"}), def: "?"}
-	judge := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: []rule{
-		{key: "intake of an orchestration engine", answer: intentClear},
-		{key: "planner", answer: plan},
-		{key: "## Step 1: sub-goal A", answer: `{"outcome": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}`},
-		{key: "## Step 1: sub-goal B", answer: `{"outcome": "not_achieved", "confidence": 0.9, "why": "no", "falsifiers": []}`},
-		{key: "## Step 1: sub-goal C", answer: `{"outcome": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}`},
-		{key: "closure judge", answer: closureYes},
-	}, def: judgeDone}
+	exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(rule{Key: "sub-goal C", Prefix: true, Answer: "8 is a cube"}), Def: "?"}
+	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []rule{
+		{Key: "intake of an orchestration engine", Answer: intentClear},
+		{Key: "planner", Answer: plan},
+		{Key: "## Step 1: sub-goal A", Answer: `{"outcome": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}`},
+		{Key: "## Step 1: sub-goal B", Answer: `{"outcome": "not_achieved", "confidence": 0.9, "why": "no", "falsifiers": []}`},
+		{Key: "## Step 1: sub-goal C", Answer: `{"outcome": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}`},
+		{Key: "closure judge", Answer: closureYes},
+	}, Def: judgeDone}
 	d := h.agenda(exec, judge)
 	rep, err := d.Run(ctxBg, []byte("three"), DeliveryPolicy{Required: TransportAccepted})
 	if err != nil || rep.Mission.Outcome != MissionDelivered {
@@ -538,8 +477,8 @@ func TestAsymmetricChildCrashAndThreeMembers(t *testing.T) {
 func TestForkIdentityDecisionsAndPanics(t *testing.T) {
 	h := open(t)
 	plan := `{"steps": ["Warm up", {"parallel": ["sub-goal A: name a prime", "sub-goal A: name a prime"], "join": "all"}, "Wrap up"]}`
-	exec := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, rules: execRules(), def: "?"}
-	judge := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: []rule{{key: "intake of an orchestration engine", answer: intentClear}, {key: "planner", answer: plan}, {key: "closure judge", answer: closureYes}}, def: judgeDone}
+	exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(), Def: "?"}
+	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []rule{{Key: "intake of an orchestration engine", Answer: intentClear}, {Key: "planner", Answer: plan}, {Key: "closure judge", Answer: closureYes}}, Def: judgeDone}
 	d := h.agenda(exec, judge)
 	rep, err := d.Run(ctxBg, []byte("twins"), DeliveryPolicy{Required: TransportAccepted})
 	if err != nil || rep.Mission.Outcome != MissionDelivered {
@@ -556,8 +495,8 @@ func TestForkIdentityDecisionsAndPanics(t *testing.T) {
 	// forged decisions: on a fork crashed after the fork record (no decision yet)
 	forgeFork := func() (*harness, *ForkState) {
 		h2 := open(t)
-		e2 := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, rules: execRules(), def: "?"}
-		j2 := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: judgeRules(JoinAll), def: judgeDone}
+		e2 := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(), Def: "?"}
+		j2 := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(JoinAll), Def: judgeDone}
 		d2 := h2.agenda(e2, j2)
 		d2.CrashAt = "child:after_child_terminal" // a child's terminal lands, then the pass dies: no decision
 		if _, err := d2.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
@@ -619,9 +558,9 @@ func TestForkIdentityDecisionsAndPanics(t *testing.T) {
 	}
 	// a panicking child is a contained error and the parent's pass ends; resume completes
 	h4 := open(t)
-	e4 := &keyed{caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, rules: execRules(rule{key: "sub-goal B", prefix: true, answer: "boom", effect: nil}), def: "?"}
+	e4 := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(rule{Key: "sub-goal B", Prefix: true, Answer: "boom", Effect: nil}), Def: "?"}
 	panicky := &panicOnce{inner: e4, key: "sub-goal B"}
-	j4 := &keyed{caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, rules: judgeRules(JoinAll), def: judgeDone}
+	j4 := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(JoinAll), Def: judgeDone}
 	d4 := h4.agenda(panicky, j4)
 	rep4, err := d4.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted})
 	// the shell contains a backend panic as the child's recorded failed

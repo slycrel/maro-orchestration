@@ -17,6 +17,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/run"
 	"github.com/slycrel/maro-orchestration/go/internal/supervise"
+	"github.com/slycrel/maro-orchestration/go/internal/tail"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
 )
@@ -117,7 +118,7 @@ func TestSubmitDeliversOverTheSocket(t *testing.T) {
 	cl, _ = Dial(s.Socket())
 	st, err := cl.One(Request{Op: "status"})
 	cl.Close()
-	if err != nil || st.Type != "status" || len(st.Lanes) != 4 || len(st.Runs) != 2 || len(st.Health) != 0 {
+	if err != nil || st.Type != "status" || len(st.Lanes) != 6 || len(st.Runs) != 2 || len(st.Health) != 0 {
 		t.Fatalf("status: %v %+v", err, st)
 	}
 	for _, m := range st.Runs {
@@ -509,4 +510,73 @@ func TestLateInterruptExpiresAndTheEarliestPendingIsConsumed(t *testing.T) {
 	}
 	j.Close()
 	l.Release()
+}
+
+// The tail's lens call is a call of THIS process: the executor's resume
+// pass (every new goal) must not reconcile it as a dead process's. Found
+// live at step 9: a lens call held open across a submit was reconciled,
+// its terminal then broke the invocation history, and the tail lane
+// failed on every pass after.
+func TestTailSurvivesTheExecutorsResume(t *testing.T) {
+	a := root(t)
+	exec := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted", Model: "m"}, Calls: []invoke.ScriptedCall{{Response: []byte("Paris.")}, {Response: []byte("Rome.")}}}
+	hold := make(chan struct{})
+	lens := &invoke.Keyed{Caps: invoke.Capabilities{Name: "keyed-lens", Model: "lens"}, Rules: []invoke.Rule{{Key: "diagnosis lens", Block: hold, Answer: `{"class": "incomplete_answer", "why": "terse", "proposals": ["Answer in a full sentence."]}`}}, Def: "?"}
+	s, err := Serve(ctxBg, Options{Root: a, Backend: exec, Judge: lens, Timeout: time.Minute, Poll: 50 * time.Millisecond, TailEvery: 50 * time.Millisecond, StallAfter: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Stop(ctxBg) })
+	evs := events(t, s, Request{Text: "Capital of France?"})
+	if len(evs) != 3 || evs[2].Mission != string(run.MissionDelivered) {
+		t.Fatalf("first: %+v", evs)
+	}
+	// the tail dispatches its lens call and holds
+	deadline := time.Now().Add(10 * time.Second)
+	for lens.Calls() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the tail never called its lens")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// a second goal: the executor resumes while the lens call is open
+	evs2 := events(t, s, Request{Text: "Capital of Italy?"})
+	if len(evs2) != 3 || evs2[2].Mission != string(run.MissionDelivered) {
+		t.Fatalf("second: %+v", evs2)
+	}
+	close(hold)
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		tl, err := tail.Fold(s.j.Production(), s.store)
+		if err != nil {
+			t.Fatalf("tail fold: %v", err)
+		}
+		if len(tl.Done) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tail done %d of 2", len(tl.Done))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	states, err := invoke.Fold(s.j.Production())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, st := range states {
+		if st.Reconciled != nil {
+			t.Fatalf("a live call was reconciled: %s %+v", id, st.Reconciled)
+		}
+	}
+	cl, _ := Dial(s.Socket())
+	st, err := cl.One(Request{Op: "status"})
+	cl.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range st.Lanes {
+		if l.Lane == "tail" && (l.Generation != 1 || !l.Up) {
+			t.Fatalf("tail lane: %+v", l)
+		}
+	}
 }

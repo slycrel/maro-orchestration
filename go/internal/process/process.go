@@ -25,6 +25,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/run"
 	"github.com/slycrel/maro-orchestration/go/internal/sheriff"
 	"github.com/slycrel/maro-orchestration/go/internal/supervise"
+	"github.com/slycrel/maro-orchestration/go/internal/tail"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
 )
@@ -45,6 +46,8 @@ type Options struct {
 	// intake lane wakes the executor directly; the poll only catches a
 	// restart's leftovers and the projector's publish cadence.
 	Poll time.Duration
+	// TailEvery is the tail lane's pass interval; zero = the tail's default.
+	TailEvery time.Duration
 }
 
 // Server is a running process.
@@ -147,7 +150,9 @@ func Serve(ctx context.Context, opts Options) (*Server, error) {
 	}
 	lanes := []supervise.Lane{
 		&intake{s: s},
+		&tail.Timers{J: j, Events: func(l string) { fmt.Fprintln(opts.Log, l) }},
 		&sheriff.Sheriff{J: j, Store: store, StallAfter: opts.StallAfter},
+		&tail.Tail{J: j, Store: store, Lens: opts.Judge, Timeout: opts.Timeout, Every: opts.TailEvery, Events: func(l string) { fmt.Fprintln(opts.Log, l) }},
 		&executor{s: s},
 		&publisher{s: s},
 	}

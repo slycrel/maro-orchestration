@@ -22,14 +22,15 @@ import (
 type Purpose string
 
 const (
-	PurposeExecute Purpose = "execute"
-	PurposeJudge   Purpose = "judge"
-	PurposePlan    Purpose = "plan"
-	PurposeIntent  Purpose = "intent"
-	PurposeRender  Purpose = "render"
+	PurposeExecute  Purpose = "execute"
+	PurposeJudge    Purpose = "judge"
+	PurposePlan     Purpose = "plan"
+	PurposeIntent   Purpose = "intent"
+	PurposeRender   Purpose = "render"
+	PurposeDiagnose Purpose = "diagnose" // the tail's model lens over a recorded run
 )
 
-var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, PurposePlan: true, PurposeIntent: true, PurposeRender: true}
+var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, PurposePlan: true, PurposeIntent: true, PurposeRender: true, PurposeDiagnose: true}
 
 // Capabilities is what a backend declares about itself, snapshotted into the
 // Invocation at decision time so the decision and its receipt agree.

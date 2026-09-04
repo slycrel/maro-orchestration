@@ -110,6 +110,7 @@ func RecallKey(run record.RunID, attempt uint32) string { return fmt.Sprintf("%s
 // transition whose evidence is not an earlier record, an application for
 // an unknown revision, two recalls for one attempt.
 func Fold(pr *journal.ProductionReader) (*Ledger, error) {
+	pr = pr.Pin() // one prefix for every scan this fold composes
 	led := &Ledger{Items: map[LearnedID]*Item{}, Applications: map[record.RecordID][]*Application{}, Recalls: map[string]*RecallSelection{}, byID: map[record.RecordID]*RecallSelection{}}
 	seen := map[record.RecordID]bool{}
 	goals := map[record.RecordID]bool{}

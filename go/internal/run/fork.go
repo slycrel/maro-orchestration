@@ -229,6 +229,14 @@ type ForkState struct {
 	Terminals map[record.RunID]*ChildTerminal
 	Settled   *JoinSettled
 	mu        sync.Mutex
+	// order serializes this process's fork commits that the fold reads as
+	// a causal order: a child's terminal and the (fold → decide → commit)
+	// of a decision. Without it a sibling's terminal can land between the
+	// decision's fold and its commit, and the decision then cancels a
+	// member the journal shows terminal before it — a history the fold
+	// refuses. Found by the kill matrix once folds pinned their prefix
+	// (step 9): the fold got slower, the window wider.
+	order sync.Mutex
 }
 
 // Complete reports whether every member has a terminal.
@@ -424,6 +432,8 @@ func (d *Driver) driveChildren(ctx context.Context, rs *RunState, fs *ForkState)
 		if fs.Decision != nil {
 			return nil
 		}
+		fs.order.Lock()
+		defer fs.order.Unlock()
 		led2, err := Fold(d.J.Production(), d.Store)
 		if err != nil {
 			return err
@@ -541,7 +551,11 @@ func (d *Driver) commitDecision(ctx context.Context, rs *RunState, fs *ForkState
 	}
 	for _, c := range dec.Cancel {
 		fs.mu.Lock()
-		done := fs.Cancelled[c.Run] != nil
+		// a cancellation is for a member still running; one that reached
+		// its terminal first (completed late, while the process died
+		// between the decision and its cancellations) needs none, and the
+		// fold refuses one
+		done := fs.Cancelled[c.Run] != nil || fs.Terminals[c.Run] != nil
 		fs.mu.Unlock()
 		if done {
 			continue
@@ -614,6 +628,8 @@ func (d *Driver) driveChild(ctx context.Context, crs *RunState, fs *ForkState, m
 // childTerminal is the child's last word: written from the child attempt
 // that reached the terminal, once.
 func (d *Driver) childTerminal(ctx context.Context, crs *RunState, rep *Report, fs *ForkState) error {
+	fs.order.Lock()
+	defer fs.order.Unlock()
 	if fs.terminal(crs.Run) != nil {
 		return nil
 	}

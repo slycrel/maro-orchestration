@@ -74,7 +74,7 @@ var Selectable = map[Stage]bool{Provisional: true, Effective: true, Canon: true,
 // in v1; measurement and tenure actors arrive with their producers
 // (steps 9–11), additively.
 var legal = map[Stage]map[Stage]bool{
-	Candidate:   {Observed: true, Provisional: true, Effective: true, Quarantined: true},
+	Candidate:   {Observed: true, Provisional: true, Effective: true, Quarantined: true, Tombstone: true},
 	Observed:    {Provisional: true, Effective: true, Quarantined: true, Tombstone: true},
 	Provisional: {Effective: true, Contested: true, Quarantined: true},
 	Effective:   {Canon: true, Contested: true, Quarantined: true},
@@ -86,13 +86,17 @@ var legal = map[Stage]map[Stage]bool{
 // Legal reports whether from→to is in the table.
 func Legal(from, to Stage) bool { return legal[from][to] }
 
-// Actor is who made a transition. v1 producer: the operator (CLI restamp);
-// `tenure` and `measurement` are added with the tail and the experiments.
+// Actor is who made a transition: the operator (CLI restamp), tenure (the
+// timers lane: candidate → observed after enough applications, or expiry
+// → tombstone); `measurement` arrives with the experiments.
 type Actor string
 
-const ActorOperator Actor = "operator"
+const (
+	ActorOperator Actor = "operator"
+	ActorTenure   Actor = "tenure"
+)
 
-var actors = map[Actor]bool{ActorOperator: true}
+var actors = map[Actor]bool{ActorOperator: true, ActorTenure: true}
 
 // ScopePath is where an item applies: the workspace, or one goal's subtree.
 // Recall walks a run's goal ancestry (own → parents → root → workspace).
@@ -113,14 +117,15 @@ func validScope(s ScopePath) error {
 	return fmt.Errorf("scope %q is neither workspace nor goal:<id>", s)
 }
 
-// Provenance says where a revision came from. v1 source: the operator.
+// Provenance says where a revision came from: the operator, or the tail's
+// proposal over a recorded run (Ref = that run's diagnosis).
 type Provenance struct {
 	Source string          `json:"source"`        // operator
 	Ref    record.RecordID `json:"ref,omitempty"` // the run or receipt it was learned from, when any
 	Why    string          `json:"why"`
 }
 
-var sources = map[string]bool{"operator": true}
+var sources = map[string]bool{"operator": true, "tail": true}
 
 // LearnedRevision is one immutable revision of an item. The first revision
 // has no predecessor; every later one names the item's then-current
@@ -225,6 +230,12 @@ func (r *LifecycleTransition) ValidateWire() error {
 	} else if r.Evidence == "" {
 		return errors.New("learned_transition: a non-operator transition names its evidence")
 	}
+	if r.Actor == ActorTenure && !tenureLegal[r.From][r.To] {
+		return fmt.Errorf("learned_transition: tenure may not move %s → %s (candidate→observed, or expiry → tombstone)", r.From, r.To)
+	}
+	if r.From == Candidate && r.To == Observed && r.Actor != ActorTenure {
+		return errors.New("learned_transition: candidate → observed is tenure's alone")
+	}
 	if r.Evidence != "" {
 		if err := record.ValidateID(r.Evidence); err != nil {
 			return fmt.Errorf("learned_transition: evidence: %w", err)
@@ -278,6 +289,10 @@ type Excluded struct {
 	ItemRev
 	Reason string `json:"reason"`
 }
+
+// tenureLegal are the edges tenure may take: candidate→observed, and
+// observed|candidate→tombstone (expiry).
+var tenureLegal = map[Stage]map[Stage]bool{Candidate: {Observed: true, Tombstone: true}, Observed: {Tombstone: true}}
 
 // RecallSelection is the recorded result of one recall query: what was
 // considered, what was included in deterministic order, why the rest was

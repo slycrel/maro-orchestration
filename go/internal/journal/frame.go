@@ -33,6 +33,7 @@ type Encoded struct {
 	Envelope string          `json:"envelope"`
 	Seq      uint64          `json:"seq"`
 	Body     json.RawMessage `json:"body"`
+	Epoch    uint64          `json:"-"` // the lease epoch of the frame that committed it (set on scan, not on the wire: the frame carries it once)
 }
 
 // Frame: magic(4) | len(4 BE) | crc32(4 BE, IEEE over payload) | payload.

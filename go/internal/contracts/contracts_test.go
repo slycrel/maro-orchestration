@@ -14,6 +14,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/run"
 	"github.com/slycrel/maro-orchestration/go/internal/supervise"
+	"github.com/slycrel/maro-orchestration/go/internal/tail"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	"github.com/slycrel/maro-orchestration/go/internal/verdict"
 )
@@ -119,6 +120,8 @@ func samples() map[record.Kind]any {
 		run.KindCancellationIssued:  &run.CancellationIssued{Header: withSubject(withSchema(h, "cancellation_issued/1"), record.Ref{Kind: "fork", ID: string(inv)}), Fork: inv, Child: record.AttemptRef{Run: "c2", Attempt: 1}, Reason: "not selected"},
 		run.KindChildTerminal:       &run.ChildTerminal{Header: withSubject(withSchema(h, "child_terminal/1"), record.Ref{Kind: "fork", ID: string(inv)}), Fork: inv, Child: record.AttemptRef{Run: "run-1", Attempt: 2}, State: run.ChildCompletedLate},
 		run.KindJoinSettled:         &run.JoinSettled{Header: withSubject(withSchema(h, "join_settled/1"), record.Ref{Kind: "fork", ID: string(inv)}), Fork: inv},
+		tail.KindDiagnosis:          &tail.Diagnosis{Header: withSubject(withSchema(h, "diagnosis/1"), record.Ref{Kind: "run", ID: "run-1"}), Signals: []tail.Signal{tail.SignalUnjudged}, Class: tail.ClassIncompleteAnswer, Why: "missed the second question", Lens: inv, LensRule: "lens"},
+		tail.KindTailDone:           &tail.TailDone{Header: withSubject(withSchema(h, "tail_done/1"), record.Ref{Kind: "run", ID: "run-1"}), Diagnosis: inv, Proposals: []record.RecordID{inv}, Skipped: ""},
 		run.KindDeliveryAcked:       &run.DeliveryAcked{Header: withSubject(withSchema(h, "delivery_acked/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, Token: strings.Repeat("a1", 16), PayloadHash: deliverable.Hash},
 	}
 }

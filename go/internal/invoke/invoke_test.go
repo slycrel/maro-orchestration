@@ -45,17 +45,94 @@ func newShell(t *testing.T) (*Shell, *workspace.Lease) {
 	return &Shell{J: j, Store: st, Run: "run-1", Attempt: 1}, l
 }
 
-// reopen simulates a process restart: the journal is reopened under the
-// same lease and a new attempt begins.
+// reopen simulates a process restart: the lease is released and taken
+// again (a new epoch, as a new process would have), the journal reopened
+// under it, and a new attempt begins.
 func reopen(t *testing.T, sh *Shell, l *workspace.Lease) *Shell {
 	t.Helper()
 	sh.J.Close()
-	j, err := journal.Open(l)
+	l.Release()
+	r, _ := workspace.Resolve()
+	a, err := r.Announce(io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l2, err := workspace.Acquire(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l2.Release() })
+	j, err := journal.Open(l2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { j.Close() })
 	return &Shell{J: j, Store: sh.Store, Run: sh.Run, Attempt: sh.Attempt + 1}
+}
+
+// Reconciliation is for a dead process's calls: a call dispatched under
+// the current lease is still being made by some lane of this process and
+// is left alone, however long it takes; the same call, seen from the next
+// lease, is reconciled.
+func TestReconcileLeavesThisEpochsCallsAlone(t *testing.T) {
+	sh, l := newShell(t)
+	hold := make(chan struct{})
+	b := &Keyed{Caps: toolless, Rules: []Rule{{Key: "slow", Block: hold, Answer: "done"}}}
+	errc := make(chan error, 1)
+	go func() {
+		_, err := sh.Invoke(ctxBg, b, execReq("slow question"), nil)
+		errc <- err
+	}()
+	// wait for the dispatch to land
+	var id record.RecordID
+	for i := 0; i < 200 && id == ""; i++ {
+		states, err := Fold(sh.J.Production())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, s := range states {
+			if s.Dispatched {
+				id = k
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if id == "" {
+		t.Fatal("dispatch never landed")
+	}
+	if rc, fin, err := Reconcile(ctxBg, sh); err != nil || len(rc) != 0 || len(fin) != 0 {
+		t.Fatalf("reconciled a live call of this epoch: %v %d %d", err, len(rc), len(fin))
+	}
+	close(hold)
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	if s := foldOne(t, sh, id); s.Phase() != "receipt_committed" {
+		t.Fatalf("after release: %s", s.Phase())
+	}
+	// a second call left in flight when the process dies IS reconciled by the next epoch
+	hold2 := make(chan struct{})
+	b2 := &Keyed{Caps: toolless, Rules: []Rule{{Key: "slow", Block: hold2, Answer: "done"}}}
+	go func() { sh.Invoke(ctxBg, b2, execReq("slow again"), nil) }()
+	for i := 0; i < 200; i++ {
+		states, _ := Fold(sh.J.Production())
+		n := 0
+		for _, s := range states {
+			if s.Dispatched {
+				n++
+			}
+		}
+		if n == 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	sh2 := reopen(t, sh, l)
+	close(hold2)
+	rc, _, err := Reconcile(ctxBg, sh2)
+	if err != nil || len(rc) != 1 || rc[0].Disposition != DispositionAbandoned {
+		t.Fatalf("next epoch: %v %+v", err, rc)
+	}
 }
 
 var (
