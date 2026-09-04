@@ -4266,3 +4266,13 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   isolation revisited later. Work-side contract-testing practice distilled
   (own words, no copies) into `planning/contract-testing-input.md` on
   `successor`. Recorded D14–D17 in `planning/successor-plan.md`.
+
+- **2026-09-04 (Vision APPROVED for the successor — Jeremy):** on the drift
+  review + D7–D17: *"let's call that a vision approved, though note it's got
+  flaws and that's fine."* Also: *"Crazy how much information is actually in
+  this project, I had no idea the scope when we started. I'm not sorry, and
+  a little nervous where this is all going."* The approval covers
+  `docs/history/2026-09-04-holistic-drift-review.md` §8 (the nine
+  vision-level commitments) as amended by D14–D17. Flaws are acknowledged
+  and accepted, not to be litigated before building. Phase 2 = the v1
+  design note for the FULL system (D14), then build.
