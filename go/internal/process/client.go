@@ -20,6 +20,10 @@ type Client struct {
 // ErrNoServer: nothing is listening on the workspace's socket.
 var ErrNoServer = errors.New("process: no maro-go serve on this workspace")
 
+// ErrStopped: the process stopped after accepting the goal; the goal stays
+// journaled and continues on the next serve.
+var ErrStopped = errors.New("process: the process stopped before the run finished; the goal stays journaled and continues on the next `maro-go serve` — find it with `maro-go runs`")
+
 // Dial connects to the workspace's socket.
 func Dial(sock string) (*Client, error) {
 	c, err := net.DialTimeout("unix", sock, 2*time.Second)
@@ -59,13 +63,22 @@ func (cl *Client) Submit(ctx context.Context, req Request, on func(Event)) error
 	if d, ok := ctx.Deadline(); ok {
 		cl.c.SetReadDeadline(d)
 	}
+	accepted := ""
 	for {
 		ev, err := cl.next()
 		if err != nil {
+			if accepted != "" {
+				return fmt.Errorf("%w (goal %s): %v", ErrStopped, accepted, err)
+			}
 			return err
 		}
 		on(ev)
-		if ev.Type == "done" {
+		switch ev.Type {
+		case "accepted":
+			accepted = ev.Goal
+		case "stopping":
+			return fmt.Errorf("%w (goal %s)", ErrStopped, ev.Goal)
+		case "done":
 			return nil
 		}
 	}

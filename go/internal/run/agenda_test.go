@@ -557,3 +557,76 @@ func TestForgedStuckDoesNotSilenceTheSheriff(t *testing.T) {
 		t.Fatalf("forged stuck resolution folded: %v", err)
 	}
 }
+
+// Interrupt acknowledgements are checked against what the attempt was at:
+// `expired` while the target is still executing is refused; `consumed` at
+// a boundary the attempt could not have been at is refused; the driver
+// consumes the EARLIEST pending interrupt, skipping acknowledged ones.
+func TestForgedInterruptAcksAndEarliestPending(t *testing.T) {
+	h := open(t)
+	exec, judge := agendaBackends([]string{"r1", "r2"}, []string{intentClear, planTwo, judgeDone, judgeDone, closureYes})
+	d := h.agenda(exec, judge)
+	d.CrashAt = "after_step" // step 1 done; the attempt is at executing before step 2
+	if _, err := d.Run(ctxBg, []byte("two steps"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+		t.Fatal(err)
+	}
+	rs := h.only()
+	it := func(why string) *Interrupt {
+		return &Interrupt{Header: record.Header{ID: record.NewID(), Schema: "interrupt/1", Subject: runRef(rs.Run), At: now()}, Target: rs.Run, Action: "cancel", Why: why}
+	}
+	first := it("first")
+	if err := forge(t, h, "i1", first); err != nil {
+		t.Fatal(err)
+	}
+	// a forged expiry while the target executes is refused (on its own
+	// journal: a refused record poisons the fold it lives in)
+	{
+		hx := open(t)
+		ex, jx := agendaBackends([]string{"r1", "r2"}, []string{intentClear, planTwo, judgeDone, judgeDone, closureYes})
+		dx := hx.agenda(ex, jx)
+		dx.CrashAt = "after_step"
+		if _, err := dx.Run(ctxBg, []byte("two steps"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+			t.Fatal(err)
+		}
+		rx := hx.only()
+		ix := &Interrupt{Header: record.Header{ID: record.NewID(), Schema: "interrupt/1", Subject: runRef(rx.Run), At: now()}, Target: rx.Run, Action: "cancel", Why: "x"}
+		expired := &InterruptAck{Header: record.Header{ID: record.NewID(), Schema: "interrupt_ack/1", Subject: record.Ref{Kind: "interrupt", ID: string(ix.ID)}, At: now()}, Interrupt: ix.ID, Result: "expired"}
+		if err := forge(t, hx, "forged-expired", ix, expired); err == nil || !strings.Contains(err.Error(), "while its target is at") {
+			t.Fatalf("forged expiry folded: %v", err)
+		}
+	}
+	// a consumed ack at an impossible boundary (step 9, or step 1 which is done)
+	for _, b := range []string{"before_step_9", "before_step_1", "before_execute", "after_delivery"} {
+		h2 := open(t)
+		e2, j2 := agendaBackends([]string{"r1", "r2"}, []string{intentClear, planTwo, judgeDone, judgeDone, closureYes})
+		d2 := h2.agenda(e2, j2)
+		d2.CrashAt = "after_step"
+		if _, err := d2.Run(ctxBg, []byte("two steps"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+			t.Fatal(err)
+		}
+		rs2 := h2.only()
+		i2 := &Interrupt{Header: record.Header{ID: record.NewID(), Schema: "interrupt/1", Subject: runRef(rs2.Run), At: now()}, Target: rs2.Run, Action: "cancel", Why: "x"}
+		bad := &InterruptAck{Header: record.Header{ID: record.NewID(), Schema: "interrupt_ack/1", RunID: rs2.Run, Attempt: 1, Subject: record.Ref{Kind: "interrupt", ID: string(i2.ID)}, At: now()}, Interrupt: i2.ID, Result: "consumed", Boundary: b}
+		if err := forge(t, h2, "forged-consumed-"+b, i2, bad); err == nil || !strings.Contains(err.Error(), "was not at") {
+			t.Fatalf("consumed at %s folded: %v", b, err)
+		}
+	}
+	// earliest pending: the first interrupt acknowledged (legitimately, by a
+	// resumed run at its boundary), a second one still pending → the resume
+	// consumes the first at before_step_2; then a third run of Resume finds
+	// nothing further to do
+	second := it("second")
+	if err := forge(t, h, "i2", second); err != nil {
+		t.Fatal(err)
+	}
+	h.restart()
+	d = h.agenda(exec, judge)
+	reps, err := d.Resume(ctxBg)
+	if err != nil || len(reps) != 1 || reps[0].Mission.Outcome != MissionFailedExec || !strings.Contains(reps[0].Mission.Reason, "interrupted at before_step_2: first") {
+		t.Fatalf("%v %+v", err, reps[0].Mission)
+	}
+	led := h.ledger()
+	if led.Acks[first.ID] == nil || led.Acks[first.ID].Result != "consumed" || led.Acks[second.ID] == nil || led.Acks[second.ID].Result != "expired" {
+		t.Fatalf("acks: first=%+v second=%+v", led.Acks[first.ID], led.Acks[second.ID])
+	}
+}

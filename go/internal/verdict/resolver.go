@@ -369,10 +369,21 @@ var ErrAlreadyResolved = errors.New("verdict: candidate set already resolved")
 // resolution for that key (an error naming both). Never decided by Seq or ID.
 func Current(pr *journal.ProductionReader) (map[string]*Resolution, error) {
 	byKey := map[string][]*Resolution{}
+	verdicts := map[record.RecordID]*Verdict{}
+	observations := map[record.RecordID]*Observation{}
 	err := pr.Scan(0, func(r record.Record) error {
-		if rr, ok := r.(*Resolution); ok {
-			k := groupKey(rr.Subject, rr.VerdictKind)
-			byKey[k] = append(byKey[k], rr)
+		switch x := r.(type) {
+		case *Verdict:
+			verdicts[x.ID] = x
+		case *Observation:
+			observations[x.ID] = x
+		case *Resolution:
+			// a resolution is trusted only when it re-derives from what it names
+			if err := Check(x, verdicts, observations); err != nil {
+				return err
+			}
+			k := groupKey(x.Subject, x.VerdictKind)
+			byKey[k] = append(byKey[k], x)
 		}
 		return nil
 	})

@@ -77,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume] | learn add|stage|list | serve [--model m] [--judge-model m] | submit [--lane now|agenda] [--ack] <goal> | interrupt <handle> --why <text> | status")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | serve [--model m] [--judge-model m] | submit [--lane now|agenda] [--ack] <goal> | interrupt <handle> --why <text> | status")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -298,8 +298,11 @@ func cmdAck(args []string, out io.Writer) error {
 		return fmt.Errorf("ack needs <delivery-id> <token>")
 	}
 	// a running process holds the lease: acknowledge through it
+	var dialErr error
 	if sock, err := socketPath(io.Discard); err == nil {
-		if cl, err := process.Dial(sock); err == nil {
+		cl, err := process.Dial(sock)
+		dialErr = err
+		if err == nil {
 			defer cl.Close()
 			ev, err := cl.One(process.Request{Op: "ack", Delivery: args[0], Token: args[1]})
 			if err != nil {
@@ -326,7 +329,7 @@ func cmdAck(args []string, out io.Writer) error {
 		return nil
 	})
 	if errors.Is(err, workspace.ErrLeaseHeld) {
-		return fmt.Errorf("%w — the run that presented this is still holding the workspace; the token stays valid, retry once it exits", err)
+		return fmt.Errorf("%w — a process holds the workspace but its socket did not answer (%v); if it is `maro-go serve`, its intake lane is down: check `maro-go status` or restart it; if it is an in-process run, the token stays valid, retry once it exits", err, dialErr)
 	}
 	return err
 }
@@ -335,6 +338,19 @@ func cmdAck(args []string, out io.Writer) error {
 // previous process left non-terminal (reconcile → recover → deliver).
 func cmdRuns(args []string, out, errw io.Writer) error {
 	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+		if len(args) > 1 && args[0] == "show" {
+			led, err := spine.Fold(j.Production(), st)
+			if err != nil {
+				return err
+			}
+			payload, m, err := spine.LatestPayload(led, st, args[1])
+			if err != nil {
+				return err
+			}
+			out.Write(payload)
+			fmt.Fprintf(out, "\n---\nrun %s attempt %d · %s · closure %s · delivery %s/%s\n", m.Handle, m.Attempt, m.Outcome, m.Closure, m.Delivery, m.Required)
+			return nil
+		}
 		if len(args) > 0 && args[0] == "resume" {
 			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out}}
 			s, err := invoke.NewSubprocess("haiku")

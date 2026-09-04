@@ -592,8 +592,8 @@ func (r *InterruptAck) ValidateWire() error {
 			return errors.New("interrupt_ack: consumed names the attempt and the boundary")
 		}
 	case "expired":
-		if r.Boundary != "" {
-			return errors.New("interrupt_ack: expired has no boundary")
+		if r.Boundary != "" || r.RunID != "" || r.Attempt != 0 {
+			return errors.New("interrupt_ack: expired has no boundary and no attempt scope")
 		}
 	default:
 		return fmt.Errorf("interrupt_ack: result %q out of vocabulary", r.Result)

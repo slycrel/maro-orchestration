@@ -192,11 +192,8 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	if !requiredStates[policy.Required] {
-		return nil, fmt.Errorf("%w: delivery policy %q", ErrConfig, policy.Required)
-	}
-	if len(bytes.TrimSpace(goalText)) == 0 {
-		return nil, ErrEmptyGoal
+	if err := ValidateIntake(goalText, d.Lane, policy); err != nil {
+		return nil, err
 	}
 	// Intake: store the thought, THEN the records that claim it (§1b).
 	ref, err := d.Store.Put(thought.Goal, goalText)
@@ -213,6 +210,22 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 		return nil, err
 	}
 	return d.drive(ctx, rs, nil, nil)
+}
+
+// ValidateIntake is the one check every intake path runs BEFORE anything
+// durable is written: a goal needs text, a registered lane, a registered
+// delivery policy.
+func ValidateIntake(text []byte, lane Lane, policy DeliveryPolicy) error {
+	if len(bytes.TrimSpace(text)) == 0 {
+		return ErrEmptyGoal
+	}
+	if !lanes[lane] {
+		return fmt.Errorf("%w: lane %q", ErrConfig, lane)
+	}
+	if !requiredStates[policy.Required] {
+		return fmt.Errorf("%w: delivery policy %q", ErrConfig, policy.Required)
+	}
+	return nil
 }
 
 // Intake is pure: the goal record and its treatment-blind assessment. The
@@ -251,12 +264,15 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 	}
 	// Execute — from the previous attempt's evidence when it exists (§5a:
 	// a new attempt starts from the last committed idempotent stage).
-	// an interrupt pending at this boundary stops the run here, honestly
-	if out, err := d.interrupted(ctx, rs, a, "before_execute"); err != nil || out != nil {
-		if err != nil {
-			return nil, err
+	// NOW's one boundary: an interrupt pending here stops the run, honestly
+	// (AGENDA's boundaries are before each step, in its own loop)
+	if rs.Goal.Lane == LaneNow {
+		if out, err := d.interrupted(ctx, rs, a, "before_execute"); err != nil || out != nil {
+			if err != nil {
+				return nil, err
+			}
+			return d.finish(ctx, rs, a, out, nil)
 		}
-		return d.finish(ctx, rs, a, out, nil)
 	}
 	var out *Outcome
 	var candidates []*verdict.Verdict
@@ -317,6 +333,11 @@ func (d *Driver) finish(ctx context.Context, rs *RunState, a *AttemptState, out 
 	if err := d.transition(ctx, rs, a, Recorded, "", nil, out); err != nil {
 		return nil, err
 	}
+	// an interrupt still pending now arrived after the last boundary: the
+	// execution is settled, so it expires — acknowledged, never left hanging
+	if err := d.expireInterrupts(ctx, rs); err != nil {
+		return nil, err
+	}
 	if err := d.crash("after_recorded"); err != nil {
 		return nil, err
 	}
@@ -342,7 +363,10 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 			case st.Receipt != nil:
 				resp := st.Receipt.Response
 				out = &Outcome{Terminal: st.Terminal.State, Reason: st.Terminal.Reason, Invocation: st.Invocation.ID, Produced: p, Receipt: st.Receipt.ID, Response: &resp, Usage: st.Receipt.Usage, Model: model}
-			case st.Terminal != nil && st.Terminal.State == invoke.TerminalFailed:
+			case st.Terminal != nil && st.Terminal.State == invoke.TerminalFailed && !cancelled(st.Terminal.Reason):
+				// the backend's own failure is reused; a failure the process's
+				// shutdown caused (the context cancelled) is not the backend's
+				// answer and the call runs again
 				out = &Outcome{Terminal: invoke.TerminalFailed, Reason: "attempt " + fmt.Sprint(p) + ": " + st.Terminal.Reason, Invocation: st.Invocation.ID, Produced: p, Usage: st.Terminal.Usage, Model: model}
 			case st.Reconciled != nil && st.Reconciled.Disposition == invoke.DispositionIndeterminate:
 				out = &Outcome{Terminal: invoke.TerminalFailed, Reason: string(invoke.DispositionIndeterminate) + ": " + st.Reconciled.Evidence, Invocation: st.Invocation.ID, Produced: p, Model: model}
@@ -441,12 +465,12 @@ func scope(g *Goal) []learn.ScopePath {
 // Nil when none is pending.
 func (d *Driver) interrupted(ctx context.Context, rs *RunState, a *AttemptState, boundary string) (*Outcome, error) {
 	var pending *Interrupt
-	acked := map[record.RecordID]bool{}
+	all, acked := []*Interrupt{}, map[record.RecordID]bool{}
 	err := d.J.Production().Scan(0, func(r record.Record) error {
 		switch x := r.(type) {
 		case *Interrupt:
-			if x.Target == rs.Run && pending == nil {
-				pending = x
+			if x.Target == rs.Run {
+				all = append(all, x)
 			}
 		case *InterruptAck:
 			acked[x.Interrupt] = true
@@ -456,7 +480,13 @@ func (d *Driver) interrupted(ctx context.Context, rs *RunState, a *AttemptState,
 	if err != nil {
 		return nil, err
 	}
-	if pending == nil || acked[pending.ID] {
+	for _, it := range all { // the earliest still unacknowledged one
+		if !acked[it.ID] {
+			pending = it
+			break
+		}
+	}
+	if pending == nil {
 		return nil, nil
 	}
 	n := a.Attempt.Attempt
@@ -466,6 +496,60 @@ func (d *Driver) interrupted(ctx context.Context, rs *RunState, a *AttemptState,
 	}
 	d.emit(rs, n, "interrupted", Executing, boundary+": "+pending.Why)
 	return &Outcome{Terminal: invoke.TerminalFailed, Reason: "interrupted at " + boundary + ": " + pending.Why}, nil
+}
+
+// expireInterrupts acknowledges every pending interrupt of the run as
+// expired: the run's execution is recorded, nothing is left to stop.
+func (d *Driver) expireInterrupts(ctx context.Context, rs *RunState) error {
+	var all []*Interrupt
+	acked := map[record.RecordID]bool{}
+	err := d.J.Production().Scan(0, func(r record.Record) error {
+		switch x := r.(type) {
+		case *Interrupt:
+			if x.Target == rs.Run {
+				all = append(all, x)
+			}
+		case *InterruptAck:
+			acked[x.Interrupt] = true
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, it := range all {
+		if acked[it.ID] {
+			continue
+		}
+		ack := &InterruptAck{Header: record.Header{ID: record.NewID(), Schema: "interrupt_ack/1", Subject: record.Ref{Kind: "interrupt", ID: string(it.ID)}, At: now()}, Interrupt: it.ID, Result: "expired"}
+		if err := d.commit(ctx, "interrupt/"+string(it.ID)+"/ack", ack); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// LatestPayload is the newest delivery's payload for a run handle: what a
+// client that was gone can still read (`maro-go runs show`).
+func LatestPayload(led *Ledger, store *thought.Store, handle string) ([]byte, *Mission, error) {
+	for _, rs := range led.Runs {
+		if HandleOf(rs.Run) != handle {
+			continue
+		}
+		m := MissionOf(rs)
+		a := rs.Latest()
+		if a == nil || a.Delivery == nil {
+			return nil, &m, fmt.Errorf("run %s has no delivery yet", handle)
+		}
+		b, err := store.Get(a.Delivery.Prepared.Payload)
+		return b, &m, err
+	}
+	return nil, nil, fmt.Errorf("no run with handle %s", handle)
+}
+
+// cancelled reports a terminal reason the process's own shutdown produced.
+func cancelled(reason string) bool {
+	return strings.Contains(reason, "context canceled") || strings.Contains(reason, "context deadline exceeded")
 }
 
 // invoked reports whether an attempt made an execute invocation.

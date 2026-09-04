@@ -267,12 +267,30 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if it == nil || acks[x.Interrupt] != nil {
 				return fmt.Errorf("run: ack %s for an unknown or already acknowledged interrupt %s", x.ID, x.Interrupt)
 			}
-			if x.Result == "consumed" {
+			target := runs[it.Target]
+			switch x.Result {
+			case "consumed":
 				a := attemptNoErr(runs, x.RunID, x.Attempt)
 				if a == nil || x.RunID != it.Target || a.Current() != Executing {
 					return fmt.Errorf("run: ack %s consumed outside an executing attempt of its target", x.ID)
 				}
+				// the boundary must be the one the attempt was AT: NOW before its
+				// execute; AGENDA before the next undone step of its plan
+				if !boundaryPossible(a, x.Boundary) {
+					return fmt.Errorf("run: ack %s consumed at %q, a boundary attempt %d was not at", x.ID, x.Boundary, x.Attempt)
+				}
 				a.touch(x)
+			case "expired":
+				// expired only when the execution is settled: the target's
+				// latest attempt is recorded or beyond
+				if target.Latest() == nil {
+					return fmt.Errorf("run: ack %s expired an interrupt of a run that never started", x.ID)
+				}
+				switch target.Latest().Current() {
+				case Recorded, Delivered, DeliveryFailedS:
+				default:
+					return fmt.Errorf("run: ack %s expired an interrupt while its target is at %s", x.ID, target.Latest().Current())
+				}
 			}
 			acks[x.Interrupt] = x
 		case *verdict.Verdict:
@@ -535,6 +553,29 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 		}
 	}
 	return led, nil
+}
+
+// boundaryPossible says whether an attempt at `executing` could have been
+// at the named boundary: NOW has one (before its execute, which must not
+// have happened yet); AGENDA has one per undone step, in order.
+func boundaryPossible(a *AttemptState, boundary string) bool {
+	switch a.Attempt.Config.Lane {
+	case LaneNow:
+		return boundary == "before_execute" && !invoked(a)
+	case LaneAgenda:
+		if a.Plan == nil {
+			return false
+		}
+		var k int
+		if _, err := fmt.Sscanf(boundary, "before_step_%d", &k); err != nil {
+			return false
+		}
+		if len(a.Steps) > 0 && a.Steps[len(a.Steps)-1].Outcome == StepBlocked {
+			return false
+		}
+		return k == len(a.Steps)+1 && k <= len(a.Plan.Steps)
+	}
+	return false
 }
 
 // attemptNoErr finds an attempt or nil.

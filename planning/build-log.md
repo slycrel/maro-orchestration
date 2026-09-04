@@ -805,3 +805,56 @@ unacknowledged` → `ack` through the socket → `user_acknowledged`;
 `status` shows 4 lanes up and both runs; `interrupt` on a terminal run
 → expired; SIGTERM → lanes quiesce in order, views published (2 B6
 rows), socket removed, lease released.
+
+**Review round (Skeptic + Expert QA, codex; 21 findings, deduplicated to 13,
+each verified in the tree before fixing).** The HIGHs were real:
+
+- *The client was registered after the goal was committed* (both, HIGH):
+  the executor's own poll could start the run and bind to no client, and
+  the mission would say delivery failed while the client waited. Now the
+  client is registered BEFORE the goal is visible in the journal (and
+  unregistered if the commit is refused). Test: six back-to-back submits
+  against a 1 ms poll all reach their submitter.
+- *An idle connection held the quiesce* (both, HIGH): cancellation closed
+  the listener only. Now every accepted connection is tracked and closed on
+  cancellation, and a client has 30 s (why in code) to send its one line.
+  Test: an idle socket, a partial line, and a waiting submit all release;
+  `Stop` twice returns the same answer (the error is kept, not lost).
+- *An interrupt pending after the last boundary was never acknowledged*
+  (both, HIGH): now every pending interrupt EXPIRES when the execution is
+  recorded (nothing is left to stop), committed by the driver; the fold
+  refuses `expired` while the target still executes, and `consumed` at a
+  boundary the attempt could not have been at (NOW: `before_execute` with
+  no execute yet; AGENDA: `before_step_k` for exactly the next undone step
+  of the plan). `expired` acks carry no attempt scope.
+- *The driver stopped at the first interrupt even when acknowledged* (QA):
+  the earliest UNACKNOWLEDGED one is consumed. Test: first consumed at the
+  boundary, second expired at recorded.
+- *`verdict.Current` never re-derived* (QA HIGH): it now `Check`s every
+  resolution before choosing among them; a wire-valid forged one is refused.
+- *Intake stored the thought before validating* (both): `run.ValidateIntake`
+  is the one check both intake paths run before anything durable; a
+  whitespace goal or an unknown lane stores nothing.
+- *A submit saw a bare EOF when the process stopped* (both): waiting
+  clients get a `stopping` event and `ErrStopped` naming their goal ("the
+  goal stays journaled and continues on the next serve").
+- *No retrieval surface for an orphaned payload* (both): `runs show
+  <handle>` prints the latest delivery's payload from the store
+  (`run.LatestPayload`), tested after a restart.
+- *`ack` hid the dial error* (both): on a held lease it now reports both
+  facts (the process holds the workspace; its socket did not answer, and
+  why). *Negative `Poll`* refused at `Serve`. *Repeated identical executor
+  failures* (Skeptic): three in a row make the lane fail (bounded restart,
+  health line) instead of logging forever.
+- Side-find while testing: a shutdown-cancelled invocation ("context
+  canceled") was REUSED as the backend's failure on resume; now a
+  cancellation is not the backend's answer and the call runs again.
+- The AGENDA lane's generic pre-execute interrupt check was lane-agnostic
+  and produced a boundary the fold rightly refused; NOW keeps
+  `before_execute`, AGENDA has only `before_step_k`.
+
+Tests: process 3 → 6, run +1, verdict +1 (14 packages green under
+`-race`; contracts 0/0). Not done, recorded: durable lane cursors and an
+explicit final-watermark record (a second front end); socket auth (the
+socket lives in the workspace; its mode is the boundary); a re-present
+verb that binds a new client to an orphaned run.

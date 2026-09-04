@@ -59,6 +59,7 @@ type Server struct {
 	conns    *conns
 	stopOnce sync.Once
 	stopped  chan struct{}
+	stopErr  error
 }
 
 // Request is one client message.
@@ -106,6 +107,9 @@ func Serve(ctx context.Context, opts Options) (*Server, error) {
 	}
 	if opts.Log == nil {
 		opts.Log = io.Discard
+	}
+	if opts.Poll < 0 || opts.Timeout < 0 || opts.StallAfter < 0 {
+		return nil, errors.New("process: durations must be positive (0 = default)")
 	}
 	if opts.Poll == 0 {
 		opts.Poll = 2 * time.Second
@@ -171,18 +175,17 @@ func (s *Server) Health() []string { return s.sup.Health() }
 // executor → publisher), then a final publish through the frozen head,
 // then the journal closes and the lease is released.
 func (s *Server) Stop(ctx context.Context) error {
-	var err error
 	s.stopOnce.Do(func() {
 		// the listener closes when the intake lane is cancelled (stage 1),
 		// so the lane's return is a quiesce, not a failure
-		err = s.sup.Stop(ctx)
-		if perr := s.publish(); perr != nil && err == nil {
-			err = perr
+		s.stopErr = s.sup.Stop(ctx)
+		if perr := s.publish(); perr != nil && s.stopErr == nil {
+			s.stopErr = perr
 		}
 		s.teardown()
 		close(s.stopped)
 	})
-	return err
+	return s.stopErr // the same answer on every call: a failed quiesce stays failed
 }
 
 func (s *Server) teardown() {
@@ -214,10 +217,17 @@ func (l *intake) Stage() int            { return 1 }
 func (l *intake) Expect() time.Duration { return time.Hour } // idle is normal; the accept loop beats on every connection
 func (l *intake) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	open := map[net.Conn]bool{}
 	defer wg.Wait()
 	go func() {
 		<-ctx.Done()
 		l.s.ln.Close() // cancellation closes the listener; Accept returns
+		mu.Lock()
+		for c := range open {
+			c.Close() // and every accepted connection: an idle client cannot hold the quiesce
+		}
+		mu.Unlock()
 	}()
 	for {
 		c, err := l.s.ln.Accept()
@@ -228,9 +238,17 @@ func (l *intake) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 			return err
 		}
 		hb.Progress(ctx, l.s.j.Head())
+		mu.Lock()
+		open[c] = true
+		mu.Unlock()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				mu.Lock()
+				delete(open, c)
+				mu.Unlock()
+			}()
 			l.s.serveConn(ctx, c)
 		}()
 	}
@@ -246,6 +264,7 @@ func (l *executor) Expect() time.Duration { return 4 * time.Hour } // a single s
 func (l *executor) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 	t := time.NewTicker(l.s.opts.Poll)
 	defer t.Stop()
+	lastErr, repeats := "", 0
 	for {
 		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health,
 			Events: func(e run.Event) {
@@ -263,6 +282,19 @@ func (l *executor) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 			if errors.Is(err, run.ErrIntegrity) {
 				return err // journal evidence the driver cannot act on: a lane failure, restarted bounded, in the health line
 			}
+			// the same failure on consecutive passes is not transient: make
+			// it the lane's failure so the bound and the health line apply
+			// (why 3: one retry covers a backend blip, two an unlucky pair)
+			if err.Error() == lastErr {
+				repeats++
+				if repeats >= 3 {
+					return fmt.Errorf("repeated %d times: %w", repeats, err)
+				}
+			} else {
+				lastErr, repeats = err.Error(), 1
+			}
+		} else {
+			lastErr, repeats = "", 0
 		}
 		hb.Progress(ctx, l.s.j.Head())
 		select {
@@ -306,10 +338,15 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn) {
 	defer c.Close()
 	r := bufio.NewReader(c)
 	enc := json.NewEncoder(c)
+	// the request is one line; a client that sends nothing is dropped.
+	// Why 30s: a human typing a goal into a client does not take longer
+	// than that to send it; the process must not keep idle sockets.
+	c.SetReadDeadline(time.Now().Add(30 * time.Second))
 	line, err := r.ReadBytes('\n')
 	if err != nil {
 		return
 	}
+	c.SetReadDeadline(time.Time{})
 	var req Request
 	if err := json.Unmarshal(line, &req); err != nil {
 		enc.Encode(Event{Type: "error", Error: "malformed request: " + err.Error()})
@@ -347,8 +384,9 @@ func (s *Server) submit(ctx context.Context, c net.Conn, enc *json.Encoder, req 
 		policy.Required = run.UserAcknowledged
 	}
 	text := []byte(req.Text)
-	if len(text) == 0 {
-		enc.Encode(Event{Type: "error", Error: run.ErrEmptyGoal.Error()})
+	// everything cheap is validated BEFORE anything durable is written
+	if err := run.ValidateIntake(text, lane, policy); err != nil {
+		enc.Encode(Event{Type: "error", Error: err.Error()})
 		return
 	}
 	ref, err := s.store.Put(thought.Goal, text)
@@ -357,11 +395,14 @@ func (s *Server) submit(ctx context.Context, c net.Conn, enc *json.Encoder, req 
 		return
 	}
 	goal, fam := run.Intake(text, ref, run.OriginSocket, lane, policy)
+	// the client is registered BEFORE the goal is visible in the journal:
+	// the executor may pick it up on its own poll the instant it commits
+	waiter := s.conns.register(goal.ID, enc)
 	if _, err := s.j.Submit(ctx, journal.Command{IdempotencyKey: "goal/" + string(goal.ID), Epoch: s.j.Epoch(), Records: []record.Record{goal, fam}}); err != nil {
+		s.conns.unregister(goal.ID)
 		enc.Encode(Event{Type: "error", Error: err.Error()})
 		return
 	}
-	waiter := s.conns.register(goal.ID, enc)
 	enc.Encode(Event{Type: "accepted", Goal: string(goal.ID)})
 	select {
 	case s.wake <- struct{}{}:
@@ -447,6 +488,12 @@ func (c *conns) register(goal record.RecordID, enc *json.Encoder) <-chan struct{
 	return cl.done
 }
 
+func (c *conns) unregister(goal record.RecordID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.byGoal, goal)
+}
+
 func (c *conns) Name() run.GoalOrigin { return run.OriginSocket }
 
 // Present writes the presentation to the run's client. The run is bound
@@ -492,6 +539,8 @@ func (c *conns) done(r *run.Report) {
 	close(cl.done)
 }
 
+// closeAll tells every waiting client the process is stopping — their
+// goal stays journaled and continues on the next serve — and releases them.
 func (c *conns) closeAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -499,6 +548,9 @@ func (c *conns) closeAll() {
 		select {
 		case <-cl.done:
 		default:
+			cl.mu.Lock()
+			cl.enc.Encode(Event{Type: "stopping", Goal: string(g), Error: "the process is stopping; the goal stays journaled and continues on the next serve — find it with `maro-go runs`"})
+			cl.mu.Unlock()
 			close(cl.done)
 		}
 		delete(c.byGoal, g)

@@ -520,3 +520,29 @@ func TestPromotionNeedsConfidence(t *testing.T) {
 		t.Fatal("promote threshold out of range accepted")
 	}
 }
+
+// Current re-derives every resolution before choosing among them: a
+// wire-valid resolution that claims what its candidates do not support is
+// refused, not selected.
+func TestCurrentRefusesResolutionsThatDoNotRederive(t *testing.T) {
+	j := openJ(t)
+	self := v(KindClosure, "not_achieved", StandingSelf, 0.9)
+	self.Schema, self.Seq = "verdict/1", 0
+	if _, err := j.Submit(context.Background(), journal.Command{IdempotencyKey: "v", Epoch: j.Epoch(), Records: []record.Record{self}}); err != nil {
+		t.Fatal(err)
+	}
+	var committed *Verdict
+	j.Production().Scan(0, func(r record.Record) error {
+		if x, ok := r.(*Verdict); ok {
+			committed = x
+		}
+		return nil
+	})
+	forged := &Resolution{Header: record.Header{ID: record.NewID(), Schema: "resolution/1", Subject: subj, At: time.Now().UTC()}, VerdictKind: KindClosure, Outcome: "achieved", Effective: committed.ID, Candidates: []record.RecordID{committed.ID}, ResolverVer: ResolverVer, Thresholds: DefaultThresholds, Rule: "standing:operator", Confidence: 0.9}
+	if _, err := j.Submit(context.Background(), journal.Command{IdempotencyKey: "forged", Epoch: j.Epoch(), Records: []record.Record{forged}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Current(j.Production()); err == nil || !strings.Contains(err.Error(), "disagrees with its recompute") {
+		t.Fatalf("Current selected a forged resolution: %v", err)
+	}
+}

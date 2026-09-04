@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -310,4 +312,201 @@ func TestRestartContinuesAndAnOrphanedClientIsHonest(t *testing.T) {
 	}
 	_ = errors.New
 	_ = record.NewID
+}
+
+// Quiesce with clients attached: an idle connection (no request), a
+// partial line, and a client waiting on a submit all release; the waiting
+// client is told the process is stopping (a typed error naming its goal);
+// Stop twice returns the same answer; the lease and socket are released.
+func TestStopReleasesEveryClient(t *testing.T) {
+	a := root(t)
+	release := make(chan struct{}, 4)
+	exec := &gated{inner: &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted", Model: "m"}, Calls: []invoke.ScriptedCall{{Response: []byte("x")}}}, release: release}
+	s := serve(t, a, exec, nil)
+	idle, err := net.Dial("unix", s.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idle.Close()
+	partial, _ := net.Dial("unix", s.Socket())
+	defer partial.Close()
+	partial.Write([]byte(`{"op":"sub`))
+	waitErr := make(chan error, 1)
+	go func() {
+		cl, err := Dial(s.Socket())
+		if err != nil {
+			waitErr <- err
+			return
+		}
+		defer cl.Close()
+		waitErr <- cl.Submit(ctxBg, Request{Text: "q?"}, func(Event) {})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		exec.mu.Lock()
+		c := exec.calls
+		exec.mu.Unlock()
+		if c == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(ctxBg, 5*time.Second)
+	defer cancel()
+	if err := s.Stop(ctx); err != nil {
+		t.Fatalf("stop with clients attached: %v", err)
+	}
+	if err := s.Stop(ctx); err != nil {
+		t.Fatalf("second stop: %v", err)
+	}
+	select {
+	case err := <-waitErr:
+		if !errors.Is(err, ErrStopped) || !strings.Contains(err.Error(), "goal 01") {
+			t.Fatalf("waiting client: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting client was not released")
+	}
+	if _, live, _ := workspace.Status(a); live {
+		t.Fatal("lease still held after Stop")
+	}
+	// the interrupted run continues on the next serve and its payload can be
+	// read by handle even though its client is gone
+	release <- struct{}{}
+	s2 := serve(t, a, exec, nil)
+	deadline = time.Now().Add(10 * time.Second)
+	var handle string
+	for time.Now().Before(deadline) {
+		cl, _ := Dial(s2.Socket())
+		st, _ := cl.One(Request{Op: "status"})
+		cl.Close()
+		if len(st.Runs) == 1 && st.Runs[0].Outcome == run.MissionFailedDelivery {
+			handle = st.Runs[0].Handle
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if handle == "" {
+		t.Fatal("orphaned run did not resume")
+	}
+	if err := s2.Stop(ctxBg); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := workspace.Acquire(a)
+	j, _ := journal.Open(l)
+	st, _ := thought.Open(a)
+	led, err := run.Fold(j.Production(), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, m, err := run.LatestPayload(led, st, handle)
+	j.Close()
+	l.Release()
+	if err != nil || string(payload) != "x" || m.Outcome != run.MissionFailedDelivery {
+		t.Fatalf("payload by handle: %v %q %+v", err, payload, m)
+	}
+}
+
+// Cheap invalid requests are refused before anything durable is written:
+// a whitespace goal and an unknown lane store no thought; the client sees
+// the reason. The executor's own poll cannot outrun the client's
+// registration: many goals submitted back to back with a 1ms poll all
+// reach their submitter.
+func TestIntakeValidatesBeforeStoringAndRegistersFirst(t *testing.T) {
+	a := root(t)
+	var calls []invoke.ScriptedCall
+	for i := 0; i < 6; i++ {
+		calls = append(calls, invoke.ScriptedCall{Response: []byte("r")})
+	}
+	exec := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted", Model: "m"}, Calls: calls}
+	s, err := Serve(ctxBg, Options{Root: a, Backend: exec, Timeout: time.Minute, Poll: time.Millisecond, StallAfter: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(ctxBg)
+	count := func() int {
+		n := 0
+		filepath.Walk(a.Path("thoughts"), func(p string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() {
+				n++
+			}
+			return nil
+		})
+		return n
+	}
+	before := count()
+	for _, req := range []Request{{Op: "submit", Text: "   \n"}, {Op: "submit", Text: "fine", Lane: "later"}} {
+		cl, _ := Dial(s.Socket())
+		_, err := cl.One(req)
+		cl.Close()
+		if err == nil {
+			t.Fatalf("%+v accepted", req)
+		}
+	}
+	if count() != before {
+		t.Fatal("a refused request stored a thought")
+	}
+	for i := 0; i < 6; i++ {
+		evs := events(t, s, Request{Text: "q?"})
+		if len(evs) != 3 || evs[1].Type != "presentation" || evs[1].Payload != "r" || evs[2].Mission != string(run.MissionDelivered) {
+			t.Fatalf("submit %d: %+v", i, evs)
+		}
+	}
+	if _, err := Serve(ctxBg, Options{Root: a, Backend: exec, Poll: -1}); err == nil {
+		t.Fatal("negative poll accepted")
+	}
+}
+
+// An interrupt that lands after the last boundary is not left pending: it
+// expires when the execution is recorded. Two interrupts: the first one
+// expired (forged as such is refused while executing), the second is the
+// one consumed.
+func TestLateInterruptExpiresAndTheEarliestPendingIsConsumed(t *testing.T) {
+	a := root(t)
+	release := make(chan struct{}, 4)
+	exec := &gated{inner: &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted", Model: "m"}, Calls: []invoke.ScriptedCall{{Response: []byte("x")}}}, release: release}
+	s := serve(t, a, exec, nil)
+	done := make(chan []Event, 1)
+	go func() { done <- events(t, s, Request{Text: "q?"}) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		exec.mu.Lock()
+		c := exec.calls
+		exec.mu.Unlock()
+		if c == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cl, _ := Dial(s.Socket())
+	st, _ := cl.One(Request{Op: "status"})
+	cl.Close()
+	cl, _ = Dial(s.Socket())
+	iv, err := cl.One(Request{Op: "interrupt", Handle: st.Runs[0].Handle, Why: "too late for NOW"})
+	cl.Close()
+	if err != nil || iv.Result != "pending" {
+		t.Fatalf("%v %+v", err, iv)
+	}
+	release <- struct{}{}
+	evs := <-done
+	if evs[len(evs)-1].Mission != string(run.MissionDelivered) {
+		t.Fatalf("a NOW run mid-execute must finish: %+v", evs)
+	}
+	if err := s.Stop(ctxBg); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := workspace.Acquire(a)
+	j, _ := journal.Open(l)
+	th, _ := thought.Open(a)
+	led, err := run.Fold(j.Production(), th)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, its := range led.Interrupts {
+		if len(its) != 1 || led.Acks[its[0].ID] == nil || led.Acks[its[0].ID].Result != "expired" {
+			t.Fatalf("late interrupt not expired: %+v", led.Acks)
+		}
+	}
+	j.Close()
+	l.Release()
 }
