@@ -4276,3 +4276,14 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   vision-level commitments) as amended by D14–D17. Flaws are acknowledged
   and accepted, not to be litigated before building. Phase 2 = the v1
   design note for the FULL system (D14), then build.
+
+- **2026-09-04 (design-doc review depth — Jeremy):** on the successor v1
+  design note's seventh codex round: *"Do we really need 7 review rounds on
+  our guidance doc...?"* No. Applied: review closed at r7 without running the
+  second lens; r1–r2 had reshaped the design (experimental unit, journal +
+  sequencer, durable join, mission outcome), r3–r7 were build-time layering
+  on two subsystems. Standing rule extended: the plan's "one adversarial pass
+  = DONE" applies to design notes as well as code; residue goes to the build
+  queue (note §19). The note gained a one-page vision read on top so the
+  approval surface is the commitments and cuts, not the type definitions.
+  Phase 2 build step 1 is next (`planning/successor-plan.md` Queue).
