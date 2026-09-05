@@ -86,6 +86,8 @@ func Open(ctx context.Context, j *journal.Journal, store *thought.Store, spec Sp
 		x.Assignment, x.Oracle, x.Outcome.Dimension, x.N = RandomizedLive, BlindedEvaluator, DimensionAchieved, spec.N
 		x.Analysis.Estimator, x.Analysis.MinPerArm = EstimatorArms, spec.MinPerArm
 		if spec.Expect != nil {
+			// the fold re-executes this check on the record (a forged
+			// experiment naming a fixture the store does not hold)
 			if err := checkFixture(store, *spec.Expect); err != nil {
 				return nil, fmt.Errorf("%w: expect: %v", ErrConfig, err)
 			}
@@ -560,6 +562,16 @@ type Closer struct {
 	Timeout time.Duration
 	Events  func(string)
 	CrashAt string
+	// EvaluatorVersion names the blinded evaluator this closer asks
+	// (EvaluatorJudge when empty); the attestation carries it.
+	EvaluatorVersion string
+}
+
+func (c *Closer) evaluator() string {
+	if c.EvaluatorVersion == "" {
+		return EvaluatorJudge
+	}
+	return c.EvaluatorVersion
 }
 
 // EvaluatorTries bounds the evaluate calls for one unit before its row is
@@ -658,7 +670,7 @@ func (c *Closer) Close(ctx context.Context, exp record.RecordID) (*EffectMeasure
 	if st.Attestations[exp] == nil {
 		att := &EffectAttestation{Header: record.Header{ID: record.NewID(), Schema: "effect_attestation/1", Subject: sub, At: now()}, Experiment: exp, Cohort: cm.ID, Closure: st.Closed[exp].ID, Protocol: cm.Protocol, Evaluator: Evaluator, Estimator: Estimator}
 		if cm.Protocol.Assignment == RandomizedLive {
-			att.Evaluator, att.Estimator = EvaluatorJudge, EstimatorArms
+			att.Evaluator, att.Estimator = c.evaluator(), EstimatorArms
 			if cm.Protocol.Oracle == DeterministicFixture {
 				att.Evaluator = Evaluator
 			}
@@ -909,14 +921,48 @@ func EvaluatorPrompt(goal, deliverable []byte) []byte {
 	return b.Bytes()
 }
 
+// EvaluatorPromptV1 is judge/1's request, frozen: two answers. Kept so an
+// attestation that names judge/1 verifies against the bytes it was asked.
+func EvaluatorPromptV1(goal, deliverable []byte) []byte {
+	var b bytes.Buffer
+	b.WriteString("You are a blinded evaluator. Decide whether the deliverable achieves the goal. Judge only what is written; do not assume context.\n\n")
+	b.WriteString("Goal:\n")
+	b.Write(bytes.TrimSpace(goal))
+	b.WriteString("\n\nDeliverable:\n")
+	b.Write(bytes.TrimSpace(deliverable))
+	b.WriteString("\n\nReply with JSON only: {\"outcome\":\"achieved\"|\"not_achieved\",\"confidence\":0..1,\"why\":\"one sentence\"}\n")
+	return b.Bytes()
+}
+
+// evaluatorPrompt renders the request for a named evaluator version.
+func evaluatorPrompt(version string, goal, deliverable []byte) ([]byte, error) {
+	switch version {
+	case EvaluatorJudge:
+		return EvaluatorPrompt(goal, deliverable), nil
+	case EvaluatorJudgeV1:
+		return EvaluatorPromptV1(goal, deliverable), nil
+	}
+	return nil, fmt.Errorf("evaluator %q is not a version this engine knows", version)
+}
+
 // EvalUnjudgeable is the evaluator's third answer.
 const EvalUnjudgeable = "unjudgeable"
 
-// ParseEvaluation reads the judge's answer: 1 for achieved, 0 for
+// ParseEvaluation reads judge/2's answer: 1 for achieved, 0 for
 // not_achieved, both judged; unjudgeable is a usable answer that scores
 // nothing (judged false); anything else is unusable.
 func ParseEvaluation(response []byte) (score float64, judged bool, err error) {
-	r, err := run.ParseJudge(response, "achieved", "not_achieved", EvalUnjudgeable)
+	return parseEvaluation(EvaluatorJudge, response)
+}
+
+// parseEvaluation reads the answer by the evaluator's version: judge/1
+// knows two answers, so an unjudgeable reply to it is unusable.
+func parseEvaluation(version string, response []byte) (score float64, judged bool, err error) {
+	allowed := []string{"achieved", "not_achieved", EvalUnjudgeable}
+	if version == EvaluatorJudgeV1 {
+		allowed = allowed[:2]
+	}
+	r, err := run.ParseJudge(response, allowed...)
 	if err != nil {
 		return 0, false, err
 	}
@@ -934,7 +980,7 @@ func ParseEvaluation(response []byte) (score float64, judged bool, err error) {
 // blinded prompt, with a receipt that parses. It also counts every
 // evaluate call made (usable or not) so the tries bound and the
 // unevaluated verdict re-derive.
-func (st *State) evaluation(store *thought.Store, rs *run.RunState, want thought.Ref) (id record.RecordID, score float64, judged bool, tries int, err error) {
+func (st *State) evaluation(store *thought.Store, rs *run.RunState, version string, want thought.Ref) (id record.RecordID, score float64, judged bool, tries int, err error) {
 	for _, a := range rs.Attempts {
 		for _, is := range a.Invocations {
 			if is.Invocation.Purpose != invoke.PurposeEvaluate {
@@ -948,7 +994,7 @@ func (st *State) evaluation(store *thought.Store, rs *run.RunState, want thought
 			if err != nil {
 				return "", 0, false, tries, err
 			}
-			if sc, jd, perr := ParseEvaluation(b); perr == nil {
+			if sc, jd, perr := parseEvaluation(version, b); perr == nil {
 				id, score, judged = is.Invocation.ID, sc, jd
 			}
 		}
@@ -996,9 +1042,12 @@ func (c *Closer) liveRow(ctx context.Context, st *State, p Protocol, i int, u As
 		row.Score = Score(deliverable, fixture)
 		return row, nil
 	}
-	prompt := EvaluatorPrompt(goal, deliverable)
+	prompt, err := evaluatorPrompt(c.evaluator(), goal, deliverable)
+	if err != nil {
+		return UnitRow{}, fmt.Errorf("%w: %v", ErrConfig, err)
+	}
 	want := thought.Address(thought.Prompt, prompt)
-	id, score, judged, tries, err := st.evaluation(c.Store, rs, want)
+	id, score, judged, tries, err := st.evaluation(c.Store, rs, c.evaluator(), want)
 	if err != nil {
 		return UnitRow{}, err
 	}
@@ -1013,7 +1062,7 @@ func (c *Closer) liveRow(ctx context.Context, st *State, p Protocol, i int, u As
 		}
 		tries++
 		if o.Terminal != invoke.TerminalFailed {
-			if sc, jd, perr := ParseEvaluation(o.Response); perr == nil {
+			if sc, jd, perr := parseEvaluation(c.evaluator(), o.Response); perr == nil {
 				id, score, judged = o.Invocation, sc, jd
 			} else if c.Events != nil {
 				c.Events(fmt.Sprintf("evaluator: unit %d try %d unusable: %v", i, tries, perr))

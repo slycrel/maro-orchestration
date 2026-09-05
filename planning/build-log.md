@@ -2153,3 +2153,50 @@ enforces that an operator who opens a fact lesson under the blinded
 evaluator has chosen well; the measurement's `unjudgeable` count is
 the honest signal after the fact, and a re-open (`version+1`) under
 `--expect` is the remedy.
+
+**Review round (Skeptic + Expert QA on codex, one pass).** Findings,
+verified in the tree before any fix. VERIFIED and fixed same round:
+(A) HIGH (both) — the evaluator prompt bytes changed under the
+unchanged `effect_attestation/1` schema, so an honest attestation that
+cites a judge/1 evaluation would no longer verify (the fold rendered
+the current prompt): interpretation code changing under immutable
+evidence is not a refusal of history. Now the evaluator is versioned
+BY NAME on the attestation — `judge/2` asks three answers, `judge/1`
+(the frozen `EvaluatorPromptV1`, two answers) stays readable — and
+the verifier renders the prompt and reads the answer by the named
+version (`Closer.EvaluatorVersion`, forwarded from the lane; door:
+live under the blinded evaluator names one of the two, and a judge/1
+row cannot claim unjudgeable). `TestEvaluatorVersionIsNamedOnTheAttestation`
+closes a cohort under judge/1, folds it under the current code, pins
+the V1 bytes, and refuses the same row under judge/2's name. No
+production journal of the successor exists, so nothing was stranded;
+the pattern is the point. (B) HIGH (Skeptic) / MEDIUM (QA) — the fold
+never checked that a live protocol's fixture is a thought the store
+holds (`State.experiment` walked the units, which a live protocol has
+none of); a forged experiment naming a ghost fixture folded and would
+have failed at close. Now checked in the fold;
+`TestFoldRefusesLiveFixtureExperimentWhoseFixtureIsMissing`. (C)
+MEDIUM (Skeptic) — `--expect` put the fixture thought before the flag
+set was known to be a live cohort without units; the shape is checked
+first now, the store written second. (D) MEDIUM (Skeptic) —
+`EffectMeasurement.Unjudgeable` had no wire bound (the contract said
+`-1` rejected; the door did not): now `0 ≤ unjudgeable ≤ assigned −
+analyzed`. Four more mutations killed (skip the fold's fixture check;
+drop the bound; render by the current version; let judge/1 rows claim
+unjudgeable). REFUTED: none. OUT-OF-SCOPE, recorded: (E) HIGH (QA) —
+lead (G) again, resolution completeness against the committed
+candidate set (`verdict.Check` re-derives only from the candidates a
+Resolution names; `Current` compares resolutions only with
+resolutions), now flagged in two rounds — moved to the plan's queue as
+owed before the first production journal. (F) MEDIUM (QA) — the
+protocol-projection equality checks (experiment ⇔ commitment ⇔
+attestation, pre-existing) have no end-to-end forged-record test;
+one needs the closer to stop between commitment and attestation and a
+hand-built attestation — named as `TestFoldRefusesFixtureAttestationWhoseFixtureDiffersFromCommitment`,
+not built. (G) LOW (QA) — `verdict.Commit`'s refusals are proven on
+`Resolve`, not on journal immutability after refusal. UNSETTLED: none
+the reviewers could not run `go test` and named the tests; every test
+above ran here. Residual added: (4) a unit whose run holds three
+judge/1 evaluate calls (a crash across the version change) counts
+them against judge/2's tries bound and closes `unevaluated` — honest,
+and far-fetched before any production journal exists.

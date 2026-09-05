@@ -182,6 +182,7 @@ func firstLine(s string) string {
 
 func experimentOpen(args []string, j *journal.Journal, st *thought.Store, out io.Writer) error {
 	spec := experiment.Spec{Relation: experiment.ApplyItem, Why: "maro-go experiment open"}
+	expect := ""
 	var item, rev, mechanism string
 	intFlag := func(v string, dst *int) error {
 		_, err := fmt.Sscanf(v, "%d", dst)
@@ -224,15 +225,10 @@ func experimentOpen(args []string, j *journal.Journal, st *thought.Store, out io
 		case "--live":
 			spec.Live = true
 		case "--expect":
-			text := strings.TrimSpace(next())
-			if text == "" {
+			expect = strings.TrimSpace(next())
+			if expect == "" {
 				return fmt.Errorf("--expect <expected answer text>")
 			}
-			ref, err := st.Put(thought.Fixture, []byte(text))
-			if err != nil {
-				return err
-			}
-			spec.Expect = &ref
 		case "--population":
 			spec.Population = next()
 		case "--n":
@@ -255,6 +251,18 @@ func experimentOpen(args []string, j *journal.Journal, st *thought.Store, out io
 	}
 	if (item == "") == (mechanism == "") {
 		return fmt.Errorf("experiment open needs --item <learned id> or --mechanism <m>")
+	}
+	if expect != "" {
+		// the shape first, the store second: nothing is written for a
+		// flag set the door would refuse
+		if !spec.Live || len(spec.Units) != 0 {
+			return fmt.Errorf("--expect chooses the fixture oracle for a live cohort (--live, no --unit)")
+		}
+		ref, err := st.Put(thought.Fixture, []byte(expect))
+		if err != nil {
+			return err
+		}
+		spec.Expect = &ref
 	}
 	if _, err := learn.EnsureSeeds(context.Background(), j); err != nil {
 		return err

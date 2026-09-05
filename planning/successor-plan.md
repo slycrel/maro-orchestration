@@ -326,6 +326,8 @@ part of the judgment.
   sweeps are decree-only upgrades, never the default.
 - **Work queue lives here.** A `## Queue
 
+**Owed before the first production journal (from the post-v1 review rounds, 2026-09-05):** resolution completeness — `verdict.Check` re-derives a Resolution only from the candidates it names and `Current` compares resolutions with resolutions, so a wire-valid Resolution that omits a committed higher-standing verdict or refuting observation stays current (flagged HIGH by Expert QA in two rounds; fixture `TestFoldRefusesResolutionOmittingCommittedCandidate`, fix shape = a sequence watermark on the Resolution and exact set equality against the committed set through it). Also the schema-bump discipline itself (`run_attempt/2`, `effect_attestation` evaluator names) — versioned interpretation is now the pattern (judge/1 kept readable), the bump ceremony starts with the first journal that persists.
+
 - **[NEXT] Phase 2 build, step 1** of `successor-design-v1.md` §16 — records,
   identity, envelopes, thought store, lease, contracts foundation. Design note
   review CLOSED 2026-09-04 at r7 by Jeremy's call ("Do we really need 7

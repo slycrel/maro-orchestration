@@ -271,6 +271,14 @@ func (st *State) experiment(x *Experiment, store *thought.Store) error {
 			return fmt.Errorf("experiment: %s unit %d (%s) is of family %s, not the population %s", x.ID, i, u.Goal, rs.Family.Family, x.Population)
 		}
 	}
+	// the protocol's own fixture (live under the fixture oracle): a thought
+	// the store holds, not blank — the door checks the reference's shape,
+	// only the fold can check the store
+	if x.Fixture != nil {
+		if err := checkFixture(store, *x.Fixture); err != nil {
+			return fmt.Errorf("experiment: %s: %w", x.ID, err)
+		}
+	}
 	// the hypothesis: a revision the learned population has
 	it := st.Runs.Learned.Items[x.Hypothesis.Item]
 	if it == nil || !hasRevision(it, x.Hypothesis.Revision) {
@@ -453,7 +461,7 @@ func (st *State) attestation(x *EffectAttestation, store *thought.Store) error {
 	}
 	for i, u := range cm.Units {
 		if cm.Protocol.Assignment == RandomizedLive {
-			if err := st.checkLiveRow(store, cm.Protocol, i, u, x.Units[i], x.Seq); err != nil {
+			if err := st.checkLiveRow(store, cm.Protocol, x.Evaluator, i, u, x.Units[i], x.Seq); err != nil {
 				return fmt.Errorf("experiment: attestation %s row %d: %w", x.ID, i, err)
 			}
 			continue
@@ -477,7 +485,7 @@ func (st *State) attestation(x *EffectAttestation, store *thought.Store) error {
 // re-rendered from the unit's goal and the evidence's deliverable, and
 // whose receipt parses to the row's score; an unevaluated row has at
 // least EvaluatorTries evaluate calls and no usable one.
-func (st *State) checkLiveRow(store *thought.Store, p Protocol, i int, u AssignedUnit, row UnitRow, before uint64) error {
+func (st *State) checkLiveRow(store *thought.Store, p Protocol, evaluator string, i int, u AssignedUnit, row UnitRow, before uint64) error {
 	as := st.Assignments[u.Assignment]
 	ev := st.Evidence[u.Assignment][as.Arm]
 	want := UnitRow{Unit: u.Unit, Assignment: u.Assignment, Arm: as.Arm, Evidence: ev.ID, Missing: ev.Missing, Exposed: ev.Exposed == intended(p.Relation, as.Arm)}
@@ -515,13 +523,19 @@ func (st *State) checkLiveRow(store *thought.Store, p Protocol, i int, u Assigne
 		}
 		return nil
 	}
-	prompt := thought.Address(thought.Prompt, EvaluatorPrompt(goal, deliverable))
+	// the prompt and the answer vocabulary are the attestation's named
+	// evaluator's, not the current code's
+	rendered, err := evaluatorPrompt(evaluator, goal, deliverable)
+	if err != nil {
+		return err
+	}
+	prompt := thought.Address(thought.Prompt, rendered)
 	if row.Missing == MissingUnevaluated {
 		want.Missing = MissingUnevaluated
 		if row != want {
 			return fmt.Errorf("unevaluated row does not match its evidence (%+v vs %+v)", row, want)
 		}
-		id, _, _, tries, err := st.evaluation(store, rs, prompt)
+		id, _, _, tries, err := st.evaluation(store, rs, evaluator, prompt)
 		if err != nil {
 			return err
 		}
@@ -556,7 +570,7 @@ func (st *State) checkLiveRow(store *thought.Store, p Protocol, i int, u Assigne
 			if err != nil {
 				return err
 			}
-			sc, judged, perr := ParseEvaluation(b)
+			sc, judged, perr := parseEvaluation(evaluator, b)
 			if perr != nil || sc != row.Score || judged == unjudgeable {
 				return fmt.Errorf("row (score %v, unjudgeable %v) is not what the cited evaluation's receipt says (%v, judged %v, %v)", row.Score, unjudgeable, sc, judged, perr)
 			}

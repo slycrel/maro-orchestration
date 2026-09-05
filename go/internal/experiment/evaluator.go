@@ -31,6 +31,8 @@ type Lane struct {
 	Timeout time.Duration
 	Tick    <-chan struct{}
 	Events  func(string)
+	// EvaluatorVersion is forwarded to the closer (empty = EvaluatorJudge).
+	EvaluatorVersion string
 }
 
 func (l *Lane) Name() string          { return "evaluator" }
@@ -73,7 +75,7 @@ func (l *Lane) Pass(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	c := &Closer{J: l.J, Store: l.Store, Judge: l.Judge, Timeout: l.Timeout, Events: l.Events}
+	c := &Closer{J: l.J, Store: l.Store, Judge: l.Judge, Timeout: l.Timeout, Events: l.Events, EvaluatorVersion: l.EvaluatorVersion}
 	for _, id := range st.Order {
 		x := st.Experiments[id]
 		if x.Assignment != RandomizedLive || st.settled(id) {

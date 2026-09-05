@@ -773,7 +773,7 @@ func TestLiveOracleIsPartOfTheHypothesis(t *testing.T) {
 		cm := st.Commitments[x.ID]
 		row := att.Units[0]
 		row.Score = 1 - row.Score
-		if err := st.checkLiveRow(h.st, cm.Protocol, 0, cm.Units[0], row, att.Seq); err == nil || !strings.Contains(err.Error(), "does not recompute") {
+		if err := st.checkLiveRow(h.st, cm.Protocol, att.Evaluator, 0, cm.Units[0], row, att.Seq); err == nil || !strings.Contains(err.Error(), "does not recompute") {
 			t.Fatalf("flipped fixture score accepted: %v", err)
 		}
 	})
@@ -813,12 +813,12 @@ func TestLiveOracleIsPartOfTheHypothesis(t *testing.T) {
 		att, cm := st.Attestations[x.ID], st.Commitments[x.ID]
 		row := att.Units[0]
 		row.Missing, row.Score = "", 1
-		if err := st.checkLiveRow(h.st, cm.Protocol, 0, cm.Units[0], row, att.Seq); err == nil || !strings.Contains(err.Error(), "not what the cited evaluation") {
+		if err := st.checkLiveRow(h.st, cm.Protocol, att.Evaluator, 0, cm.Units[0], row, att.Seq); err == nil || !strings.Contains(err.Error(), "not what the cited evaluation") {
 			t.Fatalf("scored over an unjudgeable answer: %v", err)
 		}
 		row = att.Units[0]
 		row.Evaluation = record.NewID()
-		if err := st.checkLiveRow(h.st, cm.Protocol, 0, cm.Units[0], row, att.Seq); err == nil || !strings.Contains(err.Error(), "not an invocation of the unit's run") {
+		if err := st.checkLiveRow(h.st, cm.Protocol, att.Evaluator, 0, cm.Units[0], row, att.Seq); err == nil || !strings.Contains(err.Error(), "not an invocation of the unit's run") {
 			t.Fatalf("unjudgeable citing nothing: %v", err)
 		}
 	})
@@ -870,4 +870,105 @@ func TestLiveOracleIsPartOfTheHypothesis(t *testing.T) {
 			t.Fatal("fixture oracle scoring goal_achieved")
 		}
 	})
+}
+
+// The evaluator is versioned by name on the attestation: a cohort closed
+// under judge/1 (two answers, the frozen V1 prompt) verifies against the
+// bytes it was asked after the code moved to judge/2 — the fold renders
+// and reads by the named version — and a judge/1 row cannot claim
+// unjudgeable. The V1 bytes are pinned so no later "improvement" of the
+// frozen prompt can strand a judge/1 attestation.
+func TestEvaluatorVersionIsNamedOnTheAttestation(t *testing.T) {
+	if got := string(EvaluatorPromptV1([]byte("g"), []byte("d"))); got != "You are a blinded evaluator. Decide whether the deliverable achieves the goal. Judge only what is written; do not assume context.\n\nGoal:\ng\n\nDeliverable:\nd\n\nReply with JSON only: {\"outcome\":\"achieved\"|\"not_achieved\",\"confidence\":0..1,\"why\":\"one sentence\"}\n" {
+		t.Fatalf("judge/1 prompt drifted:\n%s", got)
+	}
+	s := build(t)
+	h := s.h
+	x := h.openLive(s.helpful, 4)
+	for _, q := range everestGoals {
+		h.live(q, nil)
+	}
+	if _, err := (&Lane{J: h.j, Store: h.st, Judge: judgeFor("8,849 meters"), Timeout: time.Minute, EvaluatorVersion: EvaluatorJudgeV1}).Pass(ctxBg); err != nil {
+		t.Fatal(err)
+	}
+	st := h.state() // folds under the current code: judge/1 verified by name
+	att := st.Attestations[x.ID]
+	if att == nil || att.Evaluator != EvaluatorJudgeV1 || st.Measurements[x.ID] == nil || st.Measurements[x.ID].Verdict != TreatmentHelpful {
+		t.Fatalf("attestation %+v", att)
+	}
+	rs := st.Runs.Arms[st.Assignments[att.Units[0].Assignment].ID][att.Units[0].Arm]
+	goal, _ := h.st.Get(rs.Goal.Text)
+	ev := st.Evidence[att.Units[0].Assignment][att.Units[0].Arm]
+	deliverable, _ := h.st.Get(*ev.Deliverable)
+	if inv := invocationByID(rs, att.Units[0].Evaluation); inv == nil || inv.Request != thought.Address(thought.Prompt, EvaluatorPromptV1(goal, deliverable)) {
+		t.Fatal("the cited evaluation was not asked the judge/1 prompt")
+	}
+	// the same row under judge/2's name does not verify: different bytes
+	cm := st.Commitments[x.ID]
+	if err := st.checkLiveRow(h.st, cm.Protocol, EvaluatorJudge, 0, cm.Units[0], att.Units[0], att.Seq); err == nil || !strings.Contains(err.Error(), "something other than the blinded prompt") {
+		t.Fatalf("judge/1 evaluation accepted under judge/2: %v", err)
+	}
+	// the door: a judge/1 row claiming unjudgeable; an unknown evaluator
+	bad := *att
+	bad.Units = append([]UnitRow{}, att.Units...)
+	bad.Units[0].Missing, bad.Units[0].Score = MissingUnjudgeable, 0
+	if err := bad.ValidateWire(); err == nil || !strings.Contains(err.Error(), "asked two answers") {
+		t.Fatalf("unjudgeable under judge/1: %v", err)
+	}
+	bad = *att
+	bad.Evaluator = "judge/3"
+	if err := bad.ValidateWire(); err == nil || !strings.Contains(err.Error(), "judge/3") {
+		t.Fatalf("unknown evaluator: %v", err)
+	}
+	// a judge/1 evaluator refuses the third answer as unusable
+	if _, _, err := parseEvaluation(EvaluatorJudgeV1, []byte(`{"outcome":"unjudgeable","confidence":0.5,"why":"w"}`)); err == nil {
+		t.Fatal("judge/1 read unjudgeable")
+	}
+}
+
+func invocationByID(rs *run.RunState, id record.RecordID) *invoke.Invocation {
+	for _, a := range rs.Attempts {
+		for _, is := range a.Invocations {
+			if is.Invocation.ID == id {
+				return is.Invocation
+			}
+		}
+	}
+	return nil
+}
+
+// A forged experiment naming a fixture the store does not hold is refused
+// by the fold (the door sees only the reference's shape); the
+// measurement door bounds the unjudgeable count.
+func TestFoldRefusesLiveFixtureExperimentWhoseFixtureIsMissing(t *testing.T) {
+	s := build(t)
+	h := s.h
+	fx := h.fixture("8,849 meters")
+	x, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "answer", N: 4, Expect: &fx, Why: "w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := h.snapshot()
+	defer g.close()
+	y := *x
+	y.ID, y.Seq = record.NewID(), 0
+	y.Subject = record.Ref{Kind: "experiment", ID: string(y.ID)}
+	y.Protocol.Experiment = y.ID
+	ghost := thought.Ref{Hash: "s256v1:" + strings.Repeat("ab", 32), Kind: thought.Fixture, Bytes: 5, Encoding: thought.UTF8}
+	y.Fixture = &ghost
+	g.submit("forge/ghost", &y)
+	if _, err := Fold(g.j, g.st); err == nil || !strings.Contains(err.Error(), "fixture") {
+		t.Fatalf("ghost fixture folded: %v", err)
+	}
+	m := &EffectMeasurement{Header: record.Header{ID: record.NewID(), Schema: "effect_measurement/1", Subject: record.Ref{Kind: "experiment", ID: string(x.ID)}, At: time.Now().UTC()}, Experiment: x.ID, Attestation: record.NewID(), Hypothesis: x.Hypothesis, Relation: ApplyItem, Assigned: 4, Analyzed: 3, Verdict: Insufficient, ItemEffect: Normalize(Insufficient, ApplyItem)}
+	for _, bad := range []int{-1, 2} {
+		m.Unjudgeable = bad
+		if err := m.ValidateWire(); err == nil || !strings.Contains(err.Error(), "unjudgeable") {
+			t.Fatalf("unjudgeable %d accepted: %v", bad, err)
+		}
+	}
+	m.Unjudgeable = 1
+	if err := m.ValidateWire(); err != nil {
+		t.Fatalf("unjudgeable 1 of 1: %v", err)
+	}
 }

@@ -90,7 +90,13 @@ const (
 	// judge scores it), the difference of arm means, the judge oracle.
 	DimensionAchieved = "goal_achieved"
 	EstimatorArms     = "arm_diff/1"
-	EvaluatorJudge    = "judge/1"
+	// The evaluator is versioned by name on the attestation: judge/1 asked
+	// two answers, judge/2 asks three (unjudgeable). The verifier renders
+	// the prompt and reads the answer by the version the attestation
+	// names, never by whatever the current code would ask — interpretation
+	// code changing under immutable evidence is not a refusal of history.
+	EvaluatorJudge   = "judge/2"
+	EvaluatorJudgeV1 = "judge/1"
 )
 
 // ArmSpec is one arm's forced sets: the two arms of a protocol differ by
@@ -642,12 +648,15 @@ func (r *EffectAttestation) ValidateWire() error {
 				return fmt.Errorf("effect_attestation: row %d carries live-arm fields under paired replay", i)
 			}
 		case RandomizedLive:
-			wantEval := EvaluatorJudge
+			judged := r.Evaluator == EvaluatorJudge || r.Evaluator == EvaluatorJudgeV1
 			if r.Protocol.Oracle == DeterministicFixture {
-				wantEval = Evaluator
+				judged = r.Evaluator == Evaluator
 			}
-			if r.Evaluator != wantEval || r.Estimator != EstimatorArms {
-				return fmt.Errorf("effect_attestation: randomized live under %s is evaluated by %s and estimated by arm_diff/1", r.Protocol.Oracle, wantEval)
+			if !judged || r.Estimator != EstimatorArms {
+				return fmt.Errorf("effect_attestation: randomized live under %s is evaluated by %s (not %q) and estimated by arm_diff/1", r.Protocol.Oracle, map[bool]string{true: Evaluator, false: EvaluatorJudge + "|" + EvaluatorJudgeV1}[r.Protocol.Oracle == DeterministicFixture], r.Evaluator)
+			}
+			if r.Evaluator == EvaluatorJudgeV1 && u.Missing == MissingUnjudgeable {
+				return fmt.Errorf("effect_attestation: row %d is unjudgeable under %s, which asked two answers", i, EvaluatorJudgeV1)
 			}
 			if r.Protocol.Oracle == DeterministicFixture && (u.Evaluation != "" || u.Missing == MissingUnjudgeable || u.Missing == MissingUnevaluated) {
 				return fmt.Errorf("effect_attestation: row %d carries evaluator fields under the fixture oracle", i)
@@ -760,6 +769,9 @@ func (r *EffectMeasurement) ValidateWire() error {
 	}
 	if !learn.ValidEffect(r.ItemEffect) || r.ItemEffect != Normalize(r.Verdict, r.Relation) {
 		return fmt.Errorf("effect_measurement: item effect %q is not %s normalized by %s", r.ItemEffect, r.Verdict, r.Relation)
+	}
+	if r.Unjudgeable < 0 || r.Unjudgeable > r.Assigned-r.Analyzed {
+		return fmt.Errorf("effect_measurement: unjudgeable %d is not within the %d units assigned and not analyzed", r.Unjudgeable, r.Assigned-r.Analyzed)
 	}
 	if r.Assigned < r.Analyzed || r.Analyzed < r.Exposed || r.Exposed < r.Discordant || r.Discordant < 0 {
 		return errors.New("effect_measurement: assigned ≥ analyzed ≥ exposed ≥ discordant ≥ 0")
