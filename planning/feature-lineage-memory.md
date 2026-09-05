@@ -43,13 +43,55 @@ On Python it is: a `--after` flag → `origin.parent_handle_id`, a
 from the existing `scope` stamp), and a lineage filter in the lesson
 query that the recall seam passes from `ThreadIdentity`.
 
-## Ledger (filled at land)
+## Ledger (filled at land, 2026-09-05)
 
 | column | Go | Python |
 |---|---|---|
-| wall to land (design→green→pushed) | | |
-| files touched / lines +/- | | |
-| tests added / mutations killed | | |
-| review findings (V/R/OOS) | | |
-| fixture | | |
-| edge classes met | | |
+| wall to land (design→green→pushed) | feature 17 min (18:58→19:15Z, `30393f57`); review-fix round 19 min (`f4397e9b`) | feature ~19 min to green (19:15→~19:34Z); review-fix round ~45 min incl. fast suite; landed 19:59Z (`73f4da36`) |
+| files touched / lines +/- | feature 7 code/test files +282/−12 (+2 regenerated contracts); fixes 5 files +170/−4 | feature 6 src files +122/−3 + 1 test file (9 tests); fixes 7 src files + 1 test stub, cumulative src +256/−10, test file 362 lines (19 tests) |
+| tests added / mutations killed | 4 tests + 2 assertions / 12 killed (5 feature + 7 fix) | 19 tests / 20 killed (5 feature + 15 fix) |
+| review findings (V/R/OOS) | 2 / 0 / 0 — both HIGH, both fixed same round | 8 / 0 / 0 — 5 HIGH + 3 MEDIUM, all fixed same round |
+| fixture | `TestLineageScopesRecall` (a → lesson@goal:a → b after a: Included 1, chain [b,a,ws]; stranger c: ExcludedCounts.scope 1; d after b: root a, 4-scope chain) + live `--after` on `$SP/c3` | `tests/test_lineage_memory.py` (same shape: a → lesson@a → b after a recalls; stranger c: `lineage_excluded` 2) + live `--after` on `$SP/pyws` (run 4fade67b) |
+| edge classes met | **Parent overload** — `Goal.Parent` meant fork/replay everywhere it was read; the resume sweeps skipped followed goals (review HIGH). **Fold binds by re-derivation, not by truth** — the learn fold re-derived a recall from the scope it recorded; only the run fold holds the goal (review HIGH, pattern 83 again). | **Origin conflates provenance and lineage** — `--after` stamps an origin, and origin PRESENCE was the autonomous-run proxy (NOW gained the self-verdict call). **Identity is the goal slug** — an identically-worded stranger inherits the lineage's Goal Ancestry (live find, BACKLOG). **Surface count** — ranked recall was one of five injection surfaces (graveyard, legacy inject, worker mirror, public reader, pack import) and each needed the rule. **Fail-open default** — unknown scope became "" = widest. |
+
+## Review round (one pass, codex Skeptic + Expert QA, 2026-09-05)
+
+Every finding VERIFIED in tree before fixing; none refuted, none
+out of scope. Go: (1) run fold never compared a selection's recorded
+scope to `scope(rs.Goal)` and the continuation branch compared only the
+derived arrays → `scopeMatches` on policy + recall at the attempt
+boundary, `sameQuery` on continuations; (2) resume sweeps skipped on
+`Parent != ""` → skip by origin (fork/replay). Python: (1) graveyard,
+`inject_tiered_lessons`, `memory_bridge` ingest and `query_lessons`
+read lineage rows unfiltered → one rule `_visible_in_lineage` on every
+surface, worker mirror skips lineage rows (its scope taxonomy is
+thread/run); (2) pack import rebuilt rows without lineage → "" (widest)
+→ `foreign:<root>` namespace, never a local match; (3) dedup/reinforce
+ignored lineage → B's re-learning reinforced A's row → lineage is part
+of dedup identity; (4) `_lineage_root_for` failed OPEN → fails closed
+to `unresolved:<ref>` (injected nowhere; "" only with no run context);
+(5) `--after` origin flipped NOW into the autonomous verdict path →
+`_autonomous_origin` reads the source, cli = interactive; (6) cycle
+root was start-dependent → deterministic `unresolved:cycle:<min>`
+sentinel; (7) exclusion unrecorded → `sources.lineage_excluded`
+(distinct rows); (8) `--after` accepted a run with unreadable metadata
+→ refused rc 2. Residual, both engines: promotion to workspace scope
+(next slice); Python's persona `recent_lessons` and strategy-evaluator
+inject stay workspace-only (no run context at those call sites).
+
+## Reading
+
+Same feature, same fixture, same reviewers. Go took two findings, both
+in one class the ledger already knew (fold rules that bind by equality
+are safe only when the driver satisfies them by construction — and a
+rule that re-derives from a recorded input is not that). Python took
+eight, and the eight are a map of the codebase, not of the change: the
+lesson store has five model-facing readers, transport and dedup each
+re-derive a row's identity, and the origin dict carries two meanings.
+"Which engine is cheaper to change safely" on this feature: Go, by
+wall (36 min vs ~65) and by review yield (2 vs 8) — but the honest
+denominator is surface area, and the successor has fewer surfaces
+because it is younger, not because it is better designed. The second
+feature (related goals / horizon) will lean on this one's substrate on
+both sides; the comparison gets sharper when both engines have to
+grow, not just gate.

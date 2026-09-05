@@ -291,7 +291,7 @@ platform breadth (heartbeat, notify, viz).
 Same workspace, same goals, both engines; compare at the artifact
 boundary. Then decide what the successor becomes.
 
-**Amended 2026-09-05 (Jeremy).** Order after the v1 acceptance run (items 1, 2 and 3 DONE 2026-09-05 — build-log "Post-v1 item 1/2/3"; comparison ledger in `successor-comparison.md`: both engines 6/6, Python $1.38/400 s vs Go $0.25/256 s, level gate passed):
+**Amended 2026-09-05 (Jeremy).** Order after the v1 acceptance run (items 1, 2 and 3 DONE 2026-09-05 — build-log "Post-v1 item 1/2/3"; comparison ledger in `successor-comparison.md`: both engines 6/6, Python $1.38/400 s vs Go $0.25/256 s, level gate passed; **feature 1 (lineage-scoped memory) DONE on both engines 2026-09-05** — ledger + reading in `feature-lineage-memory.md`; feature 2 = related goals / run horizon):
 (1) per-workspace working directory + operator tool policy for
 executes (the Go NOW execute ran in this repo's cwd with no web, so no
 world-needing goal compares); (2) the oracle class becomes part of the

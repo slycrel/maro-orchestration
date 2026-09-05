@@ -2221,3 +2221,27 @@ Go judges accepted the direct path, which was right here. Level gate
 for the features-on-both-sides half PASSED. Nothing changed in the
 tree for this item — the protocol document, the checker
 (`$SP/cmpcheck.py`, scratch), and the ledger are the deliverable.
+
+
+## Post-v1 feature 1 — lineage-scoped memory, both engines (2026-09-05)
+
+Design note + per-engine ledger in `planning/feature-lineage-memory.md`.
+Feature: `--after <handle>` makes a goal follow a prior run's lineage;
+lessons minted from a run scope to the lineage root; recall walks own →
+parent → root → workspace; promotion to workspace scope is NOT in this
+slice. Go `30393f57` (`run.Lineage`/`LineageOf`, `Driver.After`, door +
+fold rules for following goals, tail mints `ScopeGoal(root)`, Inspect
+names the lineage); Python `73f4da36` (`TieredLesson.lineage`,
+`recall.lineage_root`, `--after`, mint sites via `_lineage_root_for`,
+`query_lessons_scored(lineage=)`). One review pass (Skeptic + QA): Go 2
+HIGH, Python 5 HIGH + 3 MEDIUM, all verified and fixed same round (Go
+`f4397e9b`); 12 + 20 mutants killed; race suite green; contracts 0/0;
+Python fast suite green except the pre-existing date-dependent
+`test_a_string_int_field_does_not_wedge_the_decay_cycle`. Live: both
+engines' follow-ups recall the lineage lesson and a stranger does not
+(Go `$SP/c3`, Python run 4fade67b in `$SP/pyws`). Side-find (Python,
+BACKLOG): project identity is the goal slug, so an identically-worded
+stranger inherits the lineage's Goal Ancestry block — lineage is
+run-derived, project is text-derived, and they disagree. Next: feature
+2 = related goals / run horizon (Jeremy's growth target), on both
+engines, same ledger.
