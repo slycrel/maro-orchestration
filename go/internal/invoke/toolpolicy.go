@@ -1,6 +1,7 @@
 package invoke
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -80,4 +81,45 @@ func (p ToolPolicy) String() string {
 		parts = append(parts, "deny="+strings.Join(p.Deny, ","))
 	}
 	return strings.Join(parts, ";")
+}
+
+// ParsePolicyString reads the canonical form back. It is the door's check
+// on a recorded policy: a string that does not round-trip through String
+// (unsorted, duplicated, contradictory, or another shape) is not a policy
+// this engine wrote, and is refused before the first write.
+func ParsePolicyString(s string) (ToolPolicy, error) {
+	if s == "" {
+		return ToolPolicy{}, nil
+	}
+	allow, deny := "", ""
+	for _, part := range strings.Split(s, ";") {
+		switch {
+		case strings.HasPrefix(part, "allow=") && allow == "":
+			allow = strings.TrimPrefix(part, "allow=")
+		case strings.HasPrefix(part, "deny=") && deny == "":
+			deny = strings.TrimPrefix(part, "deny=")
+		default:
+			return ToolPolicy{}, fmt.Errorf("tool policy: %q is not canonical", s)
+		}
+	}
+	p, err := ParseToolPolicy(allow, deny)
+	if err != nil {
+		return ToolPolicy{}, err
+	}
+	if p.String() != s {
+		return ToolPolicy{}, fmt.Errorf("tool policy: %q is not canonical (want %q)", s, p.String())
+	}
+	return p, nil
+}
+
+// Validate is the door on a capability snapshot: a named backend whose
+// recorded tool policy, if any, is canonical.
+func (c Capabilities) Validate() error {
+	if c.Name == "" {
+		return errors.New("backend name empty")
+	}
+	if _, err := ParsePolicyString(c.ToolPolicy); err != nil {
+		return err
+	}
+	return nil
 }

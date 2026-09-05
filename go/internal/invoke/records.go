@@ -126,8 +126,8 @@ func (r *Invocation) ValidateWire() error {
 	if len(r.EffectToken) != 32 {
 		return fmt.Errorf("invocation: effect_token must be 32 hex chars")
 	}
-	if r.Backend.Name == "" {
-		return fmt.Errorf("invocation: backend name empty")
+	if err := r.Backend.Validate(); err != nil {
+		return fmt.Errorf("invocation: backend: %w", err)
 	}
 	if r.Cwd != "" && !filepath.IsAbs(r.Cwd) {
 		return fmt.Errorf("invocation: cwd %q is not absolute", r.Cwd)

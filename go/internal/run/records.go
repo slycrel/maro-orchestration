@@ -258,8 +258,13 @@ func (r *RunAttempt) ValidateWire() error {
 			return errors.New("run_attempt: agenda = the plan's cardinality with the model judge on a named backend")
 		}
 	}
-	if r.Config.Backend.Name == "" {
-		return errors.New("run_attempt: backend snapshot has no name")
+	if err := r.Config.Backend.Validate(); err != nil {
+		return fmt.Errorf("run_attempt: backend snapshot: %w", err)
+	}
+	if r.Config.JudgeBackend.Name != "" {
+		if err := r.Config.JudgeBackend.Validate(); err != nil {
+			return fmt.Errorf("run_attempt: judge backend snapshot: %w", err)
+		}
 	}
 	if err := record.ValidateID(r.Config.Policy); err != nil {
 		return fmt.Errorf("run_attempt: policy: %w", err)

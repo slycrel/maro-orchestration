@@ -501,6 +501,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				if err := checkLens(rs, a, st, store); err != nil {
 					return err
 				}
+				if err := checkBackend(rs, a, st); err != nil {
+					return err
+				}
 				a.Invocations = append(a.Invocations, st)
 			}
 		case *RunAttempt:
@@ -1476,6 +1479,37 @@ func checkLenses(rs *RunState, a *AttemptState, store *thought.Store) error {
 		if err := checkLens(rs, a, is, store); err != nil {
 			return err
 		}
+		if err := checkBackend(rs, a, is); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkBackend binds an invocation's backend snapshot to the attempt's
+// config: an execute ran on the configured executor; a judge, plan, intent
+// or render call ran on the configured judge backend (the executor itself
+// when model_judge is off — the door already says the two agree then).
+// The snapshot carries the tool policy, so a history whose invocation
+// claims a policy the attempt was not configured with is refused here,
+// not read as "what this call could reach". The tail's diagnose and the
+// evaluator's evaluate are theirs, not the goal's, and are not bound.
+func checkBackend(rs *RunState, a *AttemptState, is *invoke.State) error {
+	inv, cfg := is.Invocation, a.Attempt.Config
+	var want invoke.Capabilities
+	switch inv.Purpose {
+	case invoke.PurposeExecute:
+		want = cfg.Backend
+	case invoke.PurposeJudge, invoke.PurposePlan, invoke.PurposeIntent, invoke.PurposeRender:
+		want = cfg.Backend
+		if cfg.Judge == JudgeModel && cfg.JudgeBackend.Name != "" {
+			want = cfg.JudgeBackend
+		}
+	default:
+		return nil
+	}
+	if inv.Backend != want {
+		return fmt.Errorf("run: %s attempt %d %s invocation %s ran on backend %+v but the attempt was configured on %+v", rs.Run, a.Attempt.Attempt, inv.Purpose, inv.ID, inv.Backend, want)
 	}
 	return nil
 }

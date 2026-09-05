@@ -732,6 +732,61 @@ func TestToolPolicyAndCwd(t *testing.T) {
 	if err := inv.ValidateWire(); err != nil {
 		t.Fatalf("absolute cwd: %v", err)
 	}
+	// the door: a recorded policy is canonical or absent — a hand-edited
+	// record cannot claim a policy this engine would not have written
+	for _, bad := range []string{"allow=Bash;deny=Bash", "deny=WebSearch,WebFetch", "tools=x", "deny=", "deny=WebFetch;deny=WebSearch", "allow=Bash,Bash", "deny=WebFetch;allow=Bash", " deny=WebFetch"} {
+		inv.Backend.ToolPolicy = bad
+		if err := inv.ValidateWire(); err == nil || !strings.Contains(err.Error(), "tool policy") {
+			t.Fatalf("policy %q accepted: %v", bad, err)
+		}
+	}
+	for _, good := range []string{"", "deny=WebFetch,WebSearch", "allow=Bash,Read;deny=WebFetch", "allow=Bash"} {
+		inv.Backend.ToolPolicy = good
+		if err := inv.ValidateWire(); err != nil {
+			t.Fatalf("policy %q refused: %v", good, err)
+		}
+		if rt, err := ParsePolicyString(good); err != nil || rt.String() != good {
+			t.Fatalf("round trip %q: %q %v", good, rt.String(), err)
+		}
+	}
+}
+
+// The OS boundary: a tool-bearing request with a cwd runs the real process
+// there, and one without runs it where the engine runs. The fake CLI
+// answers with its own working directory, so a subprocess that ignored
+// Request.Cwd would answer with the test's — the acceptance-run bug.
+func TestSubprocessRunsInCwd(t *testing.T) {
+	dir := t.TempDir()
+	pwd := writeFake(t, dir, "pwd", `cat >/dev/null
+printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":0.001,"usage":{"input_tokens":1,"output_tokens":1}}\n' "$(pwd -P)"
+`)
+	sh, _ := newShell(t)
+	work := filepath.Join(t.TempDir(), "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := &Subprocess{Bin: pwd, Model: "sonnet", DefaultTimeout: 10 * time.Second}
+	req := execReq("where am I?")
+	req.Cwd = work
+	out, err := sh.Invoke(ctxBg, b, req, nil)
+	if err != nil || out.Terminal != TerminalComplete {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if real, _ := filepath.EvalSymlinks(work); string(out.Response) != real {
+		t.Fatalf("ran in %q, want %q", out.Response, real)
+	}
+	if s := foldOne(t, sh, out.Invocation); s.Invocation.Cwd != work {
+		t.Fatalf("record cwd %q", s.Invocation.Cwd)
+	}
+	here, _ := os.Getwd()
+	here, _ = filepath.EvalSymlinks(here)
+	out2, err := sh.Invoke(ctxBg, b, execReq("and now?"), nil)
+	if err != nil || string(out2.Response) != here {
+		t.Fatalf("no cwd: ran in %q, want %q (%v)", out2.Response, here, err)
+	}
+	if s := foldOne(t, sh, out2.Invocation); s.Invocation.Cwd != "" {
+		t.Fatalf("record cwd %q, want none", s.Invocation.Cwd)
+	}
 }
 
 func writeFake(t *testing.T, dir, name, body string) string {

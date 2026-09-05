@@ -6,12 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
+	"github.com/slycrel/maro-orchestration/go/internal/verdict"
 )
 
 // §13: a lens is a prefix over judgement, never over the work. Two NOW runs
@@ -453,5 +455,158 @@ func TestExecuteFrameIsBoundAndReDerived(t *testing.T) {
 	}
 	if h.j.Head() != head {
 		t.Fatal("a refused frame was written")
+	}
+}
+
+// recordForged records an outcome for an attempt that crashed after
+// execute, citing the given invocation: the judged and recorded
+// transitions a driver would write, submitted as forged records so the
+// fold — not the driver — is what accepts or refuses the history.
+func recordForged(t *testing.T, h *harness, rs *RunState, a *AttemptState, inv *invoke.State) error {
+	t.Helper()
+	res, err := verdict.Commit(ctxBg, h.j, rs.Run, 1, verdict.Candidates{Subject: runRef(rs.Run), VerdictKind: verdict.KindClosure, Verdicts: h.verdicts(t, rs.Run)}, verdict.DefaultThresholds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := inv.Receipt.Response
+	o := &Outcome{Lane: LaneNow, Terminal: inv.Terminal.State, Invocation: inv.Invocation.ID, Produced: 1, Recall: a.Recall.ID, Receipt: inv.Receipt.ID, Response: &resp, Usage: inv.Receipt.Usage, Model: inv.Invocation.Backend.Model, GoalText: rs.Goal.Text, Closure: res.ID, ClosureOut: res.Outcome, ClosureCnf: res.Confidence}
+	hd := func() record.Header {
+		return record.Header{ID: record.NewID(), RunID: rs.Run, Attempt: 1, Subject: runRef(rs.Run), At: time.Now().UTC()}
+	}
+	if err := forge(t, h, "judged", &Transition{Header: hd(), From: Executing, To: Judged}); err != nil {
+		t.Fatalf("judged transition refused: %v", err)
+	}
+	return forge(t, h, "rec", &Transition{Header: hd(), From: Judged, To: Recorded, Outcome: o})
+}
+
+// invocationTwin is a wire-valid copy of a finished invocation under a new
+// id: the invocation, its dispatch, terminal and receipt — the records a
+// driver writes for one call — with the request (and so the subject)
+// swapped for another. Everything else is the original's.
+func invocationTwin(t *testing.T, rs *RunState, is *invoke.State, request thought.Ref) (*invoke.State, []record.Record) {
+	t.Helper()
+	f := *is.Invocation
+	f.ID, f.Seq, f.Request = record.NewID(), 0, request
+	f.Subject = record.Ref{Kind: "prompt", ID: request.Hash}
+	tok, err := invoke.NewEffectToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.EffectToken = tok
+	sub := record.Ref{Kind: "invocation", ID: string(f.ID)}
+	disp := &invoke.Dispatched{Header: record.Header{ID: record.NewID(), RunID: rs.Run, Attempt: 1, Subject: sub, At: time.Now().UTC()}, Invocation: f.ID}
+	tm := *is.Terminal
+	tm.ID, tm.Seq, tm.Subject, tm.Invocation = record.NewID(), 0, sub, f.ID
+	rc := *is.Receipt
+	rc.ID, rc.Seq, rc.Subject, rc.Invocation = record.NewID(), 0, sub, f.ID
+	return &invoke.State{Invocation: &f, Terminal: &tm, Receipt: &rc}, []record.Record{&f, disp, &tm, &rc}
+}
+
+// End to end through Fold and Resume: under a framed attempt, a recorded
+// outcome that cites an execute whose request is the bare goal (the
+// pre-frame shape) is refused by the exposure rule — the rule wired at
+// Recorded, not the helper alone. The twin invocation folds on its own
+// (an invocation is a fact; the outcome carries the exposure claim), and
+// the honest one records.
+func TestFoldRefusesUnframedExecuteUnderFramedAttempt(t *testing.T) {
+	mk := func() (*harness, *RunState, *AttemptState) {
+		h := open(t)
+		d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("Paris.")}), nil)
+		d.Frame, d.CrashAt = DefaultFrame, "after_execute"
+		if _, err := d.Run(ctxBg, []byte("What is the capital of France?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+			t.Fatal(err)
+		}
+		rs := h.only()
+		return h, rs, rs.Latest()
+	}
+	h, rs, a := mk()
+	if err := recordForged(t, h, rs, a, a.Invocations[0]); err != nil {
+		t.Fatalf("honest framed history refused: %v", err)
+	}
+	h2, rs2, a2 := mk()
+	real := a2.Invocations[0]
+	req, err := h2.st.Get(real.Invocation.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(req), DefaultFrame+"\n\n") {
+		t.Fatalf("request not framed:\n%s", req)
+	}
+	bare, err := h2.st.Put(thought.Prompt, req[len(DefaultFrame)+2:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	twin, recs := invocationTwin(t, rs2, real, bare)
+	if err := forge(t, h2, "twin", recs...); err != nil {
+		t.Fatalf("a bare invocation alone must fold: %v", err)
+	}
+	rs2 = h2.only()
+	a2 = rs2.Latest()
+	if len(a2.Invocations) != 2 || a2.Invocations[1].Invocation.ID != twin.Invocation.ID || a2.Invocations[1].Receipt == nil {
+		t.Fatalf("twin not attached: %+v", a2.Invocations)
+	}
+	if err := recordForged(t, h2, rs2, a2, a2.Invocations[1]); err == nil || !strings.Contains(err.Error(), "frame+goal+recall") {
+		t.Fatalf("unframed execute recorded under a framed attempt: %v", err)
+	}
+	d2 := h2.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("Paris.")}), nil)
+	d2.Frame = DefaultFrame
+	if _, err := d2.Resume(ctxBg); err == nil || !strings.Contains(err.Error(), "frame+goal+recall") {
+		t.Fatalf("resume papered over the unframed execute: %v", err)
+	}
+}
+
+// An invocation's backend snapshot is bound to the attempt's config: a
+// history whose execute claims a tool policy (or any capability) the
+// attempt was not configured with is refused as it attaches; a judge call
+// on the executor under a model-judge config likewise; and the door
+// refuses an attempt whose snapshot carries a non-canonical policy.
+func TestFoldRefusesBackendSwapInHistory(t *testing.T) {
+	mk := func() (*harness, *RunState, *AttemptState, *invoke.State) {
+		h := open(t)
+		h.policy(t, learn.MechModelJudge, true, learn.Provisional)
+		exec := scripted(outward, invoke.ScriptedCall{Response: []byte("Paris.")})
+		judge := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-judge", Model: "judge"}, Calls: []invoke.ScriptedCall{{Response: []byte(closureYes)}}}
+		d := h.driver(exec, nil)
+		d.Judge, d.ModelJudge, d.CrashAt = judge, true, "after_execute"
+		if _, err := d.Run(ctxBg, []byte("What is the capital of France?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+			t.Fatal(err)
+		}
+		rs := h.only()
+		a := rs.Latest()
+		if a.Attempt.Config.JudgeBackend.Name != "scripted-judge" || a.Attempt.Config.Backend.Name != "scripted-agent" {
+			t.Fatalf("config: %+v", a.Attempt.Config)
+		}
+		return h, rs, a, a.Invocations[0]
+	}
+	cases := []struct {
+		name string
+		mut  func(f *invoke.Invocation)
+	}{
+		{"policy", func(f *invoke.Invocation) { f.Backend.ToolPolicy = "deny=Bash" }},
+		{"outward", func(f *invoke.Invocation) { f.Backend.ActsOutward = false }},
+		{"model", func(f *invoke.Invocation) { f.Backend.Model = "other" }},
+		{"judge on executor", func(f *invoke.Invocation) { f.Purpose = invoke.PurposeJudge; f.Tools = false; f.Cwd = "" }},
+	}
+	for _, c := range cases {
+		h, rs, _, real := mk()
+		twin, recs := invocationTwin(t, rs, real, real.Invocation.Request)
+		c.mut(twin.Invocation)
+		if err := forge(t, h, "swap", recs...); err == nil || !strings.Contains(err.Error(), "ran on backend") {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+	}
+	// the same twin with the attempt's own snapshot folds: the rule is
+	// about the snapshot, not about a second invocation
+	h, rs, a, real := mk()
+	_, recs := invocationTwin(t, rs, real, real.Invocation.Request)
+	if err := forge(t, h, "same", recs...); err != nil {
+		t.Fatalf("honest twin refused: %v", err)
+	}
+	// the door: a non-canonical policy on an attempt's snapshot
+	att := *a.Attempt
+	att.ID, att.Seq, att.Attempt, att.RecoversFrom = record.NewID(), 0, 2, 1
+	att.Config.Backend.ToolPolicy = "deny=Bash;allow=Bash"
+	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "att2", Epoch: h.j.Epoch(), Records: []record.Record{&att}}); err == nil || !strings.Contains(err.Error(), "tool policy") {
+		t.Fatalf("non-canonical policy on an attempt accepted: %v", err)
 	}
 }

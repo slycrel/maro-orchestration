@@ -2015,3 +2015,58 @@ run's tools write. (4) `tool_policy` is in `Capabilities`, so a
 by construction, which is honest but means no fold-side rule can
 cite a policy; policy is process-checked (`args`), record-visible,
 fold-blind.
+
+**Review round (Skeptic + Expert QA on codex, one pass).** Findings,
+verified in the tree before any fix. VERIFIED and fixed same round:
+(A) HIGH (Skeptic) — the fold never bound an invocation's backend
+snapshot to the attempt's config, so a forged execute could claim any
+tool policy (or `ActsOutward`, model) and `Fold` accepted it; the
+policy was self-report. Now `checkBackend` runs as each invocation
+attaches and again in the `Recorded` sweep: an execute ran on
+`Config.Backend`; a judge/plan/intent/render call ran on the
+configured judge backend (the executor when model_judge is off); the
+tail's diagnose and the evaluator's evaluate are theirs and unbound.
+Struct equality on `Capabilities`, so the policy string is part of it.
+The driver satisfies it by construction — each attempt's config is
+snapshotted from the same driver's backends that make its calls, and a
+resume opens a new attempt — and every existing test passed unchanged.
+(B) MEDIUM (QA) — `Capabilities.ToolPolicy` was record-visible but
+not door-validated: `ParsePolicyString` reads the canonical form back
+and `Capabilities.Validate` requires round-trip equality; the
+invocation door and the attempt door (executor and judge snapshots)
+call it. (C) MEDIUM (both) — the cwd test stopped at the scripted
+backend, so removing `cmd.Dir = req.Cwd` survived: `TestSubprocessRunsInCwd`
+runs a fake CLI that answers with `pwd -P` and asserts the response is
+the request's cwd (and the engine's own cwd without one). (D) MEDIUM
+(both) — the frame test called `checkExposure` directly, so deleting
+the call at `Recorded` survived: `TestFoldRefusesUnframedExecuteUnderFramedAttempt`
+forges a wire-valid twin of the honest execute (invocation, dispatch,
+terminal, receipt) with the bare request under the framed attempt and
+drives it through `Fold` and `Resume`, refused as "frame+goal+recall";
+`TestFoldRefusesBackendSwapInHistory` does the same with the snapshot
+swapped four ways. Seven must-detect mutations, all killed: drop the
+`Recorded` exposure call; drop the frame from the re-derivation; ignore
+`Request.Cwd`; drop the attach-time `checkBackend`; drop the deny list
+from the CLI args; drop the policy door on invocations; drop it on
+attempts. REFUTED: (E) HIGH (Skeptic) — "the frame is optional, so a
+forged bare NOW history is accepted": an attempt with no frame and a
+bare request is an honest history of an unframed run, recorded as such
+(`frame: none (bare goal)`), the same standing as the neutral lens; a
+forgery is a framed attempt with a bare request, and that is what (D)
+refuses. Whether v2 requires a frame on every production NOW attempt
+is a schema-bump question, noted under residuals. OUT-OF-SCOPE leads
+(pre-existing fold rules, no in-range change exposes them; both worth
+a must-detect fixture): (F) HIGH (QA) — a run-scoped verdict journaled
+BEFORE its `RunAttempt` skips `checkJudgeVerdict` (`attemptNoErr`
+returns nil and the verdict stays in the global map), so a later
+Resolution can cite an unchecked judge verdict; probe:
+`TestFoldRefusesVerdictBeforeItsAttempt`. (G) HIGH (QA) —
+`verdict.Check` re-derives a Resolution from the candidates it names,
+never against the complete committed set for its subject, so a
+Resolution that omits a higher-standing verdict or a refuting
+observation re-derives cleanly; probe:
+`TestFoldRefusesResolutionOmittingCommittedCandidate`. UNSETTLED: none
+the reviewers could not run `go test` (read-only sandbox) and named
+the tests; every test above ran here. Residual added: (5) the
+`Recorded`-sweep `checkBackend` is redundant defense behind the
+attach-time one and no mutation kills it alone.
