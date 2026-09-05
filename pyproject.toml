@@ -178,6 +178,7 @@ py-modules = [
     "knowledge_bridge",
     "knowledge_lens",
     "knowledge_web",
+    "landscape",
     "lat_inject",
     "lens_ablation",
     "lesson_provenance",

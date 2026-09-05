@@ -111,16 +111,15 @@ class PriorAttempt:
 class ThreadIdentity:
     """Where this goal came from.
 
-    Resolved from run-metadata origin (handle_id chain) when the caller has
-    one; otherwise from the project's ancestry.json via ancestry.py — the same
-    source loop_init's prompt injection reads, so the two lineage strings in
-    the loop prompt can't disagree (BACKLOG: ancestry double-injection).
+    Resolved from run-metadata origin (handle_id chain): the operator's
+    `--after`, a task-path dispatch, or the landscape's own decision
+    (src/landscape.py). The project-ancestry (goal-slug) fallback was retired
+    2026-09-05 when the landscape took over the relation decision.
     """
     parent_goal: str
     parent_handle_id: str
-    chain: List[str]     # immediate parent first; handle_ids (origin walk) or
-                         # project slugs (ancestry.json fallback, source="ancestry")
-    source: str          # task_store | agent_loop | director | direct | ancestry | ...
+    chain: List[str]     # immediate parent first; handle_ids (origin walk)
+    source: str          # task_store | agent_loop | director | direct | cli | ...
 
 
 @dataclass
@@ -399,30 +398,6 @@ def _thread_from_current_run() -> Optional[ThreadIdentity]:
     return _resolve_thread(_origin_of_run(hid))
 
 
-def _thread_from_project_ancestry(project: str) -> Optional[ThreadIdentity]:
-    """Lineage from the project's ancestry.json (ancestry.py).
-
-    The unification half of the BACKLOG ancestry-double-injection item: when
-    run-metadata origin gives recall nothing, consult the same chain
-    loop_init's `build_ancestry_prompt` injects instead of staying silent —
-    one source of truth for both lineage strings in the loop prompt.
-    """
-    if not project:
-        return None
-    from orch_items import project_dir
-    from ancestry import get_project_ancestry
-    pa = get_project_ancestry(project_dir(project))
-    if not pa or not pa.ancestry:
-        return None
-    nodes = pa.ancestry  # top-level mission first, immediate parent last
-    return ThreadIdentity(
-        parent_goal=nodes[-1].title,
-        parent_handle_id="",
-        chain=[n.id for n in reversed(nodes)],  # immediate parent first
-        source="ancestry",
-    )
-
-
 def _normalize(text: str) -> str:
     return " ".join((text or "").lower().split())
 
@@ -656,8 +631,11 @@ def recall(
         thread = _resolve_thread(origin)
         if thread is None:
             thread = _thread_from_current_run()
-        if thread is None:
-            thread = _thread_from_project_ancestry(project)
+        # No project-ancestry (goal-slug) fallback any more: the landscape
+        # decides a goal's relation to prior runs before it runs and stamps
+        # the decided parent on the origin (src/landscape.py, 2026-09-05).
+        # The slug path decided lineage by string identity — an identically
+        # worded stranger inherited a lineage's ancestry (feature-1 side-find).
     except Exception as exc:
         log.debug("recall: thread resolution failed: %s", exc)
         thread = None

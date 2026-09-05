@@ -355,6 +355,7 @@ def _run_now(
     handle_id: str,
     adapter,
     verbose: bool = False,
+    context: str = "",
 ) -> Dict[str, Any]:
     """Execute a NOW-lane task: single LLM call, returns result dict.
 
@@ -386,7 +387,7 @@ def _run_now(
                 LLMMessage("system",
                            _NOW_SYSTEM + (_NOW_LINK_READ if enrichment else "")),
                 LLMMessage("user",
-                           f"{enrichment}\n\n{message}" if enrichment else message),
+                           "\n\n".join(p for p in (enrichment, context, message) if p)),
             ],
             max_tokens=2048,
             temperature=0.4,
@@ -831,6 +832,7 @@ def handle(
     origin: Optional[Origin] = None,
     persona: Optional[str] = None,
     measurement_class: Optional[str] = None,
+    fresh: bool = False,
 ) -> HandleResult:
     """Process an incoming request through Maro's handle.
 
@@ -864,6 +866,7 @@ def handle(
             origin=origin,
             persona=persona,
             measurement_class=measurement_class,
+            fresh=fresh,
         )
         return result
     except Exception as _handle_exc:
@@ -1120,6 +1123,7 @@ def _handle_impl(
     origin: Optional[Origin] = None,
     persona: Optional[str] = None,
     measurement_class: Optional[str] = None,
+    fresh: bool = False,
 ) -> HandleResult:
     """Process an incoming request through Maro's handle.
 
@@ -1282,6 +1286,58 @@ def _handle_impl(
     elif dry_run:
         adapter = _DryRunAdapter()
 
+    # The landscape (feature-related-runs, src/landscape.py): a goal whose
+    # origin names no parent decides its relation to the workspace's prior
+    # runs — fresh / related / rerun — before it runs. related and rerun make
+    # the goal follow the chosen run (its origin names the parent; recall
+    # walks the lineage, lessons mint at its root) and the prior's answer
+    # rides into the request as context. `--after` already named the parent
+    # (operator override); `--fresh` and dry runs record a skipped landscape.
+    _related_ctx = ""
+    if not (origin or {}).get("parent_handle_id"):
+        try:
+            import landscape as _landscape
+            def _judge(_adapter=adapter):
+                # the landscape's one call rides the hosted-free family when
+                # it is available (same seat as the NOW verdict judge), else
+                # the run's own adapter — a cheap call either way. Built
+                # only when there is a candidate to judge.
+                try:
+                    from hosted_free import build_hosted_free_adapter as _hf_build
+                    _hf = _hf_build()
+                except Exception:
+                    _hf = None
+                return _hf if _hf is not None else _adapter
+            _land = _landscape.decide(
+                _raw_input, handle_id=handle_id,
+                adapter=None if dry_run else _judge,
+                fresh=bool(fresh or dry_run),
+                why="" if fresh else ("dry_run" if dry_run else ""))
+            origin = _landscape.apply(handle_id, origin, _land)
+            _related_ctx = _landscape.related_context(_land)
+            log.info("landscape: %s (%s) %d candidate(s) of %d scanned%s",
+                     _land.get("relation"), _land.get("rule"),
+                     len(_land.get("candidates") or []), _land.get("scanned", 0),
+                     f" → follows {_land['chosen']}" if _land.get("chosen") else "")
+            if verbose:
+                print(f"[maro:{handle_id}] landscape: {_land.get('relation')} "
+                      f"({_land.get('rule')}; {len(_land.get('candidates') or [])} "
+                      f"candidate(s) of {_land.get('scanned', 0)} scanned)"
+                      + (f" — follows run {_land['chosen']}: {_land.get('reason', '')}"
+                         if _land.get("chosen") else ""),
+                      file=sys.stderr, flush=True)
+        except Exception as _land_exc:
+            # The decision is recorded even when the stage itself fails: an
+            # unreadable landscape is fresh, and the run is not blocked on it.
+            log.debug("landscape: stage failed: %s", _land_exc)
+            try:
+                from runs import stamp_run_metadata_for as _stamp_land
+                _stamp_land(handle_id, {"landscape": {
+                    "rule": "judge_unreadable", "relation": "fresh",
+                    "reason": f"stage failed: {str(_land_exc)[:200]}"}})
+            except Exception:
+                pass
+
     # Classify intent
     introspects_self = False
     if force_lane:
@@ -1411,7 +1467,8 @@ def _handle_impl(
             # Fall through to the agenda branch below
 
     if lane == "now":
-        outcome = _run_now(message, handle_id, adapter, verbose=verbose)
+        outcome = _run_now(message, handle_id, adapter, verbose=verbose,
+                           context=_related_ctx)
 
         # Status honesty for autonomous callers: NOW "done" means the
         # completion call returned, not that the goal was achieved — a
@@ -2204,6 +2261,8 @@ def _handle_impl(
         # unlearnable. Arrives pre-labeled (dispatch_envelope.operator_block).
         if operator_context:
             _extra_ctx_parts.append(operator_context)
+        if _related_ctx:
+            _extra_ctx_parts.append(_related_ctx)
         # NOW→AGENDA verdict escalation: the failed quick answer rides along
         # so the orchestrated run doesn't re-answer from model knowledge.
         if _now_escalation_context:
@@ -4195,7 +4254,8 @@ def main(argv=None):
     parser.add_argument("--repo", help="Path to target repo (auto-injects stack context into decompose)")
     parser.add_argument("--model", "-m", help="LLM model string")
     parser.add_argument("--lane", choices=["now", "agenda"], help="Force a specific lane")
-    parser.add_argument("--after", metavar="HANDLE_ID", help="Follow a prior run: this goal joins its lineage (recall walks it; lessons minted here stay with it)")
+    parser.add_argument("--after", metavar="HANDLE_ID", help="Follow a prior run: this goal joins its lineage (recall walks it; lessons minted here stay with it). Overrides the landscape's own decision.")
+    parser.add_argument("--fresh", action="store_true", help="Skip the landscape: do not look at prior runs; this goal is the root of its own lineage")
     parser.add_argument("--persona", help="Force a specific persona by name (same as a 'persona:<name>:' prefix in the message; unknown names fall back to auto-selection)")
     from ancestry import MEASUREMENT_CLASSES
     parser.add_argument("--measurement-class", choices=MEASUREMENT_CLASSES, default="organic", help="Success-measurement cohort provenance (default: organic)")
@@ -4245,6 +4305,9 @@ def main(argv=None):
                 print(f"[maro] attached {rec['name']} ({rec['bytes']} bytes)",
                       file=sys.stderr)
 
+    if getattr(args, "after", None) and getattr(args, "fresh", False):
+        print("Error: --after and --fresh contradict: one follows a run, the other refuses to look", file=sys.stderr)
+        return 2
     if getattr(args, "after", None):
         # Lineage: the new goal follows a prior run. Its origin names the
         # parent; recall walks the chain; lessons minted here scope to the
@@ -4281,6 +4344,7 @@ def main(argv=None):
             measurement_class=args.measurement_class,
             operator_context=_attach_ctx,
             origin=_attach_origin,
+            fresh=bool(getattr(args, "fresh", False)),
         )
     except RuntimeError as e:
         # build_adapter() raises RuntimeError with an actionable, human-facing

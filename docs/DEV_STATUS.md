@@ -12,13 +12,13 @@ status: living
 |---|---|---|---|
 | **19** (30d: +0) | 23 | 6 | 39% |
 
-- ⚠ **the ledger itself is 16 days stale.** A flat verified count from an unmaintained doc and a flat count from stalled work render identically; this one may be bookkeeping lag, not a plateau.
+- ledger last updated 0d ago — the count above is current enough to read as real.
 
 **Throughput and fan-out**
 
-- 11 commits in 7d, 503 in 30d
+- 13 commits in 7d, 505 in 30d
 - **Actionable Stack** open boxes: **79** (30d: +40)
-- net new open items per 10 commits: **+0.80** — findings are outrunning closure
+- net new open items per 10 commits: **+0.79** — findings are outrunning closure
 - ⚠ this delta counts one SECTION, so an archive pass or a re-org moves it without any work changing hands. Read the rate as a coarse direction, never as a score.
 
 **Actionable Stack, by kind** — the three things it contains, which look identical on the page
