@@ -738,6 +738,9 @@ func init() {
 	reg(KindTransition, Transition{}, "the driver at every stage boundary; Ack; the outbox",
 		"run fold (Runs, Mission); the outcomes view (B6 row from recorded); learning eligibility (recorded)",
 		"where a restart resumes; whether the mission is delivered, unacknowledged, or failed")
+	reg(KindLandscape, Landscape{}, "the driver's landscape stage (before attempt 1; one per run)",
+		"the fold (lineage, related context); Inspect; recall/policy scope",
+		"the run's relation to prior runs: fresh, related (follows one), rerun (follows one, reuses its plan)")
 	reg(KindMeteringTarget, MeteringTarget{}, "intake (the operator's --target, with the goal, one command)",
 		"the driver's Deliver stage (the metering line, the overage); `runs show`",
 		"the envelope the run is measured against (§11): a target with a why, never a constraint")

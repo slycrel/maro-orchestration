@@ -102,6 +102,9 @@ type Driver struct {
 	// walks the prior lineage and the tail's lessons mint at its root. Nil =
 	// a root goal of its own. Never combined with Replay.
 	After *Lineage
+	// Fresh skips the landscape: the goal is the root of its own lineage
+	// and no prior run is consulted (recorded as such; no call).
+	Fresh bool
 	// Lens is the persona lens every judge request of this driver's runs
 	// is rendered under (§13); "" or "neutral" = no prefix. Recorded in
 	// the attempt config; the fold checks each judge request begins with it.
@@ -318,7 +321,7 @@ func (d *Driver) policy(ctx context.Context, rs *RunState, n uint32) (*learn.Pol
 	if rs.Family.Family != FamilyNone {
 		family = string(rs.Family.Family)
 	}
-	pol := learn.SelectPolicy(led, learn.Query{Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable, Arm: rs.Goal.Arm})
+	pol := learn.SelectPolicy(led, learn.Query{Scope: scope(rs), Family: family, Standing: learn.Selectable, Arm: rs.Goal.Arm})
 	pol.Header = header(runRef(rs.Run), rs.Run, n, "policy_selection/1")
 	recs := []record.Record{pol}
 	for i, rule := range led.PolicyRules(pol) {
@@ -398,6 +401,9 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 		if d.Replay != nil {
 			return nil, fmt.Errorf("%w: a replay goal's lineage is its unit's; it cannot also follow %s", ErrConfig, d.After.Goal)
 		}
+		if d.Fresh {
+			return nil, fmt.Errorf("%w: --after follows %s and --fresh refuses to look; not both", ErrConfig, d.After.Goal)
+		}
 		goal.Parent, goal.Root = d.After.Goal, d.After.Root
 	}
 	var extra []record.Record
@@ -418,6 +424,9 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 	rs := &RunState{Run: record.RunID(record.NewID()), Goal: goal, Family: fam, Target: target}
 	d.emit(rs, 0, "intake", "", string(fam.Family))
 	if err := d.crash("after_intake"); err != nil {
+		return nil, err
+	}
+	if err := d.lineage(ctx, rs, goalText); err != nil {
 		return nil, err
 	}
 	return d.drive(ctx, rs, nil, nil)
@@ -648,7 +657,7 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 	if err != nil {
 		return nil, err
 	}
-	prompt := Lensed(ft, append(append([]byte{}, text...), block...))
+	prompt := Lensed(ft, append(append(append([]byte{}, text...), rs.Related...), block...))
 	tools := d.Backend.Capabilities().ActsOutward && !d.Confined
 	cwd, err := d.work(tools)
 	if err != nil {
@@ -693,13 +702,14 @@ func (d *Driver) sameRecallPolicy(rs *RunState, prev *AttemptState, n uint32) bo
 
 // scope is the run's memory scope chain: own goal → parents → root →
 // workspace (§3). v1 runs one level deep; the chain is still walked.
-func scope(g *Goal) []learn.ScopePath {
+func scope(rs *RunState) []learn.ScopePath {
+	g := rs.Goal
 	chain := []learn.ScopePath{learn.ScopeGoal(g.ID)}
-	if g.Parent != "" {
-		chain = append(chain, learn.ScopeGoal(g.Parent))
+	if rs.Parent != "" {
+		chain = append(chain, learn.ScopeGoal(rs.Parent))
 	}
-	if g.Root != g.ID && g.Root != g.Parent {
-		chain = append(chain, learn.ScopeGoal(g.Root))
+	if rs.Root != g.ID && rs.Root != rs.Parent {
+		chain = append(chain, learn.ScopeGoal(rs.Root))
 	}
 	return append(chain, learn.ScopeWorkspace)
 }
@@ -904,7 +914,7 @@ func (d *Driver) recall(ctx context.Context, rs *RunState, n uint32, continues *
 		}
 		// the policy boundary's second consumer: MechRecall off = every
 		// item excluded, the request is the goal alone
-		sel = learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs.Goal), Family: family, Standing: learn.Selectable, Off: !cfg.Mechanisms[learn.MechRecall], Arm: rs.Goal.Arm})
+		sel = learn.Recall(led, learn.Query{Purpose: string(invoke.PurposeExecute), Scope: scope(rs), Family: family, Standing: learn.Selectable, Off: !cfg.Mechanisms[learn.MechRecall], Arm: rs.Goal.Arm})
 	}
 	sel.Header = header(runRef(rs.Run), rs.Run, n, "recall_selection/1")
 	sel.Purpose = invoke.PurposeExecute
@@ -1192,7 +1202,25 @@ func (d *Driver) StartGoal(ctx context.Context, led *Ledger, g *Goal) (*Report, 
 	// the goal's envelope was committed with it: a run started after a
 	// restart is measured against it exactly as a run started at intake
 	rs := &RunState{Run: record.RunID(record.NewID()), Goal: g, Family: fam, Target: led.Targets[g.ID]}
+	text, err := d.Store.Get(g.Text)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.lineage(ctx, rs, text); err != nil {
+		return nil, err
+	}
 	return d.drive(ctx, rs, nil, nil)
+}
+
+// lineage settles a new run's lineage before its first attempt: a goal
+// whose lineage was set at intake (operator --after, fork child, replay
+// arm) carries it; every other goal reads the landscape and decides.
+func (d *Driver) lineage(ctx context.Context, rs *RunState, goalText []byte) error {
+	if rs.Goal.Parent != "" || rs.Goal.Origin == OriginFork || rs.Goal.Origin == OriginReplay {
+		rs.Parent, rs.Root = rs.Goal.Parent, rs.Goal.Root
+		return nil
+	}
+	return d.landscape(ctx, rs, goalText)
 }
 
 // ResumeRun drives one non-terminal run from its last committed stage: a
@@ -1201,6 +1229,10 @@ func (d *Driver) StartGoal(ctx context.Context, led *Ledger, g *Goal) (*Report, 
 // honest failure). Validate first.
 func (d *Driver) ResumeRun(ctx context.Context, rs *RunState) (*Report, error) {
 	a := rs.Latest()
+	if a == nil {
+		// the process died between the landscape and the first attempt
+		return d.drive(ctx, rs, nil, nil)
+	}
 	if a.Has(Recorded) != nil {
 		return d.deliver(ctx, rs, a)
 	}

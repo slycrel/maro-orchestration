@@ -21,10 +21,17 @@ func Inspect(rs *RunState) []string {
 		arm = string(rs.Goal.Arm.Arm) + " (assignment " + string(rs.Goal.Arm.Assignment) + ")"
 	}
 	lineage := "root of its own lineage"
-	if rs.Goal.Parent != "" {
-		lineage = fmt.Sprintf("follows %s, root %s", rs.Goal.Parent, rs.Goal.Root)
+	if rs.Parent != "" {
+		lineage = fmt.Sprintf("follows %s, root %s", rs.Parent, rs.Root)
 	}
 	lines = append(lines, fmt.Sprintf("goal %s: family %s, origin %s, lane %s, arm %s, %s", rs.Goal.ID, rs.Family.Family, rs.Goal.Origin, rs.Goal.Lane, arm, lineage))
+	if ls := rs.Landscape; ls != nil {
+		chosen := ""
+		if ls.Chosen != "" {
+			chosen = " run " + HandleOf(ls.Chosen)
+		}
+		lines = append(lines, fmt.Sprintf("landscape: %s%s (%s; %d candidate(s) of %d scanned, %d below the floor)%s", ls.Relation, chosen, ls.Rule, len(ls.Candidates), ls.Scanned, ls.BelowFloor, map[bool]string{true: ": " + ls.Reason, false: ""}[ls.Reason != ""]))
+	}
 	lens := a.Attempt.Config.Lens
 	if lens == "" {
 		lens = LensNeutral

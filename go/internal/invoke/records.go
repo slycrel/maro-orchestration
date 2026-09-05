@@ -25,16 +25,17 @@ import (
 type Purpose string
 
 const (
-	PurposeExecute  Purpose = "execute"
-	PurposeJudge    Purpose = "judge"
-	PurposePlan     Purpose = "plan"
-	PurposeIntent   Purpose = "intent"
-	PurposeRender   Purpose = "render"
-	PurposeDiagnose Purpose = "diagnose" // the tail's model lens over a recorded run
-	PurposeEvaluate Purpose = "evaluate" // the experiment evaluator's blinded score of a unit's deliverable
+	PurposeExecute   Purpose = "execute"
+	PurposeJudge     Purpose = "judge"
+	PurposePlan      Purpose = "plan"
+	PurposeIntent    Purpose = "intent"
+	PurposeRender    Purpose = "render"
+	PurposeDiagnose  Purpose = "diagnose"  // the tail's model lens over a recorded run
+	PurposeEvaluate  Purpose = "evaluate"  // the experiment evaluator's blinded score of a unit's deliverable
+	PurposeLandscape Purpose = "landscape" // the run's relation to prior runs, decided before its first attempt
 )
 
-var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, PurposePlan: true, PurposeIntent: true, PurposeRender: true, PurposeDiagnose: true, PurposeEvaluate: true}
+var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, PurposePlan: true, PurposeIntent: true, PurposeRender: true, PurposeDiagnose: true, PurposeEvaluate: true, PurposeLandscape: true}
 
 // Capabilities is what a backend declares about itself, snapshotted into the
 // Invocation at decision time so the decision and its receipt agree.

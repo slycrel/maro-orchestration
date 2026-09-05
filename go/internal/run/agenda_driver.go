@@ -146,7 +146,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			return nil, nil, err
 		}
 		if o == nil {
-			o, resp, err = invoke_(invoke.PurposeIntent, intentPrompt(goal), false, false)
+			o, resp, err = invoke_(invoke.PurposeIntent, intentPrompt(goal, rs.Related), false, false)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -183,7 +183,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 				return nil, nil, err
 			}
 		} else {
-			o, resp, err = invoke_(invoke.PurposePlan, planPrompt(goal, intent.Interpretation, block), len(block) > 0, false)
+			o, resp, err = invoke_(invoke.PurposePlan, planPrompt(goal, intent.Interpretation, rs.Related, block), len(block) > 0, false)
 			if err != nil {
 				return nil, nil, err
 			}

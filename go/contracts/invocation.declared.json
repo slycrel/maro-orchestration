@@ -11,7 +11,7 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^(execute|judge|plan|intent|render|diagnose|evaluate)$",
+      "pattern": "^(execute|judge|plan|intent|render|diagnose|evaluate|landscape)$",
       "rejects": "dance",
       "measured_by": "internal/invoke:TestInvokeRefusesBeforeWriting"
     },

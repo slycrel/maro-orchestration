@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -147,6 +149,17 @@ type RunState struct {
 	Attempts []*AttemptState // by attempt number, dense from 1
 	Closure  *verdict.Resolution
 	Target   *MeteringTarget // the goal's metering target (§11), when one was committed with it
+	// Landscape is the run's relation decision (feature-related-runs);
+	// nil for a goal whose lineage was set at intake (operator --after, a
+	// fork child, a replay arm). Parent/Root are the run's lineage as
+	// derived: the goal's own when set there, else the landscape's chosen
+	// run's, else its own. Related is the rendered context of the chosen
+	// run that rides into the run's requests ("" when fresh).
+	Landscape  *Landscape
+	Parent     record.RecordID
+	Root       record.RecordID
+	Related    []byte
+	TerminalAt uint64 // Seq of the transition that made the run terminal (0 = not yet)
 }
 
 // Latest is the newest attempt.
@@ -228,6 +241,11 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	memberOf := map[record.RunID]*ForkState{}
 	replays := map[record.RecordID]map[string]*RunState{}
 	forkedGoals := map[record.RecordID]bool{}
+	// the journal has no engine-version record; the first landscape it
+	// holds is the evidence that, from there on, every production run
+	// decided its relation before starting (history before it is read as
+	// it was written: each run the root of its own lineage)
+	var firstLandscape uint64
 	// invocation states are folded up front so transitions can be checked
 	// against evidence in one pass
 	inv, err := invoke.Fold(pr)
@@ -520,6 +538,33 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				}
 				a.Invocations = append(a.Invocations, st)
 			}
+		case *Landscape:
+			rs := get(x.RunID)
+			if rs.Goal != nil || len(rs.Attempts) != 0 {
+				return fmt.Errorf("run: %s landscape %s after the run started (or a second landscape)", x.RunID, x.ID)
+			}
+			g := goals[x.Goal]
+			if g == nil || fams[x.Goal] == nil || started[x.Goal] {
+				return fmt.Errorf("run: %s landscape for goal %s that was not committed first, or already started", x.RunID, x.Goal)
+			}
+			if g.Parent != "" {
+				return fmt.Errorf("run: %s landscape for goal %s whose lineage was set at intake (follows %s)", x.RunID, x.Goal, g.Parent)
+			}
+			if err := checkLandscape(x, g, runs, inv, store); err != nil {
+				return fmt.Errorf("run: %s landscape %s: %w", x.RunID, x.ID, err)
+			}
+			started[x.Goal] = true
+			if firstLandscape == 0 {
+				firstLandscape = x.Seq
+			}
+			rs.Goal, rs.Family, rs.Target = g, fams[x.Goal], targets[x.Goal]
+			rs.Landscape = x
+			rs.Parent, rs.Root = lineageOf(g, x, runs)
+			related, err := RelatedContext(rs, runs, store.Get)
+			if err != nil {
+				return fmt.Errorf("run: %s landscape %s: %w", x.RunID, x.ID, err)
+			}
+			rs.Related = related
 		case *RunAttempt:
 			rs := get(x.RunID)
 			started[x.Goal] = true
@@ -531,6 +576,13 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				if rs.Goal == nil || rs.Family == nil || rs.Family.ID != x.Family {
 					return fmt.Errorf("run: %s attempt %d cites goal %s / family %s that were not committed first", x.RunID, x.Attempt, x.Goal, x.Family)
 				}
+				// fork children, replay arms and --after goals carry their
+				// lineage; every other production goal reads the landscape
+				// first — once the journal shows the engine does that
+				if rs.Goal.Parent == "" && rs.Goal.Origin != OriginFork && rs.Goal.Origin != OriginReplay && firstLandscape != 0 && x.Seq > firstLandscape {
+					return fmt.Errorf("run: %s attempt %d started with no landscape for goal %s", x.RunID, x.Attempt, x.Goal)
+				}
+				rs.Parent, rs.Root = lineageOf(rs.Goal, nil, runs)
 			} else if rs.Goal.ID != x.Goal || rs.Family.ID != x.Family {
 				return fmt.Errorf("run: %s attempt %d cites a different goal or assessment than attempt 1", x.RunID, x.Attempt)
 			}
@@ -572,14 +624,14 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			// so only here, where the goal is known, can a recorded scope
 			// that omits the parent, reorders the walk, or names a foreign
 			// lineage be refused
-			if err := scopeMatches(rs.Goal, pol.Scope); err != nil {
+			if err := scopeMatches(rs, pol.Scope); err != nil {
 				return fmt.Errorf("run: %s attempt %d policy selection: %w", x.RunID, x.Attempt, err)
 			}
 			if rec := learned.Recalls[learn.RecallKey(x.RunID, x.Attempt)]; rec != nil {
 				if err := armMatches(rs.Goal, rec.Arm); err != nil {
 					return fmt.Errorf("run: %s attempt %d recall selection: %w", x.RunID, x.Attempt, err)
 				}
-				if err := scopeMatches(rs.Goal, rec.Scope); err != nil {
+				if err := scopeMatches(rs, rec.Scope); err != nil {
 					return fmt.Errorf("run: %s attempt %d recall selection: %w", x.RunID, x.Attempt, err)
 				}
 			}
@@ -617,6 +669,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				return err
 			}
 			a.Transitions = append(a.Transitions, x)
+			if x.To == Delivered || x.To == DeliveryFailedS {
+				rs.TerminalAt = x.Seq
+			}
 		case *IntentAssessment:
 			a, err := attempt(get(x.RunID), x.Attempt, "intent")
 			if err != nil {
@@ -636,7 +691,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if err != nil {
 				return err
 			}
-			if st.Invocation.Request != thought.Address(thought.Prompt, intentPrompt(goal)) {
+			if st.Invocation.Request != thought.Address(thought.Prompt, intentPrompt(goal, get(x.RunID).Related)) {
 				return fmt.Errorf("run: %s attempt %d intent invocation %s was not asked the intent prompt", x.RunID, x.Attempt, x.Invocation)
 			}
 			resp, err := store.Get(st.Receipt.Response)
@@ -660,6 +715,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			st := inv[x.Invocation]
 			if st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposePlan || st.Receipt == nil {
 				return fmt.Errorf("run: %s attempt %d plan cites invocation %s that is not its plan call", x.RunID, x.Attempt, x.Invocation)
+			}
+			if err := carriesRelated(get(x.RunID), st, store); err != nil {
+				return fmt.Errorf("run: %s attempt %d plan: %w", x.RunID, x.Attempt, err)
 			}
 			resp, err := store.Get(st.Receipt.Response)
 			if err != nil {
@@ -1358,8 +1416,8 @@ func ReplayKey(rs *RunState, a *AttemptState) (string, error) {
 // arm is the experiment verifier's to check.
 // scopeMatches binds a selection's recorded scope to the goal's lineage
 // walk, own → parent → root → workspace, in that order and nothing else.
-func scopeMatches(g *Goal, got []learn.ScopePath) error {
-	want := scope(g)
+func scopeMatches(rs *RunState, got []learn.ScopePath) error {
+	want := scope(rs)
 	same := len(got) == len(want)
 	for i := 0; same && i < len(want); i++ {
 		same = got[i] == want[i]
@@ -1430,7 +1488,7 @@ func checkExposure(rs *RunState, sel *learn.RecallSelection, get func(thought.Re
 			return fmt.Errorf("invocation %s request does not end with the recall rendering", invID)
 		}
 	} else {
-		want := thought.Address(thought.Prompt, Lensed(frame, append(append([]byte{}, goal...), block...)))
+		want := thought.Address(thought.Prompt, Lensed(frame, append(append(append([]byte{}, goal...), rs.Related...), block...)))
 		if invRec.Request != want {
 			return fmt.Errorf("invocation %s request is not frame+goal+recall (%s vs %s)", invID, invRec.Request.Hash, want.Hash)
 		}
@@ -1549,6 +1607,90 @@ func checkBackend(rs *RunState, a *AttemptState, is *invoke.State) error {
 	}
 	if inv.Backend != want {
 		return fmt.Errorf("run: %s attempt %d %s invocation %s ran on backend %+v but the attempt was configured on %+v", rs.Run, a.Attempt.Attempt, inv.Purpose, inv.ID, inv.Backend, want)
+	}
+	return nil
+}
+
+// checkLandscape executes the landscape's derived-record rule: the
+// candidates re-derive from the ledger as of the record's watermark, the
+// judge call (when one was made) is this run's, its request is the prompt
+// those candidates render, and the recorded relation is what its answer
+// parses to — or the unreadable rule when it does not parse.
+func checkLandscape(x *Landscape, g *Goal, runs map[record.RunID]*RunState, inv map[record.RecordID]*invoke.State, store *thought.Store) error {
+	text, err := store.Get(g.Text)
+	if err != nil {
+		return err
+	}
+	if x.Floor != LandscapeFloor || x.TopK != LandscapeTopK {
+		return fmt.Errorf("floor %v / top_k %d are not the engine's (%v / %d)", x.Floor, x.TopK, LandscapeFloor, LandscapeTopK)
+	}
+	if x.Rule == LandscapeFreshOverride {
+		if x.Scanned != 0 || x.BelowFloor != 0 {
+			return errors.New("a skipped landscape scanned nothing")
+		}
+		return nil
+	}
+	cands, scanned, below, err := landscapeCandidates(runs, g, text, x.AsOf, store.Get)
+	if err != nil {
+		return err
+	}
+	same := scanned == x.Scanned && below == x.BelowFloor && len(cands) == len(x.Candidates)
+	for i := 0; same && i < len(cands); i++ {
+		c, w := x.Candidates[i], cands[i]
+		same = c.Run == w.Run && c.Goal == w.Goal && math.Abs(c.Similarity-w.Similarity) < 1e-9
+	}
+	if !same {
+		return fmt.Errorf("candidates do not re-derive from the ledger as of %d (recorded %d of %d scanned, derived %d of %d)", x.AsOf, len(x.Candidates), x.Scanned, len(cands), scanned)
+	}
+	if x.Judge == "" {
+		return nil // no candidates: fresh, no call (the door bound rule ↔ candidates)
+	}
+	st := inv[x.Judge]
+	if st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt != 0 || st.Invocation.Purpose != invoke.PurposeLandscape || st.Invocation.Tools {
+		return fmt.Errorf("judge invocation %s is not this run's tool-less landscape call", x.Judge)
+	}
+	prompt, err := landscapePrompt(x.PromptVer, text, cands, runs, store.Get)
+	if err != nil {
+		return err
+	}
+	if st.Invocation.Request != thought.Address(thought.Prompt, prompt) {
+		return fmt.Errorf("judge request %s is not the prompt the candidates render", st.Invocation.Request.Hash)
+	}
+	if st.Receipt == nil {
+		if x.Rule != LandscapeUnreadable {
+			return errors.New("judge call has no receipt but the landscape claims a decision")
+		}
+		return nil
+	}
+	resp, err := store.Get(st.Receipt.Response)
+	if err != nil {
+		return err
+	}
+	rel, chosen, why, perr := ParseLandscape(x.PromptVer, resp, cands)
+	if perr != nil {
+		if x.Rule != LandscapeUnreadable {
+			return fmt.Errorf("judge answer does not parse (%v) but the landscape claims a decision", perr)
+		}
+		return nil
+	}
+	if x.Rule != LandscapeJudge || x.Relation != rel || x.Chosen != chosen || x.Reason != why {
+		return fmt.Errorf("recorded %s/%s is not what the judge answered (%s/%s)", x.Relation, x.Chosen, rel, chosen)
+	}
+	return nil
+}
+
+// carriesRelated: an intent or plan request of a run with related context
+// contains that context (the fold re-derived it from the landscape).
+func carriesRelated(rs *RunState, st *invoke.State, store *thought.Store) error {
+	if rs == nil || len(rs.Related) == 0 {
+		return nil
+	}
+	req, err := store.Get(st.Invocation.Request)
+	if err != nil {
+		return err
+	}
+	if !bytes.Contains(req, rs.Related) {
+		return fmt.Errorf("request %s does not carry the related prior run", st.Invocation.Request.Hash)
 	}
 	return nil
 }

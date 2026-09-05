@@ -28,7 +28,7 @@ func LineageOf(led *Ledger, handle string) (*Lineage, error) {
 		if g.Origin == OriginReplay || g.Origin == OriginFork {
 			return nil, fmt.Errorf("run: %s is a %s goal; follow the goal it descends from instead", handle, g.Origin)
 		}
-		return &Lineage{Goal: g.ID, Root: g.Root}, nil
+		return &Lineage{Goal: g.ID, Root: rs.Root}, nil
 	}
 	return nil, fmt.Errorf("run: no run with handle %s", handle)
 }

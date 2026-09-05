@@ -34,6 +34,9 @@ func (h *harness) newestRun(t *testing.T) *RunState {
 	t.Helper()
 	var newest *RunState
 	for _, rs := range h.ledger().Runs {
+		if rs.Latest() == nil {
+			continue // landscaped, not started
+		}
 		if newest == nil || rs.Latest().Attempt.Seq > newest.Latest().Attempt.Seq {
 			newest = rs
 		}
@@ -216,10 +219,10 @@ func TestFoldBindsSelectionScopeToTheLineage(t *testing.T) {
 	c := run(lin, "another follow-up") // b's sibling: a lineage member, but not on b's walk
 	own, parent, ws := learn.ScopeGoal(b.Goal.ID), learn.ScopeGoal(a.Goal.ID), learn.ScopeWorkspace
 	honest := b.Latest().Recall.Scope
-	if err := scopeMatches(b.Goal, honest); err != nil {
+	if err := scopeMatches(b, honest); err != nil {
 		t.Fatalf("honest recall scope refused: %v", err)
 	}
-	if err := scopeMatches(b.Goal, b.Latest().Policy.Scope); err != nil {
+	if err := scopeMatches(b, b.Latest().Policy.Scope); err != nil {
 		t.Fatalf("honest policy scope refused: %v", err)
 	}
 	for name, got := range map[string][]learn.ScopePath{
@@ -232,7 +235,7 @@ func TestFoldBindsSelectionScopeToTheLineage(t *testing.T) {
 		"duplicated parent": {own, parent, parent, ws},
 		"no workspace":      {own, parent},
 	} {
-		if err := scopeMatches(b.Goal, got); err == nil || !strings.Contains(err.Error(), "lineage walk") {
+		if err := scopeMatches(b, got); err == nil || !strings.Contains(err.Error(), "lineage walk") {
 			t.Fatalf("%s: forged scope %v accepted: %v", name, got, err)
 		}
 	}

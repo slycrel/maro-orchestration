@@ -27,7 +27,8 @@ func TestLensSwapOnTheSameFacts(t *testing.T) {
 	h := open(t)
 	h.policy(t, learn.MechModelJudge, true, learn.Provisional)
 	exec := scripted(toolless, invoke.ScriptedCall{Response: []byte("Paris.")}, invoke.ScriptedCall{Response: []byte("Paris.")})
-	judge := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-judge", Model: "judge"}, Calls: []invoke.ScriptedCall{{Response: []byte(closureYes)}, {Response: []byte(closureYes)}}}
+	// the second run's landscape sees the first (same goal): the judge answers fresh
+	judge := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-judge", Model: "judge"}, Calls: []invoke.ScriptedCall{{Response: []byte(closureYes)}, {Response: []byte(`{"relation": "fresh", "reason": "the same question asked again is its own run here"}`)}, {Response: []byte(closureYes)}}}
 	goal := []byte("What is the capital of France?")
 
 	d1 := h.driver(exec, nil)

@@ -176,7 +176,7 @@ func TestNowRunDeliversAndRecords(t *testing.T) {
 		}
 		stages = append(stages, e.Stage)
 	}
-	if got := strings.Join(stages, " "); got != "intake policy attempt executing recall execute judged recorded prepared presented delivered" {
+	if got := strings.Join(stages, " "); got != "intake landscape policy attempt executing recall execute judged recorded prepared presented delivered" {
 		t.Fatalf("events: %s", got)
 	}
 	m := MissionOf(rs)
@@ -516,6 +516,11 @@ func TestJournalExecutesRunVocabulary(t *testing.T) {
 		x.Schema = "run_transition/1"
 		return x
 	}
+	goodLandscape := func() *Landscape {
+		x := &Landscape{Header: hd(runRef(run)), Goal: gid, AsOf: 1, Rule: LandscapeJudge, Floor: LandscapeFloor, TopK: LandscapeTopK, Scanned: 2, BelowFloor: 1, Candidates: []LandscapeCandidate{{Run: "run-2", Goal: gid, Similarity: 0.5}}, Relation: RelationRelated, Chosen: "run-2", Judge: record.NewID()}
+		x.Schema, x.Attempt = "landscape/1", 0
+		return x
+	}
 	cases := []struct {
 		name string
 		rec  record.Record
@@ -524,6 +529,31 @@ func TestJournalExecutesRunVocabulary(t *testing.T) {
 		{"goal wrong subject", func() record.Record { g := goodGoal(); g.Subject.ID = "other"; return g }(), "subject must be the goal"},
 		{"goal foreign policy", func() record.Record { g := goodGoal(); g.Delivery.Required = "endpoint_accepted"; return g }(), "out of vocabulary"},
 		{"goal foreign lane", func() record.Record { g := goodGoal(); g.Lane = "later"; return g }(), "lane"},
+		{"landscape foreign rule", func() record.Record { x := goodLandscape(); x.Rule = "vibes"; return x }(), "rule"},
+		{"landscape foreign relation", func() record.Record { x := goodLandscape(); x.Relation = "cousin"; return x }(), "relation"},
+		{"landscape chosen not a candidate", func() record.Record { x := goodLandscape(); x.Chosen = "other"; return x }(), "not a candidate"},
+		{"landscape fresh with a chosen run", func() record.Record { x := goodLandscape(); x.Relation, x.Chosen = RelationFresh, "run-2"; return x }(), "fresh names none"},
+		{"landscape judged without candidates", func() record.Record {
+			x := goodLandscape()
+			x.Candidates = nil
+			x.Relation, x.Chosen = RelationFresh, ""
+			return x
+		}(), "names its judge"},
+		{"landscape no call with candidates", func() record.Record { x := goodLandscape(); x.Rule = LandscapeNoCandidates; return x }(), "no candidates and no call"},
+		{"landscape unreadable that decided", func() record.Record { x := goodLandscape(); x.Rule = LandscapeUnreadable; return x }(), "decides nothing"},
+		{"landscape below the floor", func() record.Record { x := goodLandscape(); x.Candidates[0].Similarity = 0.1; return x }(), "floor"},
+		{"landscape after attempt 1", func() record.Record { x := goodLandscape(); x.Attempt = 1; return x }(), "before its first attempt"},
+		{"landscape unknown prompt version", func() record.Record { x := goodLandscape(); x.PromptVer = 9; return x }(), "prompt version"},
+		{"landscape prompt version without a call", func() record.Record {
+			x := goodLandscape()
+			x.Rule, x.Candidates, x.Judge, x.Relation, x.Chosen, x.PromptVer = LandscapeNoCandidates, nil, "", RelationFresh, "", 2
+			return x
+		}(), "call that was not made"},
+		{"landscape more than top_k", func() record.Record {
+			x := goodLandscape()
+			x.Candidates = []LandscapeCandidate{{Run: "run-2", Goal: gid, Similarity: 0.5}, {Run: "run-3", Goal: gid, Similarity: 0.5}, {Run: "run-4", Goal: gid, Similarity: 0.5}, {Run: "run-5", Goal: gid, Similarity: 0.5}}
+			return x
+		}(), "top_k"},
 		{"interrupt foreign action", &Interrupt{Header: record.Header{ID: record.NewID(), Schema: "interrupt/1", Subject: runRef(run), At: time.Now().UTC()}, Target: run, Action: "pause", Why: "x"}, "action"},
 		{"interrupt without why", &Interrupt{Header: record.Header{ID: record.NewID(), Schema: "interrupt/1", Subject: runRef(run), At: time.Now().UTC()}, Target: run, Action: "cancel", Why: " "}, "why"},
 		{"interrupt ack foreign result", &InterruptAck{Header: record.Header{ID: record.NewID(), Schema: "interrupt_ack/1", Subject: record.Ref{Kind: "interrupt", ID: string(gid)}, At: time.Now().UTC()}, Interrupt: gid, Result: "ignored"}, "out of vocabulary"},
@@ -1209,6 +1239,7 @@ func TestPreDispatchRefusalKeepsItsRecall(t *testing.T) {
 	tiny := &invoke.Scripted{Caps: invoke.Capabilities{Name: "tiny", Model: "t", MaxInputBytes: 40}, Calls: []invoke.ScriptedCall{{Response: []byte("x")}}}
 	key := func() string {
 		d := h.driver(tiny, nil)
+		d.Fresh = true // the landscape judge's prompt would not fit the tiny backend either; not this test's subject
 		rep, err := d.Run(ctxBg, []byte("short goal"), DeliveryPolicy{Required: TransportAccepted})
 		if err != nil || rep.Mission.Outcome != MissionFailedExec {
 			t.Fatalf("%v %+v", err, rep)
@@ -1312,7 +1343,7 @@ func TestScopeAndPolicyAreHonored(t *testing.T) {
 	// the goal-scoped lesson IS recalled for a resumed attempt of its own goal:
 	// re-run the first goal through an unstarted-goal path is not possible;
 	// instead check the query directly over the fold
-	sel := learn.Recall(led.Learned, learn.Query{Purpose: "execute", Scope: scope(led.Runs[record.RunID(rep.Run)].Goal), Family: "answer", Standing: learn.Selectable})
+	sel := learn.Recall(led.Learned, learn.Query{Purpose: "execute", Scope: scope(led.Runs[record.RunID(rep.Run)]), Family: "answer", Standing: learn.Selectable})
 	if len(sel.Included) != 1 || sel.Included[0].Item != item {
 		t.Fatalf("goal-scoped lesson not selected for its goal: %+v", sel)
 	}
@@ -1440,14 +1471,16 @@ func TestPolicyBoundaryIsConsumed(t *testing.T) {
 	}
 	run := record.RunID(record.NewID())
 	lled, _ := learn.Fold(h3.j.Production())
-	pol := learn.SelectPolicy(lled, learn.Query{Scope: scope(goal), Standing: learn.Selectable})
+	rs0 := &RunState{Run: run, Goal: goal, Root: goal.ID}
+	pol := learn.SelectPolicy(lled, learn.Query{Scope: scope(rs0), Standing: learn.Selectable})
 	pol.Header = header(runRef(run), run, 1, "policy_selection/1")
+	ls := &Landscape{Header: header(runRef(run), run, 0, "landscape/1"), Goal: goal.ID, AsOf: h3.j.Head(), Rule: LandscapeNoCandidates, Floor: LandscapeFloor, TopK: LandscapeTopK, Relation: RelationFresh}
 	d3 := h3.driver(scripted(toolless), nil)
 	d3.validate()
 	cfg, _ := d3.config(LaneNow, pol)
 	cfg.Mechanisms[learn.MechRecall] = false // the snapshot says on
 	att := &RunAttempt{Header: header(runRef(run), run, 1, "run_attempt/1"), Goal: goal.ID, Family: fam.ID, Config: cfg}
-	recs := []record.Record{pol}
+	recs := []record.Record{ls, pol}
 	for i, rule := range lled.PolicyRules(pol) { // the seeds' applications, so the fold reaches the config
 		recs = append(recs, &learn.PolicyApplication{Header: header(record.Ref{Kind: "policy_selection", ID: string(pol.ID)}, run, 1, "policy_application/1"), Item: pol.Enabled[i].Item, Revision: pol.Enabled[i].Revision, Selection: pol.ID, Rule: rule})
 	}

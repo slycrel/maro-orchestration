@@ -325,7 +325,7 @@ func (d *Driver) forkStep(ctx context.Context, rs *RunState, a *AttemptState, k 
 				return nil, nil, err
 			}
 			g, fam := Intake(text, goalRef, OriginFork, LaneNow, DeliveryPolicy{Required: TransportAccepted})
-			g.Parent, g.Root = rs.Goal.ID, rs.Goal.Root
+			g.Parent, g.Root = rs.Goal.ID, rs.Root
 			child := record.RunID(record.NewID())
 			fk.Goals = append(fk.Goals, g.ID)
 			fk.Members = append(fk.Members, record.AttemptRef{Run: child, Attempt: 1})
@@ -419,7 +419,9 @@ func (d *Driver) driveChildren(ctx context.Context, rs *RunState, fs *ForkState)
 		if g == nil || fam == nil {
 			return nil, fmt.Errorf("run: fork %s member %d: child goal not in the journal", fs.Fork.ID, i)
 		}
-		return &RunState{Run: m.Run, Goal: g, Family: fam}, nil
+		crs = &RunState{Run: m.Run, Goal: g, Family: fam}
+		crs.Parent, crs.Root = lineageOf(g, nil, nil) // a child's lineage is on its goal
+		return crs, nil
 	}
 	// early decision (first_verdict): after any child's terminal, decide;
 	// cancel the members still running

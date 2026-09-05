@@ -94,7 +94,8 @@ func events(t *testing.T, s *Server, req Request) []Event {
 // ack over the socket acknowledges.
 func TestSubmitDeliversOverTheSocket(t *testing.T) {
 	a := root(t)
-	exec := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted", Model: "m"}, Calls: []invoke.ScriptedCall{{Response: []byte("Paris.")}, {Response: []byte("Rome.")}}}
+	// the second goal's landscape sees the first ("Capital of …"): the executor, as judge, answers fresh
+	exec := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted", Model: "m"}, Calls: []invoke.ScriptedCall{{Response: []byte("Paris.")}, {Response: []byte(`{"relation": "fresh", "reason": "a different country"}`)}, {Response: []byte("Rome.")}}}
 	s := serve(t, a, exec, nil)
 	evs := events(t, s, Request{Text: "Capital of France?", Ack: true})
 	if len(evs) != 3 || evs[0].Type != "accepted" || evs[1].Type != "presentation" || evs[1].Payload != "Paris." || evs[1].Token == "" || evs[2].Type != "done" || evs[2].Mission != string(run.MissionUnacknowledged) {

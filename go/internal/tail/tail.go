@@ -435,7 +435,7 @@ func (t *Tail) attempt(ctx context.Context, led *run.Ledger, rs *run.RunState, a
 				}
 				item := learn.LearnedID(record.NewID())
 				rev := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: now()},
-					Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeGoal(rs.Goal.Root), Family: family, Text: ref, Provenance: learn.Provenance{Source: "tail", Ref: diag.ID, Why: lr.Why}}
+					Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeGoal(rs.Root), Family: family, Text: ref, Provenance: learn.Provenance{Source: "tail", Ref: diag.ID, Why: lr.Why}}
 				proposals = append(proposals, rev)
 				proposalIDs = append(proposalIDs, rev.ID)
 			}
@@ -501,6 +501,11 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	revs := map[record.RecordID]*learn.LearnedRevision{}
 	var tailRevs []*learn.LearnedRevision
 	claimed := map[record.RecordID]bool{}
+	// the journal has no engine-version record: the first tail proposal
+	// scoped to a lineage is the evidence that, from there on, the tail
+	// scopes every proposal to the run's lineage root; proposals before it
+	// were written workspace-wide and are read as written
+	lineageTail := false
 	lensProposals := map[record.RecordID][]string{}
 	attemptOf := func(kind string, h record.Header, r record.RunID, n uint32) (*run.RunState, *run.AttemptState, error) {
 		rs := led.Runs[r]
@@ -603,8 +608,11 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 					if rev == nil || rev.Provenance.Source != "tail" || rev.Provenance.Ref != x.Diagnosis || claimed[p] {
 						return fmt.Errorf("tail: tail_done %s proposal %s is not a tail revision citing its diagnosis", x.ID, p)
 					}
-					if rev.LearnedKind != learn.Lesson || rev.Scope != learn.ScopeGoal(rs.Goal.Root) || rev.Family != family || rev.Text != thought.Address(thought.LessonText, []byte(want[i])) {
-						return fmt.Errorf("tail: tail_done %s proposal %s is not the lens response's proposal %d as a workspace lesson of the run's family", x.ID, p, i+1)
+					if rev.LearnedKind != learn.Lesson || proposalScope(rs, rev.Scope, lineageTail) != nil || rev.Family != family || rev.Text != thought.Address(thought.LessonText, []byte(want[i])) {
+						return fmt.Errorf("tail: tail_done %s proposal %s is not the lens response's proposal %d as a lesson at the run's lineage root, of the run's family", x.ID, p, i+1)
+					}
+					if rev.Scope != learn.ScopeWorkspace {
+						lineageTail = true
 					}
 					claimed[p] = true
 				}
@@ -665,3 +673,16 @@ func sameSignals(a, b []Signal) bool {
 
 var _ = verdict.ResolverVer
 var _ = errors.New
+
+// proposalScope is the rule a tail proposal's scope satisfies: the run's
+// lineage root — or, in history before the tail scoped to lineages (no
+// lineage-scoped proposal folded yet), the workspace.
+func proposalScope(rs *run.RunState, scope learn.ScopePath, lineageTail bool) error {
+	if scope == learn.ScopeGoal(rs.Root) {
+		return nil
+	}
+	if scope == learn.ScopeWorkspace && !lineageTail {
+		return nil
+	}
+	return fmt.Errorf("tail: proposal scope %s is not the run's lineage root %s", scope, rs.Root)
+}

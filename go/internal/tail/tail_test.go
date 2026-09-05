@@ -67,7 +67,8 @@ var toolless = invoke.Capabilities{Name: "scripted", Model: "m"}
 
 func (h *harness) now(t *testing.T, text string, b invoke.Backend) *run.Report {
 	t.Helper()
-	d := &run.Driver{J: h.j, Store: h.st, Backend: b, Origin: run.CLIOrigin{W: io.Discard}, Timeout: time.Minute}
+	// Fresh: the tail is the subject, not the landscape (which would spend a scripted call)
+	d := &run.Driver{J: h.j, Store: h.st, Backend: b, Origin: run.CLIOrigin{W: io.Discard}, Timeout: time.Minute, Fresh: true}
 	rep, err := d.Run(ctxBg, []byte(text), run.DeliveryPolicy{Required: run.TransportAccepted})
 	if err != nil {
 		t.Fatal(err)
@@ -718,4 +719,28 @@ func learned(ll *learn.Ledger) int {
 		}
 	}
 	return n
+}
+
+// A tail proposal's scope is the run's lineage root; history before the
+// tail scoped to lineages (no lineage-scoped proposal folded yet) was
+// written workspace-wide and is read as written — after the first, the
+// workspace scope is refused.
+func TestProposalScopeReadsHistoryAsWritten(t *testing.T) {
+	rs := &run.RunState{Root: "01AAAAAAAAAAAAAAAAAAAAAAAA"}
+	own := learn.ScopeGoal(rs.Root)
+	if err := proposalScope(rs, own, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := proposalScope(rs, own, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := proposalScope(rs, learn.ScopeWorkspace, false); err != nil {
+		t.Fatalf("history refused: %v", err)
+	}
+	if err := proposalScope(rs, learn.ScopeWorkspace, true); err == nil {
+		t.Fatal("a workspace proposal after the tail scoped to lineages folded")
+	}
+	if err := proposalScope(rs, learn.ScopeGoal("01BBBBBBBBBBBBBBBBBBBBBBBB"), false); err == nil {
+		t.Fatal("a foreign lineage folded")
+	}
 }

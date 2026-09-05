@@ -383,7 +383,7 @@ func (r *Runner) arm(ctx context.Context, st *State, x *Experiment, as *Assignme
 		return err
 	}
 	d := &run.Driver{J: r.J, Store: r.Store, Backend: r.Backend, Judge: r.Judge, Lane: unit.Goal.Lane, Origin: run.ReplayOrigin{}, Events: r.Events, Timeout: r.Timeout, CrashAt: r.CrashAt, Frame: frame, Work: r.Work,
-		Replay: &run.ReplayContext{Assignment: as.ID, Arm: arm.Arm, Unit: as.Unit, Root: unit.Goal.Root, Apply: arm.Apply, Withhold: arm.Withhold}}
+		Replay: &run.ReplayContext{Assignment: as.ID, Arm: arm.Arm, Unit: as.Unit, Root: unit.Root, Apply: arm.Apply, Withhold: arm.Withhold}}
 	if err := d.Validate(); err != nil {
 		return err
 	}
