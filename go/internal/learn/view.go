@@ -17,8 +17,8 @@ import (
 // flat store) from the learn ledger folded at the announced head. It is a
 // WholeView: a row is an item's standing, not an event, so the file is the
 // fold's end state rendered once. The mapping row lives in
-// contracts/VIEWS.md; the shape is the Python `Lesson` dataclass EXACTLY
-// so `memory_ledger.load_lessons` reads it unchanged.
+// contracts/VIEWS.md; the shape is the Python `Lesson` dataclass's fields
+// (defaults omitted) so `memory_ledger.load_lessons` reads it unchanged.
 //
 // Only what a Python reader may inject appears: the current lesson revision
 // of each item whose stage is selectable, plus quarantined items stamped
@@ -44,7 +44,9 @@ func LessonHandle(item LearnedID) string {
 	return hex.EncodeToString(sum[:])[:8]
 }
 
-// lessonRow is the flat Lesson dataclass, field for field, in its order.
+// lessonRow is the flat Lesson dataclass in its field order; fields with
+// no producer here (goal_achieved, goal_verdict_source, grounding,
+// merged_variants) are omitted and load as their defaults.
 type lessonRow struct {
 	LessonID        string            `json:"lesson_id"`
 	TaskType        string            `json:"task_type"`

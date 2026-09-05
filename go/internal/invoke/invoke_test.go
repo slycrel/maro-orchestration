@@ -395,7 +395,12 @@ func TestReconcileFinalizesLostReceipt(t *testing.T) {
 func TestTimeoutIsATerminal(t *testing.T) {
 	sh, _ := newShell(t)
 	b := &Scripted{Caps: toolless, Calls: []ScriptedCall{{Hang: true}}}
-	ctx, cancel := context.WithTimeout(ctxBg, 50*time.Millisecond)
+	// The budget must outlast the two commits before dispatch (prepared,
+	// dispatched) on a loaded box: a deadline that expires before dispatch
+	// is a prepared-never-dispatched orphan for Reconcile, by design, and
+	// not what this test is about. 50 ms flaked twice under the full race
+	// suite while a live check loaded the box (2026-09-05).
+	ctx, cancel := context.WithTimeout(ctxBg, 400*time.Millisecond)
 	defer cancel()
 	out, err := sh.Invoke(ctx, b, Request{Purpose: PurposeJudge, Prompt: []byte("p")}, nil)
 	if err != nil || out.Terminal != TerminalFailed || !strings.Contains(out.Reason, "deadline") {

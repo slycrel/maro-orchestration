@@ -177,9 +177,15 @@ func validScope(s ScopePath) error {
 // Provenance says where a revision came from: the operator, or the tail's
 // proposal over a recorded run (Ref = that run's diagnosis).
 type Provenance struct {
-	Source string          `json:"source"`        // operator
+	Source string          `json:"source"`        // operator | tail | seed | import
 	Ref    record.RecordID `json:"ref,omitempty"` // the run or receipt it was learned from, when any
 	Why    string          `json:"why"`
+	// Origin is an import's structured source identity — `pack:<source
+	// revision id>` or `python:<label>:<lesson_id>:<text digest>` — the
+	// key a re-import matches on (same origin ⇒ already here; same source
+	// lesson with a new text ⇒ a new revision of the same local item).
+	// Set exactly when Source is import.
+	Origin string `json:"origin,omitempty"`
 }
 
 // SourceImport is the provenance source of a revision that entered from
@@ -251,6 +257,9 @@ func (r *LearnedRevision) ValidateWire() error {
 	}
 	if !sources[r.Provenance.Source] {
 		return fmt.Errorf("learned_revision: provenance source %q out of vocabulary", r.Provenance.Source)
+	}
+	if (r.Provenance.Source == SourceImport) != (r.Provenance.Origin != "") {
+		return errors.New("learned_revision: provenance origin is set exactly when the source is import")
 	}
 	if strings.TrimSpace(r.Provenance.Why) == "" {
 		return errors.New("learned_revision: provenance needs a why")

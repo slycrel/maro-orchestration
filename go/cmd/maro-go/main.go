@@ -804,7 +804,11 @@ func printImport(out io.Writer, rep *pack.Report) error {
 		if it.Replayed {
 			continue
 		}
-		fmt.Fprintf(out, "  %s → item %s revision %s (candidate)\n", it.From, it.Item, it.Revision)
+		how := "new item"
+		if it.Revised {
+			how = "new revision of an earlier import"
+		}
+		fmt.Fprintf(out, "  %s → item %s revision %s (candidate, %s)\n", it.Origin, it.Item, it.Revision, how)
 	}
 	return nil
 }

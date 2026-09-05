@@ -57,7 +57,7 @@
     "provenance": {
       "absence": "never",
       "on_absence": "rejected",
-      "used_for": "display-only",
+      "used_for": "identity",
       "unknown_value": "rejected",
       "constraint": "defined",
       "pattern": "\"source\":\"(operator|tail|seed|import)\"",

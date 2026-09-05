@@ -113,6 +113,10 @@ func Address(k Kind, body []byte) Ref {
 	return Ref{Hash: hashOf(k, body), Kind: k, Bytes: int64(len(body)), Encoding: encodingOf(body)}
 }
 
+// HashOf is the ref hash a body would store under: what a carrier declares
+// can be checked without storing anything.
+func HashOf(k Kind, body []byte) string { return hashOf(k, body) }
+
 func hashOf(k Kind, body []byte) string {
 	h := sha256.New()
 	h.Write([]byte("maro-thought/v1\x00"))

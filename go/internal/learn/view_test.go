@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,9 @@ func TestLessonsViewIsB7Exact(t *testing.T) {
 		item := LearnedID(record.NewID())
 		x := rev(item, "", Lesson, ScopeWorkspace, family, lessonRef(st, text))
 		x.Provenance = Provenance{Source: source, Why: source + " why"}
+		if source == SourceImport {
+			x.Provenance.Origin = "pack:" + string(record.NewID())
+		}
 		recs := []record.Record{x}
 		from := Candidate
 		for _, to := range ladder(stage) {
@@ -150,10 +154,15 @@ func TestLessonsViewIsB7Exact(t *testing.T) {
 			t.Fatalf("%q recorded_at is not Python isoformat: %v", text, m["recorded_at"])
 		}
 	}
-	for i := 1; i < len(order); i++ {
-		if order[i] < order[i-1] { // sorted by item id, not by row; stable across renders
-			// item ids are ULIDs; handles are hashes, so the file order is by item, checked below
-			break
+	// file order is by item id (deterministic, content-independent)
+	items := []string{}
+	for _, w := range want {
+		items = append(items, string(w.id))
+	}
+	sort.Strings(items)
+	for i, id := range items {
+		if order[i] != LessonHandle(LearnedID(id)) {
+			t.Fatalf("row %d is %s, want the handle of item %s", i, order[i], id)
 		}
 	}
 	_ = cand

@@ -1706,17 +1706,32 @@ republish. `pack`: `TestPackCarriesCausalHistoryAndImportsAtCandidate`
 provenance citing the source revision, family kept, source stage in
 Why; quarantined/tombstone/policy skipped by name; local canon
 untouched; recall excludes all four `stage:candidate`; re-import 0 new
-/ 4 already, head unchanged; a later export offers only the new
-lesson), `TestPackRefusesWhatItCannotVouchFor` (foreign format, Python
-pack.json, empty, tampered thought, uncarried kind, seq disagreement,
-unknown line — each enters nothing; the untouched pack still imports),
-`TestPythonWorkspaceImportsAtCandidate` (live-shaped rows across three
-tiers: 4 enter, medium wording beats flat, empty `contested{}` is not
-contested; prompt/contested/provisional/malformed×2 skipped by name;
-idempotent; a different label is a different source; missing store is
-an error). Full race suite green but one load flake
-(`invoke.TestTimeoutIsATerminal`: a 50 ms deadline hit while the live
-check loaded the box; 3/3 green in isolation under `-race`).
+/ 4 already, head unchanged, no command; the source revising alpha
+re-enters as a new revision of the SAME local item back at candidate;
+a later export offers only the new lesson; the first import is one
+command spanning exactly its four records),
+`TestPackRefusesWhatItCannotVouchFor` (foreign format, Python
+pack.json, empty, header counts/thoughts/head disagreeing with the
+body, duplicate record, tampered thought, uncited thought, non-lesson
+thought, uncarried kind, seq disagreement, unknown line, and four
+histories every record of which decodes but the fold refuses —
+transition on the wrong item, from the wrong stage, a forged edge out
+of quarantine, a sibling first revision, a measurement citing
+non-evidence — each enters no record AND no thought; the untouched pack
+still imports), `TestPythonWorkspaceImportsAtCandidate` (live-shaped
+rows across three tiers: 7 enter in one command, medium wording beats
+flat, `contested` `{}`/`false`/`null` are not contested (Python truth),
+a flat `provisional: true` enters (the flat reader injects it), a
+tiered one is skipped, a row missing a required dataclass field is
+skipped as the reader skips it; idempotent with no command; the source
+rewording a lesson under its lesson_id revises the same local item;
+two stores with one basename are two sources; missing store is an
+error). Full race suite green but one load flake, twice
+(`invoke.TestTimeoutIsATerminal`: its 50 ms deadline expired between
+the `prepared` and `dispatched` commits while the live check loaded the
+box — a prepared-never-dispatched orphan for Reconcile by design, not
+the hung-backend case the test is about; 3/3 green in isolation; the
+budget is now 400 ms with the mechanism noted in the test).
 
 **Live.** Scratch Go workspace: `learn add` ×2, `pack import-python
 /home/clawd/.maro/workspace --label live` (read-only): **523 imported
@@ -1732,7 +1747,44 @@ by default, present with `include_contested=True` carrying
 `{reason: item_harmful, source: maro-go}`), `task_type="qa"` filter
 returns the family-tagged row.
 
-**Residuals.** (1) B7 rows for imported-then-promoted lessons carry the
+**Review round (Skeptic + Expert QA on codex, one pass).** Findings,
+each verified in the tree before fixing: (A) HIGH, both — the importer
+trusted individually valid records, not a valid history (current = max
+Seq, stage = last `To`, no predecessor/edge/evidence rules): FIXED —
+`learn.FoldRecords` extracted from `Fold`; the pack's production
+records fold under the ledger's own rules and the fold's ledger is the
+only source of "current" and "stage"; the pack now carries the whole
+learn ledger (recall/policy selections too) so the fold has what it
+reads; header counts/head/duplicates checked. (B) HIGH, both — thoughts
+were stored before records decoded, and N candidates were N commands
+(partial entry on a failed Submit): FIXED — everything is parsed,
+decoded, folded and hash-checked (`thought.HashOf`, no store) before
+any write; one Submit keyed by the set it enters; `Report.Ack` spans it;
+thought lines must be cited lesson texts. (C) MEDIUM — idempotency
+keyed on `(label, lesson_id)` froze changed text, and same-basename
+stores collided: FIXED — `Provenance.Origin` (structured source
+identity; door: set exactly when source is `import`; contract
+`used_for: identity`), re-import matches by origin, a changed text
+under a known origin prefix revises the same local item, default label
+= absolute path. (D) MEDIUM — Go's Python acceptance set was not the
+readers': FIXED — required dataclass fields, Python truth for
+`contested`, flat `provisional` injected / tiered skipped. (E) MEDIUM —
+"never recalled before staging" is false under an experiment arm's
+`apply`: REFUTED as a defect (that IS the door a candidate earns
+standing through, design §9) — the claim is reworded in VIEWS.md and
+here. (F) B7 "EXACT field for field" overstated (defaults omitted):
+wording fixed in VIEWS.md/view.go; a Go `contested` stage carries no B7
+stamp — declared. (G) view-test ordering loop was a no-op: replaced by
+a real order assertion. (H) whole-file publish prefix: sound, both
+reviewers; the post-swap debris on link failure is pre-existing
+projector behavior, out of scope. Live arithmetic (523 = 540 − 1 − 7 −
+9) independently recomputed by both reviewers from the live files.
+
+**Residuals.** (0) A pack's experiment records ride and are decoded but
+not folded (`experiment.Fold` needs the source's runs, which are not
+carried); a forged attestation therefore passes as history — it decides
+nothing here, since stages come from the learn fold and enter at
+candidate regardless. (1) B7 rows for imported-then-promoted lessons carry the
 source `Why` verbatim in `imported`; that is the whole provenance the
 Python side gets — the source revision id is not a Python concept.
 (2) `times_reinforced` is always 0: the Go ledger has no reinforcement

@@ -128,6 +128,14 @@ func RecallKey(run record.RunID, attempt uint32) string { return fmt.Sprintf("%s
 // an unknown revision, two recalls for one attempt.
 func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 	pr = pr.Pin() // one prefix for every scan this fold composes
+	return FoldRecords(func(fn func(record.Record) error) error { return pr.Scan(0, fn) })
+}
+
+// FoldRecords folds whatever scan yields, in its order, under the same
+// rules as Fold: the journal's production prefix is one such source; a
+// pack's carried history is another (the importer vouches for a source
+// history by folding it, not by decoding its records one at a time).
+func FoldRecords(scan func(fn func(record.Record) error) error) (*Ledger, error) {
 	led := &Ledger{Items: map[LearnedID]*Item{}, Applications: map[record.RecordID][]*Application{}, Recalls: map[string]*RecallSelection{}, Policies: map[string]*PolicySelection{}, PolicyApps: map[record.RecordID][]*PolicyApplication{}, Exposures: map[record.RecordID][]Exposure{}, byID: map[record.RecordID]*RecallSelection{}, policyByID: map[record.RecordID]*PolicySelection{}, seeds: map[Mechanism]LearnedID{}}
 	seen := map[record.RecordID]bool{}
 	goals := map[record.RecordID]bool{}
@@ -135,7 +143,7 @@ func Fold(pr *journal.ProductionReader) (*Ledger, error) {
 	expose := func(h record.Header, rev record.RecordID) {
 		led.Exposures[rev] = append(led.Exposures[rev], Exposure{ID: h.ID, Revision: rev, Seq: h.Seq, At: h.At})
 	}
-	err := pr.Scan(0, func(r record.Record) error {
+	err := scan(func(r record.Record) error {
 		// a record is "seen" only AFTER its own checks: nothing may cite itself
 		defer func() { seen[r.Head().ID] = true }()
 		if r.Kind() == "goal" {
