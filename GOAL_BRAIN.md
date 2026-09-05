@@ -4313,3 +4313,17 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   (`tests/test_lineage_memory.py` here; ledger in the successor repo's
   `planning/feature-lineage-memory.md`). Feature 2 = related goals / run
   horizon, on both engines, same per-feature cost ledger.
+
+- **2026-09-05 (the relation decision belongs to Maro, not the operator — Jeremy):**
+  on feature 2 (related goals / run horizons): *"long run I'd think the
+  plan step would examine the landscape, decide to pull in
+  'adjacent/related' run context (or not) along with a fresh run, or
+  potentially choose a re-run if it's similar enough. I'm fine to start
+  with an explicit path, but that's pushing that decision that maro
+  should make to the orchestrator IMO; the orchestrator doesn't have the
+  data to make a better decision than maro."* Standing constraint: an
+  explicit operator surface (`--after`) is an override, never the
+  design; the default is that the run reads the landscape and decides
+  (fresh / related / rerun), records the decision, and the decision
+  supersedes string-identity shortcuts (the goal-slug Goal Ancestry
+  block). Design note: successor repo `planning/feature-related-runs.md`.
