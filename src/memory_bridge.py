@@ -229,6 +229,15 @@ def ingest_lessons_to_store(
                             # not this mirror, is the primary injection
                             # surface and sees confirmation immediately.
                             continue
+                        if lesson.get("lineage"):
+                            # Lineage-scoped rows never enter the worker
+                            # mirror: its scope taxonomy is thread/run and a
+                            # goal-lineage scope would either be invisible
+                            # or (as global) leak to every worker. Workers
+                            # see workspace rows; lineage rows reach the
+                            # run's own recall (review 2026-09-05).
+                            stats["skipped_lineage"] = stats.get("skipped_lineage", 0) + 1
+                            continue
                         if lesson.get("minted_from") == "prompt":
                             # Provenance gate (2026-07-29): quarantined
                             # prompt-derived lessons never enter worker

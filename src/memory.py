@@ -759,6 +759,7 @@ def extract_step_lessons(
                 lesson_type=lesson_type,
                 provisional=True,
                 evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
+                lineage=_lineage_root_for("", loop_id),
                 grounding=(_step_groundings[_s_idx]
                            if _s_idx < len(_step_groundings) else None),
                 # R1-5: step results are the extraction input — scaffolding
@@ -779,6 +780,31 @@ def extract_step_lessons(
              loop_id or "?")
     return recorded
 
+
+
+def _lineage_root_for(handle_id: str, loop_id: str) -> str:
+    """Lineage root a minted lesson is scoped to: the run's lineage root by
+    handle_id, else by loop_id (resolve_run_dir indexes both).
+
+    Fails CLOSED (review 2026-09-05): a run whose lineage cannot be resolved
+    — no such run, malformed metadata, cyclic ancestry, a lookup error —
+    gets ``recall.UNRESOLVED_LINEAGE`` + the ref, a scope that matches no
+    lineage, so the lesson is kept but injected nowhere until re-scoped.
+    "" (workspace-wide, the widest scope) is written only when there is no
+    run context at all — a mint with neither handle nor loop is an explicit
+    workspace record, not a run's. Never raises — a lesson is worth more
+    than its scope, but not more than another lineage's privacy."""
+    ref = str(handle_id or loop_id or "")
+    if not ref:
+        return ""
+    try:
+        from recall import UNRESOLVED_LINEAGE, lineage_root
+        root = lineage_root(handle_id) or lineage_root(loop_id)
+    except Exception as exc:
+        log.warning("lineage: could not resolve the run for a mint (%s): %s",
+                    ref, exc)
+        return "unresolved:error:" + ref
+    return root or UNRESOLVED_LINEAGE + ref
 
 def reflect_and_record(
     goal: str,
@@ -898,6 +924,7 @@ def reflect_and_record(
                     k_samples=1,  # single extraction → 0.5 confidence (F5)
                     lesson_type=lesson_type,
                     lesson_id=_shared_id,
+                    lineage=_lineage_root_for(handle_id, loop_id),
                     # M14 defect: reflect mints landed with evidence_sources=[]
                     # even though the originating run was known — the Phase 60
                     # citation penalty never had anything to reward.
@@ -1118,6 +1145,7 @@ def extract_deferred_lessons(
                     k_samples=1,
                     lesson_type=lesson_type,
                     lesson_id=_shared_id,
+                    lineage=_lineage_root_for("", loop_id),
                     evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
                     grounding=(lesson_groundings[_l_idx]
                                if _l_idx < len(lesson_groundings) else None),

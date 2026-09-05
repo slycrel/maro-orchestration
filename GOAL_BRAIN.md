@@ -4294,3 +4294,22 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   fork children query + working-copy writes only, outward mutations
   parent-committed after selection; fixed-N experiments; subprocess +
   scripted backends; CLI + intake seam. Phase 2 build step 1 begins.
+
+- **2026-09-05 (memory first, then run horizons — Jeremy):** on the
+  features-on-both-sides half of the successor comparison, Jeremy weighed
+  scoped memory against "ecosystem-like goals" — *"we will sometimes run
+  a goal 3-4 times and tweak our overall ask a bit to get the 'right'
+  information we want. I wonder if we need ancillary/related goals;
+  things we can identify that are similar enough to an existing goal
+  that we can leverage, but an additional angle or tangent on them ...
+  I'd love to ask goal-related questions and (maybe a stretch right now)
+  even have maro leverage past runs or learned contexts to give better
+  answers"* — and decided: *"we start there [memory], then get into
+  expanding our run horizons as a growth feature target after ... memory
+  is more supplemental and potentially smaller/adjacent/additive to the
+  existing system rather than a larger change."* Feature 1 = lineage-
+  scoped memory (`--after`, lineage-scoped mints, recall walks the
+  lineage; promotion out of scope) — SHIPPED both engines same day
+  (`tests/test_lineage_memory.py` here; ledger in the successor repo's
+  `planning/feature-lineage-memory.md`). Feature 2 = related goals / run
+  horizon, on both engines, same per-feature cost ledger.

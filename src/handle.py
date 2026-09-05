@@ -588,6 +588,17 @@ def _now_verify_payload(message: str, result: str,
     return f"{_seg('Request', message)}\n\n{_seg('Response', result)}"
 
 
+def _autonomous_origin(origin: Optional[dict]) -> bool:
+    """Whether an origin marks a task-path run (no human reading the text).
+
+    Origin presence used to be the proxy. It is no longer one: ``--after``
+    stamps an origin on an interactive CLI run purely to carry lineage, and
+    a memory-scope request must not opt the run into the autonomous verdict
+    path (an extra judge call, a possible demotion) — review 2026-09-05.
+    A CLI-sourced origin is interactive; every other source is a task."""
+    return origin is not None and str(origin.get("source") or "") != "cli"
+
+
 def _verify_now_outcome(
     message: str, outcome: Dict[str, Any], adapter,
     wall_start: Optional[float] = None,
@@ -1410,10 +1421,10 @@ def _handle_impl(
         # human reading the text) get a cheap self-verdict and demote to
         # "incomplete" when the response reports non-fulfillment.
         # Interactive calls keep raw speed.
-        if origin is not None and not dry_run and outcome.get("status") == "done":
+        if _autonomous_origin(origin) and not dry_run and outcome.get("status") == "done":
             outcome = _verify_now_outcome(
                 message, outcome, adapter, wall_start=wall_started_at)
-        elif (origin is None and not dry_run
+        elif (not _autonomous_origin(origin) and not dry_run
                 and outcome.get("status") == "done"
                 and _interactive_now_verdict_enabled()):
             # Interactive half of the NOW verdict pipe (chunk B, 2026-07-31 —
@@ -4184,6 +4195,7 @@ def main(argv=None):
     parser.add_argument("--repo", help="Path to target repo (auto-injects stack context into decompose)")
     parser.add_argument("--model", "-m", help="LLM model string")
     parser.add_argument("--lane", choices=["now", "agenda"], help="Force a specific lane")
+    parser.add_argument("--after", metavar="HANDLE_ID", help="Follow a prior run: this goal joins its lineage (recall walks it; lessons minted here stay with it)")
     parser.add_argument("--persona", help="Force a specific persona by name (same as a 'persona:<name>:' prefix in the message; unknown names fall back to auto-selection)")
     from ancestry import MEASUREMENT_CLASSES
     parser.add_argument("--measurement-class", choices=MEASUREMENT_CLASSES, default="organic", help="Success-measurement cohort provenance (default: organic)")
@@ -4233,6 +4245,29 @@ def main(argv=None):
                 print(f"[maro] attached {rec['name']} ({rec['bytes']} bytes)",
                       file=sys.stderr)
 
+    if getattr(args, "after", None):
+        # Lineage: the new goal follows a prior run. Its origin names the
+        # parent; recall walks the chain; lessons minted here scope to the
+        # chain's root (feature-lineage-memory, 2026-09-05).
+        from runs import resolve_run_dir as _resolve_run_dir
+        _prior = _resolve_run_dir(args.after)
+        if _prior is None:
+            print(f"Error: --after {args.after}: no run with that handle_id in this workspace", file=sys.stderr)
+            return 2
+        try:
+            _prior_meta = json.loads((_prior / "metadata.json").read_text(encoding="utf-8"))
+            if not isinstance(_prior_meta, dict):
+                raise ValueError("metadata is not an object")
+        except Exception as _exc:
+            # A run the workspace holds but cannot describe is not a lineage
+            # to join: minting from it would fail closed to an unresolved
+            # scope, and the follow-up would learn nothing (review 2026-09-05).
+            print(f"Error: --after {args.after}: that run's metadata.json is unreadable ({_exc})", file=sys.stderr)
+            return 2
+        _prior_goal = str(_prior_meta.get("prompt") or "")
+        _attach_origin = {**(_attach_origin or {}), "source": "cli",
+                          "parent_handle_id": _prior.name.split("-", 1)[0],
+                          "parent_goal": _prior_goal[:200]}
     try:
         result = handle(
             msg,

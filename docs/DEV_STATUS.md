@@ -2,7 +2,7 @@
 status: living
 ---
 
-## Dev status — 2026-08-28
+## Dev status — 2026-09-05
 
 *Recomputed by `maro dev-status`; not a plan, a measurement. Leads with capability because the backlog is a findings log and its job is to grow — read it as a rate, not a total.*
 
@@ -10,21 +10,21 @@ status: living
 
 | verified | target | aspirational | verified share |
 |---|---|---|---|
-| **19** (30d: +3) | 22 | 6 | 40% |
+| **19** (30d: +0) | 23 | 6 | 39% |
 
-- ledger last updated 8d ago — the count above is current enough to read as real.
+- ⚠ **the ledger itself is 16 days stale.** A flat verified count from an unmaintained doc and a flat count from stalled work render identically; this one may be bookkeeping lag, not a plateau.
 
 **Throughput and fan-out**
 
-- 57 commits in 7d, 711 in 30d
-- **Actionable Stack** open boxes: **79** (30d: +64)
-- net new open items per 10 commits: **+0.90** — findings are outrunning closure
+- 11 commits in 7d, 503 in 30d
+- **Actionable Stack** open boxes: **79** (30d: +40)
+- net new open items per 10 commits: **+0.80** — findings are outrunning closure
 - ⚠ this delta counts one SECTION, so an archive pass or a re-org moves it without any work changing hands. Read the rate as a coarse direction, never as a score.
 
 **Actionable Stack, by kind** — the three things it contains, which look identical on the page
 
 - 21 entries with open work (9 of them waiting on evidence, not on a person)
-- 19 entries that are narrative records with no open checkbox — shipped work, not queue
+- 20 entries that are narrative records with no open checkbox — shipped work, not queue
 
 **12 live entries declare no stopping rule** — no kill criterion, falsifier, or evidence gate. These are where 0→1-approaching-1 rabbit holes live:
 

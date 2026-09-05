@@ -1303,7 +1303,8 @@ def _cmd_memory(args: argparse.Namespace) -> int:
         tier = getattr(args, "tier", "medium")
         task_type = getattr(args, "task_type", "general")
         outcome = getattr(args, "outcome", "done")
-        tl = record_tiered_lesson(args.lesson, task_type, outcome, source_goal="manual", tier=tier)
+        tl = record_tiered_lesson(args.lesson, task_type, outcome, source_goal="manual", tier=tier,
+                                  lineage=getattr(args, "lineage", "") or "")
         print(f"Recorded lesson_id={tl.lesson_id} tier={tier} score={tl.score:.2f}")
     elif memory_cmd == "canon-candidates":
         from memory import get_canon_candidates

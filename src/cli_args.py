@@ -416,6 +416,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mem_record.add_argument("--task-type", default="general")
     p_mem_record.add_argument("--outcome", choices=["done", "stuck"], default="done")
     p_mem_record.add_argument("--tier", choices=["medium", "long"], default="medium")
+    p_mem_record.add_argument("--lineage", default="", metavar="HANDLE_ID", help="Scope the lesson to a run lineage (its root handle_id); default workspace-wide")
     p_mem_canon = memory_sub.add_parser("canon-candidates", help="Show long-tier lessons eligible for identity promotion (human review; door = canon-promote)")
     p_mem_canon.add_argument("--min-hits", type=int, default=10, help="Minimum times_applied (default 10)")
     p_mem_canon.add_argument("--min-task-types", type=int, default=3, help="Minimum distinct task types seen (default 3)")

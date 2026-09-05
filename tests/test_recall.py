@@ -288,7 +288,7 @@ class TestLoopSlice:
         monkeypatch.setattr(memory, "inject_decisions",
                             lambda goal, domain="": "## Decisions\n- chose sqlite")
         monkeypatch.setattr(memory, "search_graveyard",
-                            lambda goal, resurrect=False: [_L()])
+                            lambda goal, resurrect=False, lineage=None: [_L()])
         monkeypatch.setattr(introspect, "find_relevant_failure_notes",
                             lambda goal, limit=3, project="": ["decompose_too_broad"])
         monkeypatch.setattr(playbook_mod, "inject_playbook",

@@ -44,6 +44,10 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Project identity is the goal slug, so an identically-worded stranger inherits another lineage's Goal Ancestry (FOUND 2026-09-05, lineage-memory live fixture, run bcc76703)
+
+Lineage-scoped memory landed (`--after <handle>`, `TieredLesson.lineage`, lineage filter at the recall seam — `tests/test_lineage_memory.py`; the Go successor got the same feature the same day, `planning/feature-lineage-memory.md` in the successor worktree). The lesson filter held in the live check: a stranger run's 22 prompts carried the lineage-scoped lesson 0 times. But the stranger still learned the codename, because its goal text was identical to the follow-up's, `_default_project_for` derived the SAME project slug, and the loop's **Goal Ancestry** block ("stay aligned with this chain: 1. Remember for later: our project codename is Heron…") rendered the other lineage's parent goal from the project's ancestry.json. Same-wording → same project → shared ancestry, artifacts, prior-attempt decisions — none of it lineage-scoped. A differently worded stranger (own slug) wrote UNKNOWN. Not a bug in the new filter; a pre-existing seam: project identity is text-derived, lineage identity is run-derived, and the two disagree exactly when a user re-asks the same question from a different context. Belongs to the "related goals / run horizons" feature Jeremy named as the growth target after memory: when a goal follows a run, its project should follow the lineage (or the ancestry block should be scoped by lineage), and an unfollowed goal should not inherit ancestry from a slug collision. Falsifier when fixing: the same-wording stranger writes UNKNOWN while the `--after` follow-up still writes Heron.
+
 ### Knowledge edges are minted but never traversed — the graph is queried like a flat list (FOUND 2026-08-21, link-farm round-3 run 92491e53, verified on dev Mac)
 
 Surfaced as a byproduct of a documented PASS: the round-3 assessment declined
