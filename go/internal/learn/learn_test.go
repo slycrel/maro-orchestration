@@ -570,6 +570,33 @@ func TestFoldRefusesForgedRecalls(t *testing.T) {
 	if _, err := Fold(j.Production()); err == nil || !strings.Contains(err.Error(), "content differs") {
 		t.Fatalf("differing continuation folded: %v", err)
 	}
+	// a continuation with the same content but a different QUERY: the
+	// scope it claims to have been decided over is not the prior's
+	j, st = openJ(t)
+	if _, err := EnsureSeeds(ctxBg, j); err != nil {
+		t.Fatal(err)
+	}
+	r1 = rev(item, "", Lesson, ScopeWorkspace, "", lessonRef(st, "one"))
+	pol = rev(LearnedID(record.NewID()), "", Policy, ScopeWorkspace, "", lessonRef(st, "policy"))
+	_ = submit(t, j, "base", r1, tr(item, r1.ID, Candidate, Effective), pol, tr(pol.Item, pol.ID, Candidate, Effective))
+	r2 = rev(item, r1.ID, Lesson, ScopeWorkspace, "", lessonRef(st, "two"))
+	_ = submit(t, j, "r2", r2)
+	led = fold(t, j)
+	honest = Recall(led, Query{Purpose: "execute", Scope: []ScopePath{ScopeWorkspace}, Standing: Selectable})
+	x = mk(1, func(s *RecallSelection) {})
+	if err := submit(t, j, "c1", x); err != nil {
+		t.Fatal(err)
+	}
+	y = mk(2, func(s *RecallSelection) {
+		s.Continues = x.ID
+		s.Scope = []ScopePath{ScopeGoal(record.NewID()), ScopeWorkspace}
+	})
+	if err := submit(t, j, "c2", y); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fold(j.Production()); err == nil || !strings.Contains(err.Error(), "content differs") {
+		t.Fatalf("continuation over a different scope folded: %v", err)
+	}
 }
 
 // The policy apply surface is data at one boundary (§7, D17): a policy

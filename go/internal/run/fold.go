@@ -567,8 +567,19 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if err := armMatches(rs.Goal, pol.Arm); err != nil {
 				return fmt.Errorf("run: %s attempt %d policy selection: %w", x.RunID, x.Attempt, err)
 			}
+			// the selections were decided over THIS goal's lineage walk: the
+			// learn fold re-derives a selection from the scope it recorded,
+			// so only here, where the goal is known, can a recorded scope
+			// that omits the parent, reorders the walk, or names a foreign
+			// lineage be refused
+			if err := scopeMatches(rs.Goal, pol.Scope); err != nil {
+				return fmt.Errorf("run: %s attempt %d policy selection: %w", x.RunID, x.Attempt, err)
+			}
 			if rec := learned.Recalls[learn.RecallKey(x.RunID, x.Attempt)]; rec != nil {
 				if err := armMatches(rs.Goal, rec.Arm); err != nil {
+					return fmt.Errorf("run: %s attempt %d recall selection: %w", x.RunID, x.Attempt, err)
+				}
+				if err := scopeMatches(rs.Goal, rec.Scope); err != nil {
 					return fmt.Errorf("run: %s attempt %d recall selection: %w", x.RunID, x.Attempt, err)
 				}
 			}
@@ -1345,6 +1356,20 @@ func ReplayKey(rs *RunState, a *AttemptState) (string, error) {
 // and forced sets — and absent for a goal that is no arm. The goal is the
 // production truth of what the arm forces; whether that is the protocol's
 // arm is the experiment verifier's to check.
+// scopeMatches binds a selection's recorded scope to the goal's lineage
+// walk, own → parent → root → workspace, in that order and nothing else.
+func scopeMatches(g *Goal, got []learn.ScopePath) error {
+	want := scope(g)
+	same := len(got) == len(want)
+	for i := 0; same && i < len(want); i++ {
+		same = got[i] == want[i]
+	}
+	if !same {
+		return fmt.Errorf("recorded scope %v is not the goal's lineage walk %v", got, want)
+	}
+	return nil
+}
+
 func armMatches(g *Goal, arm *learn.ArmRef) error {
 	switch {
 	case g.Arm == nil && arm != nil:

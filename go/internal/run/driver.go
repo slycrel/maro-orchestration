@@ -1150,7 +1150,7 @@ func (d *Driver) Resume(ctx context.Context) ([]*Report, error) {
 	// goals taken in whose run never started: start one (the goal and its
 	// assessment are the committed intake; nothing outcome-bearing ran)
 	for _, g := range led.Unstarted {
-		if g.Parent != "" {
+		if g.Origin == OriginFork || g.Origin == OriginReplay {
 			continue // a fork's child goal is started by the parent; a replay arm by the experiment runner
 		}
 		rep, err := d.StartGoal(ctx, led, g)
@@ -1166,8 +1166,11 @@ func (d *Driver) Resume(ctx context.Context) ([]*Report, error) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		rs := led.Runs[record.RunID(id)]
-		if rs.Terminal() || rs.Goal.Parent != "" {
-			continue // a child run is driven by its parent's fork step; a replay arm by the experiment runner
+		if rs.Terminal() || rs.Goal.Origin == OriginFork || rs.Goal.Origin == OriginReplay {
+			// a child run is driven by its parent's fork step; a replay arm by
+			// the experiment runner. A goal that FOLLOWS a prior run has a
+			// parent too, and is resumed like any production run.
+			continue
 		}
 		rep, err := d.ResumeRun(ctx, rs)
 		if err != nil {

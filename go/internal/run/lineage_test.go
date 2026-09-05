@@ -1,6 +1,7 @@
 package run
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -186,5 +187,93 @@ func TestFoldRefusesForeignLineageRoot(t *testing.T) {
 	d3.Replay = &ReplayContext{}
 	if _, err := d3.Run(ctxBg, []byte("x"), DeliveryPolicy{Required: TransportAccepted}); err == nil || !strings.Contains(err.Error(), "replay") {
 		t.Fatalf("replay+follow accepted: %v", err)
+	}
+}
+
+// The fold binds a selection's recorded scope to the goal's lineage walk:
+// the learn fold re-derives a selection from the scope it RECORDED, so a
+// forged recall that omits the parent, reorders the walk, or names a
+// foreign lineage re-derives consistently and only the run fold — which
+// holds the goal — can refuse it. The rule is exercised directly on the
+// honest facts with one field mutated (the honest driver satisfies it by
+// construction, so a journal-level forgery would need a whole second run).
+func TestFoldBindsSelectionScopeToTheLineage(t *testing.T) {
+	h := open(t)
+	run := func(after *Lineage, goal string) *RunState {
+		d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+		d.After = after
+		if _, err := d.Run(ctxBg, []byte(goal), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+			t.Fatal(err)
+		}
+		return h.newestRun(t)
+	}
+	a := run(nil, "first question")
+	lin, err := LineageOf(h.ledger(), HandleOf(a.Run))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := run(lin, "follow-up question")
+	c := run(lin, "another follow-up") // b's sibling: a lineage member, but not on b's walk
+	own, parent, ws := learn.ScopeGoal(b.Goal.ID), learn.ScopeGoal(a.Goal.ID), learn.ScopeWorkspace
+	honest := b.Latest().Recall.Scope
+	if err := scopeMatches(b.Goal, honest); err != nil {
+		t.Fatalf("honest recall scope refused: %v", err)
+	}
+	if err := scopeMatches(b.Goal, b.Latest().Policy.Scope); err != nil {
+		t.Fatalf("honest policy scope refused: %v", err)
+	}
+	for name, got := range map[string][]learn.ScopePath{
+		"omits the parent":  {own, ws},
+		"reordered":         {parent, own, ws},
+		"foreign lineage":   {own, learn.ScopeGoal(c.Goal.ID), ws},
+		"sibling appended":  {own, parent, learn.ScopeGoal(c.Goal.ID), ws},
+		"workspace only":    {ws},
+		"parent's own walk": a.Latest().Recall.Scope,
+		"duplicated parent": {own, parent, parent, ws},
+		"no workspace":      {own, parent},
+	} {
+		if err := scopeMatches(b.Goal, got); err == nil || !strings.Contains(err.Error(), "lineage walk") {
+			t.Fatalf("%s: forged scope %v accepted: %v", name, got, err)
+		}
+	}
+}
+
+// A goal that follows a prior run is resumed after a crash like any
+// production run: only fork children and replay arms are driven by
+// something other than the resume sweep. Both sweeps — the admitted-but-
+// unstarted goal and the started, non-terminal run — must take it.
+func TestResumeDrivesAFollowedRun(t *testing.T) {
+	for _, crashAt := range []string{"after_intake", "after_start"} {
+		t.Run(crashAt, func(t *testing.T) {
+			h := open(t)
+			mk := func() *Driver {
+				return h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("ok")}), nil)
+			}
+			if _, err := mk().Run(ctxBg, []byte("first question"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+				t.Fatal(err)
+			}
+			a := h.newestRun(t)
+			lin, err := LineageOf(h.ledger(), HandleOf(a.Run))
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := mk()
+			d.After, d.CrashAt = lin, crashAt
+			if _, err := d.Run(ctxBg, []byte("follow-up question"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+				t.Fatalf("fixture: %v", err)
+			}
+			h.restart()
+			reps, err := mk().Resume(ctxBg)
+			if err != nil || len(reps) != 1 || reps[0].Mission.Outcome != MissionDelivered {
+				t.Fatalf("resume did not drive the followed goal: %v %+v", err, reps)
+			}
+			b := h.newestRun(t)
+			if b.Goal.Parent != a.Goal.ID || b.Goal.Root != a.Goal.ID || !b.Terminal() {
+				t.Fatalf("resumed run: %+v terminal=%v", b.Goal, b.Terminal())
+			}
+			if len(h.ledger().Unstarted) != 0 {
+				t.Fatal("a goal is still unstarted after resume")
+			}
+		})
 	}
 }

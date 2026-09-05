@@ -60,7 +60,7 @@ func (led *Ledger) checkRecall(x *RecallSelection) error {
 		if prior == nil || prior.RunID != x.RunID || prior.Attempt >= x.Attempt {
 			return fmt.Errorf("learn: recall %s continues %s, which is not an earlier selection of the same run", x.ID, x.Continues)
 		}
-		if !sameSelection(prior, x) {
+		if !sameQuery(prior, x) || !sameSelection(prior, x) {
 			return fmt.Errorf("learn: recall %s claims to continue %s but its content differs", x.ID, x.Continues)
 		}
 		if priorPol := led.policyByID[prior.Policy]; priorPol == nil || !priorPol.Snapshot[MechRecall] != off {
@@ -88,6 +88,28 @@ func sameStages(a, b map[Stage]bool) bool {
 	}
 	for s := range a {
 		if !b[s] {
+			return false
+		}
+	}
+	return true
+}
+
+// sameQuery compares the inputs a selection was decided over: a continued
+// selection is a copy, so every one of them is the prior's.
+func sameQuery(a, b *RecallSelection) bool {
+	if a.Purpose != b.Purpose || a.Family != b.Family || len(a.Scope) != len(b.Scope) || len(a.Standing) != len(b.Standing) || (a.Arm == nil) != (b.Arm == nil) {
+		return false
+	}
+	if a.Arm != nil && (a.Arm.Assignment != b.Arm.Assignment || a.Arm.Arm != b.Arm.Arm || !sameRevs(a.Arm.Apply, b.Arm.Apply) || !sameRevs(a.Arm.Withhold, b.Arm.Withhold)) {
+		return false
+	}
+	for i := range a.Scope {
+		if a.Scope[i] != b.Scope[i] {
+			return false
+		}
+	}
+	for i := range a.Standing {
+		if a.Standing[i] != b.Standing[i] {
 			return false
 		}
 	}
