@@ -1444,7 +1444,7 @@ func TestPolicyBoundaryIsConsumed(t *testing.T) {
 	pol.Header = header(runRef(run), run, 1, "policy_selection/1")
 	d3 := h3.driver(scripted(toolless), nil)
 	d3.validate()
-	cfg := d3.config(LaneNow, pol)
+	cfg, _ := d3.config(LaneNow, pol)
 	cfg.Mechanisms[learn.MechRecall] = false // the snapshot says on
 	att := &RunAttempt{Header: header(runRef(run), run, 1, "run_attempt/1"), Goal: goal.ID, Family: fam.ID, Config: cfg}
 	recs := []record.Record{pol}

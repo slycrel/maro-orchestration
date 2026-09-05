@@ -47,6 +47,11 @@ func Inspect(rs *RunState) []string {
 		}
 		sort.Strings(mech)
 		lines = append(lines, fmt.Sprintf("policy %s: %d of %d enabled, %d excluded; mechanisms %s", p.ID, len(p.Enabled), len(p.Considered), len(p.Excluded), strings.Join(mech, " ")))
+		// each exclusion as the selection recorded it: which revision, at
+		// what stage, why — the absence proof is these entries, not the count
+		for _, ex := range p.Excluded {
+			lines = append(lines, fmt.Sprintf("  excluded %s (item %s, stage %s): %s", ex.Revision, ex.Item, ex.Stage, ex.Reason))
+		}
 	}
 	for _, is := range a.Invocations {
 		inv := is.Invocation

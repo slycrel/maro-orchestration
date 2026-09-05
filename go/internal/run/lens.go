@@ -19,18 +19,27 @@ const (
 	LensSkeptic = "skeptic"
 )
 
-// Lenses maps a lens name to its text. Neutral is the empty text.
-var Lenses = map[string]string{
+// lenses maps a lens name to its text. Neutral is the empty text. The
+// table is not exported: a lens is bound to a run by name AND content ref
+// in the attempt's config, so nothing may rewrite a name's text under a
+// running attempt.
+var lenses = map[string]string{
 	LensNeutral: "",
 	LensSkeptic: skepticLens,
+}
+
+// LensText is the text of a named lens (neutral: empty, true).
+func LensText(name string) (string, bool) {
+	t, ok := lenses[name]
+	return t, ok
 }
 
 const skepticLens = `You are judging as a sceptic. A claim of success is not success: look for the named fact, the concrete artifact, or the executed check that would make the result true, and treat a confident answer that cites none of them as not established. Prefer "unknown" to a verdict you cannot ground in the material shown to you.`
 
 // LensNames lists the lenses this binary knows, sorted.
 func LensNames() []string {
-	names := make([]string, 0, len(Lenses))
-	for n := range Lenses {
+	names := make([]string, 0, len(lenses))
+	for n := range lenses {
 		names = append(names, n)
 	}
 	sort.Strings(names)
@@ -66,7 +75,7 @@ func (d *Driver) lens() (*invoke.Lens, []byte, error) {
 	if name == "" {
 		return nil, nil, nil
 	}
-	text, ok := Lenses[name]
+	text, ok := lenses[name]
 	if !ok {
 		return nil, nil, fmt.Errorf("%w: unknown lens %q (known: %v)", ErrConfig, name, LensNames())
 	}

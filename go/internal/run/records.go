@@ -205,8 +205,9 @@ type ConfigSnapshot struct {
 	TimeoutMillis   int64               `json:"timeout_ms"`
 	FamilyRule      string              `json:"family_rule"`
 	ResolverVer     string              `json:"resolver_ver"`
-	Confined        bool                `json:"confined,omitempty"` // every invocation tool-less (a fork child)
-	Lens            string              `json:"lens,omitempty"`     // the persona lens judge requests are rendered under (§13); "" = neutral
+	Confined        bool                `json:"confined,omitempty"`  // every invocation tool-less (a fork child)
+	Lens            string              `json:"lens,omitempty"`      // the persona lens judge requests are rendered under (§13); "" = neutral
+	LensText        *thought.Ref        `json:"lens_text,omitempty"` // the lens's text, content-addressed: present iff Lens is; every lensed invocation cites exactly this
 	// Policy is the attempt's policy selection (same command as the
 	// attempt); Mechanisms is its snapshot, copied here so the attempt's
 	// config is complete on its own record. The fold checks equality.
@@ -275,6 +276,17 @@ func (r *RunAttempt) ValidateWire() error {
 	}
 	if (r.Attempt == 1) != (r.RecoversFrom == 0) {
 		return errors.New("run_attempt: attempt 1 recovers from nothing; later attempts name what they recover from")
+	}
+	if (r.Config.Lens == "") != (r.Config.LensText == nil) {
+		return errors.New("run_attempt: a lens is bound by name and text together")
+	}
+	if r.Config.LensText != nil {
+		if err := r.Config.LensText.Validate(); err != nil {
+			return fmt.Errorf("run_attempt: lens text: %w", err)
+		}
+		if r.Config.LensText.Kind != thought.LensText || r.Config.LensText.Bytes == 0 {
+			return errors.New("run_attempt: lens text must be a non-empty lens_text thought")
+		}
 	}
 	if r.RecoversFrom != 0 && r.RecoversFrom >= r.Attempt {
 		return errors.New("run_attempt: recovers_from must be an earlier attempt")

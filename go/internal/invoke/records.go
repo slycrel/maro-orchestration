@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"regexp"
 
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
@@ -79,6 +80,9 @@ var lensPurposes = map[Purpose]bool{PurposeJudge: true, PurposeRender: true}
 // LensAllowed says whether a lens may ride a request of this purpose.
 func LensAllowed(p Purpose) bool { return lensPurposes[p] }
 
+// lensName: a lens is named like an identifier, never free text.
+var lensName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
 func (l *Lens) validate(p Purpose) error {
 	if l == nil {
 		return nil
@@ -86,8 +90,14 @@ func (l *Lens) validate(p Purpose) error {
 	if l.Name == "" {
 		return errors.New("invocation: lens without a name")
 	}
+	if !lensName.MatchString(l.Name) {
+		return fmt.Errorf("invocation: lens name %q is not a name (lowercase letters, digits, _ -)", l.Name)
+	}
 	if err := l.Text.Validate(); err != nil {
 		return fmt.Errorf("invocation: lens text: %w", err)
+	}
+	if l.Text.Bytes == 0 {
+		return errors.New("invocation: a lens with no text is the neutral lens — carry none")
 	}
 	if l.Text.Kind != thought.LensText {
 		return fmt.Errorf("invocation: lens text is a %s thought, not lens_text", l.Text.Kind)

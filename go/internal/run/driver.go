@@ -215,7 +215,7 @@ func (d *Driver) validate() error {
 	case d.Backend.Capabilities().Name == "":
 		return fmt.Errorf("%w: backend declares no name", ErrConfig)
 	}
-	if _, ok := Lenses[d.Lens]; d.Lens != "" && !ok {
+	if _, ok := lenses[d.Lens]; d.Lens != "" && !ok {
 		return fmt.Errorf("%w: unknown lens %q (known: %v)", ErrConfig, d.Lens, LensNames())
 	}
 	if d.Replay != nil && (d.Replay.Unit == "" || d.Replay.Root == "" || !learn.Arms[d.Replay.Arm]) {
@@ -242,8 +242,19 @@ func (d *Driver) validate() error {
 	return nil
 }
 
-func (d *Driver) config(lane Lane, pol *learn.PolicySelection) ConfigSnapshot {
+func (d *Driver) config(lane Lane, pol *learn.PolicySelection) (ConfigSnapshot, error) {
+	// the lens binding: the name AND the content ref of its text, so the
+	// attempt's config says exactly which bytes every lensed request
+	// begins with (§13) — the fold checks each invocation against it
+	l, _, err := d.lens()
+	if err != nil {
+		return ConfigSnapshot{}, err
+	}
 	c := ConfigSnapshot{Lane: lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), Lens: d.lensName(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer, Confined: d.Confined, Policy: pol.ID, Mechanisms: map[learn.Mechanism]bool{}}
+	if l != nil {
+		ref := l.Text
+		c.LensText = &ref
+	}
 	for m, on := range pol.Snapshot {
 		c.Mechanisms[m] = on
 	}
@@ -258,7 +269,7 @@ func (d *Driver) config(lane Lane, pol *learn.PolicySelection) ConfigSnapshot {
 	} else if d.ModelJudge {
 		c.Judge, c.JudgeBackend = JudgeModel, judge.Capabilities()
 	}
-	return c
+	return c, nil
 }
 
 // judge is the backend an attempt's judgments run on: the configured judge,
@@ -401,7 +412,11 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 	if err != nil {
 		return nil, err
 	}
-	att := &RunAttempt{Header: header(runRef(rs.Run), rs.Run, n, "run_attempt/1"), Goal: rs.Goal.ID, Family: rs.Family.ID, Config: d.config(rs.Goal.Lane, pol)}
+	cfg, err := d.config(rs.Goal.Lane, pol)
+	if err != nil {
+		return nil, err
+	}
+	att := &RunAttempt{Header: header(runRef(rs.Run), rs.Run, n, "run_attempt/1"), Goal: rs.Goal.ID, Family: rs.Family.ID, Config: cfg}
 	if prev != nil {
 		att.RecoversFrom = prev.Attempt.Attempt
 	}
@@ -1115,7 +1130,9 @@ func (d *Driver) StartGoal(ctx context.Context, led *Ledger, g *Goal) (*Report, 
 	if fam == nil {
 		return nil, fmt.Errorf("run: goal %s has no family assessment", g.ID)
 	}
-	rs := &RunState{Run: record.RunID(record.NewID()), Goal: g, Family: fam}
+	// the goal's envelope was committed with it: a run started after a
+	// restart is measured against it exactly as a run started at intake
+	rs := &RunState{Run: record.RunID(record.NewID()), Goal: g, Family: fam, Target: led.Targets[g.ID]}
 	return d.drive(ctx, rs, nil, nil)
 }
 

@@ -185,6 +185,7 @@ type Ledger struct {
 	Runs      map[record.RunID]*RunState
 	Unstarted []*Goal                               // in Seq order
 	Families  map[record.RecordID]*FamilyAssessment // by goal; exactly one per goal
+	Targets   map[record.RecordID]*MeteringTarget   // by goal; at most one per goal (§11)
 	Learned   *learn.Ledger                         // the learned population, folded alongside
 	// Interrupts by target run, with their acks; a pending one has no ack.
 	Interrupts map[record.RunID][]*Interrupt
@@ -494,7 +495,13 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			st := inv[x.ID]
 			rs := runs[x.RunID]
 			if st != nil && rs != nil && x.Attempt > 0 && int(x.Attempt) <= len(rs.Attempts) {
-				rs.Attempts[x.Attempt-1].Invocations = append(rs.Attempts[x.Attempt-1].Invocations, st)
+				a := rs.Attempts[x.Attempt-1]
+				// the lens rule executes as the invocation arrives (§13):
+				// a lensed request cites the attempt's lens binding exactly
+				if err := checkLens(rs, a, st, store); err != nil {
+					return err
+				}
+				a.Invocations = append(a.Invocations, st)
 			}
 		case *RunAttempt:
 			rs := get(x.RunID)
@@ -787,7 +794,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	led := &Ledger{Runs: runs, Families: fams, Learned: learned, Interrupts: interrupts, Acks: acks, Forks: forks, goals: goals, Arms: replays}
+	led := &Ledger{Runs: runs, Families: fams, Targets: targets, Learned: learned, Interrupts: interrupts, Acks: acks, Forks: forks, goals: goals, Arms: replays}
 	for _, g := range goalOrder {
 		if !started[g.ID] {
 			led.Unstarted = append(led.Unstarted, g)
@@ -1039,10 +1046,11 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 	default:
 		return nil
 	}
-	if st.Invocation.Lens != nil {
-		// the judge was asked under a lens: the prompt is the lens text
-		// over the same facts (§13)
-		lb, err := store.Get(st.Invocation.Lens.Text)
+	if lt := a.Attempt.Config.LensText; lt != nil {
+		// the attempt judges under a lens: the prompt is the CONFIGURED lens
+		// text over the same facts (§13) — the binding, not whatever the
+		// invocation cites (checkLens holds them equal)
+		lb, err := store.Get(*lt)
 		if err != nil {
 			return fmt.Errorf("run: %s attempt %d judge verdict %s: lens text: %w", rs.Run, v.Attempt, v.ID, err)
 		}
@@ -1416,35 +1424,49 @@ func describeDecision(d *JoinDecision) string {
 	return fmt.Sprintf("selected=%v cancel=%v", d.Selected, d.Cancel)
 }
 
-// checkLenses executes the lens rules (§13) over the attempt's invocations
-// once its outcome is recorded: a lensed invocation names the attempt's
-// configured lens and its request bytes begin with the lens text; an
-// attempt configured with a lens has every judge request under it; the
-// neutral lens is the absence of a prefix, so an unlensed judge request
-// under a lensed attempt is a swap the attempt did not declare.
+// checkLens executes the lens rules (§13) over one invocation as it
+// attaches to its attempt: a lensed invocation cites the attempt's lens
+// binding — the name AND the content ref of the text in the attempt's
+// config — and its request bytes begin with that text; an attempt under a
+// lens has every judge and render request under it (the neutral lens is
+// the absence of a prefix, so an unlensed judgement under a lensed attempt
+// is a swap the attempt did not declare); a neutral attempt carries none.
+func checkLens(rs *RunState, a *AttemptState, is *invoke.State, store *thought.Store) error {
+	inv, cfg := is.Invocation, a.Attempt.Config
+	n := a.Attempt.Attempt
+	switch {
+	case inv.Lens == nil:
+		if cfg.Lens != "" && invoke.LensAllowed(inv.Purpose) {
+			return fmt.Errorf("run: %s attempt %d is under lens %q but %s invocation %s carries none", rs.Run, n, cfg.Lens, inv.Purpose, inv.ID)
+		}
+	case cfg.Lens == "" || cfg.LensText == nil:
+		return fmt.Errorf("run: %s attempt %d is neutral but invocation %s ran under %q", rs.Run, n, inv.ID, inv.Lens.Name)
+	case inv.Lens.Name != cfg.Lens:
+		return fmt.Errorf("run: %s attempt %d is under lens %q but invocation %s ran under %q", rs.Run, n, cfg.Lens, inv.ID, inv.Lens.Name)
+	case inv.Lens.Text != *cfg.LensText:
+		return fmt.Errorf("run: %s attempt %d invocation %s cites lens text %s, not the attempt's %s", rs.Run, n, inv.ID, inv.Lens.Text.Hash, cfg.LensText.Hash)
+	default:
+		text, err := store.Get(*cfg.LensText)
+		if err != nil {
+			return fmt.Errorf("run: %s attempt %d invocation %s lens text: %w", rs.Run, n, inv.ID, err)
+		}
+		body, err := store.Get(inv.Request)
+		if err != nil {
+			return fmt.Errorf("run: %s attempt %d invocation %s request: %w", rs.Run, n, inv.ID, err)
+		}
+		if len(text) == 0 || !bytes.HasPrefix(body, Lensed(text, nil)) {
+			return fmt.Errorf("run: %s attempt %d invocation %s claims lens %q but its request does not begin with the lens text", rs.Run, n, inv.ID, inv.Lens.Name)
+		}
+	}
+	return nil
+}
+
+// checkLenses re-executes checkLens over every invocation the attempt made,
+// at Recorded: the whole set an outcome rests on, checked once more as one.
 func checkLenses(rs *RunState, a *AttemptState, store *thought.Store) error {
-	want := a.Attempt.Config.Lens
 	for _, is := range a.Invocations {
-		inv := is.Invocation
-		switch {
-		case inv.Lens == nil:
-			if want != "" && inv.Purpose == invoke.PurposeJudge {
-				return fmt.Errorf("run: %s attempt %d is under lens %q but judge invocation %s carries none", rs.Run, a.Attempt.Attempt, want, inv.ID)
-			}
-		case inv.Lens.Name != want:
-			return fmt.Errorf("run: %s attempt %d is under lens %q but invocation %s ran under %q", rs.Run, a.Attempt.Attempt, want, inv.ID, inv.Lens.Name)
-		default:
-			text, err := store.Get(inv.Lens.Text)
-			if err != nil {
-				return fmt.Errorf("run: %s attempt %d invocation %s lens text: %w", rs.Run, a.Attempt.Attempt, inv.ID, err)
-			}
-			body, err := store.Get(inv.Request)
-			if err != nil {
-				return fmt.Errorf("run: %s attempt %d invocation %s request: %w", rs.Run, a.Attempt.Attempt, inv.ID, err)
-			}
-			if len(text) == 0 || !bytes.HasPrefix(body, Lensed(text, nil)) {
-				return fmt.Errorf("run: %s attempt %d invocation %s claims lens %q but its request does not begin with the lens text", rs.Run, a.Attempt.Attempt, inv.ID, inv.Lens.Name)
-			}
+		if err := checkLens(rs, a, is, store); err != nil {
+			return err
 		}
 	}
 	return nil

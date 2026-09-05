@@ -9,6 +9,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/thought"
 )
 
 // §11 / D13: a target is committed with the goal, measured on the recorded
@@ -90,15 +91,25 @@ func TestMeteringTargetIsMeasuredNeverEnforced(t *testing.T) {
 	if MeasuredOn(over, DimTokens) != 1200 || MeasuredOn(over, DimWallMS) != 9000 || MeasuredOn(over, DimCostUSD) != 2.5 || MeasuredOn(over, "beans") != 0 {
 		t.Fatal("MeasuredOn")
 	}
-	unreported := invoke.Usage{CostUSD: 0}
-	if l := MeteringLine(rs1.Target, unreported, nil); !strings.Contains(l, "cost not reported by the backend") {
+	// a cost target on a backend that reports no cost: no measurement, no
+	// verdict — never "under"
+	unreported := invoke.Usage{CostUSD: 0, InputTokens: 5000}
+	if l := MeteringLine(rs1.Target, unreported, nil); !strings.Contains(l, "unreported") || strings.Contains(l, "under") || strings.Contains(l, "measured") {
 		t.Fatalf("unreported: %s", l)
+	}
+	if l := MeteringLine((&TargetSpec{Name: "tokens", Dimension: DimTokens, Limit: 100, Why: "w"}).Record(rs1.Goal.ID), unreported, nil); !strings.Contains(l, "OVER by 4900") {
+		t.Fatalf("tokens are measured without a cost: %s", l)
 	}
 
 	// the operator's spec: refused before a goal exists
-	for _, c := range [][2]string{{"cost_usd", "w"}, {"beans=2", "w"}, {"cost_usd=0", "w"}, {"cost_usd=-1", "w"}, {"cost_usd=nan", "w"}, {"cost_usd=inf", "w"}, {"cost_usd=x", "w"}, {"cost_usd=2", ""}, {"", "w"}} {
+	for _, c := range [][2]string{{"cost_usd", "w"}, {"beans=2", "w"}, {"cost_usd=0", "w"}, {"cost_usd=-1", "w"}, {"cost_usd=nan", "w"}, {"cost_usd=inf", "w"}, {"cost_usd=x", "w"}, {"cost_usd=2", ""}, {"", "w"}, {"tokens=0.5", "w"}, {"wall_ms=10.25", "w"}} {
 		if _, err := ParseTarget(c[0], c[1]); !errors.Is(err, ErrConfig) {
 			t.Fatalf("%q/%q: %v", c[0], c[1], err)
+		}
+	}
+	for _, ok := range []string{"tokens=1", "wall_ms=1500", "cost_usd=0.25"} {
+		if _, err := ParseTarget(ok, "w"); err != nil {
+			t.Fatalf("%q: %v", ok, err)
 		}
 	}
 
@@ -126,6 +137,7 @@ func TestMeteringTargetIsMeasuredNeverEnforced(t *testing.T) {
 	door("target dimension", "out of vocabulary", tgt(rs3.Goal.ID, func(x *MeteringTarget) { x.Dimension = "beans" }))
 	door("target no why", "name and a why", tgt(rs3.Goal.ID, func(x *MeteringTarget) { x.Why = " " }))
 	door("target subject", "subject must be its goal", tgt(rs3.Goal.ID, func(x *MeteringTarget) { x.Subject = runRef(rs3.Run) }))
+	door("fractional tokens", "whole number", tgt(rs3.Goal.ID, func(x *MeteringTarget) { x.Dimension, x.Limit = DimTokens, 0.5 }))
 	ov := func(rs *RunState, f func(*Overage)) *Overage {
 		x := &Overage{Header: header(runRef(rs.Run), rs.Run, 1, "overage/1"), Goal: rs.Goal.ID, Target: rs.Target.ID, Dimension: DimCostUSD, Measured: 3, Limit: 2}
 		if f != nil {
@@ -171,4 +183,85 @@ func TestMeteringTargetIsMeasuredNeverEnforced(t *testing.T) {
 	fold("overage on an attempt that does not exist", "attempt 2", func(x trio) record.Record {
 		return ov(x.rs2, func(o *Overage) { o.Measured, o.Attempt = 2.5, 2 })
 	})
+}
+
+// A goal taken in with a target whose run never started (a crash after
+// intake): the run started on resume is measured against the committed
+// envelope exactly as one started at intake — the target is folded, the
+// overage committed, the delivery names it.
+func TestResumeUnstartedTargetedGoalIsMetered(t *testing.T) {
+	h := open(t)
+	over := invoke.Usage{InputTokens: 900, OutputTokens: 300, CostUSD: 2.5, CostReported: true, WallMillis: 9000}
+	exec := scripted(toolless, invoke.ScriptedCall{Response: []byte("answer"), Usage: over})
+	spec, _ := ParseTarget("cost_usd=2.00", "Manti envelope")
+	d := h.driver(exec, nil)
+	d.Target, d.CrashAt = spec, "after_intake"
+	if _, err := d.Run(ctxBg, []byte("Where can I get non-ethanol gas in or around Manti, Utah?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+		t.Fatalf("seam did not fire: %v", err)
+	}
+	if h.count(KindMeteringTarget) != 1 || len(h.ledger().Unstarted) != 1 {
+		t.Fatal("intake did not commit the target with the goal")
+	}
+	h.restart()
+	d = h.driver(exec, nil) // the operator's spec is gone; the journal carries it
+	reps, err := d.Resume(ctxBg)
+	if err != nil || len(reps) != 1 {
+		t.Fatalf("resume: %v (%d reports)", err, len(reps))
+	}
+	rs := h.only()
+	a := rs.Latest()
+	if rs.Target == nil || rs.Target.Why != "Manti envelope" || a.Overage == nil || a.Overage.Target != rs.Target.ID || a.Overage.Measured != 2.5 {
+		t.Fatalf("resumed run: target %+v overage %+v", rs.Target, a.Overage)
+	}
+	if reps[0].Mission.Outcome != MissionDelivered || !strings.Contains(string(reps[0].Payload), "OVER by 0.5 (overage "+string(a.Overage.ID)+")") {
+		t.Fatalf("delivery: %s %q", reps[0].Mission.Outcome, reps[0].Payload)
+	}
+	if h.count(KindOverage) != 1 {
+		t.Fatalf("overages: %d", h.count(KindOverage))
+	}
+}
+
+// The fold's delivery rule is executed, not decorative: an attempt recorded
+// over its target (crash after recorded, before the overage) followed by a
+// forged, well-formed DeliveryPrepared without the overage is refused by
+// Fold; the driver's own resume commits the overage first and delivers.
+func TestFoldRefusesDeliveryOverTargetWithoutOverage(t *testing.T) {
+	over := invoke.Usage{InputTokens: 900, OutputTokens: 300, CostUSD: 2.5, CostReported: true, WallMillis: 9000}
+	spec, _ := ParseTarget("cost_usd=2.00", "Manti envelope")
+	crashed := func(t *testing.T) (*harness, *RunState) {
+		t.Helper()
+		h := open(t)
+		d := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("answer"), Usage: over}), nil)
+		d.Target, d.CrashAt = spec, "after_recorded"
+		if _, err := d.Run(ctxBg, []byte("Where can I get non-ethanol gas in or around Manti, Utah?"), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+			t.Fatalf("seam did not fire: %v", err)
+		}
+		rs := h.only()
+		if rs.Target == nil || rs.Latest().Has(Recorded) == nil || rs.Latest().Overage != nil || rs.Latest().Delivery != nil {
+			t.Fatalf("not the shape: %s", trail(rs.Latest()))
+		}
+		return h, rs
+	}
+	h, rs := crashed(t)
+	payload, _ := h.st.Put(thought.Deliverable, []byte("answer"))
+	id := record.NewID()
+	x := &DeliveryPrepared{Header: record.Header{ID: id, Schema: "delivery_prepared/1", RunID: rs.Run, Attempt: 1, Subject: record.Ref{Kind: "delivery", ID: string(id)}, At: now()},
+		Payload: payload, Origin: OriginCLI, Required: TransportAccepted, Nonce: strings.Repeat("ab", 16)}
+	if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "forged/delivery-over-target", Epoch: h.j.Epoch(), Records: []record.Record{x}}); err != nil {
+		t.Fatalf("the door refused a well-formed record: %v", err)
+	}
+	if _, err := Fold(h.j.Production(), h.st); err == nil || !strings.Contains(err.Error(), "without the overage committed") {
+		t.Fatalf("want fold refusal, got %v", err)
+	}
+	// the driver's path: overage first, then the delivery
+	h, rs = crashed(t)
+	h.restart()
+	reps, err := h.driver(scripted(toolless), nil).Resume(ctxBg)
+	if err != nil || len(reps) != 1 || reps[0].Mission.Outcome != MissionDelivered {
+		t.Fatalf("resume: %v", err)
+	}
+	rs = h.only()
+	if rs.Latest().Overage == nil || rs.Latest().Delivery == nil || !strings.Contains(string(reps[0].Payload), "OVER by 0.5") {
+		t.Fatalf("resumed: %s", trail(rs.Latest()))
+	}
 }

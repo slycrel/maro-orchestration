@@ -62,7 +62,16 @@ func (r *MeteringTarget) ValidateWire() error {
 	if !(r.Limit > 0) || math.IsInf(r.Limit, 0) {
 		return errors.New("metering_target: limit must be finite and positive")
 	}
+	if !integral(r.Dimension, r.Limit) {
+		return fmt.Errorf("metering_target: a %s limit is a whole number", r.Dimension)
+	}
 	return nil
+}
+
+// integral: tokens and milliseconds are counted, so their limits are whole
+// numbers — a fractional token target would make any use at all an overage.
+func integral(d Dimension, v float64) bool {
+	return d == DimCostUSD || v == math.Trunc(v)
 }
 
 // Overage is the event: an attempt's recorded usage on the target's
@@ -126,6 +135,9 @@ func ParseTarget(spec, why string) (*TargetSpec, error) {
 	if err != nil || !(v > 0) || math.IsInf(v, 0) {
 		return nil, fmt.Errorf("%w: target limit %q must be a positive number", ErrConfig, lim)
 	}
+	if !integral(d, v) {
+		return nil, fmt.Errorf("%w: a %s limit is a whole number, not %q", ErrConfig, d, lim)
+	}
 	if strings.TrimSpace(why) == "" {
 		return nil, fmt.Errorf("%w: a target needs a why (--why)", ErrConfig)
 	}
@@ -155,8 +167,13 @@ func num(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
 // MeteringLine is the delivery's metering line for a recorded attempt:
 // measured against the target, under or OVER, with the why — present
-// whenever a target exists, so an under-target run says so too.
+// whenever a target exists, so an under-target run says so too. A cost
+// target on a backend that reports no cost is UNREPORTED, not under: an
+// absent measurement supports no verdict.
 func MeteringLine(t *MeteringTarget, u invoke.Usage, ov *Overage) string {
+	if t.Dimension == DimCostUSD && !u.CostReported {
+		return fmt.Sprintf("metering: %s — cost_usd target %s (%s): unreported (the backend reports no cost; no verdict)", t.Name, num(t.Limit), t.Why)
+	}
 	m := MeasuredOn(u, t.Dimension)
 	verdict := "under"
 	if m > t.Limit {
@@ -165,11 +182,7 @@ func MeteringLine(t *MeteringTarget, u invoke.Usage, ov *Overage) string {
 			verdict += " (overage " + string(ov.ID) + ")"
 		}
 	}
-	rep := ""
-	if t.Dimension == DimCostUSD && !u.CostReported {
-		rep = ", cost not reported by the backend"
-	}
-	return fmt.Sprintf("metering: %s — %s measured %s, target %s (%s): %s%s", t.Name, t.Dimension, num(m), num(t.Limit), t.Why, verdict, rep)
+	return fmt.Sprintf("metering: %s — %s measured %s, target %s (%s): %s", t.Name, t.Dimension, num(m), num(t.Limit), t.Why, verdict)
 }
 
 // meter commits the overage for a recorded attempt whose usage exceeds the

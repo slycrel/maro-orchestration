@@ -1880,3 +1880,67 @@ an operator tool policy are owed before the Manti answer can match
 Python's. (3) `pgrep -f "mg serve"` matched the calling shell's own
 command line and killed it once during the live run — an ops trap,
 not a code one (anchor the pattern).
+
+**Review round (Skeptic + Expert QA on codex, one pass).** Findings,
+each verified in the tree before fixing: (A) HIGH, both — a goal taken
+in with a target whose run never started (crash after intake) lost the
+target on resume: `StartGoal` built the `RunState` without it, so the
+resumed run could exceed the envelope, deliver without an `Overage`,
+and print no metering line. VERIFIED (`driver.go` `StartGoal`, no
+`Target`; the fold set it only from `RunAttempt`). FIXED — the fold's
+`Ledger` carries `Targets` by goal and `StartGoal` reads it; pinned by
+`TestResumeUnstartedTargetedGoalIsMetered` (crash after intake, resume
+with an operator spec that is gone, the overage and the line come from
+the journal). (B) HIGH, both — the lens was bound by name only: the
+attempt config carried `lens: skeptic` and the fold checked each
+invocation's request against the invocation's OWN cited text, so two
+different `lens_text` bodies under one name passed, and the verdict
+re-derivation read the same self-cited text. VERIFIED. FIXED —
+`ConfigSnapshot.LensText` (present iff `Lens`, a non-empty `lens_text`
+ref; door-checked on `run_attempt`); `checkLens` runs per invocation
+AS IT ATTACHES (not only at Recorded) and requires name AND text ref
+equal to the binding, the request prefixed by the bound text, and
+every judge/render request under a lensed attempt lensed; the verdict
+re-derives under the CONFIGURED text. `checkLenses` at Recorded is now
+the whole-set re-execution of the same rule. Pinned by
+`TestFoldRefusesLensSwapsInHistory` (four forged invocations after a
+real lensed run, each refused by `Fold`; four forged attempt configs
+refused at the door) and the extended `TestFoldLensRules`. (C) MEDIUM
+(Skeptic) — exported mutable `Lenses`: FIXED, unexported table +
+`LensText(name)`; with (B) a rewrite could no longer alter a running
+attempt anyway. (D) MEDIUM (both) — a cost target on a backend that
+reports no cost printed "under": FIXED, `MeteringLine` says
+`unreported (… no verdict)` and never "under"; pinned. (E) LOW (QA) —
+fractional `tokens`/`wall_ms` limits made any use an overage: FIXED,
+whole numbers at `ParseTarget` and the door; pinned. (F) LOW (both) —
+lens name free text, zero-byte lens text accepted at the door: FIXED
+(`^[a-z][a-z0-9_-]*$`; `Bytes == 0` refused as "the neutral lens —
+carry none"); pinned. (G) MEDIUM (Skeptic) — two mutations survived
+(delete the `checkLenses` call; no-op the delivery-over-target rule):
+both now killed — the first by (B)'s attach-time check and the forged
+histories, the second by
+`TestFoldRefusesDeliveryOverTargetWithoutOverage` (crash after
+recorded, forge a well-formed `DeliveryPrepared`, `Fold` refuses; the
+driver's resume commits the overage first). (H) Report (both): the
+request-hash row now carries the byte decomposition (after = before +
+`\n\n## Recalled lessons\n- <lesson>`, re-derived by the fold's NOW
+rule on every fold), the absence-proof row quotes the policy exclusion
+entry (`Inspect` prints each `Excluded` entry: revision, item, stage,
+reason), the `equivalent` closures read "per this evaluator", and the
+date is the local date with the UTC stamp noted. REFUTED: none.
+UNSETTLED: none that a probe here could settle — the reviewers could
+not run `go test` (read-only sandbox) and said so; every test above ran
+here. Residuals from the round: (4) replay arms run neutral (the
+replay driver does not inherit the unit's lens) — a documented protocol
+choice now, not a rule; an experiment that wants a lensed replay names
+it. (5) An `evaluate`/`diagnose` invocation after Recorded is bound by
+the door only (no lens on those purposes) — the attach-time check
+covers whatever attaches, the door covers the rest. (6) (B) is a
+wire-breaking change to `run_attempt` without a schema bump: the
+scratch journal `l13` that the acceptance report cites no longer opens
+under the fixed binary (its lensed attempt has no `lens_text`; the
+door says so and refuses to open). No production journal of the
+successor exists yet, so nothing is stranded; the report says which
+binary reads it. The first production journal is where the schema-bump
+discipline (`run_attempt/2`, a reader for `/1`) starts — before that it
+is ceremony.
