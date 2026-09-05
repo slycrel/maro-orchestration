@@ -1,0 +1,47 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "overage",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced",
+  "fields": {
+    "goal": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced"
+    },
+    "target": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced"
+    },
+    "dimension": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(cost_usd|tokens|wall_ms)$",
+      "rejects": "beans",
+      "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced"
+    },
+    "measured": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced"
+    },
+    "limit": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced"
+    }
+  }
+}

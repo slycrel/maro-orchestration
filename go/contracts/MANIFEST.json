@@ -1,6 +1,6 @@
 {
   "generator": "maro-go contracts gen v1",
-  "source_ref": "184ac892",
+  "source_ref": "5f4d3e15",
   "kinds": {
     "application": "ddab4335dd49232e8a3a7056daa72ae181e21794f25b5ab5d38a3dbd52305385",
     "assignment": "c28cdc7aef08bebb6fa3c5200385bfb624563ea012f7f079bb92284d9499f777",
@@ -22,7 +22,7 @@
     "intent_assessment": "c236c9e6942052c2ccaec0edfd2ef7f8033ba7cf54f7e2d088dcb49626c6796f",
     "interrupt": "e305a0a4b1c44d316ec0e9bc9d6e235a64b25e4ce4038539ca4a85d1bf135fc0",
     "interrupt_ack": "36a6d475d892fcb7da9d49fac685c2bd75b23aa4f4a971aafecf6828b9274b44",
-    "invocation": "e9bc644afc8a40516e9812e46387e551e1237e1baf3507b0488fd60c850e2c6e",
+    "invocation": "f3ac29c6de3a1d2a4fd32bba53fd99cb091c04518897c0aca337c2c462bde566",
     "invocation_dispatched": "f9277d84d50aa6f4ffddc8a6b16c58a3514684adc897c77853bc90214752c5a2",
     "invocation_reconciled": "2f92a10602f8f0cc0cd963bf8ce0aff2f9f53ed9d6f435891ca3f9906bd7abb5",
     "join_decision": "aed2fb91ff52e9b78a5394ecb23c9e61abc704e1336f67650605811e780fd121",
@@ -32,7 +32,9 @@
     "learned_revision": "f61dd40132557e397c6b661f072997f232d6d445658d5e738117cb8b716eebe6",
     "learned_transition": "9253c1516fdbfdee5ea8901c8480ba1e4401ed93f51cc1d8afd08bc716f11f59",
     "lease": "e7fe2d8c53af8a54ff530269c2a3ed2893b6cfdce933b9ec63c09d2051c01a7e",
+    "metering_target": "45e8694440ff28245074c0aab62dd9755ff88854cc1c16dbf57a67c0585e4c76",
     "observation": "2c6cd406a86d780b75ab1f591fca0e1dcdf42211e9e6c92c70f5262ea370aace",
+    "overage": "44f295293356c6196a1f761c0cddefec27018ab75c131f23751440233ffd8a97",
     "plan": "999916d15d4525eb654c0ac3b119146a15173bea1e78cdfc307ef3c1693642e2",
     "policy_application": "0bd69007744ae6921eccd0cdb3a81c9e923beed5f6663f39911afca2c958f082",
     "policy_selection": "5f703f0b46138342496919f79614a449d229fcaa4c59c135bc148b7be8732b45",

@@ -16,6 +16,9 @@ type Request struct {
 	Tools   bool          // false ⇒ the backend must run tool-less (judges, intent)
 	Timeout time.Duration // 0 ⇒ backend default
 	Cwd     string        // working directory for an agentic backend ("" ⇒ backend default)
+	// Lens is the persona lens the prompt was rendered under (judge/render
+	// purposes only); the prompt MUST begin with the lens text. Nil = neutral.
+	Lens *Lens
 }
 
 // EffectEvent is a tool action as the backend's stream announces it (a

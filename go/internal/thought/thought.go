@@ -30,11 +30,12 @@ const (
 	StepResult  Kind = "step_result"
 	Deliverable Kind = "deliverable"
 	LessonText  Kind = "lesson_text"
-	Step        Kind = "step"    // one planned step's text (AGENDA)
-	Fixture     Kind = "fixture" // an experiment unit's expected answer (deterministic oracle)
+	Step        Kind = "step"      // one planned step's text (AGENDA)
+	Fixture     Kind = "fixture"   // an experiment unit's expected answer (deterministic oracle)
+	LensText    Kind = "lens_text" // a persona lens: the text a judge/render request is prefixed with (§13)
 )
 
-var kinds = map[Kind]bool{Goal: true, Prompt: true, Response: true, StepResult: true, Deliverable: true, LessonText: true, Step: true, Fixture: true}
+var kinds = map[Kind]bool{Goal: true, Prompt: true, Response: true, StepResult: true, Deliverable: true, LessonText: true, Step: true, Fixture: true, LensText: true}
 
 // Encoding says what a text backend may be handed (utf8) versus what only a
 // file transport may carry (bytes). Derived at store time, never declared by

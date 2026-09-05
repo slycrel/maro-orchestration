@@ -50,6 +50,8 @@ type Options struct {
 	Poll time.Duration
 	// TailEvery is the tail lane's pass interval; zero = the tail's default.
 	TailEvery time.Duration
+	// Lens is the persona lens every judge request runs under (§13); "" = neutral.
+	Lens string
 }
 
 // Server is a running process.
@@ -75,6 +77,9 @@ type Request struct {
 	Ack    bool   `json:"ack,omitempty"` // policy: user_acknowledged
 	Handle string `json:"handle,omitempty"`
 	Why    string `json:"why,omitempty"`
+	// submit: an optional metering target `<dimension>=<limit>` with its why (§11)
+	Target    string `json:"target,omitempty"`
+	TargetWhy string `json:"target_why,omitempty"`
 	// ack
 	Delivery string `json:"delivery,omitempty"`
 	Token    string `json:"token,omitempty"`
@@ -278,7 +283,7 @@ func (l *executor) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 	defer t.Stop()
 	lastErr, repeats := "", 0
 	for {
-		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health,
+		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health, Lens: l.s.opts.Lens,
 			Events: func(e run.Event) {
 				if e.Stage == "attempt" && e.Goal != "" {
 					l.s.conns.bind(e.Goal, e.Run) // the run's presentation goes to the client that submitted its goal
@@ -401,6 +406,15 @@ func (s *Server) submit(ctx context.Context, c net.Conn, enc *json.Encoder, req 
 		enc.Encode(Event{Type: "error", Error: err.Error()})
 		return
 	}
+	var spec *run.TargetSpec
+	if req.Target != "" || req.TargetWhy != "" {
+		t, err := run.ParseTarget(req.Target, req.TargetWhy)
+		if err != nil {
+			enc.Encode(Event{Type: "error", Error: err.Error()})
+			return
+		}
+		spec = t
+	}
 	ref, err := s.store.Put(thought.Goal, text)
 	if err != nil {
 		enc.Encode(Event{Type: "error", Error: err.Error()})
@@ -412,7 +426,11 @@ func (s *Server) submit(ctx context.Context, c net.Conn, enc *json.Encoder, req 
 	waiter := s.conns.register(goal.ID, enc)
 	// one command: the goal, its assessment, and — if an open live
 	// experiment of its family claims it — its assignment (§5)
-	if err := run.IntakeCommand(ctx, s.j, experiment.Admit(s.j, s.store), goal, fam); err != nil {
+	var extra []record.Record
+	if spec != nil {
+		extra = append(extra, spec.Record(goal.ID))
+	}
+	if err := run.IntakeCommand(ctx, s.j, experiment.Admit(s.j, s.store), goal, fam, extra...); err != nil {
 		s.conns.unregister(goal.ID)
 		enc.Encode(Event{Type: "error", Error: err.Error()})
 		return

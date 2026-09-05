@@ -66,6 +66,15 @@
       "used_for": "authorization",
       "constraint": "unconstrained",
       "measured_by": "internal/invoke:TestToolLessRequestsRefuseEffects"
+    },
+    "lens": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "defined",
+      "pattern": "\"kind\":\"lens_text\"",
+      "rejects": "{\"name\":\"skeptic\",\"text\":{\"hash\":\"s256v1:00\",\"kind\":\"prompt\"}}",
+      "measured_by": "internal/run:TestLensSwapOnTheSameFacts"
     }
   }
 }

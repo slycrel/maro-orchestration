@@ -1,6 +1,7 @@
 package run
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -84,6 +85,7 @@ type AttemptState struct {
 	Recall      *learn.RecallSelection // the attempt's recall selection, when it reached that stage
 	Policy      *learn.PolicySelection // the attempt's policy selection (always: same command as the attempt)
 	Stuck       *verdict.Resolution    // the sheriff's stuck resolution, when one exists
+	Overage     *Overage               // the attempt's overage against the goal's target, when its recorded usage exceeded it
 	// AGENDA stages, as committed
 	Intent *IntentAssessment
 	Plan   *Plan
@@ -144,6 +146,7 @@ type RunState struct {
 	Family   *FamilyAssessment
 	Attempts []*AttemptState // by attempt number, dense from 1
 	Closure  *verdict.Resolution
+	Target   *MeteringTarget // the goal's metering target (§11), when one was committed with it
 }
 
 // Latest is the newest attempt.
@@ -212,6 +215,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	var goalOrder []*Goal
 	started := map[record.RecordID]bool{}
 	fams := map[record.RecordID]*FamilyAssessment{}
+	targets := map[record.RecordID]*MeteringTarget{}
 	runs := map[record.RunID]*RunState{}
 	deliveries := map[record.RecordID]*Delivery{}
 	resolutions := map[record.RecordID]*verdict.Resolution{}
@@ -272,6 +276,36 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				return fmt.Errorf("run: goal %s assessed twice (%s, %s) — an assessment is never revised", x.Goal, fams[x.Goal].ID, x.ID)
 			}
 			fams[x.Goal] = x
+		case *MeteringTarget:
+			if goals[x.Goal] == nil {
+				return fmt.Errorf("run: metering target %s for goal %s that was not committed first", x.ID, x.Goal)
+			}
+			if targets[x.Goal] != nil {
+				return fmt.Errorf("run: goal %s targeted twice (%s, %s) — one envelope per goal", x.Goal, targets[x.Goal].ID, x.ID)
+			}
+			targets[x.Goal] = x
+		case *Overage:
+			rs := get(x.RunID)
+			a, err := attempt(rs, x.Attempt, "overage")
+			if err != nil {
+				return err
+			}
+			rec := a.Has(Recorded)
+			if rec == nil {
+				return fmt.Errorf("run: %s attempt %d overage %s before the attempt is recorded", x.RunID, x.Attempt, x.ID)
+			}
+			if a.Overage != nil {
+				return fmt.Errorf("run: %s attempt %d overage twice (%s, %s)", x.RunID, x.Attempt, a.Overage.ID, x.ID)
+			}
+			t := rs.Target
+			if t == nil || x.Target != t.ID || x.Goal != rs.Goal.ID || x.Dimension != t.Dimension || x.Limit != t.Limit {
+				return fmt.Errorf("run: %s attempt %d overage %s does not cite the goal's target", x.RunID, x.Attempt, x.ID)
+			}
+			if m := MeasuredOn(rec.Outcome.Usage, t.Dimension); x.Measured != m {
+				return fmt.Errorf("run: %s attempt %d overage %s measures %s but the recorded usage is %s", x.RunID, x.Attempt, x.ID, num(x.Measured), num(m))
+			}
+			a.Overage = x
+			a.touch(x)
 		case *Fork:
 			a, err := attempt(get(x.RunID), x.Attempt, "fork")
 			if err != nil {
@@ -469,7 +503,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				return fmt.Errorf("run: %s attempt %d started but %d attempts exist", x.RunID, x.Attempt, len(rs.Attempts))
 			}
 			if rs.Goal == nil {
-				rs.Goal, rs.Family = goals[x.Goal], fams[x.Goal]
+				rs.Goal, rs.Family, rs.Target = goals[x.Goal], fams[x.Goal], targets[x.Goal]
 				if rs.Goal == nil || rs.Family == nil || rs.Family.ID != x.Family {
 					return fmt.Errorf("run: %s attempt %d cites goal %s / family %s that were not committed first", x.RunID, x.Attempt, x.Goal, x.Family)
 				}
@@ -687,6 +721,11 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			}
 			if a.Delivery != nil {
 				return fmt.Errorf("run: %s attempt %d prepared two deliveries", x.RunID, x.Attempt)
+			}
+			if t, rec := rs.Target, a.Has(Recorded); t != nil && rec != nil && a.Overage == nil && MeasuredOn(rec.Outcome.Usage, t.Dimension) > t.Limit {
+				// the overage is an event the delivery carries: a delivery
+				// prepared over target without it is refused (D13)
+				return fmt.Errorf("run: %s attempt %d prepared a delivery over its target without the overage committed", x.RunID, x.Attempt)
 			}
 			if a.Has(Recorded) == nil {
 				return fmt.Errorf("run: %s attempt %d prepared a delivery before recorded", x.RunID, x.Attempt)
@@ -1000,6 +1039,15 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 	default:
 		return nil
 	}
+	if st.Invocation.Lens != nil {
+		// the judge was asked under a lens: the prompt is the lens text
+		// over the same facts (§13)
+		lb, err := store.Get(st.Invocation.Lens.Text)
+		if err != nil {
+			return fmt.Errorf("run: %s attempt %d judge verdict %s: lens text: %w", rs.Run, v.Attempt, v.ID, err)
+		}
+		want = Lensed(lb, want)
+	}
 	if st.Invocation.Request != thought.Address(thought.Prompt, want) {
 		return fmt.Errorf("run: %s attempt %d judge verdict %s: invocation %s was not asked this judgement's prompt", rs.Run, v.Attempt, v.ID, v.Source.Ref)
 	}
@@ -1020,6 +1068,9 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 		}
 		if o.GoalText != rs.Goal.Text {
 			return fmt.Errorf("run: %s attempt %d recorded an outcome for a different goal thought", rs.Run, x.Attempt)
+		}
+		if err := checkLenses(rs, a, store); err != nil {
+			return err
 		}
 		if o.Invocation != "" {
 			st := inv[o.Invocation]
@@ -1363,4 +1414,38 @@ func describeDecision(d *JoinDecision) string {
 		return "no decision yet"
 	}
 	return fmt.Sprintf("selected=%v cancel=%v", d.Selected, d.Cancel)
+}
+
+// checkLenses executes the lens rules (§13) over the attempt's invocations
+// once its outcome is recorded: a lensed invocation names the attempt's
+// configured lens and its request bytes begin with the lens text; an
+// attempt configured with a lens has every judge request under it; the
+// neutral lens is the absence of a prefix, so an unlensed judge request
+// under a lensed attempt is a swap the attempt did not declare.
+func checkLenses(rs *RunState, a *AttemptState, store *thought.Store) error {
+	want := a.Attempt.Config.Lens
+	for _, is := range a.Invocations {
+		inv := is.Invocation
+		switch {
+		case inv.Lens == nil:
+			if want != "" && inv.Purpose == invoke.PurposeJudge {
+				return fmt.Errorf("run: %s attempt %d is under lens %q but judge invocation %s carries none", rs.Run, a.Attempt.Attempt, want, inv.ID)
+			}
+		case inv.Lens.Name != want:
+			return fmt.Errorf("run: %s attempt %d is under lens %q but invocation %s ran under %q", rs.Run, a.Attempt.Attempt, want, inv.ID, inv.Lens.Name)
+		default:
+			text, err := store.Get(inv.Lens.Text)
+			if err != nil {
+				return fmt.Errorf("run: %s attempt %d invocation %s lens text: %w", rs.Run, a.Attempt.Attempt, inv.ID, err)
+			}
+			body, err := store.Get(inv.Request)
+			if err != nil {
+				return fmt.Errorf("run: %s attempt %d invocation %s request: %w", rs.Run, a.Attempt.Attempt, inv.ID, err)
+			}
+			if len(text) == 0 || !bytes.HasPrefix(body, Lensed(text, nil)) {
+				return fmt.Errorf("run: %s attempt %d invocation %s claims lens %q but its request does not begin with the lens text", rs.Run, a.Attempt.Attempt, inv.ID, inv.Lens.Name)
+			}
+		}
+	}
+	return nil
 }

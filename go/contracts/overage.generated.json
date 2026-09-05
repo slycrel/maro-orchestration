@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "run_attempt",
+  "kind": "overage",
   "envelope": "production",
-  "schema": "run_attempt/1",
-  "go_type": "run.RunAttempt",
+  "schema": "overage/1",
+  "go_type": "run.Overage",
   "fields": [
     {
       "name": "header.ID",
@@ -85,24 +85,31 @@
       "is_thought": false
     },
     {
-      "name": "Family",
-      "wire": "family",
+      "name": "Target",
+      "wire": "target",
       "go_type": "record.RecordID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Config",
-      "wire": "config",
-      "go_type": "run.ConfigSnapshot",
+      "name": "Dimension",
+      "wire": "dimension",
+      "go_type": "run.Dimension",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "RecoversFrom",
-      "wire": "recovers_from",
-      "go_type": "uint32",
-      "omittable": true,
+      "name": "Measured",
+      "wire": "measured",
+      "go_type": "float64",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Limit",
+      "wire": "limit",
+      "go_type": "float64",
+      "omittable": false,
       "is_thought": false
     }
   ],

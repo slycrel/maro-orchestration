@@ -87,10 +87,11 @@ func samples() map[record.Kind]any {
 	step := thought.Ref{Hash: "s256v1:" + strings.Repeat("12", 32), Kind: thought.Step, Bytes: 5, Encoding: thought.UTF8}
 	resp := thought.Ref{Hash: "s256v1:" + strings.Repeat("34", 32), Kind: thought.Response, Bytes: 5, Encoding: thought.UTF8}
 	fixture := thought.Ref{Hash: "s256v1:" + strings.Repeat("56", 32), Kind: thought.Fixture, Bytes: 5, Encoding: thought.UTF8}
+	lensText := thought.Ref{Hash: "s256v1:" + strings.Repeat("78", 32), Kind: thought.LensText, Bytes: 5, Encoding: thought.UTF8}
 	return map[record.Kind]any{
 		record.KindLease:            &record.LeaseRecord{Header: withSchema(h, "lease/1"), PID: 4242, Epoch: 3, Host: "mini"},
 		record.KindThoughtStored:    &record.ThoughtStored{Header: withSchema(h, "thought_stored/1"), Hash: "s256v1:" + strings.Repeat("ab", 32), Thought: "goal", Bytes: 12, Encoding: "utf8"},
-		invoke.KindInvocation:       &invoke.Invocation{Header: withSchema(h, "invocation/1"), Purpose: invoke.PurposeExecute, Request: ref, Backend: caps, Tools: true, EffectToken: strings.Repeat("ab", 16), TargetName: "step", TargetLimit: 10, TargetWhy: "p90"},
+		invoke.KindInvocation:       &invoke.Invocation{Header: withSchema(h, "invocation/1"), Purpose: invoke.PurposeJudge, Request: ref, Backend: caps, Tools: false, EffectToken: strings.Repeat("ab", 16), TargetName: "step", TargetLimit: 10, TargetWhy: "p90", Lens: &invoke.Lens{Name: "skeptic", Text: lensText}},
 		invoke.KindDispatched:       &invoke.Dispatched{Header: withSchema(h, "invocation_dispatched/1"), Invocation: inv},
 		invoke.KindToolEffect:       &invoke.ToolEffect{Header: withSchema(h, "tool_effect/1"), Invocation: inv, Ordinal: 0, Op: "Read", Class: invoke.OpQuery, Key: strings.Repeat("cd", 32), Refused: true, Input: ref},
 		invoke.KindToolEffectResult: &invoke.ToolEffectResult{Header: withSchema(h, "tool_effect_result/1"), Invocation: inv, Ordinal: 0, Output: ref},
@@ -100,6 +101,8 @@ func samples() map[record.Kind]any {
 		verdict.KindVerdict:         &verdict.Verdict{Header: withSchema(h, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Confidence: 0.7, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: inv}, Basis: []record.Ref{{Kind: "receipt", ID: "r"}}, Falsifiers: []thought.Ref{ref}, Direction: verdict.Both},
 		verdict.KindResolution:      &verdict.Resolution{Header: withSchema(h, "resolution/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Effective: inv, Candidates: []record.RecordID{inv}, Observations: []record.RecordID{inv}, ResolverVer: verdict.ResolverVer, Thresholds: verdict.DefaultThresholds, Rule: "standing:judge", Confidence: 0.7},
 		invoke.KindReconciled:       &invoke.Reconciled{Header: withSchema(h, "invocation_reconciled/1"), Invocation: inv, Disposition: invoke.DispositionAbandoned, Evidence: "tool-less"},
+		run.KindMeteringTarget:      &run.MeteringTarget{Header: withSubject(withSchema(h, "metering_target/1"), record.Ref{Kind: "goal", ID: string(inv)}), Goal: inv, Name: "cost_usd", Dimension: run.DimCostUSD, Limit: 2, Why: "Manti envelope"},
+		run.KindOverage:             &run.Overage{Header: withSubject(withSchema(h, "overage/1"), record.Ref{Kind: "run", ID: "run-1"}), Goal: inv, Target: tomb, Dimension: run.DimCostUSD, Measured: 2.5, Limit: 2},
 		run.KindGoal:                &run.Goal{Header: withSubject(withSchema(h, "goal/1"), record.Ref{Kind: "goal", ID: string(h.ID)}), Parent: inv, Root: inv, Text: goalRef, Origin: run.OriginReplay, Lane: run.LaneNow, Delivery: run.DeliveryPolicy{Required: run.TransportAccepted}, Arm: &learn.ArmRef{Assignment: inv, Arm: "treatment"}},
 		run.KindFamilyAssessment:    &run.FamilyAssessment{Header: withSubject(withSchema(h, "family_assessment/1"), record.Ref{Kind: "goal", ID: string(inv)}), Goal: inv, Family: run.FamilyAnswer, Rule: run.FamilyRule, Reason: "question shape"},
 		run.KindRunAttempt:          &run.RunAttempt{Header: withSchema(h, "run_attempt/1"), Goal: inv, Family: inv, Config: run.ConfigSnapshot{Lane: run.LaneAgenda, Backend: caps, Judge: run.JudgeModel, JudgeBackend: caps, PlanCardinality: 0, FamilyRule: run.FamilyRule, ResolverVer: verdict.ResolverVer, Confined: true, Policy: inv, Mechanisms: learn.Defaults()}, RecoversFrom: 1},

@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -58,6 +59,43 @@ type Invocation struct {
 	TargetName    string       `json:"target_name,omitempty"`
 	TargetLimit   int64        `json:"target_limit,omitempty"`
 	TargetWhy     string       `json:"target_why,omitempty"`
+	// Lens: the persona lens a judge/render request was rendered under
+	// (§13). Absent = neutral. Present ⇒ the request body begins with the
+	// lens text (the run fold checks the bytes).
+	Lens *Lens `json:"lens,omitempty"`
+}
+
+// Lens names a persona lens and the exact text it prefixes a request with.
+type Lens struct {
+	Name string      `json:"name"`
+	Text thought.Ref `json:"text"`
+}
+
+// lensPurposes: the purposes a lens may be applied to. Execute, plan,
+// intent, diagnose, and evaluate requests are never lensed — a persona
+// colours judgement and rendering, not what the work is.
+var lensPurposes = map[Purpose]bool{PurposeJudge: true, PurposeRender: true}
+
+// LensAllowed says whether a lens may ride a request of this purpose.
+func LensAllowed(p Purpose) bool { return lensPurposes[p] }
+
+func (l *Lens) validate(p Purpose) error {
+	if l == nil {
+		return nil
+	}
+	if l.Name == "" {
+		return errors.New("invocation: lens without a name")
+	}
+	if err := l.Text.Validate(); err != nil {
+		return fmt.Errorf("invocation: lens text: %w", err)
+	}
+	if l.Text.Kind != thought.LensText {
+		return fmt.Errorf("invocation: lens text is a %s thought, not lens_text", l.Text.Kind)
+	}
+	if !lensPurposes[p] {
+		return fmt.Errorf("invocation: a %s request cannot carry a lens", p)
+	}
+	return nil
 }
 
 func (r *Invocation) Head() *record.Header { return &r.Header }
@@ -77,6 +115,9 @@ func (r *Invocation) ValidateWire() error {
 	}
 	if r.Backend.Name == "" {
 		return fmt.Errorf("invocation: backend name empty")
+	}
+	if err := r.Lens.validate(r.Purpose); err != nil {
+		return err
 	}
 	if (r.TargetName == "") != (r.TargetWhy == "") {
 		return fmt.Errorf("invocation: a target needs both a name and a why")

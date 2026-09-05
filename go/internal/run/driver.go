@@ -92,6 +92,13 @@ type Driver struct {
 	// ModelJudge: a NOW run asks the closure judge (tool-less) after its
 	// execute, so its closure can be established by a judge.
 	ModelJudge bool
+	// Target is the goal's metering envelope (§11): committed with the goal,
+	// measured at delivery, never enforced. Nil = no target.
+	Target *TargetSpec
+	// Lens is the persona lens every judge request of this driver's runs
+	// is rendered under (§13); "" or "neutral" = no prefix. Recorded in
+	// the attempt config; the fold checks each judge request begins with it.
+	Lens string
 	// MaxDeliveryAttempts bounds the outbox. Why 3: a CLI origin fails only
 	// when its writer is gone (closed pipe), which a retry never repairs; the
 	// bound exists so a dead origin becomes delivery_failed with a reason
@@ -130,9 +137,9 @@ type AdmitFunc func(ctx context.Context, g *Goal, fam *FamilyAssessment) (recs [
 // whatever the admitter adds. An admission decided at a head that moved
 // is refused by the sequencer and decided again (bounded: a third refusal
 // is the caller's error to see).
-func IntakeCommand(ctx context.Context, j *journal.Journal, admit AdmitFunc, g *Goal, fam *FamilyAssessment) error {
+func IntakeCommand(ctx context.Context, j *journal.Journal, admit AdmitFunc, g *Goal, fam *FamilyAssessment, extra ...record.Record) error {
 	for try := 0; try < IntakeTries; try++ {
-		recs := []record.Record{g, fam}
+		recs := append([]record.Record{g, fam}, extra...)
 		var head *uint64
 		if admit != nil && try < IntakeTries-1 {
 			g.Arm = nil
@@ -208,6 +215,9 @@ func (d *Driver) validate() error {
 	case d.Backend.Capabilities().Name == "":
 		return fmt.Errorf("%w: backend declares no name", ErrConfig)
 	}
+	if _, ok := Lenses[d.Lens]; d.Lens != "" && !ok {
+		return fmt.Errorf("%w: unknown lens %q (known: %v)", ErrConfig, d.Lens, LensNames())
+	}
 	if d.Replay != nil && (d.Replay.Unit == "" || d.Replay.Root == "" || !learn.Arms[d.Replay.Arm]) {
 		return fmt.Errorf("%w: replay context needs unit, root, and an arm", ErrConfig)
 	}
@@ -233,7 +243,7 @@ func (d *Driver) validate() error {
 }
 
 func (d *Driver) config(lane Lane, pol *learn.PolicySelection) ConfigSnapshot {
-	c := ConfigSnapshot{Lane: lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer, Confined: d.Confined, Policy: pol.ID, Mechanisms: map[learn.Mechanism]bool{}}
+	c := ConfigSnapshot{Lane: lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), Lens: d.lensName(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer, Confined: d.Confined, Policy: pol.ID, Mechanisms: map[learn.Mechanism]bool{}}
 	for m, on := range pol.Snapshot {
 		c.Mechanisms[m] = on
 	}
@@ -334,16 +344,22 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 	if (d.Origin.Name() == OriginReplay) != (d.Replay != nil) {
 		return nil, fmt.Errorf("%w: a replay origin needs a replay context, and only it", ErrConfig)
 	}
+	var extra []record.Record
+	var target *MeteringTarget
+	if d.Target != nil {
+		target = d.Target.Record(goal.ID)
+		extra = append(extra, target)
+	}
 	if d.Replay != nil {
 		goal.Arm = d.Replay.arm()
 		goal.Parent, goal.Root = d.Replay.Unit, d.Replay.Root
-		if err := d.commit(ctx, "goal/"+string(goal.ID), goal, fam); err != nil {
+		if err := d.commit(ctx, "goal/"+string(goal.ID), append([]record.Record{goal, fam}, extra...)...); err != nil {
 			return nil, err
 		}
-	} else if err := IntakeCommand(ctx, d.J, d.Admit, goal, fam); err != nil {
+	} else if err := IntakeCommand(ctx, d.J, d.Admit, goal, fam, extra...); err != nil {
 		return nil, err
 	}
-	rs := &RunState{Run: record.RunID(record.NewID()), Goal: goal, Family: fam}
+	rs := &RunState{Run: record.RunID(record.NewID()), Goal: goal, Family: fam, Target: target}
 	d.emit(rs, 0, "intake", "", string(fam.Family))
 	if err := d.crash("after_intake"); err != nil {
 		return nil, err
@@ -746,7 +762,11 @@ func (d *Driver) nowClosureJudge(ctx context.Context, rs *RunState, a *AttemptSt
 		}
 	}
 	sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n}
-	jo, err := sh.Invoke(ctx, d.judge(a), invoke.Request{Purpose: invoke.PurposeJudge, Prompt: closurePrompt(goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}), Tools: false, Timeout: d.Timeout}, nil)
+	req, err := d.lensedRequest(closurePrompt(goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}), false)
+	if err != nil {
+		return nil, err
+	}
+	jo, err := sh.Invoke(ctx, d.judge(a), req, nil)
 	if err != nil || jo.Err != nil || jo.Terminal == invoke.TerminalFailed {
 		return nil, err
 	}
@@ -972,6 +992,12 @@ func (d *Driver) deliver(ctx context.Context, rs *RunState, a *AttemptState) (*R
 	if rec == nil {
 		return nil, fmt.Errorf("run: deliver before recorded")
 	}
+	// the target is measured here, on the recorded usage, before the
+	// delivery is prepared: the overage (if any) is a fact the delivery
+	// line names, never a reason to stop (§11, D13)
+	if err := d.meter(ctx, rs, a, rec); err != nil {
+		return nil, err
+	}
 	if a.Delivery == nil {
 		var response []byte
 		if rec.Outcome.Response != nil {
@@ -988,6 +1014,9 @@ func (d *Driver) deliver(ctx context.Context, rs *RunState, a *AttemptState) (*R
 				return nil, err
 			}
 			payload = p
+		}
+		if rs.Target != nil {
+			payload = append(append(payload, "\n\n"...), MeteringLine(rs.Target, rec.Outcome.Usage, a.Overage)...)
 		}
 		ref, err := d.Store.Put(thought.Deliverable, payload)
 		if err != nil {

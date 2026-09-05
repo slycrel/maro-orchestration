@@ -84,7 +84,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] | submit [--lane now|agenda] [--ack] <goal> | interrupt <handle> --why <text> | status")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -238,8 +238,24 @@ func cmdContracts(args []string, out, errw io.Writer) error {
 func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	var text []string
 	backend, model, judgeModel, policy := "subprocess", "haiku", "", spine.DeliveryPolicy{Required: spine.TransportAccepted}
+	var lens, target, why string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--lens":
+			i++
+			if i < len(args) {
+				lens = args[i]
+			}
+		case "--target":
+			i++
+			if i < len(args) {
+				target = args[i]
+			}
+		case "--why":
+			i++
+			if i < len(args) {
+				why = args[i]
+			}
 		case "--backend":
 			i++
 			if i < len(args) {
@@ -263,7 +279,15 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	}
 	goal := strings.TrimSpace(strings.Join(text, " "))
 	if goal == "" {
-		return fmt.Errorf("now needs a goal: maro-go now [--backend subprocess|scripted] [--model m] [--ack] <goal text>")
+		return fmt.Errorf("now needs a goal: maro-go now [--backend subprocess|scripted] [--model m] [--judge-model m] [--lens l] [--target dim=limit --why text] [--ack] <goal text>")
+	}
+	var spec *spine.TargetSpec
+	if target != "" || why != "" {
+		t, err := spine.ParseTarget(target, why)
+		if err != nil {
+			return err
+		}
+		spec = t
 	}
 	var b, jb invoke.Backend
 	switch backend {
@@ -286,7 +310,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		return fmt.Errorf("unknown backend %q (subprocess|scripted)", backend)
 	}
 	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st),
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}
@@ -366,6 +390,13 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 			}
 			out.Write(payload)
 			fmt.Fprintf(out, "\n---\nrun %s attempt %d · %s · closure %s · delivery %s/%s\n", m.Handle, m.Attempt, m.Outcome, m.Closure, m.Delivery, m.Required)
+			for _, rs := range led.Runs {
+				if spine.HandleOf(rs.Run) == args[1] {
+					for _, l := range spine.Inspect(rs) {
+						fmt.Fprintln(out, l)
+					}
+				}
+			}
 			return nil
 		}
 		if len(args) > 0 && args[0] == "resume" {
@@ -561,9 +592,14 @@ func cmdLearn(args []string, out io.Writer) error {
 // cmdServe is the always-on process: lease, journal, supervisor, lanes,
 // socket. It runs until SIGINT/SIGTERM, then quiesces in stage order.
 func cmdServe(args []string, out, errw io.Writer) error {
-	model, judgeModel := "haiku", ""
+	model, judgeModel, lens := "haiku", "", ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--lens":
+			i++
+			if i < len(args) {
+				lens = args[i]
+			}
 		case "--model":
 			i++
 			if i < len(args) {
@@ -598,7 +634,7 @@ func cmdServe(args []string, out, errw io.Writer) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw})
+	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens})
 	if err != nil {
 		return err
 	}
@@ -636,13 +672,23 @@ func cmdSubmit(args []string, out, errw io.Writer) error {
 			}
 		case "--ack":
 			req.Ack = true
+		case "--target":
+			i++
+			if i < len(args) {
+				req.Target = args[i]
+			}
+		case "--why":
+			i++
+			if i < len(args) {
+				req.TargetWhy = args[i]
+			}
 		default:
 			text = append(text, args[i])
 		}
 	}
 	req.Text = strings.TrimSpace(strings.Join(text, " "))
 	if req.Text == "" {
-		return fmt.Errorf("submit needs a goal: maro-go submit [--lane now|agenda] [--ack] <goal text>")
+		return fmt.Errorf("submit needs a goal: maro-go submit [--lane now|agenda] [--ack] [--target dim=limit --why text] <goal text>")
 	}
 	sock, err := socketPath(out)
 	if err != nil {

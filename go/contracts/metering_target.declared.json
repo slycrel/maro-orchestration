@@ -1,0 +1,49 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "metering_target",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced",
+  "fields": {
+    "goal": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced"
+    },
+    "name": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced"
+    },
+    "dimension": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "routing",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(cost_usd|tokens|wall_ms)$",
+      "rejects": "beans",
+      "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced"
+    },
+    "limit": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "authorization",
+      "constraint": "defined",
+      "pattern": "^[0-9]*\\.?[0-9]*[1-9][0-9]*$",
+      "rejects": "0",
+      "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced"
+    },
+    "why": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestMeteringTargetIsMeasuredNeverEnforced"
+    }
+  }
+}

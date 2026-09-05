@@ -206,6 +206,7 @@ type ConfigSnapshot struct {
 	FamilyRule      string              `json:"family_rule"`
 	ResolverVer     string              `json:"resolver_ver"`
 	Confined        bool                `json:"confined,omitempty"` // every invocation tool-less (a fork child)
+	Lens            string              `json:"lens,omitempty"`     // the persona lens judge requests are rendered under (§13); "" = neutral
 	// Policy is the attempt's policy selection (same command as the
 	// attempt); Mechanisms is its snapshot, copied here so the attempt's
 	// config is complete on its own record. The fold checks equality.
@@ -708,6 +709,12 @@ func init() {
 	reg(KindTransition, Transition{}, "the driver at every stage boundary; Ack; the outbox",
 		"run fold (Runs, Mission); the outcomes view (B6 row from recorded); learning eligibility (recorded)",
 		"where a restart resumes; whether the mission is delivered, unacknowledged, or failed")
+	reg(KindMeteringTarget, MeteringTarget{}, "intake (the operator's --target, with the goal, one command)",
+		"the driver's Deliver stage (the metering line, the overage); `runs show`",
+		"the envelope the run is measured against (§11): a target with a why, never a constraint")
+	reg(KindOverage, Overage{}, "the driver, after Recorded and before the delivery is prepared",
+		"the delivery (the metering line names it); `runs show`; the acceptance report",
+		"that this attempt's recorded usage exceeded the goal's target: an event, never a stop (D13)")
 	reg(KindDeliveryPrepared, DeliveryPrepared{}, "the driver's Deliver stage",
 		"the outbox (what is owed); Ack (token derivation)",
 		"which payload is owed to which origin under which policy; the ack token")

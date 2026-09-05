@@ -74,7 +74,16 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		if !strings.HasPrefix(d.CrashAt, "invoke:") {
 			sh.CrashAt = ""
 		}
-		o, err := sh.Invoke(ctx, b, invoke.Request{Purpose: purpose, Prompt: prompt, Tools: tools && b.Capabilities().ActsOutward, Timeout: d.Timeout}, nil)
+		req := invoke.Request{Purpose: purpose, Prompt: prompt, Tools: tools && b.Capabilities().ActsOutward, Timeout: d.Timeout}
+		if purpose == invoke.PurposeJudge {
+			// a judge request is rendered under the attempt's lens (§13)
+			lr, err := d.lensedRequest(prompt, req.Tools)
+			if err != nil {
+				return nil, nil, err
+			}
+			req = lr
+		}
+		o, err := sh.Invoke(ctx, b, req, nil)
 		var inc *invoke.Incapable
 		if errors.As(err, &inc) {
 			// a deterministic pre-dispatch refusal (the composed prompt is
