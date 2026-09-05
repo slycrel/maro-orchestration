@@ -9,7 +9,8 @@
       "absence": "omitted",
       "on_absence": "tolerated",
       "used_for": "identity",
-      "constraint": "unconstrained"
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestLineageScopesRecall"
     },
     "root": {
       "absence": "never",

@@ -106,9 +106,13 @@ func TestTailDiagnosesAndProposes(t *testing.T) {
 	if _, err := tl.Pass(ctxBg); err != nil {
 		t.Fatal(err)
 	}
-	_, tld, ll := h.ledgers(t)
+	rl, tld, ll := h.ledgers(t)
 	if len(tld.Done) != 1 || len(tld.Diagnoses) != 1 || len(lens.Seen) != 1 {
 		t.Fatalf("done=%d diag=%d lens=%d", len(tld.Done), len(tld.Diagnoses), len(lens.Seen))
+	}
+	var root record.RecordID
+	for _, rs := range rl.Runs {
+		root = rs.Goal.Root
 	}
 	var d *Diagnosis
 	for _, x := range tld.Diagnoses {
@@ -124,8 +128,9 @@ func TestTailDiagnosesAndProposes(t *testing.T) {
 		if learn.IsSeed(it.Current) {
 			continue
 		}
-		if it.StageOf(it.Current.ID) != learn.Candidate || it.Current.Provenance.Source != "tail" || it.Current.Provenance.Ref != d.ID || it.Current.Family != "answer" {
-			t.Fatalf("proposal: %+v", it.Current)
+		// a run's lessons mint at its lineage root, never workspace-wide
+		if it.StageOf(it.Current.ID) != learn.Candidate || it.Current.Provenance.Source != "tail" || it.Current.Provenance.Ref != d.ID || it.Current.Family != "answer" || it.Current.Scope != learn.ScopeGoal(root) {
+			t.Fatalf("proposal: %+v (root %s)", it.Current, root)
 		}
 	}
 	if !strings.Contains(string(lens.Seen[0].Prompt), "## Deliverable\nParis.") || !strings.Contains(string(lens.Seen[0].Prompt), "signals: [unjudged]") || lens.Seen[0].Tools {

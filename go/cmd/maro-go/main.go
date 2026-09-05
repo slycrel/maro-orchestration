@@ -84,7 +84,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--after handle] [--work dir] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -238,10 +238,15 @@ func cmdContracts(args []string, out, errw io.Writer) error {
 func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	var text []string
 	backend, model, judgeModel, policy := "subprocess", "haiku", "", spine.DeliveryPolicy{Required: spine.TransportAccepted}
-	var lens, target, why, work string
+	var lens, target, why, work, after string
 	allowTools, denyTools := "", "WebFetch,WebSearch"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--after":
+			i++
+			if i < len(args) {
+				after = args[i]
+			}
 		case "--work":
 			i++
 			if i < len(args) {
@@ -295,7 +300,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	}
 	goal := strings.TrimSpace(strings.Join(text, " "))
 	if goal == "" {
-		return fmt.Errorf("now needs a goal: maro-go now [--backend subprocess|scripted] [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why text] [--ack] <goal text>")
+		return fmt.Errorf("now needs a goal: maro-go now [--backend subprocess|scripted] [--model m] [--judge-model m] [--lens l] [--after handle] [--work dir] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why text] [--ack] <goal text>")
 	}
 	toolPolicy, err := invoke.ParseToolPolicy(allowTools, denyTools)
 	if err != nil {
@@ -334,7 +339,18 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		if work == "" {
 			work = a.Path("work")
 		}
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: spine.DefaultFrame,
+		var lineage *spine.Lineage
+		if after != "" {
+			led, err := spine.Fold(j.Production(), st)
+			if err != nil {
+				return err
+			}
+			if lineage, err = spine.LineageOf(led, after); err != nil {
+				return err
+			}
+			fmt.Fprintf(errw, "follows: run %s (goal %s, root %s)\n", after, lineage.Goal, lineage.Root)
+		}
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: spine.DefaultFrame, After: lineage,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}

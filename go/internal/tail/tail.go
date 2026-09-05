@@ -435,7 +435,7 @@ func (t *Tail) attempt(ctx context.Context, led *run.Ledger, rs *run.RunState, a
 				}
 				item := learn.LearnedID(record.NewID())
 				rev := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: now()},
-					Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeWorkspace, Family: family, Text: ref, Provenance: learn.Provenance{Source: "tail", Ref: diag.ID, Why: lr.Why}}
+					Item: item, LearnedKind: learn.Lesson, Scope: learn.ScopeGoal(rs.Goal.Root), Family: family, Text: ref, Provenance: learn.Provenance{Source: "tail", Ref: diag.ID, Why: lr.Why}}
 				proposals = append(proposals, rev)
 				proposalIDs = append(proposalIDs, rev.ID)
 			}
@@ -603,7 +603,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 					if rev == nil || rev.Provenance.Source != "tail" || rev.Provenance.Ref != x.Diagnosis || claimed[p] {
 						return fmt.Errorf("tail: tail_done %s proposal %s is not a tail revision citing its diagnosis", x.ID, p)
 					}
-					if rev.LearnedKind != learn.Lesson || rev.Scope != learn.ScopeWorkspace || rev.Family != family || rev.Text != thought.Address(thought.LessonText, []byte(want[i])) {
+					if rev.LearnedKind != learn.Lesson || rev.Scope != learn.ScopeGoal(rs.Goal.Root) || rev.Family != family || rev.Text != thought.Address(thought.LessonText, []byte(want[i])) {
 						return fmt.Errorf("tail: tail_done %s proposal %s is not the lens response's proposal %d as a workspace lesson of the run's family", x.ID, p, i+1)
 					}
 					claimed[p] = true

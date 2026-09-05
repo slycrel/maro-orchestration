@@ -97,6 +97,11 @@ type Driver struct {
 	// Target is the goal's metering envelope (§11): committed with the goal,
 	// measured at delivery, never enforced. Nil = no target.
 	Target *TargetSpec
+	// After is the lineage this driver's goal follows (§3 memory scope): the
+	// goal's parent and root become the prior goal and its root, so recall
+	// walks the prior lineage and the tail's lessons mint at its root. Nil =
+	// a root goal of its own. Never combined with Replay.
+	After *Lineage
 	// Lens is the persona lens every judge request of this driver's runs
 	// is rendered under (§13); "" or "neutral" = no prefix. Recorded in
 	// the attempt config; the fold checks each judge request begins with it.
@@ -388,6 +393,12 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 	goal, fam := Intake(goalText, ref, d.Origin.Name(), d.Lane, policy)
 	if (d.Origin.Name() == OriginReplay) != (d.Replay != nil) {
 		return nil, fmt.Errorf("%w: a replay origin needs a replay context, and only it", ErrConfig)
+	}
+	if d.After != nil {
+		if d.Replay != nil {
+			return nil, fmt.Errorf("%w: a replay goal's lineage is its unit's; it cannot also follow %s", ErrConfig, d.After.Goal)
+		}
+		goal.Parent, goal.Root = d.After.Goal, d.After.Root
 	}
 	var extra []record.Record
 	var target *MeteringTarget

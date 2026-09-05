@@ -139,9 +139,12 @@ func (r *Goal) ValidateWire() error {
 		return errors.New("goal: a replay goal names its assignment and arm, and its parent is the unit it replays")
 	case r.Origin == OriginFork && r.Arm != nil:
 		return errors.New("goal: a fork's child goal is no experiment arm")
-	case r.Origin != OriginReplay && r.Origin != OriginFork && r.Parent != "":
-		return errors.New("goal: only a replay or a fork child has a parent")
+	case r.Parent == r.ID:
+		return errors.New("goal: a goal cannot follow itself")
 	}
+	// Any other origin with a parent FOLLOWS it: the goal joins the parent's
+	// lineage (memory scope walks own → parent → root → workspace). The fold
+	// checks the parent is an earlier production goal of the same root.
 	return nil
 }
 

@@ -266,6 +266,13 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				if unit == nil || unit.Origin == OriginReplay || unit.Origin == OriginFork || x.Root != unit.Root {
 					return fmt.Errorf("run: replay goal %s replays %s, which is not an earlier production unit of the same root", x.ID, x.Parent)
 				}
+			} else if x.Origin != OriginFork && x.Parent != "" {
+				// follows: the parent is an earlier production goal and the
+				// lineage root is the parent's (a root parent is its own root)
+				p := goals[x.Parent]
+				if p == nil || p.Origin == OriginReplay || p.Origin == OriginFork || x.Root != p.Root {
+					return fmt.Errorf("run: goal %s follows %s, which is not an earlier production goal of root %s", x.ID, x.Parent, x.Root)
+				}
 			}
 			goals[x.ID] = x
 			goalOrder = append(goalOrder, x)
