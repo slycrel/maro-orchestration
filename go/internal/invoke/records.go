@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"reflect"
 	"regexp"
 
@@ -40,10 +41,11 @@ var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, Purpos
 type Capabilities struct {
 	Name                string `json:"name"`
 	Model               string `json:"model"`
-	ActsOutward         bool   `json:"acts_outward"`         // can this backend act on the world (tools, network)?
-	OutwardReconcilable bool   `json:"outward_reconcilable"` // does it announce effects BEFORE acting (key handshake)?
-	ReadsByReference    bool   `json:"reads_by_reference"`   // can it read an artifact handed by path?
-	MaxInputBytes       int64  `json:"max_input_bytes"`      // 0 = unknown/unbounded as far as this engine knows
+	ActsOutward         bool   `json:"acts_outward"`          // can this backend act on the world (tools, network)?
+	OutwardReconcilable bool   `json:"outward_reconcilable"`  // does it announce effects BEFORE acting (key handshake)?
+	ReadsByReference    bool   `json:"reads_by_reference"`    // can it read an artifact handed by path?
+	MaxInputBytes       int64  `json:"max_input_bytes"`       // 0 = unknown/unbounded as far as this engine knows
+	ToolPolicy          string `json:"tool_policy,omitempty"` // the operator's tool policy, canonical (ToolPolicy.String); "" = the backend's whole set
 }
 
 // Invocation is the `prepared` state: the exact backend-visible request, the
@@ -56,6 +58,7 @@ type Invocation struct {
 	Request       thought.Ref  `json:"request"`
 	Backend       Capabilities `json:"backend"`
 	Tools         bool         `json:"tools,omitempty"` // the request offered tools; false = confined: any reported effect is refused
+	Cwd           string       `json:"cwd,omitempty"`   // the working directory an agentic backend ran in (absolute); "" = the process's own
 	EffectToken   string       `json:"effect_token"`    // hex, the namespace per-effect keys derive from
 	TargetName    string       `json:"target_name,omitempty"`
 	TargetLimit   int64        `json:"target_limit,omitempty"`
@@ -125,6 +128,9 @@ func (r *Invocation) ValidateWire() error {
 	}
 	if r.Backend.Name == "" {
 		return fmt.Errorf("invocation: backend name empty")
+	}
+	if r.Cwd != "" && !filepath.IsAbs(r.Cwd) {
+		return fmt.Errorf("invocation: cwd %q is not absolute", r.Cwd)
 	}
 	if err := r.Lens.validate(r.Purpose); err != nil {
 		return err

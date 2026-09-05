@@ -673,13 +673,64 @@ func TestSubprocessArgs(t *testing.T) {
 	if !strings.Contains(a, "--tools ") || strings.Contains(a, "disallowedTools") || !strings.Contains(a, "--output-format stream-json") || !strings.Contains(a, "--model sonnet") {
 		t.Fatalf("tool-less args: %s", a)
 	}
+	// no policy set on a bare struct: the whole set; NewSubprocess's default
+	// denies the network readers (the operator turns them on)
 	b := strings.Join(s.args(Request{Tools: true}), " ")
-	if !strings.Contains(b, "--disallowedTools WebFetch,WebSearch") || strings.Contains(b, "--tools ") {
+	if strings.Contains(b, "--allowedTools") || strings.Contains(b, "--disallowedTools") || strings.Contains(b, "--tools ") {
+		t.Fatalf("tool args, no policy: %s", b)
+	}
+	s.Policy = DefaultToolPolicy()
+	b = strings.Join(s.args(Request{Tools: true}), " ")
+	if !strings.Contains(b, "--disallowedTools WebFetch,WebSearch") || strings.Contains(b, "--allowedTools") || strings.Contains(b, "--tools ") {
 		t.Fatalf("tool args: %s", b)
 	}
 	caps := s.Capabilities()
-	if !caps.ActsOutward || caps.OutwardReconcilable || !caps.ReadsByReference {
+	if !caps.ActsOutward || caps.OutwardReconcilable || !caps.ReadsByReference || caps.ToolPolicy != "deny=WebFetch,WebSearch" {
 		t.Fatalf("caps %+v", caps)
+	}
+	// the tool-less request never carries the policy flags
+	if a := strings.Join(s.args(Request{Tools: false}), " "); strings.Contains(a, "disallowedTools") {
+		t.Fatalf("tool-less args carry the policy: %s", a)
+	}
+}
+
+// The operator's tool policy: parsed from two comma lists, canonical in
+// the capability snapshot, rendered as the CLI's flags; a name on both
+// lists, a non-name, and a relative cwd on an invocation are refused.
+func TestToolPolicyAndCwd(t *testing.T) {
+	p, err := ParseToolPolicy(" Bash, Read ,Bash", "WebSearch,WebFetch")
+	if err != nil || p.String() != "allow=Bash,Read;deny=WebFetch,WebSearch" {
+		t.Fatalf("parse: %q %v", p.String(), err)
+	}
+	if p, err := ParseToolPolicy("", ""); err != nil || p.String() != "" || len(p.Allow) != 0 || len(p.Deny) != 0 {
+		t.Fatalf("empty: %q %v", p.String(), err)
+	}
+	if p, err := ParseToolPolicy("", "WebFetch"); err != nil || p.String() != "deny=WebFetch" {
+		t.Fatalf("deny only: %q %v", p.String(), err)
+	}
+	for _, bad := range [][2]string{{"Bash", "Bash"}, {"Web Fetch", ""}, {"", "rm -rf"}, {"1x", ""}} {
+		if _, err := ParseToolPolicy(bad[0], bad[1]); err == nil {
+			t.Fatalf("accepted %q/%q", bad[0], bad[1])
+		}
+	}
+	s := &Subprocess{Bin: "claude", Model: "haiku", Policy: p}
+	args := strings.Join(s.args(Request{Tools: true}), " ")
+	if !strings.Contains(args, "--allowedTools Bash,Read") || !strings.Contains(args, "--disallowedTools WebFetch,WebSearch") {
+		t.Fatalf("flags: %s", args)
+	}
+	if s.Capabilities().ToolPolicy != p.String() {
+		t.Fatal("capabilities do not carry the policy")
+	}
+	// the door: cwd is absolute or absent
+	inv := &Invocation{Header: record.Header{ID: record.NewID(), Schema: "invocation/1", RunID: "r", Attempt: 1, Subject: record.Ref{Kind: "prompt", ID: "x"}, At: time.Now().UTC()},
+		Purpose: PurposeExecute, Request: thought.Ref{Hash: "s256v1:" + strings.Repeat("ab", 32), Kind: thought.Prompt, Bytes: 1, Encoding: thought.UTF8}, Backend: Capabilities{Name: "b"}, Tools: true, EffectToken: strings.Repeat("ab", 16)}
+	inv.Cwd = "work"
+	if err := inv.ValidateWire(); err == nil || !strings.Contains(err.Error(), "not absolute") {
+		t.Fatalf("relative cwd: %v", err)
+	}
+	inv.Cwd = "/work"
+	if err := inv.ValidateWire(); err != nil {
+		t.Fatalf("absolute cwd: %v", err)
 	}
 }
 

@@ -208,6 +208,7 @@ type ConfigSnapshot struct {
 	Confined        bool                `json:"confined,omitempty"`  // every invocation tool-less (a fork child)
 	Lens            string              `json:"lens,omitempty"`      // the persona lens judge requests are rendered under (§13); "" = neutral
 	LensText        *thought.Ref        `json:"lens_text,omitempty"` // the lens's text, content-addressed: present iff Lens is; every lensed invocation cites exactly this
+	Frame           *thought.Ref        `json:"frame,omitempty"`     // the execute frame (frame_text) every NOW execute request of this attempt begins with; nil = bare goal
 	// Policy is the attempt's policy selection (same command as the
 	// attempt); Mechanisms is its snapshot, copied here so the attempt's
 	// config is complete on its own record. The fold checks equality.
@@ -286,6 +287,14 @@ func (r *RunAttempt) ValidateWire() error {
 		}
 		if r.Config.LensText.Kind != thought.LensText || r.Config.LensText.Bytes == 0 {
 			return errors.New("run_attempt: lens text must be a non-empty lens_text thought")
+		}
+	}
+	if r.Config.Frame != nil {
+		if err := r.Config.Frame.Validate(); err != nil {
+			return fmt.Errorf("run_attempt: frame: %w", err)
+		}
+		if r.Config.Frame.Kind != thought.FrameText || r.Config.Frame.Bytes == 0 {
+			return errors.New("run_attempt: frame must be a non-empty frame_text thought")
 		}
 	}
 	if r.RecoversFrom != 0 && r.RecoversFrom >= r.Attempt {

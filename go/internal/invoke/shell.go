@@ -214,7 +214,7 @@ func (sh *Shell) Invoke(ctx context.Context, b Backend, req Request, target *Tar
 	if err != nil {
 		return nil, err
 	}
-	inv := &Invocation{Header: sh.header(record.Ref{Kind: "prompt", ID: reqRef.Hash}), Purpose: req.Purpose, Request: reqRef, Backend: caps, Tools: req.Tools, EffectToken: token, Lens: req.Lens}
+	inv := &Invocation{Header: sh.header(record.Ref{Kind: "prompt", ID: reqRef.Hash}), Purpose: req.Purpose, Request: reqRef, Backend: caps, Tools: req.Tools, Cwd: req.Cwd, EffectToken: token, Lens: req.Lens}
 	if target != nil {
 		inv.TargetName, inv.TargetLimit, inv.TargetWhy = target.Name, target.Limit, target.Why
 	}

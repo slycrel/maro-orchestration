@@ -84,7 +84,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -238,9 +238,25 @@ func cmdContracts(args []string, out, errw io.Writer) error {
 func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	var text []string
 	backend, model, judgeModel, policy := "subprocess", "haiku", "", spine.DeliveryPolicy{Required: spine.TransportAccepted}
-	var lens, target, why string
+	var lens, target, why, work string
+	allowTools, denyTools := "", "WebFetch,WebSearch"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--work":
+			i++
+			if i < len(args) {
+				work = args[i]
+			}
+		case "--allow-tools":
+			i++
+			if i < len(args) {
+				allowTools = args[i]
+			}
+		case "--deny-tools":
+			i++
+			if i < len(args) {
+				denyTools = args[i]
+			}
 		case "--lens":
 			i++
 			if i < len(args) {
@@ -279,7 +295,11 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	}
 	goal := strings.TrimSpace(strings.Join(text, " "))
 	if goal == "" {
-		return fmt.Errorf("now needs a goal: maro-go now [--backend subprocess|scripted] [--model m] [--judge-model m] [--lens l] [--target dim=limit --why text] [--ack] <goal text>")
+		return fmt.Errorf("now needs a goal: maro-go now [--backend subprocess|scripted] [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why text] [--ack] <goal text>")
+	}
+	toolPolicy, err := invoke.ParseToolPolicy(allowTools, denyTools)
+	if err != nil {
+		return err
 	}
 	var spec *spine.TargetSpec
 	if target != "" || why != "" {
@@ -296,6 +316,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		if err != nil {
 			return err
 		}
+		s.Policy = toolPolicy
 		b = s
 		if judgeModel != "" {
 			js, err := invoke.NewSubprocess(judgeModel)
@@ -309,8 +330,11 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	default:
 		return fmt.Errorf("unknown backend %q (subprocess|scripted)", backend)
 	}
-	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec,
+	return withJournal(out, func(a *workspace.Announced, j *journal.Journal, st *thought.Store) error {
+		if work == "" {
+			work = a.Path("work")
+		}
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: spine.DefaultFrame,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}
@@ -357,7 +381,7 @@ func cmdAck(args []string, out io.Writer) error {
 			return nil
 		}
 	}
-	err := withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+	err := withJournal(out, func(a *workspace.Announced, j *journal.Journal, st *thought.Store) error {
 		ack, replayed, err := spine.Ack(context.Background(), j, st, record.RecordID(args[0]), args[1])
 		if err != nil {
 			return err
@@ -378,7 +402,7 @@ func cmdAck(args []string, out io.Writer) error {
 // cmdRuns lists every run's mission fold; `resume` first finishes what a
 // previous process left non-terminal (reconcile → recover → deliver).
 func cmdRuns(args []string, out, errw io.Writer) error {
-	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+	return withJournal(out, func(a *workspace.Announced, j *journal.Journal, st *thought.Store) error {
 		if len(args) > 1 && args[0] == "show" {
 			led, err := spine.Fold(j.Production(), st)
 			if err != nil {
@@ -443,7 +467,7 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 
 // withJournal announces the workspace, takes the lease, opens the journal
 // and thought store, runs fn, and releases — one command, one lease hold.
-func withJournal(out io.Writer, fn func(*journal.Journal, *thought.Store) error) error {
+func withJournal(out io.Writer, fn func(*workspace.Announced, *journal.Journal, *thought.Store) error) error {
 	r, err := workspace.Resolve()
 	if err != nil {
 		return err
@@ -469,7 +493,7 @@ func withJournal(out io.Writer, fn func(*journal.Journal, *thought.Store) error)
 	if err != nil {
 		return err
 	}
-	return fn(j, st)
+	return fn(a, j, st)
 }
 
 // cmdLearn is the operator's memory surface (§7, v1 producer of learned
@@ -482,7 +506,7 @@ func cmdLearn(args []string, out io.Writer) error {
 	if len(args) < 1 {
 		return fmt.Errorf("learn needs add|stage|list")
 	}
-	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+	return withJournal(out, func(a *workspace.Announced, j *journal.Journal, st *thought.Store) error {
 		if _, err := learn.EnsureSeeds(context.Background(), j); err != nil {
 			return err
 		}
@@ -592,9 +616,25 @@ func cmdLearn(args []string, out io.Writer) error {
 // cmdServe is the always-on process: lease, journal, supervisor, lanes,
 // socket. It runs until SIGINT/SIGTERM, then quiesces in stage order.
 func cmdServe(args []string, out, errw io.Writer) error {
-	model, judgeModel, lens := "haiku", "", ""
+	model, judgeModel, lens, work := "haiku", "", "", ""
+	allowTools, denyTools := "", "WebFetch,WebSearch"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--work":
+			i++
+			if i < len(args) {
+				work = args[i]
+			}
+		case "--allow-tools":
+			i++
+			if i < len(args) {
+				allowTools = args[i]
+			}
+		case "--deny-tools":
+			i++
+			if i < len(args) {
+				denyTools = args[i]
+			}
 		case "--lens":
 			i++
 			if i < len(args) {
@@ -620,10 +660,15 @@ func cmdServe(args []string, out, errw io.Writer) error {
 	if err != nil {
 		return err
 	}
+	toolPolicy, err := invoke.ParseToolPolicy(allowTools, denyTools)
+	if err != nil {
+		return err
+	}
 	b, err := invoke.NewSubprocess(model)
 	if err != nil {
 		return err
 	}
+	b.Policy = toolPolicy
 	var jb invoke.Backend
 	if judgeModel != "" {
 		js, err := invoke.NewSubprocess(judgeModel)
@@ -634,7 +679,7 @@ func cmdServe(args []string, out, errw io.Writer) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens})
+	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens, Work: work})
 	if err != nil {
 		return err
 	}
@@ -798,7 +843,7 @@ func cmdPack(args []string, out io.Writer) error {
 			label = args[i+1]
 		}
 	}
-	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+	return withJournal(out, func(a *workspace.Announced, j *journal.Journal, st *thought.Store) error {
 		switch args[0] {
 		case "export":
 			f, err := os.Create(args[1])

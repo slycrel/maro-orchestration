@@ -1123,7 +1123,7 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 				return fmt.Errorf("run: %s attempt %d recorded usage that disagrees with receipt %s", rs.Run, x.Attempt, o.Receipt)
 			}
 			// exposure: the recall the request was rendered from is the
-			// producing attempt's; NOW: the request is EXACTLY goal+rendering;
+			// producing attempt's; NOW: the request is EXACTLY frame+goal+rendering;
 			// AGENDA: every plan/execute request ENDS with the rendering and
 			// carries the applications; judge/intent requests carry neither
 			recallBy := o.Produced
@@ -1349,6 +1349,14 @@ func checkExposure(rs *RunState, sel *learn.RecallSelection, get func(thought.Re
 	if err != nil {
 		return err
 	}
+	// NOW: the request is frame + goal + rendering, the frame being the one
+	// the PRODUCING attempt's config binds (frame.go)
+	var frame []byte
+	if int(produced) >= 1 && int(produced) <= len(rs.Attempts) {
+		if frame, err = frameText(rs.Attempts[produced-1], get); err != nil {
+			return fmt.Errorf("invocation %s frame: %w", invID, err)
+		}
+	}
 	apps := learned.Applications[invID]
 	if suffix && invRec.Purpose != invoke.PurposeExecute && invRec.Purpose != invoke.PurposePlan {
 		if len(apps) != 0 {
@@ -1380,9 +1388,9 @@ func checkExposure(rs *RunState, sel *learn.RecallSelection, get func(thought.Re
 			return fmt.Errorf("invocation %s request does not end with the recall rendering", invID)
 		}
 	} else {
-		want := thought.Address(thought.Prompt, append(append([]byte{}, goal...), block...))
+		want := thought.Address(thought.Prompt, Lensed(frame, append(append([]byte{}, goal...), block...)))
 		if invRec.Request != want {
-			return fmt.Errorf("invocation %s request is not goal+recall (%s vs %s)", invID, invRec.Request.Hash, want.Hash)
+			return fmt.Errorf("invocation %s request is not frame+goal+recall (%s vs %s)", invID, invRec.Request.Hash, want.Hash)
 		}
 	}
 	if len(apps) != len(reps) {

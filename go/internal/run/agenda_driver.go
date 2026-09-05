@@ -75,6 +75,11 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			sh.CrashAt = ""
 		}
 		req := invoke.Request{Purpose: purpose, Prompt: prompt, Tools: tools && b.Capabilities().ActsOutward, Timeout: d.Timeout}
+		cwd, err := d.work(req.Tools)
+		if err != nil {
+			return nil, nil, err
+		}
+		req.Cwd = cwd
 		if purpose == invoke.PurposeJudge {
 			// a judge request is rendered under the attempt's lens (§13)
 			lr, err := d.lensedRequest(prompt, req.Tools)

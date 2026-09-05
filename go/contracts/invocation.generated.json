@@ -106,6 +106,13 @@
       "is_thought": false
     },
     {
+      "name": "Cwd",
+      "wire": "cwd",
+      "go_type": "string",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
       "name": "EffectToken",
       "wire": "effect_token",
       "go_type": "string",
@@ -141,6 +148,6 @@
       "is_thought": false
     }
   ],
-  "source_ref": "4b131044",
+  "source_ref": "5b50de5b",
   "generator": "maro-go contracts gen v1"
 }

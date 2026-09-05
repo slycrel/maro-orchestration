@@ -52,6 +52,9 @@ type Options struct {
 	TailEvery time.Duration
 	// Lens is the persona lens every judge request runs under (§13); "" = neutral.
 	Lens string
+	// Work is the working directory tool-bearing executes start in; "" =
+	// the workspace's own work/ (Root.Path("work")).
+	Work string
 }
 
 // Server is a running process.
@@ -123,6 +126,9 @@ func Serve(ctx context.Context, opts Options) (*Server, error) {
 	}
 	if opts.Poll == 0 {
 		opts.Poll = 2 * time.Second
+	}
+	if opts.Work == "" {
+		opts.Work = opts.Root.Path("work")
 	}
 	if err := opts.Root.Ensure(); err != nil {
 		return nil, err
@@ -283,7 +289,7 @@ func (l *executor) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 	defer t.Stop()
 	lastErr, repeats := "", 0
 	for {
-		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health, Lens: l.s.opts.Lens,
+		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health, Lens: l.s.opts.Lens, Work: l.s.opts.Work, Frame: run.DefaultFrame,
 			Events: func(e run.Event) {
 				if e.Stage == "attempt" && e.Goal != "" {
 					l.s.conns.bind(e.Goal, e.Run) // the run's presentation goes to the client that submitted its goal

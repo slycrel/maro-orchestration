@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -99,6 +101,16 @@ type Driver struct {
 	// is rendered under (§13); "" or "neutral" = no prefix. Recorded in
 	// the attempt config; the fold checks each judge request begins with it.
 	Lens string
+	// Frame is the execute frame text every NOW execute request of this
+	// driver's runs begins with (frame.go); "" = the bare goal (tests).
+	Frame string
+	// Work is the working directory every tool-bearing execute of this
+	// driver's runs starts in — the workspace's own `work/`, never the
+	// process's cwd (an execute that inherits the process's directory
+	// inherits whatever project it was launched from: its CLAUDE.md, its
+	// files, its idea of what the goal is about). Created on first use;
+	// recorded on the invocation. "" = the backend's default (tests).
+	Work string
 	// MaxDeliveryAttempts bounds the outbox. Why 3: a CLI origin fails only
 	// when its writer is gone (closed pipe), which a retry never repairs; the
 	// bound exists so a dead origin becomes delivery_failed with a reason
@@ -255,6 +267,11 @@ func (d *Driver) config(lane Lane, pol *learn.PolicySelection) (ConfigSnapshot, 
 		ref := l.Text
 		c.LensText = &ref
 	}
+	fr, _, err := d.frame()
+	if err != nil {
+		return ConfigSnapshot{}, err
+	}
+	c.Frame = fr
 	for m, on := range pol.Snapshot {
 		c.Mechanisms[m] = on
 	}
@@ -304,6 +321,23 @@ func (d *Driver) policy(ctx context.Context, rs *RunState, n uint32) (*learn.Pol
 		recs = append(recs, &learn.PolicyApplication{Header: header(record.Ref{Kind: "policy_selection", ID: string(pol.ID)}, rs.Run, n, "policy_application/1"), Item: ir.Item, Revision: ir.Revision, Selection: pol.ID, Rule: rule})
 	}
 	return pol, recs, nil
+}
+
+// work is the working directory for a tool-bearing request: the driver's
+// Work, made to exist (mkdir -p; 0755) and absolute. A tool-less request
+// has none — a judge does not run anywhere.
+func (d *Driver) work(tools bool) (string, error) {
+	if !tools || d.Work == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(d.Work)
+	if err != nil {
+		return "", fmt.Errorf("%w: work dir %q: %v", ErrConfig, d.Work, err)
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return "", fmt.Errorf("%w: work dir %q: %v", ErrConfig, d.Work, err)
+	}
+	return abs, nil
 }
 
 func (d *Driver) crash(stage string) error {
@@ -597,8 +631,19 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 	if !strings.HasPrefix(d.CrashAt, "invoke:") {
 		sh.CrashAt = ""
 	}
-	prompt := append(append([]byte{}, text...), block...)
-	o, err := sh.Invoke(ctx, d.Backend, invoke.Request{Purpose: invoke.PurposeExecute, Prompt: prompt, Tools: d.Backend.Capabilities().ActsOutward && !d.Confined, Timeout: d.Timeout}, nil)
+	// the request: frame + goal + rendering — the fold re-derives exactly
+	// this from the attempt config, the goal thought, and the selection
+	_, ft, err := d.frame()
+	if err != nil {
+		return nil, err
+	}
+	prompt := Lensed(ft, append(append([]byte{}, text...), block...))
+	tools := d.Backend.Capabilities().ActsOutward && !d.Confined
+	cwd, err := d.work(tools)
+	if err != nil {
+		return nil, err
+	}
+	o, err := sh.Invoke(ctx, d.Backend, invoke.Request{Purpose: invoke.PurposeExecute, Prompt: prompt, Tools: tools, Timeout: d.Timeout, Cwd: cwd}, nil)
 	var inc *invoke.Incapable
 	if errors.As(err, &inc) {
 		// a refusal the shell makes BEFORE writing anything (input over the

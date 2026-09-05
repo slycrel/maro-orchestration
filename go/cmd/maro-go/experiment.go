@@ -14,6 +14,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	spine "github.com/slycrel/maro-orchestration/go/internal/run"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
+	"github.com/slycrel/maro-orchestration/go/internal/workspace"
 )
 
 // cmdExperiment is the operator surface of the measured loop (step 10b):
@@ -28,12 +29,12 @@ func cmdExperiment(args []string, out, errw io.Writer) error {
 	if len(args) < 1 {
 		return fmt.Errorf("experiment needs open|run|close|list|show")
 	}
-	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+	return withJournal(out, func(a *workspace.Announced, j *journal.Journal, st *thought.Store) error {
 		switch args[0] {
 		case "open":
 			return experimentOpen(args[1:], j, st, out)
 		case "run":
-			return experimentRun(args[1:], j, st, out, errw)
+			return experimentRun(args[1:], a, j, st, out, errw)
 		case "close":
 			if len(args) < 2 {
 				return fmt.Errorf("experiment close <exp> [--judge-model m]")
@@ -271,7 +272,7 @@ func experimentOpen(args []string, j *journal.Journal, st *thought.Store, out io
 	return nil
 }
 
-func experimentRun(args []string, j *journal.Journal, st *thought.Store, out, errw io.Writer) error {
+func experimentRun(args []string, a *workspace.Announced, j *journal.Journal, st *thought.Store, out, errw io.Writer) error {
 	if len(args) < 1 {
 		return fmt.Errorf("experiment run <exp> [--model m] [--judge-model m]")
 	}
@@ -303,7 +304,7 @@ func experimentRun(args []string, j *journal.Journal, st *thought.Store, out, er
 			return err
 		}
 	}
-	r := &experiment.Runner{J: j, Store: st, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Events: func(e spine.Event) {
+	r := &experiment.Runner{J: j, Store: st, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Work: a.Path("work"), Events: func(e spine.Event) {
 		fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 	}}
 	if err := r.Run(context.Background(), exp); err != nil {

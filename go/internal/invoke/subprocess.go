@@ -23,19 +23,21 @@ import (
 // CLI (kept because the CONTRACT with the CLI forces it, not because Python
 // had it): -p, stream-json, --verbose, --dangerously-skip-permissions,
 // --strict-mcp-config; tool-less calls pass --tools "" (disables the built-in
-// set entirely); tool calls deny WebFetch/WebSearch.
+// set entirely); tool calls carry the operator's ToolPolicy as
+// --allowedTools / --disallowedTools (default: deny WebFetch/WebSearch).
 type Subprocess struct {
 	Bin            string
 	Model          string
 	DefaultTimeout time.Duration
 	Lookup         func(string) (string, error) // exec.LookPath seam
+	Policy         ToolPolicy                   // the operator's tool policy for tool-bearing requests
 }
 
 const subprocessName = "subprocess"
 
 // NewSubprocess finds the claude binary.
 func NewSubprocess(model string) (*Subprocess, error) {
-	s := &Subprocess{Model: model, DefaultTimeout: 20 * time.Minute, Lookup: exec.LookPath}
+	s := &Subprocess{Model: model, DefaultTimeout: 20 * time.Minute, Lookup: exec.LookPath, Policy: DefaultToolPolicy()}
 	bin, err := s.Lookup("claude")
 	if err != nil {
 		return nil, fmt.Errorf("%w: claude CLI not found: %v", ErrBeforeDispatch, err)
@@ -45,13 +47,18 @@ func NewSubprocess(model string) (*Subprocess, error) {
 }
 
 func (s *Subprocess) Capabilities() Capabilities {
-	return Capabilities{Name: subprocessName, Model: s.Model, ActsOutward: true, OutwardReconcilable: false, ReadsByReference: true}
+	return Capabilities{Name: subprocessName, Model: s.Model, ActsOutward: true, OutwardReconcilable: false, ReadsByReference: true, ToolPolicy: s.Policy.String()}
 }
 
 func (s *Subprocess) args(req Request) []string {
 	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--strict-mcp-config"}
 	if req.Tools {
-		a = append(a, "--disallowedTools", "WebFetch,WebSearch")
+		if len(s.Policy.Allow) > 0 {
+			a = append(a, "--allowedTools", strings.Join(s.Policy.Allow, ","))
+		}
+		if len(s.Policy.Deny) > 0 {
+			a = append(a, "--disallowedTools", strings.Join(s.Policy.Deny, ","))
+		}
 	} else {
 		a = append(a, "--tools", "")
 	}

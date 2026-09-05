@@ -6,7 +6,7 @@ package invoke
 var operationTable = map[string]OperationClass{
 	// claude CLI tools
 	"Read": OpQuery, "Glob": OpQuery, "Grep": OpQuery, "LS": OpQuery, "TodoRead": OpQuery,
-	"WebFetch": OpQuery, "WebSearch": OpQuery, // network reads; disallowed by args anyway
+	"WebFetch": OpQuery, "WebSearch": OpQuery, // network reads; denied by the default ToolPolicy, an operator may allow them
 	"Write": OpWriteLocal, "Edit": OpWriteLocal, "MultiEdit": OpWriteLocal, "NotebookEdit": OpWriteLocal, "TodoWrite": OpWriteLocal,
 	"Bash": OpIrreversible, // a shell can do anything; unclassifiable ⇒ irreversible
 	"Task": OpIrreversible, "Agent": OpIrreversible,

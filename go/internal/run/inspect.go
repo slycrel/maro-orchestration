@@ -26,6 +26,11 @@ func Inspect(rs *RunState) []string {
 		lens = LensNeutral
 	}
 	lines = append(lines, "lens: "+lens)
+	if f := a.Attempt.Config.Frame; f != nil {
+		lines = append(lines, "frame: "+f.Hash)
+	} else {
+		lines = append(lines, "frame: none (bare goal)")
+	}
 	if r := a.Recall; r != nil {
 		var ex []string
 		for k, v := range r.ExcludedCounts {
@@ -62,6 +67,12 @@ func Inspect(rs *RunState) []string {
 		term := "open"
 		if is.Terminal != nil {
 			term = string(is.Terminal.State)
+		}
+		if inv.Cwd != "" {
+			l += " cwd=" + inv.Cwd
+		}
+		if inv.Tools && inv.Backend.ToolPolicy != "" {
+			l += " tools=" + inv.Backend.ToolPolicy
 		}
 		lines = append(lines, fmt.Sprintf("invocation %s: %s request=%s model=%s%s terminal=%s", inv.ID, inv.Purpose, inv.Request.Hash, inv.Backend.Model, l, term))
 	}

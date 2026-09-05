@@ -578,7 +578,7 @@ func (d *Driver) commitDecision(ctx context.Context, rs *RunState, fs *ForkState
 // NOW lane with the parent's judge when the policy needs a verdict. It
 // writes the ChildTerminal from the child attempt's own scope.
 func (d *Driver) driveChild(ctx context.Context, crs *RunState, fs *ForkState, member int) error {
-	cd := &Driver{J: d.J, Store: d.Store, Backend: d.Backend, Judge: d.Judge, Lane: LaneNow, Origin: forkOrigin{}, Timeout: d.Timeout, Health: d.Health, Events: d.Events, Lens: d.Lens,
+	cd := &Driver{J: d.J, Store: d.Store, Backend: d.Backend, Judge: d.Judge, Lane: LaneNow, Origin: forkOrigin{}, Timeout: d.Timeout, Health: d.Health, Events: d.Events, Lens: d.Lens, Work: d.Work, Frame: d.Frame,
 		Confined: true, ChildOf: fs.Fork.ID, ModelJudge: fs.Fork.Policy == JoinFirstVerdict, MaxAttempts: d.MaxAttempts, MaxDeliveryAttempts: d.MaxDeliveryAttempts}
 	// crash seams: "child:<seam>" fires in every child, "child:<n>:<seam>"
 	// only in member n (1-based)

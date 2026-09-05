@@ -2,6 +2,8 @@ package run
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -300,5 +302,156 @@ func TestFoldRefusesLensSwapsInHistory(t *testing.T) {
 	}
 	if h.j.Head() != head {
 		t.Fatal("a refused lens wrote records")
+	}
+}
+
+// The workspace's working directory: every tool-bearing execute starts in
+// the driver's Work (created on first use, absolute), recorded on the
+// invocation and shown by Inspect; a tool-less request (the judge) has
+// none; a confined fork child has none. The process's own cwd is never
+// what an execute inherits.
+func TestExecutesRunInTheWorkspaceWorkDir(t *testing.T) {
+	h := open(t)
+	h.policy(t, learn.MechModelJudge, true, learn.Provisional)
+	exec := scripted(outward, invoke.ScriptedCall{Response: []byte("Paris.")})
+	judge := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-judge", Model: "judge"}, Calls: []invoke.ScriptedCall{{Response: []byte(closureYes)}}}
+	work := filepath.Join(t.TempDir(), "ws", "work") // does not exist yet
+	d := h.driver(exec, nil)
+	d.Judge, d.ModelJudge, d.Work = judge, true, work
+	if _, err := d.Run(ctxBg, []byte("What is the capital of France?"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(work); err != nil || !st.IsDir() {
+		t.Fatalf("work dir not created: %v", err)
+	}
+	if len(exec.Seen) != 1 || exec.Seen[0].Cwd != work || !exec.Seen[0].Tools {
+		t.Fatalf("execute request: %+v", exec.Seen)
+	}
+	if len(judge.Seen) != 1 || judge.Seen[0].Cwd != "" || judge.Seen[0].Tools {
+		t.Fatalf("judge request: %+v", judge.Seen)
+	}
+	rs := h.only()
+	var ex, jd *invoke.Invocation
+	for _, is := range rs.Latest().Invocations {
+		switch is.Invocation.Purpose {
+		case invoke.PurposeExecute:
+			ex = is.Invocation
+		case invoke.PurposeJudge:
+			jd = is.Invocation
+		}
+	}
+	if ex == nil || ex.Cwd != work || jd == nil || jd.Cwd != "" {
+		t.Fatalf("recorded: execute %+v judge %+v", ex, jd)
+	}
+	if lines := strings.Join(Inspect(rs), "\n"); !strings.Contains(lines, "cwd="+work) {
+		t.Fatalf("inspect:\n%s", lines)
+	}
+	// no Work configured: the backend's default, nothing recorded
+	h2 := open(t)
+	exec2 := scripted(outward, invoke.ScriptedCall{Response: []byte("Paris.")})
+	if _, err := h2.driver(exec2, nil).Run(ctxBg, []byte("What is the capital of France?"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	if exec2.Seen[0].Cwd != "" {
+		t.Fatalf("default: %+v", exec2.Seen[0])
+	}
+	// a relative Work is made absolute before it is recorded (the door
+	// refuses a relative cwd)
+	h3 := open(t)
+	exec3 := scripted(outward, invoke.ScriptedCall{Response: []byte("Paris.")})
+	d3 := h3.driver(exec3, nil)
+	d3.Work = "relative-work"
+	if _, err := d3.Run(ctxBg, []byte("What is the capital of France?"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(exec3.Seen[0].Cwd) || filepath.Base(exec3.Seen[0].Cwd) != "relative-work" {
+		t.Fatalf("relative work: %q", exec3.Seen[0].Cwd)
+	}
+	os.RemoveAll("relative-work")
+}
+
+// The execute frame: a NOW execute request is frame + goal + rendering,
+// the frame bound in the attempt config as a frame_text ref and re-derived
+// by the fold; a lens never touches it; a forged unframed request under a
+// framed attempt is refused by Fold; a config binding a frame of another
+// kind is refused at the door; Inspect shows the binding.
+func TestExecuteFrameIsBoundAndReDerived(t *testing.T) {
+	h := open(t)
+	h.lesson(t, "cite the file", learn.Provisional)
+	exec := scripted(toolless, invoke.ScriptedCall{Response: []byte("Paris.")})
+	goal := []byte("What is the capital of France?")
+	d := h.driver(exec, nil)
+	d.Frame = DefaultFrame
+	if _, err := d.Run(ctxBg, goal, DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	rs := h.only()
+	a := rs.Latest()
+	if a.Attempt.Config.Frame == nil || a.Attempt.Config.Frame.Kind != thought.FrameText {
+		t.Fatalf("config: %+v", a.Attempt.Config.Frame)
+	}
+	req, err := h.st.Get(a.Invocations[0].Invocation.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(req), DefaultFrame+"\n\n"+string(goal)) || !strings.Contains(string(req), "cite the file") {
+		t.Fatalf("request:\n%s", req)
+	}
+	if ft, _ := FrameOf(a, h.st); ft != DefaultFrame {
+		t.Fatalf("FrameOf: %q", ft)
+	}
+	if lines := strings.Join(Inspect(rs), "\n"); !strings.Contains(lines, "frame: "+a.Attempt.Config.Frame.Hash) {
+		t.Fatalf("inspect:\n%s", lines)
+	}
+	// no frame: the bare goal, and Inspect says so
+	h2 := open(t)
+	exec2 := scripted(toolless, invoke.ScriptedCall{Response: []byte("Paris.")})
+	if _, err := h2.driver(exec2, nil).Run(ctxBg, goal, DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	rs2 := h2.only()
+	if rs2.Latest().Attempt.Config.Frame != nil || !strings.Contains(strings.Join(Inspect(rs2), "\n"), "frame: none") {
+		t.Fatal("bare goal run carries a frame")
+	}
+	if string(exec2.Seen[0].Prompt) != string(goal) {
+		t.Fatalf("bare request: %q", exec2.Seen[0].Prompt)
+	}
+
+	// the fold's rule, executed directly on the framed run's own facts: the
+	// real invocation re-derives; the same invocation claiming the bare
+	// goal+rendering (the pre-frame shape) is refused — a frame dropped
+	// from the re-derivation would let it through
+	led := h.ledger()
+	real := a.Invocations[0].Invocation
+	if err := checkExposure(rs, a.Recall, h.st.Get, led.Learned, h.st.Get, real.ID, real, 1, false); err != nil {
+		t.Fatalf("honest exposure refused: %v", err)
+	}
+	bareBody := append(append([]byte{}, goal...), req[len(DefaultFrame)+2+len(goal):]...)
+	bare, _ := h.st.Put(thought.Prompt, bareBody)
+	forged := *real
+	forged.Request = bare
+	if err := checkExposure(rs, a.Recall, h.st.Get, led.Learned, h.st.Get, real.ID, &forged, 1, false); err == nil || !strings.Contains(err.Error(), "frame+goal+recall") {
+		t.Fatalf("unframed request under a framed attempt: %v", err)
+	}
+
+	// the door: a frame of another kind, an empty frame
+	head := h.j.Head()
+	cfg := a.Attempt.Config
+	for _, c := range []struct {
+		name string
+		ref  thought.Ref
+	}{{"prompt kind", thought.Address(thought.Prompt, []byte("x"))}, {"empty", thought.Address(thought.FrameText, nil)}} {
+		f := c.ref
+		if c.name == "prompt kind" {
+			f.Bytes = 1
+		}
+		cfg.Frame = &f
+		x := &RunAttempt{Header: header(runRef(rs.Run), rs.Run, 2, "run_attempt/1"), Goal: a.Attempt.Goal, Family: a.Attempt.Family, Config: cfg, RecoversFrom: 1}
+		if _, err := h.j.Submit(ctxBg, journal.Command{IdempotencyKey: "forged/frame-" + c.name, Epoch: h.j.Epoch(), Records: []record.Record{x}}); err == nil || !strings.Contains(err.Error(), "non-empty frame_text") {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+	}
+	if h.j.Head() != head {
+		t.Fatal("a refused frame was written")
 	}
 }

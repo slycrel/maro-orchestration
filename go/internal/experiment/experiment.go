@@ -290,6 +290,7 @@ type Runner struct {
 	Backend invoke.Backend
 	Judge   invoke.Backend
 	Timeout time.Duration
+	Work    string // the replay arms' working directory (run.Driver.Work)
 	Events  func(run.Event)
 	// CrashAt is forwarded to every arm driver (the kill matrix's seam);
 	// production never sets it.
@@ -355,7 +356,15 @@ func (r *Runner) arm(ctx context.Context, st *State, x *Experiment, as *Assignme
 	if it := st.Runs.Learned.Items[x.Hypothesis.Item]; it == nil || it.Current.ID != x.Hypothesis.Revision {
 		return fmt.Errorf("%w: hypothesis %s/%s is no longer the item's current revision; the experiment is stale", ErrRefused, x.Hypothesis.Item, x.Hypothesis.Revision)
 	}
-	d := &run.Driver{J: r.J, Store: r.Store, Backend: r.Backend, Judge: r.Judge, Lane: unit.Goal.Lane, Origin: run.ReplayOrigin{}, Events: r.Events, Timeout: r.Timeout, CrashAt: r.CrashAt,
+	// the arm replays the unit under the unit's own execute frame (read
+	// from the unit's attempt config, not from this process): a replay
+	// whose request differs from the unit's by anything but the arm's
+	// applied set measures the difference in framing, not the hypothesis
+	frame, err := run.FrameOf(unit.Latest(), r.Store)
+	if err != nil {
+		return err
+	}
+	d := &run.Driver{J: r.J, Store: r.Store, Backend: r.Backend, Judge: r.Judge, Lane: unit.Goal.Lane, Origin: run.ReplayOrigin{}, Events: r.Events, Timeout: r.Timeout, CrashAt: r.CrashAt, Frame: frame, Work: r.Work,
 		Replay: &run.ReplayContext{Assignment: as.ID, Arm: arm.Arm, Unit: as.Unit, Root: unit.Goal.Root, Apply: arm.Apply, Withhold: arm.Withhold}}
 	if err := d.Validate(); err != nil {
 		return err

@@ -1944,3 +1944,74 @@ successor exists yet, so nothing is stranded; the report says which
 binary reads it. The first production journal is where the schema-bump
 discipline (`run_attempt/2`, a reader for `/1`) starts — before that it
 is ceremony.
+
+## Post-v1 item 1 — the work dir, the operator's tool policy, the execute frame (2026-09-05)
+
+**Intent.** The acceptance run's fourth lesson: a NOW execute ran in
+whatever directory the operator's shell was in — this repo's, so the
+CLI inherited this repo's `CLAUDE.md` and answered a question about
+gas stations as an engineer with a codebase in front of it. Two
+operator controls were missing that Python has had since the first
+month: where a run's process lives, and which tools it may reach for.
+Jeremy: "yep, let's do this first."
+
+**Subtraction.**
+
+| Considered | Where | Decision |
+|---|---|---|
+| Per-run scratch directories (`work/<run>`) | — | cut: one `work/` per workspace; a run that wants isolation is a v2 seam, and a shared directory is what Python has |
+| A tool policy persisted per workspace (config file) | D16 | cut: the policy is a process option (`--allow-tools`/`--deny-tools`, same on `now`/`agenda`/`serve`), recorded on every invocation as `backend.tool_policy`; a stored default is a later lift |
+| Policy on the Request (per call) | — | cut: the policy is the backend's (rides `Capabilities`), so every invocation's record says what it ran under without the driver knowing about tools |
+| Persist the work dir on the record | — | done as `invocation.cwd` (door: absolute when set) — the process shape is data (D16); a fold cannot check a cwd, but an inspect can show it |
+| A system prompt for execute (Python's `_NOW_SYSTEM`) | §13 | done as a **frame**: bound in the attempt config by content ref like a lens, prefixed to the execute request, re-derived by the fold's exposure rule (`frame+goal+recall`); not operator-swappable in v1 |
+| Framing agenda step requests | §13 | cut: an agenda step's request is the plan's rendering, already framed by the planner's contract |
+
+**Built.** `invoke.ToolPolicy{Allow, Deny}` (`DefaultToolPolicy` = deny
+`WebFetch,WebSearch`; `ParseToolPolicy`; canonical `String`) →
+`Capabilities.ToolPolicy`; `Subprocess.Policy` → `--allowedTools` /
+`--disallowedTools` on tool-bearing requests. `Request.Cwd` →
+`Invocation.Cwd` (door: absolute). `Driver.Work` (default
+`<workspace>/work`, created on first use) sets the cwd of every
+tool-bearing execute and agenda step; forks inherit it; `serve`
+defaults it from the root. `thought.FrameText`; `run.DefaultFrame`;
+`ConfigSnapshot.Frame` (door: a non-empty `frame_text` thought);
+`execute` sends `Lensed(frame, goal+recall)`; `checkExposure` resolves
+the producing attempt's frame and refuses a NOW request that is not
+frame+goal+recall; replay arms run under the unit's own frame
+(`FrameOf`). `Inspect` prints `frame:`, `cwd=`, `tools=`.
+
+**Edge tests.** `TestToolPolicyAndCwd` (invoke): default policy
+string, parse, args, the door on a relative cwd.
+`TestExecutesRunInTheWorkspaceWorkDir`: the recorded invocation's cwd
+is the driver's work dir and it exists; a driver without one records
+none. `TestExecuteFrameIsBoundAndReDerived`: the request bytes are
+frame+goal+recall; the attempt config binds the frame's ref; the fold
+accepts the honest invocation and refuses the same invocation claiming
+the bare goal+recall (the pre-frame shape); the door refuses a frame
+of another kind and an empty one.
+
+**Live.** Scratch workspace `l14`. Before the frame, the Manti goal
+under an open policy came back "I'm Claude Code … outside my scope" —
+the bare NOW request, with nothing saying whose goal it was, let the
+CLI answer as itself. With the frame and `--deny-tools ""`: a real
+answer with three web sources (Utah is thin on ethanol-free fuel; the
+Pure Gas app; SLC/Cedar City), cost 0.042 under a 2.00 target, cwd
+`l14/work`, `frame:` bound. Under the default policy the same class of
+question answered honestly that it had no web tool and gave the
+Census route; the record reads `tools=deny=WebFetch,WebSearch`. The
+default is the conservative one: an operator opens the web per
+process, and the record says so either way.
+
+**Residuals.** (1) `runs resume` builds its backend without the policy
+flags — a resumed execute runs under the default policy, not the
+operator's original; the original is on the record (`tool_policy`) and
+resume could read it back from the attempt's last invocation. (2) The
+frame is not operator-swappable and not lensable by name — one text,
+bound by ref; a second frame is the first real test of whether the
+lens table wants to become a prefix table. (3) The work dir is shared
+across runs and never cleaned; nothing writes there yet except what a
+run's tools write. (4) `tool_policy` is in `Capabilities`, so a
+`scripted` backend records none — the tests' harness runs unpoliced
+by construction, which is honest but means no fold-side rule can
+cite a policy; policy is process-checked (`args`), record-visible,
+fold-blind.

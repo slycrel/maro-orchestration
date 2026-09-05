@@ -91,7 +91,7 @@ func samples() map[record.Kind]any {
 	return map[record.Kind]any{
 		record.KindLease:            &record.LeaseRecord{Header: withSchema(h, "lease/1"), PID: 4242, Epoch: 3, Host: "mini"},
 		record.KindThoughtStored:    &record.ThoughtStored{Header: withSchema(h, "thought_stored/1"), Hash: "s256v1:" + strings.Repeat("ab", 32), Thought: "goal", Bytes: 12, Encoding: "utf8"},
-		invoke.KindInvocation:       &invoke.Invocation{Header: withSchema(h, "invocation/1"), Purpose: invoke.PurposeJudge, Request: ref, Backend: caps, Tools: false, EffectToken: strings.Repeat("ab", 16), TargetName: "step", TargetLimit: 10, TargetWhy: "p90", Lens: &invoke.Lens{Name: "skeptic", Text: lensText}},
+		invoke.KindInvocation:       &invoke.Invocation{Header: withSchema(h, "invocation/1"), Purpose: invoke.PurposeJudge, Request: ref, Backend: caps, Tools: false, Cwd: "/work", EffectToken: strings.Repeat("ab", 16), TargetName: "step", TargetLimit: 10, TargetWhy: "p90", Lens: &invoke.Lens{Name: "skeptic", Text: lensText}},
 		invoke.KindDispatched:       &invoke.Dispatched{Header: withSchema(h, "invocation_dispatched/1"), Invocation: inv},
 		invoke.KindToolEffect:       &invoke.ToolEffect{Header: withSchema(h, "tool_effect/1"), Invocation: inv, Ordinal: 0, Op: "Read", Class: invoke.OpQuery, Key: strings.Repeat("cd", 32), Refused: true, Input: ref},
 		invoke.KindToolEffectResult: &invoke.ToolEffectResult{Header: withSchema(h, "tool_effect_result/1"), Invocation: inv, Ordinal: 0, Output: ref},

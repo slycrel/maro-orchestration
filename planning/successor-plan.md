@@ -291,6 +291,23 @@ platform breadth (heartbeat, notify, viz).
 Same workspace, same goals, both engines; compare at the artifact
 boundary. Then decide what the successor becomes.
 
+**Amended 2026-09-05 (Jeremy).** Order after the v1 acceptance run:
+(1) per-workspace working directory + operator tool policy for
+executes (the Go NOW execute ran in this repo's cwd with no web, so no
+world-needing goal compares); (2) the oracle class becomes part of the
+experiment hypothesis — Jeremy: "you can have a tool and not know how
+to use it and call it junk; that doesn't mean it's useless, just that
+you're holding it wrong" — the blinded evaluator is kept and MATCHED to
+what it can judge, never retired; (3) the comparison on a small goal
+set. Then, once both engines run at roughly the same level: add a
+couple of new features on BOTH sides and judge whether they are merely
+different or one is better suited to own — the measured question is
+"which is cheaper to change safely", so the features should touch the
+seams the prototype never closed (fork-with-join, scoped memory,
+removal-as-deliverable), with a per-feature cost ledger. Jeremy has a
+feel for the Python edge classes, much less for Go; that calibration is
+part of the judgment.
+
 ## Standing rules (the guardrails this plan exists to enforce)
 
 - **Anti-lift-and-translate.** A Go module is written from the arch
