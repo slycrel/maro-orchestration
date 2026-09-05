@@ -6412,6 +6412,30 @@ design sign-off before any public release. Still open:
   arc raises its priority (a dead run behind a network edge is
   invisible — see SP entry).
 
+### The landscape (related runs) — follow-ups (2026-09-05, feature 2 on both engines)
+
+Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
+`bd43ad31`); design note + review ledger live in the successor repo,
+`planning/feature-related-runs.md`. Left open on purpose:
+
+- [ ] **`rerun_identity` / `find_prior_attempts` overlap.** The 24 h
+  near-duplicate brief asks a narrower question ("was this exact goal
+  just run?") than the landscape's rerun relation; two instruments, one
+  fact. Fold the brief into the landscape record (rerun ⇒ the brief's
+  content) once the landscape has a live denominator.
+- [ ] **Project ancestry block vs run lineage — naming.** The loop still
+  injects `build_ancestry_prompt` (project nesting from dispatch forks'
+  `ancestry.json`) next to the recall thread line and the related block
+  (run lineage from origin). They are different facts and can name
+  different parents by construction; both reviewers read them as one
+  contradictory lineage. Landscape origins no longer WRITE ancestry.json;
+  the read side wants either a rename ("project nesting") or a fold into
+  one chain. Not a bug; a naming debt.
+- [ ] **Landscape judge cost census.** The one call rides
+  `purpose="landscape"` (hosted-free when buildable); the subprocess
+  backend does not enforce `max_tokens=200` (live: 378 tokens). Add the
+  purpose to the metering census once a denominator exists.
+
 ---
 
 Full history in [BACKLOG_DONE.md](BACKLOG_DONE.md).
