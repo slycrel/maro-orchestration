@@ -182,7 +182,11 @@ type Provenance struct {
 	Why    string          `json:"why"`
 }
 
-var sources = map[string]bool{"operator": true, "tail": true, SourceSeed: true}
+// SourceImport is the provenance source of a revision that entered from
+// another workspace — a native pack or a Python store — at candidate.
+const SourceImport = "import"
+
+var sources = map[string]bool{"operator": true, "tail": true, SourceSeed: true, SourceImport: true}
 
 // LearnedRevision is one immutable revision of an item. The first revision
 // has no predecessor; every later one names the item's then-current

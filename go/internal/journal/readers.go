@@ -39,6 +39,19 @@ func (r *ProductionReader) Pin() *ProductionReader {
 	return &ProductionReader{j: r.j, pin: r.j.Head(), pinned: true}
 }
 
+// PinAt returns a reader fixed at an explicit head at or below the
+// journal's: a projector that announced a head must fold exactly that
+// prefix, whatever landed since. Pinning a pinned reader is the identity.
+func (r *ProductionReader) PinAt(head uint64) *ProductionReader {
+	if r.pinned {
+		return r
+	}
+	if h := r.j.Head(); head > h {
+		head = h
+	}
+	return &ProductionReader{j: r.j, pin: head, pinned: true}
+}
+
 func (j *Journal) Production() *ProductionReader     { return &ProductionReader{j: j} }
 func (j *Journal) Control() *ControlReader           { return &ControlReader{j} }
 func (j *Journal) Experimental() *ExperimentalReader { return &ExperimentalReader{j} }

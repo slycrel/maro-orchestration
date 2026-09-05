@@ -21,6 +21,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/experiment"
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/run"
@@ -207,9 +208,9 @@ func (s *Server) teardown() {
 	_ = os.Remove(s.opts.Root.Path(SocketName))
 }
 
-// publish runs the projector once (both views), through the current head.
+// publish runs the projector once (every view), through the current head.
 func (s *Server) publish() error {
-	p, err := projector.New(s.j, projector.ThoughtsView{}, run.OutcomesView{Store: s.store})
+	p, err := projector.New(s.j, projector.ThoughtsView{}, run.OutcomesView{Store: s.store}, learn.LessonsView{Store: s.store})
 	if err != nil {
 		return err
 	}

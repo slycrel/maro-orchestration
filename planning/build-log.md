@@ -1659,3 +1659,88 @@ makes `experiment open --mechanism recall --relation ablate` refuse
 it; four submits c/t/c/t (`policy 2 of 3 enabled · recall 1 included of
 4 · applied 1` vs `1 of 3 · 0 of 4`); evaluator `equivalent →
 item_redundant`; seed tombstone; fifth submit `1 of 3 · 0 of 4`.
+
+## Step 12 — native pack envelope, B7 lessons view, import quarantine (2026-09-05)
+
+Design §13: shared edges EXACT to the wire contract, a native pack for
+the Go-only causal history, and a quarantine through which learning
+from elsewhere enters at candidate. Two directions, tested separately;
+no round trip is claimed. The Python workspace's learned data (the live
+store, read-only) imports at candidate.
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| B7 `lessons.jsonl` (flat `Lesson` shape) | §13 "shared edges exact" | kept: `learn.LessonsView` — a **whole-file** view (new `projector.WholeView`: the file is the learn fold at the announced head, rendered once; `LineView` is the old per-record kind; `New` refuses a view that is neither or both). One row per item whose CURRENT lesson revision is selectable or quarantined; field set and order are the Python dataclass's; `confidence` by stage orders as the ladder does; quarantined rows carry `contested{item_harmful, maro-go, at}` (B7's "on disk, not injected"); tail-learned rows `minted_from: outcome`; pack-entered rows `imported{source, why}` |
+| Candidate/observed rows in B7 | — | cut, declared: the flat vocabulary has no non-injecting stamp that means "unproven" rather than "retired"; an unproven Go lesson must not become an injected Python one. Tombstones (archive) and policies (process data) also omitted |
+| B7 medium/long tiers | B7 | cut: the Go ladder is the stage; no tier files |
+| B1–B5, B8–B12 views | §13 mapping table complete | declared **not projected** with reasons in `contracts/VIEWS.md` (own root; run state is the journal; no producer) |
+| Native pack | §13, §15 "pack import idempotency" | kept: `pack export <file>` / `pack import <file>` — JSON lines: header (`maro-go-pack/1`, head, counts), the cited `lesson_text` thoughts by hash (base64), then the carried records exactly as the source journal framed them (`journal.Encoded`: kind + envelope from the registry, body verbatim). Carried: learn revision/transition/application/policy_application + experiment/assignment/cohort_commitment/effect_attestation/effect_measurement |
+| Import adopts the source's stage | — | cut by design: an import enters HERE as a fresh candidate (`Provenance{Source: import, Ref: source revision, Why: "pack <label>: item … was <stage> at head N"}`), text re-stored by hash, keyed `import/pack/<source revision>` — idempotent per source revision. Tombstoned/quarantined lessons, policies, and superseded revisions are not offered. Stage-at-source is read off the pack's own transition Seqs (pattern 68: read, don't re-execute) |
+| Import atomicity | §15 | kept: the whole file is parsed, thoughts hash-checked (`ErrTampered`), and every record decoded through `journal.Decode` (registry kind/envelope, stored validation, seq agreement) BEFORE the first Submit; a foreign format (`maro-go-pack/2`, a Python `pack.json`), an uncarried kind, or a body that disagrees with its frame is `ErrFormat` and enters nothing |
+| Python store import | "import the Python workspace's learned data at candidate" | kept: `pack import-python <dir> [--label]` reads the three B7 tiers read-only; highest tier wins per `lesson_id`; rows the Python readers would not inject are skipped by name (`minted_from=prompt`, non-empty `contested`, `provisional: true`); malformed rows counted, not fatal; `Why` carries lesson_id/tier/task_type/times_reinforced; keyed `import/python/<label>/<lesson_id>` |
+| Python pack.py (tar.gz, `pack.json`, `REVIEW.md`, seal/scrub/adopt) | — | cut: the native pack is machine causal history, not an offer with a review sheet; adoption IS the standing ladder; content-addressed thoughts need no path rewriting |
+| `provenance.source` vocabulary | contract | widened to `(operator|tail|seed|import)` (door + declared contract; report 0/0) |
+
+**Built.** `projector/projector.go` (`View`/`LineView`/`WholeView`,
+`writeView` renders a whole view from the pinned journal);
+`journal/readers.go` `ProductionReader.PinAt(head)`; `learn/view.go`
+(`LessonsView`, `LessonHandle`, `pyISO`); `learn/records.go`
+`SourceImport`; new `internal/pack` (`Export`, `Import`, `ImportPython`,
+`Report`, `Carried`, `ErrFormat`, `ErrTampered`); CLI `pack
+export|import|import-python`; `LessonsView` registered in `journal
+publish` and the serve loop's publish; `contracts/VIEWS.md` complete
+(lessons row, not-projected table, carriers section).
+
+**Edge tests.** `learn`: `TestLessonsViewIsB7Exact` — a view that
+renders nothing is refused; rows lead with `lesson_id` (dataclass
+order); the row set is exactly {provisional, effective (times_applied
+1), canon (multi-line), contested, quarantined (+`contested`), imported
+(+`imported`), the CURRENT text of a revised item}; candidate,
+tombstone, superseded text and the policy absent; no tiered
+`provisional` key; `recorded_at` is Python isoformat; a lesson landing
+after the announced head is not in that generation but is after
+republish. `pack`: `TestPackCarriesCausalHistoryAndImportsAtCandidate`
+(header counts; 4 enter at candidate with fresh ids, `import`
+provenance citing the source revision, family kept, source stage in
+Why; quarantined/tombstone/policy skipped by name; local canon
+untouched; recall excludes all four `stage:candidate`; re-import 0 new
+/ 4 already, head unchanged; a later export offers only the new
+lesson), `TestPackRefusesWhatItCannotVouchFor` (foreign format, Python
+pack.json, empty, tampered thought, uncarried kind, seq disagreement,
+unknown line — each enters nothing; the untouched pack still imports),
+`TestPythonWorkspaceImportsAtCandidate` (live-shaped rows across three
+tiers: 4 enter, medium wording beats flat, empty `contested{}` is not
+contested; prompt/contested/provisional/malformed×2 skipped by name;
+idempotent; a different label is a different source; missing store is
+an error). Full race suite green but one load flake
+(`invoke.TestTimeoutIsATerminal`: a 50 ms deadline hit while the live
+check loaded the box; 3/3 green in isolation under `-race`).
+
+**Live.** Scratch Go workspace: `learn add` ×2, `pack import-python
+/home/clawd/.maro/workspace --label live` (read-only): **523 imported
+at candidate; skipped contested 7, minted_from=prompt 1, provisional
+9**; second call 0 new / 523 already. Staged one to provisional, one to
+quarantined, one import to effective; `journal publish` → 3 B7 rows.
+`pack export` → head 534, 531 records, 499 thoughts; a second
+workspace imports 525 (the two seed policies skipped `policy 2`), then
+twice more 0 new / 525 already. Python reader probe: the projected
+file copied under a scratch `MARO_WORKSPACE/memory/`;
+`memory_ledger.load_lessons()` loads 2 (the quarantined row excluded
+by default, present with `include_contested=True` carrying
+`{reason: item_harmful, source: maro-go}`), `task_type="qa"` filter
+returns the family-tagged row.
+
+**Residuals.** (1) B7 rows for imported-then-promoted lessons carry the
+source `Why` verbatim in `imported`; that is the whole provenance the
+Python side gets — the source revision id is not a Python concept.
+(2) `times_reinforced` is always 0: the Go ledger has no reinforcement
+counter (exposures are `times_applied`); a Python reader that ranks by
+reinforcement sees a flat store. (3) Experiment records ride in the
+pack for causal history but nothing here folds them into this
+workspace's experiment ledger (they cite runs and cohorts that do not
+exist here); the pack is honest about what it carries and what an
+import does with it. (4) The Python importer treats `task_type` as
+provenance text, not a family: Go families are keyed differently, and a
+wrong family would silently narrow recall.

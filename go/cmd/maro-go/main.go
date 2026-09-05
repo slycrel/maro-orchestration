@@ -20,6 +20,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
+	"github.com/slycrel/maro-orchestration/go/internal/pack"
 	"github.com/slycrel/maro-orchestration/go/internal/process"
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -59,6 +60,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdRuns(args[1:], stdout, stderr)
 	case "learn":
 		err = cmdLearn(args[1:], stdout)
+	case "pack":
+		err = cmdPack(args[1:], stdout)
 	case "experiment":
 		err = cmdExperiment(args[1:], stdout, stderr)
 	case "serve":
@@ -81,7 +84,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | experiment open [--live --population f --n k]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] | submit [--lane now|agenda] [--ack] <goal> | interrupt <handle> --why <text> | status")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] | submit [--lane now|agenda] [--ack] <goal> | interrupt <handle> --why <text> | status")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -158,7 +161,7 @@ func cmdJournal(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		p, err := projector.New(j, projector.ThoughtsView{}, spine.OutcomesView{Store: st})
+		p, err := projector.New(j, projector.ThoughtsView{}, spine.OutcomesView{Store: st}, learn.LessonsView{Store: st})
 		if err != nil {
 			return err
 		}
@@ -732,6 +735,76 @@ func cmdStatus(out io.Writer) error {
 	}
 	for _, m := range ev.Runs {
 		fmt.Fprintf(out, "%s attempt %d  %-24s execution=%s terminal=%s closure=%s delivery=%s/%s\n", m.Handle, m.Attempt, m.Outcome, m.Execution, m.Terminal, m.Closure, m.Delivery, m.Required)
+	}
+	return nil
+}
+
+// cmdPack is the native pack envelope: export this workspace's causal
+// learning history, or import another workspace's (a pack, or a Python
+// store's lesson tiers) at candidate. Imports never carry standing.
+func cmdPack(args []string, out io.Writer) error {
+	if len(args) < 2 {
+		return fmt.Errorf("pack export <file> | import <file> [--label l] | import-python <dir> [--label l]")
+	}
+	label := ""
+	for i := 2; i < len(args); i++ {
+		if args[i] == "--label" && i+1 < len(args) {
+			label = args[i+1]
+		}
+	}
+	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
+		switch args[0] {
+		case "export":
+			f, err := os.Create(args[1])
+			if err != nil {
+				return err
+			}
+			h, err := pack.Export(j, st, label, f)
+			if err != nil {
+				f.Close()
+				return err
+			}
+			if err := f.Close(); err != nil {
+				return err
+			}
+			n := 0
+			for _, c := range h.Records {
+				n += c
+			}
+			fmt.Fprintf(out, "exported %s: head %d, %d records, %d thoughts\n", args[1], h.Head, n, h.Thoughts)
+			return nil
+		case "import":
+			f, err := os.Open(args[1])
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			if label == "" {
+				label = filepath.Base(args[1])
+			}
+			rep, err := pack.Import(context.Background(), j, st, label, f)
+			if err != nil {
+				return err
+			}
+			return printImport(out, rep)
+		case "import-python":
+			rep, err := pack.ImportPython(context.Background(), j, st, label, args[1])
+			if err != nil {
+				return err
+			}
+			return printImport(out, rep)
+		}
+		return fmt.Errorf("pack: unknown verb %q", args[0])
+	})
+}
+
+func printImport(out io.Writer, rep *pack.Report) error {
+	fmt.Fprintf(out, "%s: %s\n", rep.Label, rep)
+	for _, it := range rep.Items {
+		if it.Replayed {
+			continue
+		}
+		fmt.Fprintf(out, "  %s → item %s revision %s (candidate)\n", it.From, it.Item, it.Revision)
 	}
 	return nil
 }

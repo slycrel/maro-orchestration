@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,9 +32,21 @@ import (
 // record to its wire line. Mapping rows live in contracts/VIEWS.md.
 type View interface {
 	Name() string
+}
+
+// LineView maps records of one population to lines, in Seq order.
+type LineView interface {
+	View
 	Population() record.Envelope
 	Accepts(r record.Record) bool
 	Line(r record.Record) ([]byte, error)
+}
+
+// WholeView renders the file from the journal pinned at head: a store
+// whose rows are standing (the fold's end state), not events.
+type WholeView interface {
+	View
+	Render(j *journal.Journal, head uint64, w io.Writer) error
 }
 
 // Manifest is written inside a generation before it is renamed into place.
@@ -64,6 +77,13 @@ var (
 
 // New opens the projector over a journal with the given views.
 func New(j *journal.Journal, views ...View) (*Projector, error) {
+	for _, v := range views {
+		_, line := v.(LineView)
+		_, whole := v.(WholeView)
+		if line == whole {
+			return nil, fmt.Errorf("projector: view %s must be exactly one of LineView or WholeView", v.Name())
+		}
+	}
 	seen := map[string]bool{}
 	for _, v := range views {
 		n := v.Name()
@@ -249,11 +269,21 @@ func (p *Projector) writeView(staging string, v View, head uint64) (err error) {
 		}
 	}()
 	w := bufio.NewWriter(f)
+	if wv, ok := v.(WholeView); ok {
+		if err := wv.Render(p.j, head, w); err != nil {
+			return fmt.Errorf("view %s: %w", v.Name(), err)
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+		return f.Sync()
+	}
+	lv := v.(LineView)
 	emit := func(r record.Record) error {
-		if !v.Accepts(r) {
+		if !lv.Accepts(r) {
 			return nil
 		}
-		line, err := v.Line(r)
+		line, err := lv.Line(r)
 		if err != nil {
 			return fmt.Errorf("view %s: record %s: %w", v.Name(), r.Head().ID, err)
 		}
@@ -265,7 +295,7 @@ func (p *Projector) writeView(staging string, v View, head uint64) (err error) {
 		}
 		return nil
 	}
-	switch v.Population() {
+	switch lv.Population() {
 	case record.Production:
 		err = p.j.Production().ScanThrough(0, head, emit)
 	case record.Control:
