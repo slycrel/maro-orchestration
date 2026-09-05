@@ -459,7 +459,7 @@ func TestRenderFramesMultilineLessons(t *testing.T) {
 // refused by the fold even though the door accepts its shape.
 func TestFoldRefusesForgedRecalls(t *testing.T) {
 	j, st := openJ(t)
-	if err := EnsureSeeds(ctxBg, j); err != nil {
+	if _, err := EnsureSeeds(ctxBg, j); err != nil {
 		t.Fatal(err)
 	}
 	run := record.RunID(record.NewID())
@@ -547,7 +547,7 @@ func TestFoldRefusesForgedRecalls(t *testing.T) {
 		}
 		// each forged case poisons the fold; start clean for the next
 		j, st = openJ(t)
-		if err := EnsureSeeds(ctxBg, j); err != nil {
+		if _, err := EnsureSeeds(ctxBg, j); err != nil {
 			t.Fatal(err)
 		}
 		r1 = rev(item, "", Lesson, ScopeWorkspace, "", lessonRef(st, "one"))
@@ -581,7 +581,7 @@ func TestFoldRefusesForgedRecalls(t *testing.T) {
 // refused.
 func TestPolicyIsDataAtTheBoundary(t *testing.T) {
 	j, st := openJ(t)
-	if err := EnsureSeeds(ctxBg, j); err != nil {
+	if _, err := EnsureSeeds(ctxBg, j); err != nil {
 		t.Fatal(err)
 	}
 	run := record.RunID(record.NewID())
@@ -659,7 +659,7 @@ func TestPolicyIsDataAtTheBoundary(t *testing.T) {
 	// forged: a continuation across the policy change (attempt 1 recalled
 	// under recall-on; attempt 4 continues it under recall-off)
 	j2, st2 := openJ(t)
-	if err := EnsureSeeds(ctxBg, j2); err != nil {
+	if _, err := EnsureSeeds(ctxBg, j2); err != nil {
 		t.Fatal(err)
 	}
 	lesson2 := rev(LearnedID(record.NewID()), "", Lesson, ScopeWorkspace, "", lessonRef(st2, "cite sources"))
@@ -720,6 +720,13 @@ func TestFoldRefusesForgedPolicies(t *testing.T) {
 			sel := honest(j, 1)
 			sel.Enabled = append(sel.Enabled, ItemRev{Item: on.Item, Revision: on.ID})
 			sel.Basis = append(sel.Basis, sel.Basis[0])
+			var keep []Exclusion // the door holds the partition; the fold holds the truth
+			for _, e := range sel.Excluded {
+				if e.Item != on.Item {
+					keep = append(keep, e)
+				}
+			}
+			sel.Excluded = keep
 			return []record.Record{sel, app(sel, off, *off.Policy), app(sel, on, *on.Policy)}
 		}},
 		{"application for a revision not enabled", "is not enabled revision", func(j *journal.Journal, st *thought.Store, off, on *LearnedRevision) []record.Record {
@@ -772,11 +779,11 @@ func TestSeedsAreTheHarnessDefaultsAsData(t *testing.T) {
 	if sel := SelectPolicy(fold(t, j), Query{Scope: []ScopePath{ScopeWorkspace}, Standing: Selectable}); sel.Snapshot[MechRecall] || sel.Snapshot[MechModelJudge] || len(sel.Excluded) != 0 || len(sel.Considered) != 0 {
 		t.Fatalf("unseeded: %+v", sel)
 	}
-	if err := EnsureSeeds(ctxBg, j); err != nil {
+	if _, err := EnsureSeeds(ctxBg, j); err != nil {
 		t.Fatal(err)
 	}
 	head := j.Head()
-	if err := EnsureSeeds(ctxBg, j); err != nil || j.Head() != head {
+	if _, err := EnsureSeeds(ctxBg, j); err != nil || j.Head() != head {
 		t.Fatalf("second seeding: %v, head %d → %d", err, head, j.Head())
 	}
 	led := fold(t, j)
@@ -811,7 +818,7 @@ func TestSeedsAreTheHarnessDefaultsAsData(t *testing.T) {
 	// (each on a fresh seeded journal with the recall seed tombstoned)
 	seeded := func() *journal.Journal {
 		g, _ := openJ(t)
-		if err := EnsureSeeds(ctxBg, g); err != nil {
+		if _, err := EnsureSeeds(ctxBg, g); err != nil {
 			t.Fatal(err)
 		}
 		return g
@@ -824,25 +831,45 @@ func TestSeedsAreTheHarnessDefaultsAsData(t *testing.T) {
 		}
 		return g, s
 	}
-	for name, mutate := range map[string]func(sel *PolicySelection, seed *Item){
-		"absence proof dropped":   func(sel *PolicySelection, seed *Item) { sel.Excluded = nil },
-		"absence proof misplaced": func(sel *PolicySelection, seed *Item) { sel.Excluded[0].Basis = seed.Current.ID },
-		"absence proof restaged":  func(sel *PolicySelection, seed *Item) { sel.Excluded[0].Stage = Quarantined },
+	for _, c := range []struct {
+		name   string
+		mutate func(sel *PolicySelection, seed *Item)
+		door   string // refused at the door with this text; "" ⇒ the fold refuses it
+	}{
+		{"absence proof dropped", func(sel *PolicySelection, seed *Item) { sel.Excluded = nil }, "neither enabled nor excluded"},
+		{"absence proof misplaced", func(sel *PolicySelection, seed *Item) { sel.Excluded[0].Basis = seed.Current.ID }, ""},
+		{"absence proof restaged", func(sel *PolicySelection, seed *Item) { sel.Excluded[0].Stage = Quarantined }, ""},
+		{"absence proof citing the wrong transition", func(sel *PolicySelection, seed *Item) {
+			sel.Excluded[0].Basis = seed.Transitions[seed.Current.ID][1].ID // effective→canon, a real transition of the revision
+		}, ""},
+		{"enabled and excluded", func(sel *PolicySelection, seed *Item) {
+			sel.Enabled = append(sel.Enabled, ItemRev{Item: seed.ID, Revision: seed.Current.ID})
+			sel.Basis = append(sel.Basis, sel.Excluded[0].Basis)
+		}, "enabled or excluded twice"},
+		{"withheld by no arm", func(sel *PolicySelection, seed *Item) { sel.Excluded[0].Reason = ExcludedWithheld }, "arm the selection does not carry"},
+		{"candidate with a basis", func(sel *PolicySelection, seed *Item) { sel.Excluded[0].Stage = Candidate }, "a candidate has none"},
 	} {
 		g, seed := tombstoned()
 		sel := SelectPolicy(fold(t, g), Query{Scope: []ScopePath{ScopeWorkspace}, Standing: Selectable})
 		sel.Header = record.Header{ID: record.NewID(), RunID: run, Attempt: 9, Subject: record.Ref{Kind: "run", ID: string(run)}, At: time.Now().UTC()}
-		mutate(sel, seed)
 		recs := []record.Record{sel}
 		for i, rule := range fold(t, g).PolicyRules(sel) {
 			ir := sel.Enabled[i]
 			recs = append(recs, &PolicyApplication{Header: record.Header{ID: record.NewID(), RunID: run, Attempt: 9, Subject: record.Ref{Kind: "policy_selection", ID: string(sel.ID)}, At: time.Now().UTC()}, Item: ir.Item, Revision: ir.Revision, Selection: sel.ID, Rule: rule})
 		}
-		if err := submit(t, g, name, recs...); err != nil {
-			t.Fatalf("%s: door: %v", name, err)
+		c.mutate(sel, seed)
+		err := submit(t, g, c.name, recs...)
+		if c.door != "" {
+			if err == nil || !strings.Contains(err.Error(), c.door) {
+				t.Fatalf("%s: door: %v (want %q)", c.name, err, c.door)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: refused at the door (fixture bug): %v", c.name, err)
 		}
 		if _, err := Fold(g.Production()); err == nil || !strings.Contains(err.Error(), "does not re-derive") {
-			t.Fatalf("%s: folded: %v", name, err)
+			t.Fatalf("%s: folded: %v", c.name, err)
 		}
 	}
 	// forged seed histories
@@ -858,45 +885,112 @@ func TestSeedsAreTheHarnessDefaultsAsData(t *testing.T) {
 		return r, []*LifecycleTransition{a, b}
 	}
 	for _, f := range []struct {
-		name string
-		recs func(g *journal.Journal) []record.Record
-		want string
+		name     string
+		recs     func(g *journal.Journal) []record.Record
+		want     string
+		door     bool // refused at the door; otherwise the record lands and the FOLD refuses the history
+		unseeded bool // on a journal without the seeds (the forgery arrives first)
 	}{
 		{"a second seed for a mechanism", func(g *journal.Journal) []record.Record {
 			r, trs := mk(MechModelJudge, true)
 			return []record.Record{r, trs[0], trs[1]}
-		}, "a second seed"},
+		}, "a second seed", false, false},
 		{"a seed that turns its mechanism off", func(g *journal.Journal) []record.Record {
 			r, _ := mk(MechRecall, false)
 			return []record.Record{r}
-		}, "turning its mechanism on"},
+		}, "turning its mechanism on", false, false},
 		{"a seed revised", func(g *journal.Journal) []record.Record {
 			s := fold(t, g).Seed(MechModelJudge)
 			r := rev(s.ID, s.Current.ID, Policy, ScopeWorkspace, "", thought.Ref{})
 			r.Policy = &PolicyRule{Mechanism: MechModelJudge, Enabled: false}
 			return []record.Record{r}
-		}, "never revised"},
+		}, "never revised", false, false},
 		{"the seed actor on an operator revision", func(g *journal.Journal) []record.Record {
 			r := rev(LearnedID(record.NewID()), "", Policy, ScopeWorkspace, "", thought.Ref{})
 			x := tr(r.Item, r.ID, Candidate, Effective)
 			x.Actor, x.Evidence = ActorSeed, r.ID
 			return []record.Record{r, x}
-		}, "not a seed revision citing itself"},
+		}, "not a seed revision", false, false},
 		{"a seed transition citing other evidence", func(g *journal.Journal) []record.Record {
 			s := fold(t, g).Seed(MechModelJudge)
 			x := tr(s.ID, s.Current.ID, Canon, Tombstone)
 			x.Actor, x.Evidence = ActorSeed, s.Current.ID
-			return []record.Record{x} // refused at the door: the edge
-		}, "seed may only move"},
+			return []record.Record{x}
+		}, "seed may only move", true, false},
+		{"the seed actor demoting a seed", func(g *journal.Journal) []record.Record {
+			s := fold(t, g).Seed(MechModelJudge)
+			x := tr(s.ID, s.Current.ID, Canon, Contested)
+			x.Actor, x.Evidence = ActorSeed, s.Current.ID
+			return []record.Record{x}
+		}, "seed may only move", true, false},
+		{"an operator promoting a seed-provenance revision", func(g *journal.Journal) []record.Record {
+			// the forgery the provenance alone would allow: a hand-written
+			// "seed" made canon by operator edges — never selectable
+			item := LearnedID(record.NewID())
+			r := rev(item, "", Policy, ScopeWorkspace, "", thought.Ref{})
+			r.Policy = &PolicyRule{Mechanism: MechRecall, Enabled: true}
+			r.Provenance = Provenance{Source: SourceSeed, Why: "forged"}
+			return []record.Record{r, tr(item, r.ID, Candidate, Effective)}
+		}, "a seed's promotion is the seed actor's edge", false, true},
+		{"the seed actor promoting on the wrong edge", func(g *journal.Journal) []record.Record {
+			item := LearnedID(record.NewID())
+			r := rev(item, "", Policy, ScopeWorkspace, "", thought.Ref{})
+			r.Policy = &PolicyRule{Mechanism: MechRecall, Enabled: true}
+			r.Provenance = Provenance{Source: SourceSeed, Why: "forged"}
+			x := tr(item, r.ID, Candidate, Provisional)
+			x.Actor, x.Evidence = ActorSeed, r.ID
+			return []record.Record{r, x}
+		}, "seed may only move", true, true},
 	} {
 		g := seeded()
+		if f.unseeded {
+			g, _ = openJ(t)
+		}
 		recs := f.recs(g)
 		err := submit(t, g, f.name, recs...)
-		if err == nil {
-			_, err = Fold(g.Production())
+		if f.door {
+			if err == nil || !strings.Contains(err.Error(), f.want) {
+				t.Fatalf("%s: door: %v (want %q)", f.name, err, f.want)
+			}
+			continue
 		}
-		if err == nil || !strings.Contains(err.Error(), f.want) {
-			t.Fatalf("%s: %v (want %q)", f.name, err, f.want)
+		if err != nil {
+			t.Fatalf("%s: refused at the door (fixture bug): %v", f.name, err)
 		}
+		if _, err := Fold(g.Production()); err == nil || !strings.Contains(err.Error(), f.want) {
+			t.Fatalf("%s: folded: %v (want %q)", f.name, err, f.want)
+		}
+	}
+	// a workspace seeded by an older binary: the mechanism it did not know
+	// gets its seed from the next EnsureSeeds; nothing else is written
+	g, _ := openJ(t)
+	if _, err := g.Submit(ctxBg, journal.Command{IdempotencyKey: SeedKeyFor(MechRecall), Epoch: g.Epoch(), Records: SeedRecordsFor(MechRecall)}); err != nil {
+		t.Fatal(err)
+	}
+	before := g.Head()
+	led2, err := EnsureSeeds(ctxBg, g)
+	if err != nil || led2.Seed(MechRecall) == nil || led2.Seed(MechModelJudge) == nil || g.Head() != before+3 {
+		t.Fatalf("backfill: %v, head %d → %d", err, before, g.Head())
+	}
+	if _, err := EnsureSeeds(ctxBg, g); err != nil || g.Head() != before+3 {
+		t.Fatalf("backfill twice: %v, head %d", err, g.Head())
+	}
+	// a forged seed-provenance candidate written before the seeds: it IS
+	// the mechanism's seed (never selectable — nobody promotes it), the
+	// honest seed is not written beside it, and the selection says why the
+	// mechanism is off
+	g, _ = openJ(t)
+	forged := rev(LearnedID(record.NewID()), "", Policy, ScopeWorkspace, "", thought.Ref{})
+	forged.Policy = &PolicyRule{Mechanism: MechRecall, Enabled: true}
+	forged.Provenance = Provenance{Source: SourceSeed, Why: "forged"}
+	if err := submit(t, g, "forged", forged); err != nil {
+		t.Fatal(err)
+	}
+	led3, err := EnsureSeeds(ctxBg, g)
+	if err != nil || led3.Seed(MechRecall) == nil || led3.Seed(MechRecall).Current.ID != forged.ID || led3.Seed(MechModelJudge) == nil {
+		t.Fatalf("forged first: %v %+v", err, led3.Seed(MechRecall))
+	}
+	if sel := SelectPolicy(led3, Query{Scope: []ScopePath{ScopeWorkspace}, Standing: Selectable}); sel.Snapshot[MechRecall] || !sel.Snapshot[MechModelJudge] || len(sel.Excluded) != 1 || sel.Excluded[0] != (Exclusion{Item: forged.Item, Revision: forged.ID, Stage: Candidate, Reason: ExcludedStanding}) {
+		t.Fatalf("forged seed selection: %+v", sel)
 	}
 }

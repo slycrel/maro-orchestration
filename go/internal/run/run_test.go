@@ -1430,7 +1430,7 @@ func TestPolicyBoundaryIsConsumed(t *testing.T) {
 	}
 	// forged: an attempt whose config disagrees with its policy selection
 	h3 := open(t)
-	if err := learn.EnsureSeeds(ctxBg, h3.j); err != nil {
+	if _, err := learn.EnsureSeeds(ctxBg, h3.j); err != nil {
 		t.Fatal(err)
 	}
 	ref, _ := h3.st.Put(thought.Goal, []byte("q?"))

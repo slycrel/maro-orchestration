@@ -119,8 +119,8 @@ func Open(ctx context.Context, j *journal.Journal, store *thought.Store, spec Sp
 	if it == nil || !hasRevision(it, spec.Hypothesis.Revision) {
 		return nil, fmt.Errorf("%w: hypothesis %s/%s is not a learned revision", ErrConfig, spec.Hypothesis.Item, spec.Hypothesis.Revision)
 	}
-	if spec.Relation == AblateItem && !learn.Selectable[it.StageOf(spec.Hypothesis.Revision)] {
-		return nil, fmt.Errorf("%w: ablate withholds a selectable revision; %s/%s is %s, so both arms would run without it", ErrConfig, spec.Hypothesis.Item, spec.Hypothesis.Revision, it.StageOf(spec.Hypothesis.Revision))
+	if err := armsDiffer(st.Runs.Learned, spec.Hypothesis, spec.Relation, family); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrConfig, err)
 	}
 	// the fishing guard, as the fold applies it
 	if prior := st.openFor(spec.Hypothesis, family); prior != nil {
@@ -172,6 +172,9 @@ func Admit(j *journal.Journal, store *thought.Store) run.AdmitFunc {
 			if it := st.Runs.Learned.Items[x.Hypothesis.Item]; it == nil || it.Current.ID != x.Hypothesis.Revision {
 				continue // stale: production intake is never blocked by an experiment
 			}
+			if armsDiffer(st.Runs.Learned, x.Hypothesis, x.Relation, x.Population) != nil {
+				continue // degenerate since it opened (staged, overridden): the arms would not differ
+			}
 			ordinal := len(st.byUnit[id])
 			first := ""
 			if ordinal%2 == 1 {
@@ -187,6 +190,51 @@ func Admit(j *journal.Journal, store *thought.Store) run.AdmitFunc {
 		// unrelated journal traffic
 		return nil, nil, nil
 	}
+}
+
+// armsDiffer is the condition under which an experiment measures anything:
+// apply forces a revision production does not select, so the revision
+// must not be selectable; ablate withholds one production does select, so
+// it must be selectable AND, for a policy item, deciding — withholding it
+// must change its mechanism's snapshot over the population (a seed that an
+// operator policy already overrides decides nothing, and tombstoning it
+// on an "equivalent" would be evidence about nothing).
+func armsDiffer(led *learn.Ledger, hyp learn.ItemRev, rel Relation, population string) error {
+	it := led.Items[hyp.Item]
+	if it == nil {
+		return fmt.Errorf("hypothesis %s is not in the learned population", hyp.Item)
+	}
+	stage := it.StageOf(hyp.Revision)
+	switch rel {
+	case ApplyItem:
+		if learn.Selectable[stage] {
+			return fmt.Errorf("apply forces a revision production does not select; %s/%s is %s, so both arms would run with it", hyp.Item, hyp.Revision, stage)
+		}
+	case AblateItem:
+		if !learn.Selectable[stage] {
+			return fmt.Errorf("ablate withholds a selectable revision; %s/%s is %s, so both arms would run without it", hyp.Item, hyp.Revision, stage)
+		}
+		if rev := revisionOf(it, hyp.Revision); rev != nil && rev.LearnedKind == learn.Policy && rev.Policy != nil {
+			q := learn.Query{Scope: []learn.ScopePath{learn.ScopeWorkspace}, Family: population, Standing: learn.Selectable}
+			base := learn.SelectPolicy(led, q)
+			q.Arm = &learn.ArmRef{Arm: Treatment, Withhold: []learn.ItemRev{hyp}}
+			without := learn.SelectPolicy(led, q)
+			m := rev.Policy.Mechanism
+			if base.Snapshot[m] == without.Snapshot[m] {
+				return fmt.Errorf("ablate withholds a deciding policy; %s/%s does not decide %s over %s (another selectable policy does), so both arms would run the same", hyp.Item, hyp.Revision, m, population)
+			}
+		}
+	}
+	return nil
+}
+
+func revisionOf(it *learn.Item, id record.RecordID) *learn.LearnedRevision {
+	for _, r := range it.Revisions {
+		if r.ID == id {
+			return r
+		}
+	}
+	return nil
 }
 
 // armRef is the arm's forced sets as the goal and the selections carry them.

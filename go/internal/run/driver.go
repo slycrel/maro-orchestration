@@ -267,10 +267,7 @@ func (d *Driver) judge(a *AttemptState) invoke.Backend {
 func (d *Driver) policy(ctx context.Context, rs *RunState, n uint32) (*learn.PolicySelection, []record.Record, error) {
 	// the harness defaults are data: seeded once per workspace, here,
 	// before the first selection that could read them
-	if err := learn.EnsureSeeds(ctx, d.J); err != nil {
-		return nil, nil, err
-	}
-	led, err := learn.Fold(d.J.Production())
+	led, err := learn.EnsureSeeds(ctx, d.J)
 	if err != nil {
 		return nil, nil, err
 	}

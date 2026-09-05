@@ -676,7 +676,13 @@ func TestOpenRefusesBadUnits(t *testing.T) {
 	if _, err := Close(ctxBg, h.j, h.st, x.ID); err != nil {
 		t.Fatal(err)
 	}
-	// a re-open is version 2 citing the prior attestation, and it runs
+	// a re-open is version 2 citing the prior attestation, and it runs —
+	// on a revision production does not select (the operator tombstoned
+	// the effective lesson; applying a selectable one is refused)
+	if _, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: s.helpful, Relation: ApplyItem, Units: []UnitSpec{{Goal: s.everest[0], Fixture: fx}}, Why: "w"}); !errors.Is(err, ErrConfig) {
+		t.Errorf("apply on an effective revision: %v", err)
+	}
+	h.stage(s.helpful, learn.Effective, learn.Tombstone)
 	x2 := s.open(t, s.helpful, s.everest, "8,849 meters")
 	if x2.Version != 2 || x2.Prior != h.state().Attestations[x.ID].ID {
 		t.Fatalf("re-open: %+v", x2)

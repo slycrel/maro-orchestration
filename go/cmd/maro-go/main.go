@@ -449,7 +449,7 @@ func cmdLearn(args []string, out io.Writer) error {
 		return fmt.Errorf("learn needs add|stage|list")
 	}
 	return withJournal(out, func(j *journal.Journal, st *thought.Store) error {
-		if err := learn.EnsureSeeds(context.Background(), j); err != nil {
+		if _, err := learn.EnsureSeeds(context.Background(), j); err != nil {
 			return err
 		}
 		head := j.Head() // the fold below reads exactly this much; a transition is submitted against it

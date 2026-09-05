@@ -10,6 +10,19 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 )
 
+// policy commits an operator policy item at a stage.
+func (h *harness) policy(m learn.Mechanism, enabled bool, stage learn.Stage) learn.ItemRev {
+	h.t.Helper()
+	item := learn.LearnedID(record.NewID())
+	r := &learn.LearnedRevision{Header: record.Header{ID: record.NewID(), Schema: "learned_revision/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()}, Item: item, LearnedKind: learn.Policy, Scope: learn.ScopeWorkspace, Policy: &learn.PolicyRule{Mechanism: m, Enabled: enabled}, Provenance: learn.Provenance{Source: "operator", Why: "test"}}
+	recs := []record.Record{r}
+	if stage != learn.Candidate {
+		recs = append(recs, &learn.LifecycleTransition{Header: record.Header{ID: record.NewID(), Schema: "learned_transition/1", Subject: record.Ref{Kind: "learned", ID: string(item)}, At: time.Now().UTC()}, Item: item, Revision: r.ID, From: learn.Candidate, To: stage, Actor: learn.ActorOperator, Why: "test"})
+	}
+	h.submit("policy/"+string(item), recs...)
+	return learn.ItemRev{Item: item, Revision: r.ID}
+}
+
 func (h *harness) stage(ir learn.ItemRev, from, to learn.Stage) {
 	h.t.Helper()
 	h.submit("stage/"+string(ir.Revision)+"/"+string(to), &learn.LifecycleTransition{Header: record.Header{ID: record.NewID(), Schema: "learned_transition/1", Subject: record.Ref{Kind: "learned", ID: string(ir.Item)}, At: time.Now().UTC()},
@@ -104,6 +117,48 @@ func TestAblateMechanismByEvidence(t *testing.T) {
 		// a seed is never re-opened as apply: the ledger has no seed to apply
 		if _, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: hyp, Relation: AblateItem, Live: true, Population: "answer", N: 4, Why: "again"}); err == nil {
 			t.Fatal("a tombstoned seed re-ablated")
+		}
+	})
+	t.Run("an overridden seed decides nothing and is not ablated", func(t *testing.T) {
+		s := build(t)
+		h := s.h
+		h.live("What is the height of Mount Everest?", nil) // seeds
+		seed := h.state().Runs.Learned.Seed(learn.MechRecall)
+		hyp := learn.ItemRev{Item: seed.ID, Revision: seed.Current.ID}
+		off := h.policy(learn.MechRecall, false, learn.Provisional)
+		if _, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: hyp, Relation: AblateItem, Live: true, Population: "answer", N: 4, Why: "ablate recall"}); err == nil || !strings.Contains(err.Error(), "does not decide recall") {
+			t.Fatalf("ablate an overridden seed: %v", err)
+		}
+		// the override withdrawn: the seed decides again and the ablation opens
+		h.stage(off, learn.Provisional, learn.Tombstone)
+		x, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: hyp, Relation: AblateItem, Live: true, Population: "answer", N: 4, Why: "ablate recall"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// overridden again while open: admission stops, production goes on
+		off2 := h.policy(learn.MechRecall, false, learn.Provisional)
+		rs := h.live("How high is K2?", nil)
+		a := rs.Latest()
+		if rs.Goal.Arm != nil || a.Attempt.Config.Mechanisms[learn.MechRecall] || a.Policy.Enabled[len(a.Policy.Enabled)-1] != off2 || len(h.state().byUnit[x.ID]) != 0 {
+			t.Fatalf("admitted under an overridden seed: arm %+v policy %+v", rs.Goal.Arm, a.Policy)
+		}
+	})
+	t.Run("apply on a selectable revision is refused", func(t *testing.T) {
+		s := build(t)
+		h := s.h
+		h.stage(s.helpful, learn.Candidate, learn.Effective)
+		if _, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "answer", N: 4, Why: "apply"}); err == nil || !strings.Contains(err.Error(), "both arms would run with it") {
+			t.Fatalf("apply on an effective lesson: %v", err)
+		}
+		// opened as a candidate, then staged: admission stops
+		x, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: s.harmful, Relation: ApplyItem, Live: true, Population: "answer", N: 4, Why: "apply"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.stage(s.harmful, learn.Candidate, learn.Provisional)
+		rs := h.live("How high is K2?", nil)
+		if rs.Goal.Arm != nil || len(h.state().byUnit[x.ID]) != 0 {
+			t.Fatalf("admitted to apply a selectable revision: %+v", rs.Goal.Arm)
 		}
 	})
 	t.Run("harmful ablation keeps the seed", func(t *testing.T) {

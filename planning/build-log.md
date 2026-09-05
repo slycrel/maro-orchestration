@@ -1595,3 +1595,67 @@ binary's defaults, so a "learned off" does not travel (portable learning
 is a later step). Only two mechanisms exist; the seed set grows with
 `learn.Mechanisms`, and the samples check pins that every mechanism has
 a seed.
+
+**Review round (Skeptic + Expert QA on codex, one pass; every finding
+verified in the tree before fixing).** Nine distinct findings, seven
+fixed same round, one refuted, one out of scope:
+
+- A (both, high) — ablating a seed that an operator policy already
+  overrides: both arms ran the same and an "equivalent" tombstoned the
+  seed on evidence about nothing. FIXED: `experiment.armsDiffer` — at
+  `Open` and at every `Admit`, an ablated POLICY item must be deciding
+  (withholding it must change its mechanism's snapshot over the
+  population); an overridden seed refuses to open and stops admitting.
+  The fold cannot re-execute "deciding at open" (it has no ledger as of
+  the open) — residual, stated in the fold.
+- B (both, high) — seed identity was provenance alone: a hand-written
+  `source: seed` revision promoted by operator edges became THE seed,
+  and the honest seed command then bricked the fold as "a second seed".
+  FIXED: a seed's promotion (from candidate, from effective) is the seed
+  actor's exact edge citing the revision — no other actor promotes a
+  seed, so a forged seed never becomes selectable; and `EnsureSeeds`
+  folds first and writes only the mechanisms that have NO seed, so a
+  forged candidate seed stays what it is (unselectable, its mechanism
+  off with the candidate as the absence proof) and nothing bricks.
+- C (both, high) — one fixed idempotency key for all seeds: a mechanism
+  added by a later binary hid behind the old ack forever. FIXED: one key
+  per mechanism (`learn/seed/<m>/1`), fold-driven backfill; pinned by
+  the older-binary case in `TestSeedsAreTheHarnessDefaultsAsData`.
+- D (Skeptic, medium) — `apply` on an already-selectable revision is the
+  symmetric degenerate. FIXED at `Open`, at `Admit`, and in the fold
+  (point-in-time off the transition seqs); the re-open test now
+  tombstones the lesson first.
+- E (QA, medium) — the contract sample had one revision both enabled and
+  excluded, and the door validated exclusion fields independently.
+  FIXED: sample corrected; door partition rules (every considered item
+  enabled or excluded exactly once; `arm:withheld` needs the selection's
+  arm and its assignment as basis; a candidate's standing exclusion has
+  no basis, any other stage cites a transition). Door cases added.
+- F (Skeptic, medium) — seed-forgery tests did not distinguish door from
+  fold refusal, so a fold rule shadowed by the door was untested. FIXED:
+  each case declares which surface refuses it; the fold cases land and
+  the fold refuses the history. `Why` on seed transitions stays
+  unconstrained (any non-empty text) — narrowed claim, not a rule.
+- G (Skeptic, low) — `EnsureSeeds` on every attempt built records and took
+  the sequencer lock. FIXED: it folds (the driver needed that fold
+  anyway) and submits nothing when every mechanism has a seed.
+- H (Skeptic, high) — a hypothesis superseded between intake and attempt
+  start would run an arm that administers nothing and "report
+  equivalence". REFUTED: `exposed(a, hyp)` makes such a row unexposed,
+  per-protocol counts drop it, and the cohort closes `insufficient`
+  (the stale residual of 11a, not a false verdict); a seed cannot be
+  revised at all.
+- I (QA, medium) — after a harmful ablation the seed stays canon and a
+  new version can be opened at once; nothing bounds re-sampling until
+  noise says "equivalent". OUT OF SCOPE for 11b (the fishing guard's
+  versioning is 10b/11a design; "sequential stopping" was cut in 11a) —
+  lead queued: a stopping rule or an accumulated estimator across
+  versions of one hypothesis.
+
+Live re-check after the fixes (fresh scratch workspace, haiku): seeds
+listed per mechanism; `learn add --policy recall=off` staged provisional
+makes `experiment open --mechanism recall --relation ablate` refuse
+("does not decide recall over answer"); tombstoning the override opens
+it; four submits c/t/c/t (`policy 2 of 3 enabled · recall 1 included of
+4 · applied 1` vs `1 of 3 · 0 of 4`); evaluator `equivalent →
+item_redundant`; seed tombstone; fifth submit `1 of 3 · 0 of 4`.

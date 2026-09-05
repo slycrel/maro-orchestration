@@ -244,7 +244,7 @@ func experimentOpen(args []string, j *journal.Journal, st *thought.Store, out io
 	if (item == "") == (mechanism == "") {
 		return fmt.Errorf("experiment open needs --item <learned id> or --mechanism <m>")
 	}
-	if err := learn.EnsureSeeds(context.Background(), j); err != nil {
+	if _, err := learn.EnsureSeeds(context.Background(), j); err != nil {
 		return err
 	}
 	led, err := learn.Fold(j.Production())

@@ -179,6 +179,38 @@ func (r *PolicySelection) ValidateWire() error {
 	if err := r.Arm.validate(); err != nil {
 		return fmt.Errorf("policy_selection: %w", err)
 	}
+	// the partition: every considered item is enabled or excluded, never
+	// both; an absence proof's basis matches its reason and stage
+	considered := map[LearnedID]bool{}
+	for _, ir := range r.Considered {
+		considered[ir.Item] = true
+	}
+	seen := map[LearnedID]bool{}
+	for _, ir := range r.Enabled {
+		if !considered[ir.Item] || seen[ir.Item] {
+			return fmt.Errorf("policy_selection: enabled item %s is not considered exactly once", ir.Item)
+		}
+		seen[ir.Item] = true
+	}
+	for _, e := range r.Excluded {
+		if !considered[e.Item] || seen[e.Item] {
+			return fmt.Errorf("policy_selection: excluded item %s is enabled or excluded twice, or not considered", e.Item)
+		}
+		seen[e.Item] = true
+		switch e.Reason {
+		case ExcludedWithheld:
+			if r.Arm == nil || e.Basis != r.Arm.Assignment {
+				return fmt.Errorf("policy_selection: excluded item %s is withheld by an arm the selection does not carry", e.Item)
+			}
+		case ExcludedStanding:
+			if (e.Stage == Candidate) != (e.Basis == "") {
+				return fmt.Errorf("policy_selection: excluded item %s at %s has basis %q; a candidate has none, anything else cites the transition", e.Item, e.Stage, e.Basis)
+			}
+		}
+	}
+	if len(seen) != len(r.Considered) {
+		return errors.New("policy_selection: a considered item is neither enabled nor excluded")
+	}
 	return nil
 }
 
