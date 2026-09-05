@@ -462,13 +462,20 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 		case *verdict.Verdict:
 			verdicts[x.ID] = x
 			if x.RunID != "" {
-				if a := attemptNoErr(runs, x.RunID, x.Attempt); a != nil {
-					if err := checkJudgeVerdict(runs[x.RunID], a, x, inv, learned, store, forks, runs); err != nil {
-						return err
-					}
-					a.Verdicts = append(a.Verdicts, x)
-					a.touch(x)
+				// a run-scoped verdict is checked against the attempt it
+				// names as it arrives; one that arrives before that attempt
+				// exists would skip the check and stay citable, so it is
+				// refused — no writer of this engine journals a verdict
+				// ahead of the attempt it judges
+				a := attemptNoErr(runs, x.RunID, x.Attempt)
+				if a == nil {
+					return fmt.Errorf("run: verdict %s names %s attempt %d, which does not exist yet", x.ID, x.RunID, x.Attempt)
 				}
+				if err := checkJudgeVerdict(runs[x.RunID], a, x, inv, learned, store, forks, runs); err != nil {
+					return err
+				}
+				a.Verdicts = append(a.Verdicts, x)
+				a.touch(x)
 			}
 		case *verdict.Observation:
 			observations[x.ID] = x

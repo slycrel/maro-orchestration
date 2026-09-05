@@ -610,3 +610,23 @@ func TestFoldRefusesBackendSwapInHistory(t *testing.T) {
 		t.Fatalf("non-canonical policy on an attempt accepted: %v", err)
 	}
 }
+
+// A run-scoped verdict that arrives before the attempt it names would skip
+// checkJudgeVerdict and stay citable by a later resolution (a reviewer's
+// out-of-scope lead, item 1 round): refused as it arrives.
+func TestFoldRefusesVerdictBeforeItsAttempt(t *testing.T) {
+	h := open(t)
+	if _, err := h.driver(scripted(toolless, invoke.ScriptedCall{Response: []byte("Paris.")}), nil).Run(ctxBg, []byte("What is the capital of France?"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	rs := h.only()
+	vs := h.verdicts(t, rs.Run)
+	if len(vs) == 0 {
+		t.Fatal("no verdicts")
+	}
+	v := *vs[0]
+	v.ID, v.Seq, v.Attempt = record.NewID(), 0, 5
+	if err := forge(t, h, "vfwd", &v); err == nil || !strings.Contains(err.Error(), "does not exist yet") {
+		t.Fatalf("verdict ahead of its attempt folded: %v", err)
+	}
+}

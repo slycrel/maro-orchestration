@@ -2070,3 +2070,13 @@ the reviewers could not run `go test` (read-only sandbox) and named
 the tests; every test above ran here. Residual added: (5) the
 `Recorded`-sweep `checkBackend` is redundant defense behind the
 attach-time one and no mutation kills it alone.
+
+**Lead (F) closed the same day.** The out-of-scope verdict-ordering
+lead was a one-line rule and every suite passed under it: a run-scoped
+verdict that names an attempt not yet in the fold is refused as it
+arrives ("does not exist yet") instead of being kept, unchecked, in the
+verdict map; no writer of this engine journals a verdict ahead of the
+attempt it judges. Fixture `TestFoldRefusesVerdictBeforeItsAttempt`
+(a copy of an honest closure verdict re-addressed to attempt 5). Lead
+(G), resolution completeness against the committed candidate set, is
+a resolver-design question and stays open.
