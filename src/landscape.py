@@ -36,8 +36,21 @@ log = logging.getLogger("maro.landscape")
 FLOOR = 0.2
 TOP_K = 3
 RELATED_HEAD = 2000
-SCAN_CAP = 200
-PROMPT_VER = 2
+SCAN_CAP = 200          # eligible finished runs considered (newest first)
+PROMPT_VER = 3          # template 2's text; the answer read strictly (review 2026-09-05)
+
+# A prior run is a candidate when it RAN TO AN END: every terminal status the
+# lifecycle writes (run_curation's success / partial / fail vocabularies),
+# shown to the judge as the candidate's outcome — a failed prior is
+# landscape information too (same as the Go engine, whose watermark covers
+# delivered and delivery-failed runs). A run still running, or one whose
+# status is not a word the lifecycle writes, is not.
+TERMINAL_STATUSES = frozenset({
+    "done", "complete", "completed",             # success
+    "partial", "restart", "incomplete",           # partial
+    "stuck", "error", "failed", "blocked",        # fail
+    "killed", "cancelled", "canceled", "timeout", # interrupted
+})
 
 RELATIONS = ("fresh", "related", "rerun")
 RULE_JUDGE = "judge"
@@ -53,6 +66,7 @@ RELATED_BY = "landscape"
 _CONTRACT = {
     1: '{"relation": "fresh" | "related" | "rerun", "run": "<candidate number, or 0 for fresh>", "reason": "<one sentence>"}',
     2: '{"relation": "fresh" | "related" | "rerun", "run": <the candidate\'s number (1, 2, …) or its run id, or 0 for fresh>, "reason": "<one sentence>"}',
+    3: '{"relation": "fresh" | "related" | "rerun", "run": <the candidate\'s number (1, 2, …) or its run id, or 0 for fresh>, "reason": "<one sentence>"}',
 }
 
 
@@ -81,20 +95,32 @@ def candidates(goal: str, *, exclude_handle_id: str = "") -> Tuple[List[dict], i
     """Scan the workspace's finished runs for the top-K at or above the floor,
     by similarity then by handle (deterministic). Returns (candidates,
     scanned, below_floor). A run that has not ended, a dry run, and the
-    goal's own run are not candidates."""
+    goal's own run are not candidates. The cap counts ELIGIBLE runs, newest
+    first, so unrelated directories never push a finished run out of view
+    (review 2026-09-05); when more eligible runs exist than the cap, the
+    record says so (`truncated` on the decision)."""
+    cands, scanned, below, _ = _candidates(goal, exclude_handle_id=exclude_handle_id)
+    return cands, scanned, below
+
+
+def _candidates(goal: str, *, exclude_handle_id: str = "") -> Tuple[List[dict], int, int, bool]:
     from runs import runs_root
 
     root = runs_root()
     if not root.is_dir():
-        return [], 0, 0
+        return [], 0, 0, False
     try:
         dirs = sorted((d for d in root.iterdir() if d.is_dir()),
                       key=lambda d: d.stat().st_mtime, reverse=True)
     except OSError:
-        return [], 0, 0
+        return [], 0, 0, False
     scanned = below = 0
+    truncated = False
     found: List[dict] = []
-    for rd in dirs[:SCAN_CAP]:
+    for rd in dirs:
+        if scanned >= SCAN_CAP:
+            truncated = True
+            break
         meta = _read_meta(rd)
         if not meta:
             continue
@@ -102,7 +128,8 @@ def candidates(goal: str, *, exclude_handle_id: str = "") -> Tuple[List[dict], i
         if exclude_handle_id and hid == exclude_handle_id:
             continue
         prompt = str(meta.get("prompt") or "")
-        if not prompt or not meta.get("status") or not meta.get("ended_at") or meta.get("dry_run"):
+        status = str(meta.get("status") or "").strip().lower()
+        if not prompt or status not in TERMINAL_STATUSES or not meta.get("ended_at") or meta.get("dry_run"):
             continue
         scanned += 1
         sim = similarity(goal, prompt)
@@ -110,11 +137,11 @@ def candidates(goal: str, *, exclude_handle_id: str = "") -> Tuple[List[dict], i
             below += 1
             continue
         found.append({"handle_id": hid, "goal": prompt, "similarity": round(sim, 4),
-                      "status": str(meta.get("status") or ""), "run_dir": str(rd)})
+                      "status": status, "run_dir": str(rd)})
     # by similarity descending, then handle descending (stable two-pass sort)
     found.sort(key=lambda c: c["handle_id"], reverse=True)
     found.sort(key=lambda c: c["similarity"], reverse=True)
-    return found[:TOP_K], scanned, below
+    return found[:TOP_K], scanned, below, truncated
 
 
 def answer_head(handle_id: str, run_dir: Optional[str] = None, *, head: int = RELATED_HEAD) -> str:
@@ -165,11 +192,22 @@ def parse(text: str, cands: List[dict], *, ver: int = PROMPT_VER) -> Tuple[str, 
     if rel not in RELATIONS:
         raise ValueError(f"relation {a.get('relation')!r} out of vocabulary")
     reason = str(a.get("reason") or "").strip()
-    if rel == "fresh":
-        return rel, "", reason
+    strict = (ver or 1) >= 3
     run = a.get("run")
+    if rel == "fresh":
+        # under the strict contract a fresh answer names no candidate: a
+        # fresh that names one is contradictory evidence, not fresh
+        if strict and run not in (None, 0, "0", "") and not (isinstance(run, float) and run == 0):
+            raise ValueError(f"fresh names candidate {run!r}")
+        return rel, "", reason
     n = 0
-    if isinstance(run, (int, float)) and not isinstance(run, bool):
+    if isinstance(run, bool):
+        n = 0
+    elif isinstance(run, int):
+        n = run
+    elif isinstance(run, float):
+        if strict and run != int(run):
+            raise ValueError(f"{rel} names candidate {run!r}, which is not a whole number")
         n = int(run)
     elif isinstance(run, str):
         v = run.strip()
@@ -198,8 +236,10 @@ def decide(goal: str, *, handle_id: str, adapter=None, fresh: bool = False,
         if why:
             rec["reason"] = why
         return rec
-    cands, scanned, below = candidates(goal, exclude_handle_id=handle_id)
+    cands, scanned, below, truncated = _candidates(goal, exclude_handle_id=handle_id)
     rec["scanned"], rec["below_floor"] = scanned, below
+    if truncated:
+        rec["truncated"] = True
     rec["candidates"] = [{k: c[k] for k in ("handle_id", "goal", "similarity", "status")} for c in cands]
     if not cands:
         rec["rule"] = RULE_NO_CANDIDATES
@@ -243,14 +283,21 @@ def apply(handle_id: str, origin: Optional[dict], rec: Dict[str, Any]) -> Option
     from runs import stamp_run_metadata_for
     out = dict(origin or {})
     if rec.get("relation") in ("related", "rerun") and rec.get("chosen"):
-        prior_goal = next((c["goal"] for c in rec.get("candidates", []) if c["handle_id"] == rec["chosen"]), "")
-        out.update({"parent_handle_id": rec["chosen"], "parent_goal": prior_goal[:200],
+        prior = next((c for c in rec.get("candidates", []) if c.get("handle_id") == rec["chosen"]), None)
+        if prior is None:
+            # the chosen run must be one the record shows the judge — a
+            # record that names another is not a decision this run made
+            raise ValueError(f"landscape names {rec['chosen']}, which is not one of its candidates")
+        out.update({"parent_handle_id": rec["chosen"], "parent_goal": str(prior.get("goal") or "")[:200],
                     "related_by": RELATED_BY, "relation": rec["relation"]})
         out.setdefault("source", "cli")
     fields: Dict[str, Any] = {"landscape": rec}
     if out:
         fields["origin"] = out
-    stamp_run_metadata_for(handle_id, fields)
+    if stamp_run_metadata_for(handle_id, fields) is None:
+        # the decision is recorded or it is not a decision: an unrecorded
+        # lineage must not drive the run (review 2026-09-05)
+        raise RuntimeError(f"landscape for {handle_id} could not be recorded")
     return out or None
 
 

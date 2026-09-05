@@ -1328,15 +1328,23 @@ def _handle_impl(
                       file=sys.stderr, flush=True)
         except Exception as _land_exc:
             # The decision is recorded even when the stage itself fails: an
-            # unreadable landscape is fresh, and the run is not blocked on it.
-            log.debug("landscape: stage failed: %s", _land_exc)
+            # unreadable landscape is fresh, and the run is not blocked on
+            # it. Nothing the failed stage derived drives the run: the
+            # origin stays what the caller gave (apply's result is only
+            # bound on success) and the related context is still "" (it is
+            # rendered last). If even the fresh record cannot be written,
+            # the run proceeds as a pre-landscape run would, and says so.
+            log.warning("landscape: stage failed, running fresh: %s", _land_exc)
+            _fallback = None
             try:
                 from runs import stamp_run_metadata_for as _stamp_land
-                _stamp_land(handle_id, {"landscape": {
+                _fallback = _stamp_land(handle_id, {"landscape": {
                     "rule": "judge_unreadable", "relation": "fresh",
                     "reason": f"stage failed: {str(_land_exc)[:200]}"}})
-            except Exception:
-                pass
+            except Exception as _stamp_exc:
+                log.warning("landscape: fresh record not written either: %s", _stamp_exc)
+            if _fallback is None:
+                log.warning("landscape: %s runs with NO landscape record (metadata not writable)", handle_id)
 
     # Classify intent
     introspects_self = False
@@ -2168,7 +2176,11 @@ def _handle_impl(
         # to — so origin-walk and ancestry.json stop being two disagreeing
         # sources. First fork wins; parent identity derives from parent_goal
         # via the same _default_project_for the parent's own loop used.
-        if origin:
+        if origin and origin.get("related_by") != "landscape":
+            # A landscape-decided relation is a RUN relation (origin +
+            # recall thread carry it); it is not a project fork, so it
+            # never writes the project's ancestry.json — that file is the
+            # goal-slug channel the landscape retired (review 2026-09-05).
             try:
                 from ancestry import record_fork_ancestry
                 from orch_items import project_dir as _anc_pdir

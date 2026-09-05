@@ -482,3 +482,147 @@ class TestAgendaReadsTheLandscape:
         from runs import run_dir
         meta = json.loads((run_dir(r.handle_id) / "metadata.json").read_text())
         assert meta["origin"]["parent_handle_id"] == a and meta["origin"]["relation"] == "rerun"
+
+
+# ---------------------------------------------------------------------------
+# review round 2026-09-05 (Skeptic + Expert QA, codex)
+# ---------------------------------------------------------------------------
+
+class TestReviewFixes:
+    def test_only_lifecycle_terminal_statuses_are_candidates(self, monkeypatch, tmp_path):
+        # a failed prior IS landscape information (its outcome is shown);
+        # a run still running, or a status the lifecycle never writes, is not
+        _setup(monkeypatch, tmp_path)
+        from landscape import candidates, prompt
+        err = _finished_run(GOAL_QUARTERLY, status="error", handle_id="aaaa0001")
+        killed = _finished_run(GOAL_QUARTERLY, status="killed", handle_id="aaaa0002")
+        done = _finished_run(GOAL_QUARTERLY, status="done", handle_id="aaaa0003")
+        _finished_run(GOAL_QUARTERLY, status="running", handle_id="aaaa0004")     # stale ended_at
+        _finished_run(GOAL_QUARTERLY, status="Whatever", handle_id="aaaa0005")   # not a lifecycle word
+        _finished_run(GOAL_QUARTERLY, status="", handle_id="aaaa0006")
+        cands, scanned, below = candidates(GOAL_QUARTERLY)
+        assert scanned == 3 and below == 0
+        assert [c["handle_id"] for c in cands] == [done, killed, err]
+        assert [c["status"] for c in cands] == ["done", "killed", "error"]
+        assert f"(run {err}, similarity 1.00, outcome error)" in prompt(GOAL_QUARTERLY, cands)
+
+    def test_the_cap_counts_eligible_runs_not_directories(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import landscape
+        from landscape import candidates, decide
+        import os, time
+        old = _finished_run(GOAL_QUARTERLY, "the old answer", handle_id="aaaa0001")
+        rd = tmp_path / "runs"
+        t0 = time.time() - 3600
+        os.utime(next(rd.glob("aaaa0001-*")), (t0, t0))
+        # newer junk: unfinished, dry, and metadata-less directories, more than the cap
+        for i in range(landscape.SCAN_CAP + 5):
+            if i % 3 == 0:
+                _finished_run(GOAL_HAIKU, finished=False)
+            elif i % 3 == 1:
+                _finished_run(GOAL_HAIKU, dry_run=True)
+            else:
+                (rd / f"junk{i:04d}-dir").mkdir()
+        cands, scanned, below = candidates(GOAL_QUARTERLY)
+        assert [c["handle_id"] for c in cands] == [old] and scanned == 1
+        rec = decide(GOAL_QUARTERLY, handle_id="x", adapter=_Judge(_related(1)))
+        assert rec["chosen"] == old and "truncated" not in rec
+        # more ELIGIBLE runs than the cap: the newest are read, the record says it stopped
+        monkeypatch.setattr(landscape, "SCAN_CAP", 2)
+        _finished_run(GOAL_HAIKU, handle_id="bbbb0001")
+        _finished_run(GOAL_HAIKU, handle_id="bbbb0002")
+        rec = decide(GOAL_QUARTERLY, handle_id="x", adapter=_Judge())
+        assert rec["rule"] == "no_candidates" and rec["scanned"] == 2 and rec["truncated"] is True
+
+    def test_the_third_contract_reads_strictly(self):
+        from landscape import parse, PROMPT_VER
+        cands = TestParse.CANDS
+        assert PROMPT_VER == 3
+        # the second contract, as recorded, still reads as it did
+        assert parse('{"relation":"related","run":1.9,"reason":"x"}', cands, ver=2)[1] == "aaaa0001"
+        assert parse('{"relation":"fresh","run":2,"reason":"x"}', cands, ver=2)[0] == "fresh"
+        for bad in ('{"relation":"related","run":1.9,"reason":"x"}',
+                    '{"relation":"related","run":"1.9","reason":"x"}',
+                    '{"relation":"fresh","run":2,"reason":"x"}',
+                    '{"relation":"fresh","run":"aaaa0001","reason":"x"}',
+                    '{"relation":"fresh","run":[1],"reason":"x"}'):
+            with pytest.raises(ValueError):
+                parse(bad, cands)
+        assert parse('{"relation":"related","run":2.0,"reason":"x"}', cands)[1] == "aaaa0002"
+        for ok in ('{"relation":"fresh","run":0,"reason":"x"}', '{"relation":"fresh","run":"0","reason":"x"}',
+                   '{"relation":"fresh","reason":"x"}', '{"relation":"fresh","run":null,"reason":"x"}'):
+            assert parse(ok, cands) == ("fresh", "", "x")
+
+    def test_a_chosen_run_outside_the_candidates_is_no_decision(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from landscape import apply
+        from recall import lineage_root
+        b = _finished_run(GOAL_FOLLOW_UP, finished=False)
+        rec = {"rule": "judge", "relation": "related", "chosen": "zzzz9999",
+               "candidates": [{"handle_id": "aaaa0001", "goal": GOAL_QUARTERLY}]}
+        with pytest.raises(ValueError):
+            apply(b, {"source": "cli"}, rec)
+        assert lineage_root(b) == b
+        from runs import run_dir
+        assert "landscape" not in json.loads((run_dir(b) / "metadata.json").read_text())
+
+    def test_an_unrecorded_decision_does_not_drive_the_run(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        from landscape import apply, decide
+        a = _finished_run(GOAL_QUARTERLY, "Revenue rose.")
+        b = _finished_run(GOAL_FOLLOW_UP, finished=False)
+        rec = decide(GOAL_FOLLOW_UP, handle_id=b, adapter=_Judge(_related(1)))
+        monkeypatch.setattr(runs, "stamp_run_metadata_for", lambda *x, **kw: None)
+        with pytest.raises(RuntimeError):
+            apply(b, None, rec)
+
+    def test_a_failed_stage_runs_fresh_and_says_so(self, monkeypatch, tmp_path, caplog):
+        _setup(monkeypatch, tmp_path)
+        import landscape
+        from handle import handle
+        from runs import run_dir
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.")
+        monkeypatch.setattr(landscape, "apply", lambda *x, **kw: (_ for _ in ()).throw(RuntimeError("disk full")))
+        a = _NowAndJudge(_related(1))
+        with _no_hosted_free(), _classify_now():
+            r = handle(GOAL_QUARTERLY, adapter=a, force_lane="now", dry_run=False,
+                       origin={"source": "cli"})
+        assert r.status == "done"
+        meta = json.loads((run_dir(r.handle_id) / "metadata.json").read_text())
+        assert meta["landscape"] == {"rule": "judge_unreadable", "relation": "fresh",
+                                     "reason": "stage failed: disk full"}
+        assert "parent_handle_id" not in meta.get("origin", {})
+        assert "## Related prior run" not in a.calls[-1][0][-1].content
+        assert any("running fresh" in m for m in caplog.messages)
+
+    def test_a_landscape_relation_writes_no_project_ancestry(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle, _default_project_for
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        from orch_items import project_dir
+        import llm
+        a = _finished_run("Investigate the revenue ledger for the board", "Ledger reviewed.")
+        adapter = _NowAndJudge(_related(1, "same ledger"))
+        monkeypatch.setattr(llm, "build_adapter", lambda *x, **kw: adapter)
+        goal = "Audit committee review of the revenue ledger"
+        assert _default_project_for(goal) != _default_project_for("Investigate the revenue ledger for the board")
+
+        def _fake_run(g, *x, **kw):
+            return LoopResult(loop_id="l", project=kw.get("project") or "p", goal=g, status="done",
+                              stuck_reason=None, steps=[StepOutcome(index=0, text="s", status="done",
+                                                                    result="o", iteration=0)])
+        gate = MagicMock(); gate.escalate = False; gate.contested_claims = []
+        with _no_hosted_free(), patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=ClosureVerdict(complete=True, confidence=0.9, gaps=[],
+                                               summary="v", checks_run=1, checks_passed=1)), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            r = handle(goal, force_lane="agenda", dry_run=False)
+        from runs import run_dir
+        meta = json.loads((run_dir(r.handle_id) / "metadata.json").read_text())
+        assert meta["origin"]["parent_handle_id"] == a and meta["origin"]["related_by"] == "landscape"
+        assert not list(tmp_path.rglob("ancestry.json"))
