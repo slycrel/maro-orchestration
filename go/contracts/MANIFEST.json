@@ -1,6 +1,6 @@
 {
   "generator": "maro-go contracts gen v1",
-  "source_ref": "5b50de5b",
+  "source_ref": "e632ac45",
   "kinds": {
     "application": "ddab4335dd49232e8a3a7056daa72ae181e21794f25b5ab5d38a3dbd52305385",
     "assignment": "c28cdc7aef08bebb6fa3c5200385bfb624563ea012f7f079bb92284d9499f777",
@@ -14,7 +14,7 @@
     "delivery_started": "688e331b4df2d8ed6d356d1f98c7d0659d6b56640e30dc0cf9de80f9174673e3",
     "diagnosis": "eb7348b8dd26c2bf33ed28756505de4aab8e04588c46fa0592604bd193e9f9fe",
     "effect_attestation": "a7a546680c9bc08872ca2f0020a017a4f092c8fb4740ddefa2830d860ed9b6d8",
-    "effect_measurement": "5b634e95a2a3f1583d2d1def4d18d2d2fe5fc2ab673dc01f44239e8ab2b53c0d",
+    "effect_measurement": "af92eb2f59760181295b5894da929da97c6d70c3072d4dc77ec14c049e9d3b15",
     "experiment": "55b80f8a787d7146809fdf1e26096f2f0144843e7609a6fb9f3042e9f068bd9d",
     "family_assessment": "58236866fac4561129151109f0cacc0d6c3371db845a746e03bc02ca794f4bd1",
     "fork": "4172184259f577fc007ec7dd60208cbce278578644d6df0f021a63e145ecd265",

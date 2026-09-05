@@ -59,8 +59,16 @@ const (
 
 var assignmentKinds = map[AssignmentKind]bool{PairedReplay: true, RandomizedLive: true}
 
-// OracleClass: deterministic_fixture (paired replay) | blinded_evaluator
-// (randomized live). §8a: the historical closure verdict is not one.
+// OracleClass: deterministic_fixture | blinded_evaluator. §8a: the
+// historical closure verdict is not one. Paired replay always scores by
+// fixture (one per unit). Randomized live chooses at open — the oracle is
+// part of the hypothesis: a lesson that supplies a fact needs an oracle
+// that can check the fact (a fixture the protocol carries, matched against
+// every unit's deliverable), while a lesson that shapes an answer is judged
+// by the blinded evaluator, which says `unjudgeable` when the text alone
+// cannot settle it rather than guessing. The acceptance run tombstoned two
+// fact lessons the evaluator could not verify; that was the oracle's
+// competence, not the lessons' effect.
 type OracleClass string
 
 const (
@@ -139,6 +147,7 @@ type Protocol struct {
 	Analysis   AnalysisSpec    `json:"analysis"`
 	Oracle     OracleClass     `json:"oracle"`
 	Units      []UnitSpec      `json:"units"`
+	Fixture    *thought.Ref    `json:"fixture,omitempty"` // randomized live under deterministic_fixture: the one expected answer every unit's deliverable is matched against
 }
 
 func (p *Protocol) validate() error {
@@ -183,9 +192,28 @@ func (p *Protocol) validate() error {
 		if p.N < 1 || len(p.Units) != p.N {
 			return fmt.Errorf("n is %d but %d units are fixed", p.N, len(p.Units))
 		}
+		if p.Fixture != nil {
+			return errors.New("paired replay: the fixtures are the units'")
+		}
 	case RandomizedLive:
-		if p.Oracle != BlindedEvaluator || p.Outcome.Dimension != DimensionAchieved || p.Analysis.Estimator != EstimatorArms {
-			return errors.New("randomized live: oracle blinded_evaluator, dimension goal_achieved, estimator arm_diff/1")
+		if p.Analysis.Estimator != EstimatorArms {
+			return errors.New("randomized live: estimator arm_diff/1")
+		}
+		switch p.Oracle {
+		case BlindedEvaluator:
+			if p.Outcome.Dimension != DimensionAchieved || p.Fixture != nil {
+				return errors.New("randomized live under the blinded evaluator: dimension goal_achieved, no fixture")
+			}
+		case DeterministicFixture:
+			if p.Outcome.Dimension != Dimension || p.Fixture == nil {
+				return errors.New("randomized live under the fixture oracle: dimension fixture_match and the protocol's fixture")
+			}
+			if err := p.Fixture.Validate(); err != nil {
+				return fmt.Errorf("fixture: %w", err)
+			}
+			if p.Fixture.Kind != thought.Fixture || p.Fixture.Bytes == 0 {
+				return errors.New("fixture: a non-empty fixture thought")
+			}
 		}
 		if p.Analysis.MinPerArm < 1 || p.Analysis.MinDiscordant != 0 {
 			return errors.New("randomized live: min_per_arm ≥ 1, no min_discordant")
@@ -452,6 +480,7 @@ const (
 	MissingNoDeliverable = "no_deliverable"
 	MissingNotComplete   = "not_complete"
 	MissingUnevaluated   = "unevaluated"
+	MissingUnjudgeable   = "unjudgeable" // the blinded evaluator said the text alone cannot settle it
 )
 
 // AssignedUnit is one cohort row: the unit, its assignment, its ordinal
@@ -613,8 +642,15 @@ func (r *EffectAttestation) ValidateWire() error {
 				return fmt.Errorf("effect_attestation: row %d carries live-arm fields under paired replay", i)
 			}
 		case RandomizedLive:
-			if r.Evaluator != EvaluatorJudge || r.Estimator != EstimatorArms {
-				return errors.New("effect_attestation: randomized live is evaluated by judge/1 and estimated by arm_diff/1")
+			wantEval := EvaluatorJudge
+			if r.Protocol.Oracle == DeterministicFixture {
+				wantEval = Evaluator
+			}
+			if r.Evaluator != wantEval || r.Estimator != EstimatorArms {
+				return fmt.Errorf("effect_attestation: randomized live under %s is evaluated by %s and estimated by arm_diff/1", r.Protocol.Oracle, wantEval)
+			}
+			if r.Protocol.Oracle == DeterministicFixture && (u.Evaluation != "" || u.Missing == MissingUnjudgeable || u.Missing == MissingUnevaluated) {
+				return fmt.Errorf("effect_attestation: row %d carries evaluator fields under the fixture oracle", i)
 			}
 			if err := record.ValidateID(u.Unit); err != nil {
 				return fmt.Errorf("effect_attestation: row %d unit: %w", i, err)
@@ -630,10 +666,11 @@ func (r *EffectAttestation) ValidateWire() error {
 			}
 			switch u.Missing {
 			case "":
-				// a scored row cites its evaluation; the one exception is
-				// the zero of a run that did not complete (the fold checks
-				// that against the evidence)
-				if u.Evaluation == "" && u.Score != 0 {
+				// under the evaluator a scored row cites its evaluation; the
+				// one exception is the zero of a run that did not complete
+				// (the fold checks that against the evidence). Under the
+				// fixture oracle the fold recomputes every score
+				if r.Protocol.Oracle == BlindedEvaluator && u.Evaluation == "" && u.Score != 0 {
 					return fmt.Errorf("effect_attestation: row %d scores %v without an evaluation", i, u.Score)
 				}
 				if u.Evaluation != "" {
@@ -644,6 +681,14 @@ func (r *EffectAttestation) ValidateWire() error {
 			case MissingNoDeliverable, MissingNotComplete, MissingUnevaluated:
 				if u.Score != 0 || u.Evaluation != "" {
 					return fmt.Errorf("effect_attestation: row %d is missing yet scored", i)
+				}
+			case MissingUnjudgeable:
+				// the evaluator's own answer: the row cites it
+				if u.Score != 0 {
+					return fmt.Errorf("effect_attestation: row %d is unjudgeable yet scored", i)
+				}
+				if err := record.ValidateID(u.Evaluation); err != nil {
+					return fmt.Errorf("effect_attestation: row %d unjudgeable cites no evaluation: %w", i, err)
 				}
 			default:
 				return fmt.Errorf("effect_attestation: row %d missing %q out of vocabulary", i, u.Missing)
@@ -682,6 +727,7 @@ type EffectMeasurement struct {
 	Discordant    int              `json:"discordant"`            // paired replay
 	TreatmentN    int              `json:"treatment_n,omitempty"` // randomized live: exposed units per arm
 	ControlN      int              `json:"control_n,omitempty"`
+	Unjudgeable   int              `json:"unjudgeable,omitempty"` // randomized live: units the blinded evaluator could not judge from the text (excluded, and the oracle's competence on this population)
 	DeltaITT      float64          `json:"delta_itt"`
 	DeltaPP       float64          `json:"delta_pp"`
 	Verdict       EffectVerdict    `json:"verdict"`

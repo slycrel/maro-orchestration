@@ -709,3 +709,165 @@ func TestOpenRefusesBadLiveProtocols(t *testing.T) {
 		t.Fatal("parity")
 	}
 }
+
+// The oracle is part of the hypothesis (post-v1 item 2). A lesson that
+// supplies a fact is measured by the fixture oracle over a live cohort —
+// the protocol carries the one expected answer, no evaluator is called,
+// the verifier recomputes every score; a lesson judged by the blinded
+// evaluator gets `unjudgeable` as a counted missingness when the text
+// alone cannot settle it, so an oracle out of its competence yields an
+// insufficient measurement and no transition — never the acceptance run's
+// tombstone of a lesson that had changed behavior.
+func TestLiveOracleIsPartOfTheHypothesis(t *testing.T) {
+	openWith := func(h *harness, hyp learn.ItemRev, n int, expect *thought.Ref, minPerArm int) *Experiment {
+		t.Helper()
+		x, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: hyp, Relation: ApplyItem, Live: true, Population: "answer", N: n, Expect: expect, MinPerArm: minPerArm, MinEquivalent: minPerArm, Why: "oracle"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
+	t.Run("fixture oracle on a live cohort", func(t *testing.T) {
+		s := build(t)
+		h := s.h
+		fx := h.fixture("8,849 meters")
+		x := openWith(h, s.helpful, 4, &fx, 0)
+		if x.Oracle != DeterministicFixture || x.Outcome.Dimension != Dimension || x.Fixture == nil || x.Fixture.Hash != fx.Hash {
+			t.Fatalf("protocol: %+v", x.Protocol)
+		}
+		for _, q := range everestGoals {
+			h.live(q, nil)
+		}
+		// no judge: the fixture scores
+		if _, err := (&Lane{J: h.j, Store: h.st, Timeout: time.Minute}).Pass(ctxBg); err != nil {
+			t.Fatal(err)
+		}
+		st := h.state()
+		m := st.Measurements[x.ID]
+		if m == nil || m.Verdict != TreatmentHelpful || m.ItemEffect != learn.ItemHelpful || m.DeltaPP != 1 || m.Unjudgeable != 0 {
+			t.Fatalf("measurement %+v", m)
+		}
+		att := st.Attestations[x.ID]
+		if att.Evaluator != Evaluator {
+			t.Fatalf("evaluator %q", att.Evaluator)
+		}
+		for i, row := range att.Units {
+			if row.Evaluation != "" || row.Missing != "" || (row.Arm == Treatment) != (row.Score == 1) {
+				t.Fatalf("row %d %+v", i, row)
+			}
+		}
+		for _, rs := range st.Runs.Runs {
+			for _, a := range rs.Attempts {
+				for _, is := range a.Invocations {
+					if is.Invocation.Purpose == invoke.PurposeEvaluate {
+						t.Fatal("an evaluate call under the fixture oracle")
+					}
+				}
+			}
+		}
+		if st.Runs.Learned.Items[s.helpful.Item].StageOf(s.helpful.Revision) != learn.Effective {
+			t.Fatal("not promoted")
+		}
+		// the verifier's rule on the attestation's own facts: a row whose
+		// score is not the fixture's over the deliverable is refused
+		cm := st.Commitments[x.ID]
+		row := att.Units[0]
+		row.Score = 1 - row.Score
+		if err := st.checkLiveRow(h.st, cm.Protocol, 0, cm.Units[0], row, att.Seq); err == nil || !strings.Contains(err.Error(), "does not recompute") {
+			t.Fatalf("flipped fixture score accepted: %v", err)
+		}
+	})
+	t.Run("unjudgeable is counted, not scored", func(t *testing.T) {
+		// the acceptance run's shape: a fact lesson, an evaluator that
+		// cannot verify the fact from the text — it says so
+		s := build(t)
+		h := s.h
+		fact := h.lesson("The code word is juniper.", learn.Candidate)
+		x := openWith(h, fact, 4, nil, 0)
+		for _, q := range everestGoals {
+			h.live(q, nil)
+		}
+		cannot := &invoke.Keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Def: `{"outcome":"unjudgeable","confidence":0.9,"why":"the text alone cannot settle it"}`}
+		if _, err := (&Lane{J: h.j, Store: h.st, Judge: cannot, Timeout: time.Minute}).Pass(ctxBg); err != nil {
+			t.Fatal(err)
+		}
+		st := h.state()
+		m := st.Measurements[x.ID]
+		if m == nil || m.Verdict != Insufficient || m.Unjudgeable != 4 || m.Analyzed != 0 || m.TreatmentN != 0 {
+			t.Fatalf("measurement %+v", m)
+		}
+		for i, row := range st.Attestations[x.ID].Units {
+			if row.Missing != MissingUnjudgeable || row.Score != 0 || row.Evaluation == "" {
+				t.Fatalf("row %d %+v", i, row)
+			}
+		}
+		if st.Runs.Learned.Items[fact.Item].StageOf(fact.Revision) != learn.Candidate {
+			t.Fatal("an oracle out of its competence moved the lesson")
+		}
+		if len(cannot.Seen) != 4 {
+			t.Fatalf("%d evaluate calls; unjudgeable is a usable answer, not a retry", len(cannot.Seen))
+		}
+		// the verifier: a row claiming a judged score while the cited
+		// evaluation said unjudgeable is refused, and so is one claiming
+		// unjudgeable that cites nothing the run made
+		att, cm := st.Attestations[x.ID], st.Commitments[x.ID]
+		row := att.Units[0]
+		row.Missing, row.Score = "", 1
+		if err := st.checkLiveRow(h.st, cm.Protocol, 0, cm.Units[0], row, att.Seq); err == nil || !strings.Contains(err.Error(), "not what the cited evaluation") {
+			t.Fatalf("scored over an unjudgeable answer: %v", err)
+		}
+		row = att.Units[0]
+		row.Evaluation = record.NewID()
+		if err := st.checkLiveRow(h.st, cm.Protocol, 0, cm.Units[0], row, att.Seq); err == nil || !strings.Contains(err.Error(), "not an invocation of the unit's run") {
+			t.Fatalf("unjudgeable citing nothing: %v", err)
+		}
+	})
+	t.Run("a partly judgeable cohort", func(t *testing.T) {
+		s := build(t)
+		h := s.h
+		x := openWith(h, s.helpful, 4, nil, 1)
+		for _, q := range everestGoals {
+			h.live(q, nil)
+		}
+		mixed := &invoke.Keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []invoke.Rule{
+			{Key: everestGoals[0], Answer: `{"outcome":"unjudgeable","confidence":0.9,"why":"cannot"}`},
+			{Key: "8,849 meters", Answer: `{"outcome":"achieved","confidence":0.9,"why":"matched"}`},
+		}, Def: `{"outcome":"not_achieved","confidence":0.9,"why":"no match"}`}
+		if _, err := (&Lane{J: h.j, Store: h.st, Judge: mixed, Timeout: time.Minute}).Pass(ctxBg); err != nil {
+			t.Fatal(err)
+		}
+		st := h.state()
+		m := st.Measurements[x.ID]
+		if m == nil || m.Unjudgeable != 1 || m.Analyzed != 3 || m.Verdict != TreatmentHelpful {
+			t.Fatalf("measurement %+v", m)
+		}
+	})
+	t.Run("the door", func(t *testing.T) {
+		s := build(t)
+		h := s.h
+		blank := h.fixture(" ")
+		if _, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: s.helpful, Relation: ApplyItem, Live: true, Population: "answer", N: 4, Expect: &blank, Why: "w"}); !errors.Is(err, ErrConfig) {
+			t.Fatalf("blank expectation: %v", err)
+		}
+		fx := h.fixture("x")
+		if _, err := Open(ctxBg, h.j, h.st, Spec{Hypothesis: s.helpful, Relation: ApplyItem, Units: []UnitSpec{{Goal: s.everest[0], Fixture: fx}}, Expect: &fx, Why: "w"}); !errors.Is(err, ErrConfig) {
+			t.Fatalf("expectation on paired replay: %v", err)
+		}
+		x := openWith(h, s.helpful, 4, &fx, 0)
+		bad := *x
+		bad.Fixture = nil
+		if err := bad.ValidateWire(); err == nil || !strings.Contains(err.Error(), "fixture") {
+			t.Fatalf("fixture oracle without a fixture: %v", err)
+		}
+		bad = *x
+		bad.Oracle, bad.Outcome.Dimension = BlindedEvaluator, DimensionAchieved
+		if err := bad.ValidateWire(); err == nil || !strings.Contains(err.Error(), "no fixture") {
+			t.Fatalf("blinded evaluator with a fixture: %v", err)
+		}
+		bad = *x
+		bad.Outcome.Dimension = DimensionAchieved
+		if err := bad.ValidateWire(); err == nil {
+			t.Fatal("fixture oracle scoring goal_achieved")
+		}
+	})
+}

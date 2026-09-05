@@ -291,7 +291,7 @@ platform breadth (heartbeat, notify, viz).
 Same workspace, same goals, both engines; compare at the artifact
 boundary. Then decide what the successor becomes.
 
-**Amended 2026-09-05 (Jeremy).** Order after the v1 acceptance run:
+**Amended 2026-09-05 (Jeremy).** Order after the v1 acceptance run (items 1 and 2 SHIPPED 2026-09-05 — build-log "Post-v1 item 1/2"):
 (1) per-workspace working directory + operator tool policy for
 executes (the Go NOW execute ran in this repo's cwd with no web, so no
 world-needing goal compares); (2) the oracle class becomes part of the

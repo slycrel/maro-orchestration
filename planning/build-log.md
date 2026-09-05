@@ -2080,3 +2080,76 @@ attempt it judges. Fixture `TestFoldRefusesVerdictBeforeItsAttempt`
 (a copy of an honest closure verdict re-addressed to attempt 5). Lead
 (G), resolution completeness against the committed candidate set, is
 a resolver-design question and stays open.
+
+## Post-v1 item 2 — the oracle class is part of the hypothesis (2026-09-05)
+
+**Intent.** The acceptance run tombstoned two lessons that had
+demonstrably changed behavior: they supplied a fact ("the code word is
+juniper"), and the blinded evaluator — seeing only goal and deliverable
+— could not verify the fact, so it scored `not_achieved` in both arms
+and the protocol called them equivalent. Jeremy: "you can have a tool
+and not know how to use it and call it junk; that doesn't mean it's
+useless, just that you're holding it wrong." The evaluator is kept and
+matched to what it can judge; the oracle is chosen with the
+hypothesis.
+
+**Subtraction.**
+
+| Considered | Where | Decision |
+|---|---|---|
+| A `knowledge` lesson kind the door could route on | learn | cut: `learn.LearnedKind` is lesson/policy and a lesson's text does not say which it is; the operator declares the oracle at open |
+| Handing the evaluator the lesson text as the key | §9 | refused: the evaluator's inputs provably exclude the hypothesis (blinding); a fixture is deterministic, so blinding is moot |
+| A per-unit fixture for live units | §9 | not possible: live units arrive at intake; the fixture is the protocol's, one expected answer for the population |
+| Retiring `blinded_evaluator` for fact lessons | — | cut: it gains a third answer, `unjudgeable`, and says so instead of guessing |
+| An oracle-competence threshold (too many unjudgeable ⇒ refuse the cohort) | — | cut: `unjudgeable` is excluded missingness, counted on the measurement; the per-arm floors already make such a cohort `insufficient`, which moves nothing |
+
+**Built.** `Protocol.Fixture *thought.Ref` (live under
+`deterministic_fixture`: the one expected answer; door: that oracle ⇔
+a non-empty fixture thought and dimension `fixture_match`; the blinded
+evaluator ⇔ no fixture and `goal_achieved`; paired replay carries none).
+`Spec.Expect` / `experiment open --live … --expect <answer>` chooses
+it. `liveRow` under the fixture oracle scores `Score(deliverable,
+fixture)` with no evaluate call; `checkLiveRow` recomputes it;
+the attestation's evaluator is `fixture/1`. `EvaluatorPrompt` gains
+the third answer ("if achievement turns on a fact, file, or artifact
+you are not shown … answer unjudgeable; never guess");
+`ParseEvaluation` returns `(score, judged)`; an unjudgeable answer is
+usable (no retry), lands as `Missing: unjudgeable` citing the
+evaluation, is excluded from analysis and counted as
+`EffectMeasurement.Unjudgeable`; the verifier re-reads the cited
+receipt and refuses a judged score over an unjudgeable answer (and the
+reverse). CLI list/close lines show the oracle and the count.
+
+**Edge tests.** `TestLiveOracleIsPartOfTheHypothesis`: a fixture-oracle
+live cohort (helpful, no judge, no evaluate invocation anywhere,
+`fixture/1`, every score recomputed; a flipped score refused by the
+verifier); the acceptance shape — a fact lesson under an evaluator that
+answers unjudgeable — measures `insufficient` with four unjudgeable,
+four evaluate calls (no retry), and the lesson stays `candidate`; a
+partly judgeable cohort (one unjudgeable, three analyzed, helpful);
+the door (blank expectation, expectation on paired replay, fixture
+oracle without a fixture, blinded with one, fixture oracle scoring
+`goal_achieved`). Five must-detect mutations, all killed: drop the
+count; score unjudgeable as not_achieved; the verifier trusts a
+fixture row's score; the verifier ignores judged-vs-unjudgeable; the
+closer scores every fixture row 1.
+
+**Live.** One direct probe of the real evaluator (haiku, no tools)
+with the new prompt: on the acceptance shape (a code word in a file it
+is not shown) one of two tries answered `unjudgeable` with the right
+why ("requires verifying the contents of secret.txt, which was not
+provided"); the other emitted tool-call text, which parses as unusable
+and is retried, as before. On a judgeable answer (Everest, 8,849
+meters) it answered `achieved`. So the third answer is one the
+evaluator actually gives.
+
+**Residuals.** (1) The evaluator fences its JSON in ```json — the
+parser's `unfence` already strips that; what stays unusable is a reply
+that narrates a tool call it has no tools for, and the tries bound
+(3) is the only answer to it. (2) The fixture oracle on live is substring match
+(`fixture/1`); a population whose answers vary in form (units, digits
+vs words) wants a richer oracle — `--expect` is the seam. (3) Nothing
+enforces that an operator who opens a fact lesson under the blinded
+evaluator has chosen well; the measurement's `unjudgeable` count is
+the honest signal after the fact, and a re-open (`version+1`) under
+`--expect` is the remedy.

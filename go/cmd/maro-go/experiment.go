@@ -20,7 +20,8 @@ import (
 // cmdExperiment is the operator surface of the measured loop (step 10b):
 //
 //	experiment open --item <id> [--revision <rev>] --relation apply|ablate --unit <goal>=<expected> ... [--margin f] [--why text]
-//	experiment open --item <id> [--revision <rev>] --relation apply|ablate --live --population <family> --n <k> [--min-per-arm k] [--margin f] [--why text]
+//	experiment open --item <id> [--revision <rev>] --relation apply|ablate --live --population <family> --n <k> [--expect <answer>] [--min-per-arm k] [--margin f] [--why text]
+//	  --expect chooses the deterministic fixture oracle for a live cohort (a lesson that supplies a fact); without it the blinded evaluator judges, and says unjudgeable when the text alone cannot settle it
 //	experiment open --mechanism recall|model_judge --relation ablate --live ...   (the mechanism's seed is the hypothesis)
 //	experiment run <exp> [--model m] [--judge-model m]           (paired replay)
 //	experiment close <exp> [--judge-model m]                     (a live cohort is scored by the judge)
@@ -55,7 +56,7 @@ func cmdExperiment(args []string, out, errw io.Writer) error {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "closed %s: %s → %s (assigned %d, analyzed %d, exposed %d, discordant %d, delta_itt %.3f, delta_pp %.3f)\n", args[1], m.Verdict, m.ItemEffect, m.Assigned, m.Analyzed, m.Exposed, m.Discordant, m.DeltaITT, m.DeltaPP)
+			fmt.Fprintf(out, "closed %s: %s → %s (assigned %d, analyzed %d, exposed %d, discordant %d, unjudgeable %d, delta_itt %.3f, delta_pp %.3f)\n", args[1], m.Verdict, m.ItemEffect, m.Assigned, m.Analyzed, m.Exposed, m.Discordant, m.Unjudgeable, m.DeltaITT, m.DeltaPP)
 			state, err := experiment.Fold(j, st)
 			if err != nil {
 				return err
@@ -98,7 +99,7 @@ func cmdExperiment(args []string, out, errw io.Writer) error {
 						}
 					}
 				}
-				fmt.Fprintf(out, "%s  v%d %s %s %s/%s over %s  n=%d assigned=%d evidence=%d/%d  %s\n", id, x.Version, x.Assignment, x.Relation, x.Hypothesis.Item, x.Hypothesis.Revision, x.Population, x.N, assigned, evidence, arms, status)
+				fmt.Fprintf(out, "%s  v%d %s %s %s/%s over %s  n=%d oracle=%s assigned=%d evidence=%d/%d  %s\n", id, x.Version, x.Assignment, x.Relation, x.Hypothesis.Item, x.Hypothesis.Revision, x.Population, x.N, x.Oracle, assigned, evidence, arms, status)
 				if args[0] == "show" && x.Assignment == experiment.RandomizedLive {
 					for i := 0; ; i++ {
 						as := assignmentAt(state, id, i)
@@ -222,6 +223,16 @@ func experimentOpen(args []string, j *journal.Journal, st *thought.Store, out io
 			spec.Units = append(spec.Units, experiment.UnitSpec{Goal: record.RecordID(goal), Fixture: ref})
 		case "--live":
 			spec.Live = true
+		case "--expect":
+			text := strings.TrimSpace(next())
+			if text == "" {
+				return fmt.Errorf("--expect <expected answer text>")
+			}
+			ref, err := st.Put(thought.Fixture, []byte(text))
+			if err != nil {
+				return err
+			}
+			spec.Expect = &ref
 		case "--population":
 			spec.Population = next()
 		case "--n":

@@ -503,13 +503,25 @@ func (st *State) checkLiveRow(store *thought.Store, p Protocol, i int, u Assigne
 	if err != nil {
 		return err
 	}
+	if p.Oracle == DeterministicFixture {
+		// recomputed: the protocol's fixture over the deliverable
+		fixture, err := store.Get(*p.Fixture)
+		if err != nil {
+			return err
+		}
+		want.Score = Score(deliverable, fixture)
+		if row != want {
+			return fmt.Errorf("does not recompute from the evidence and the protocol's fixture (%+v vs %+v)", row, want)
+		}
+		return nil
+	}
 	prompt := thought.Address(thought.Prompt, EvaluatorPrompt(goal, deliverable))
 	if row.Missing == MissingUnevaluated {
 		want.Missing = MissingUnevaluated
 		if row != want {
 			return fmt.Errorf("unevaluated row does not match its evidence (%+v vs %+v)", row, want)
 		}
-		id, _, tries, err := st.evaluation(store, rs, prompt)
+		id, _, _, tries, err := st.evaluation(store, rs, prompt)
 		if err != nil {
 			return err
 		}
@@ -517,6 +529,10 @@ func (st *State) checkLiveRow(store *thought.Store, p Protocol, i int, u Assigne
 			return fmt.Errorf("unevaluated after %d evaluate calls (usable: %v); the bound is %d", tries, id != "", EvaluatorTries)
 		}
 		return nil
+	}
+	unjudgeable := row.Missing == MissingUnjudgeable
+	if unjudgeable {
+		want.Missing = MissingUnjudgeable
 	}
 	want.Score, want.Evaluation = row.Score, row.Evaluation
 	if row != want {
@@ -540,9 +556,9 @@ func (st *State) checkLiveRow(store *thought.Store, p Protocol, i int, u Assigne
 			if err != nil {
 				return err
 			}
-			sc, perr := ParseEvaluation(b)
-			if perr != nil || sc != row.Score {
-				return fmt.Errorf("score %v is not what the cited evaluation's receipt says (%v, %v)", row.Score, sc, perr)
+			sc, judged, perr := ParseEvaluation(b)
+			if perr != nil || sc != row.Score || judged == unjudgeable {
+				return fmt.Errorf("row (score %v, unjudgeable %v) is not what the cited evaluation's receipt says (%v, judged %v, %v)", row.Score, unjudgeable, sc, judged, perr)
 			}
 			return nil
 		}
