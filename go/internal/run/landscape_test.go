@@ -413,12 +413,27 @@ func TestParseLandscapeReadsNumberOrHandle(t *testing.T) {
 	if _, run, _, err := ParseLandscape(0, []byte(`{"relation": "related", "run": 2, "reason": "x"}`), cands); err != nil || run != cands[1].Run {
 		t.Errorf("absent version is the first: %s %v", run, err)
 	}
+	// the third contract reads strictly: a whole candidate number, and a
+	// fresh that names a candidate is contradictory evidence (review
+	// 2026-09-05); the second, as recorded, still reads as it did
+	if _, run, _, err := ParseLandscape(2, []byte(`{"relation": "related", "run": 1.9, "reason": "x"}`), cands); err != nil || run != cands[0].Run {
+		t.Errorf("second contract stopped reading a truncated number: %s %v", run, err)
+	}
+	if rel, _, _, err := ParseLandscape(2, []byte(`{"relation": "fresh", "run": 2, "reason": "x"}`), cands); err != nil || rel != RelationFresh {
+		t.Errorf("second contract stopped reading fresh-with-run: %s %v", rel, err)
+	}
 	for _, in := range []string{
 		`{"relation": "related", "run": 3, "reason": "x"}`,
 		`{"relation": "related", "run": "deadbeef", "reason": "x"}`,
 		`{"relation": "related", "run": 0, "reason": "x"}`,
 		`{"relation": "cousin", "run": 1, "reason": "x"}`,
 		`related to 1`,
+		`{"relation": "related", "run": 1.9, "reason": "x"}`,
+		`{"relation": "related", "run": "1.9", "reason": "x"}`,
+		`{"relation": "related", "run": true, "reason": "x"}`,
+		`{"relation": "fresh", "run": 2, "reason": "x"}`,
+		`{"relation": "fresh", "run": "` + HandleOf(cands[0].Run) + `", "reason": "x"}`,
+		`{"relation": "fresh", "run": [1], "reason": "x"}`,
 	} {
 		if _, _, _, err := ParseLandscape(LandscapePromptVer, []byte(in), cands); err == nil {
 			t.Errorf("%s: parsed", in)

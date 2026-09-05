@@ -677,11 +677,18 @@ var _ = errors.New
 // proposalScope is the rule a tail proposal's scope satisfies: the run's
 // lineage root — or, in history before the tail scoped to lineages (no
 // lineage-scoped proposal folded yet), the workspace.
+//
+// lineageTail is the history gate (the first lineage-scoped proposal in
+// the journal) OR the run's own evidence: a run that carries a landscape
+// record was driven by an engine whose tail scopes to lineages, so its
+// proposals are never read as history even when no earlier tail has
+// proposed at a lineage yet (review 2026-09-05: the global gate alone
+// stayed open across post-upgrade runs whose tails proposed nothing).
 func proposalScope(rs *run.RunState, scope learn.ScopePath, lineageTail bool) error {
 	if scope == learn.ScopeGoal(rs.Root) {
 		return nil
 	}
-	if scope == learn.ScopeWorkspace && !lineageTail {
+	if scope == learn.ScopeWorkspace && !lineageTail && rs.Landscape == nil {
 		return nil
 	}
 	return fmt.Errorf("tail: proposal scope %s is not the run's lineage root %s", scope, rs.Root)

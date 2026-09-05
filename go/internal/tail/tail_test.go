@@ -744,3 +744,28 @@ func TestProposalScopeReadsHistoryAsWritten(t *testing.T) {
 		t.Fatal("a foreign lineage folded")
 	}
 }
+
+// A run that carries a landscape record is post-upgrade by its own
+// evidence: its tail's workspace-scoped proposal is refused even when no
+// earlier tail in the journal proposed at a lineage (the history gate is
+// still open) — the fold composes the two.
+func TestLandscapedRunTailIsNeverReadAsHistory(t *testing.T) {
+	h := open(t)
+	h.now(t, "What is the capital of France?", scripted(toolless, invoke.ScriptedCall{Response: []byte("Paris.")}))
+	rl, _, _ := h.ledgers(t)
+	var landscaped *run.RunState
+	for _, rs := range rl.Runs {
+		if rs.Landscape != nil {
+			landscaped = rs
+		}
+	}
+	if landscaped == nil {
+		t.Fatal("the driven run carries no landscape record")
+	}
+	if err := proposalScope(landscaped, learn.ScopeWorkspace, false); err == nil {
+		t.Fatal("a workspace proposal on a landscaped run folded with the history gate open")
+	}
+	if err := proposalScope(landscaped, learn.ScopeGoal(landscaped.Root), false); err != nil {
+		t.Fatal(err)
+	}
+}

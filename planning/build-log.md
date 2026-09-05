@@ -2245,3 +2245,26 @@ stranger inherits the lineage's Goal Ancestry block — lineage is
 run-derived, project is text-derived, and they disagree. Next: feature
 2 = related goals / run horizon (Jeremy's growth target), on both
 engines, same ledger.
+
+
+## Post-v1 feature 2 — the landscape (related runs), both engines (2026-09-05)
+
+Design note + per-engine ledger + review ledger in
+`planning/feature-related-runs.md`. Decree: the RUN decides its relation
+to prior runs (fresh / related / rerun) from deterministic candidates +
+one recorded judge call; `--after` is the override, `--fresh` the
+opt-out; the goal-slug ancestry retired. Go `0133a8d0` (+ review fixes
+this entry): `Landscape` record, `checkLandscape` re-derivation, two
+history gates, versioned prompt template + parser (v3 strict);
+Python `c19d619e` + `bd43ad31`: `src/landscape.py`, handle hook, lazy
+hosted-free judge, `--fresh`, slug fallback retired. One review pass
+(Skeptic + Expert QA): Go 2 fixed / 1 OOS-lead / 1 backlog, Python 5
+fixed / 1 partial; 33 + 45 mutants killed; race suite green; contracts
+0/0; Python fast suite green except the pre-existing decay-cycle test.
+Live: both engines' follow-ups became `related` following the first
+run on one haiku call, the unrelated goal stayed fresh with no call.
+Wall: Go 78 min (design carried here) vs Python 23 min. Backlog from
+this entry: version the intent/plan/step/closure templates; bind the
+plan request byte-for-byte; a `Fresh` field on the goal record. Next:
+wire Go as the challenger in Python's shadow lane on the live goal
+stream.

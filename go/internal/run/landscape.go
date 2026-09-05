@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -70,12 +72,16 @@ const (
 	// template change is a new version, recorded on the landscape; the
 	// old text stays so history renders as it was asked. (An absent
 	// version on the record is 1: the template at the record's birth.)
-	LandscapePromptVer = 2
+	// The parser's contract is versioned with it: 3 renders the second
+	// template's text but reads the answer strictly (an integral
+	// candidate number; fresh names no candidate) — review 2026-09-05.
+	LandscapePromptVer = 3
 )
 
 var landscapeContract = map[int]string{
 	1: `{"relation": "fresh" | "related" | "rerun", "run": "<candidate number, or 0 for fresh>", "reason": "<one sentence>"}`,
 	2: `{"relation": "fresh" | "related" | "rerun", "run": <the candidate's number (1, 2, …) or its run id, or 0 for fresh>, "reason": "<one sentence>"}`,
+	3: `{"relation": "fresh" | "related" | "rerun", "run": <the candidate's number (1, 2, …) or its run id, or 0 for fresh>, "reason": "<one sentence>"}`,
 }
 
 // LandscapeCandidate is a prior run the judge was shown.
@@ -317,7 +323,25 @@ func ParseLandscape(ver int, resp []byte, cands []LandscapeCandidate) (Relation,
 	if !relations[rel] {
 		return "", "", "", fmt.Errorf("landscape: relation %q out of vocabulary", a.Relation)
 	}
+	strict := promptVer(ver) >= 3
 	if rel == RelationFresh {
+		// under the strict contract a fresh answer names no candidate: a
+		// fresh that names one is contradictory evidence, not fresh
+		if strict {
+			switch v := a.Run.(type) {
+			case nil:
+			case float64:
+				if v != 0 {
+					return "", "", "", fmt.Errorf("landscape: fresh names candidate %v", a.Run)
+				}
+			case string:
+				if s := strings.TrimSpace(v); s != "" && s != "0" {
+					return "", "", "", fmt.Errorf("landscape: fresh names candidate %q", v)
+				}
+			default:
+				return "", "", "", fmt.Errorf("landscape: fresh names candidate %v", a.Run)
+			}
+		}
 		return rel, "", strings.TrimSpace(a.Reason), nil
 	}
 	// the candidate by number (1-based) or by run id — judges answer with
@@ -325,6 +349,9 @@ func ParseLandscape(ver int, resp []byte, cands []LandscapeCandidate) (Relation,
 	n := 0
 	switch v := a.Run.(type) {
 	case float64:
+		if strict && v != math.Trunc(v) {
+			return "", "", "", fmt.Errorf("landscape: %s names candidate %v, which is not a whole number", rel, a.Run)
+		}
 		n = int(v)
 	case string:
 		v = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "run "))
@@ -334,7 +361,13 @@ func ParseLandscape(ver int, resp []byte, cands []LandscapeCandidate) (Relation,
 			}
 		}
 		if n == 0 {
-			fmt.Sscanf(v, "%d", &n)
+			if strict {
+				if k, err := strconv.Atoi(v); err == nil {
+					n = k
+				}
+			} else {
+				fmt.Sscanf(v, "%d", &n)
+			}
 		}
 	}
 	if n < 1 || n > len(cands) {
