@@ -2200,3 +2200,24 @@ above ran here. Residual added: (4) a unit whose run holds three
 judge/1 evaluate calls (a crash across the version change) counts
 them against judge/2's tries bound and closes `unevaluated` — honest,
 and far-fetched before any production journal exists.
+
+
+## Post-v1 item 3 — two-engine comparison (2026-09-05)
+
+Protocol and ledger in `planning/successor-comparison.md`. Six goals
+(four NOW, two AGENDA; every fixture script-checkable, pattern 84),
+haiku through the CLI on both engines, fresh scratch workspaces on
+both sides (`$SP/pyws`, `$SP/c3`), one run per cell. Both engines
+6/6. Python $1.38 / 400 s, Go $0.25 / 256 s. NOW goals: Python one
+call at ~$0.005, Go two or three at $0.02–0.04 (tools in the execute
+system prompt + in-process tail diagnose). AGENDA goals: Python 17–22
+calls at $0.55–0.80, Go 6–10 at $0.04–0.09 — Python's mechanism ladder
+(cuts, scope, 3 decompose candidates, plan review, closure plan +
+verdict, quality gate, claim review, 3 extractions) is a fixed cost on
+a one-file goal; the successor's overhead is its process shape (intent,
+plan, judge per step, closure judge, diagnose). Python's recon-first
+plan and verification step are judgement the fixture cannot see; the
+Go judges accepted the direct path, which was right here. Level gate
+for the features-on-both-sides half PASSED. Nothing changed in the
+tree for this item — the protocol document, the checker
+(`$SP/cmpcheck.py`, scratch), and the ledger are the deliverable.
