@@ -16,6 +16,11 @@ func Inspect(rs *RunState) []string {
 		return []string{"no attempt yet"}
 	}
 	var lines []string
+	arm := "none"
+	if rs.Goal.Arm != nil {
+		arm = string(rs.Goal.Arm.Arm) + " (assignment " + string(rs.Goal.Arm.Assignment) + ")"
+	}
+	lines = append(lines, fmt.Sprintf("goal %s: family %s, origin %s, lane %s, arm %s", rs.Goal.ID, rs.Family.Family, rs.Goal.Origin, rs.Goal.Lane, arm))
 	lens := a.Attempt.Config.Lens
 	if lens == "" {
 		lens = LensNeutral

@@ -1796,3 +1796,87 @@ exist here); the pack is honest about what it carries and what an
 import does with it. (4) The Python importer treats `task_type` as
 provenance text, not a family: Go families are keyed differently, and a
 wrong family would silently narrow recall.
+
+## Step 13 — live acceptance: the §8a predicate, a lens swap, a metering target (2026-09-05)
+
+**Intent.** Close v1 on the predicate the design set (§16 step 13):
+one family, one live randomized experiment to its stopping rule, the
+predeclared transition from a recomputed attestation, a later run whose
+request hash or policy selection changed because of it, the Manti
+target measured and reported, one mechanism removed with absence proof,
+one lens swap. Two pieces were missing before it could be run honestly:
+personas as lenses (§13) and metering targets with overage as an event
+(§11, D13).
+
+**Subtraction.**
+
+| Considered | Where | Decision |
+|---|---|---|
+| Lens as a full persona object (voice, tools, memory) | §13 | cut: v1 lens = the exact text a judge/render request is prefixed with, carried by name + content-addressed `lens_text` thought on the invocation; neutral = no prefix (a neutral judge request is byte-identical to an unlensed one) |
+| Lensing execute/plan/intent requests | §13 | refused at the door: a lens colours judgement and rendering, never what the work is |
+| Budget enforcement (stop at limit) | §11, D13, D15 | cut: a target is measured on the recorded usage after `Recorded`; over ⇒ an `Overage` record before the delivery and a line in it; the run continues; the fold refuses a delivery prepared over target without the overage |
+| Target per attempt / per invocation | §11 | cut: one target per goal, committed with the goal in the intake command; invocation-level `Target` (step 3) is unchanged and unrelated |
+| Dimensions beyond cost/tokens/wall | §11 | cut: `cost_usd`, `tokens` (in+out), `wall_ms`; vocabulary at the door |
+| A live `model_judge` ablation on agenda goals | §9 | not possible: live admission is NOW-lane roots only (11a); run on NOW answers, reported as such |
+
+**Built.** `invoke.Lens{Name, Text}` on `Request`/`Invocation` (door:
+named, `lens_text` kind, judge/render purposes only; validated before
+the first write); `thought.LensText`; `run.Lenses` (neutral, skeptic),
+`Lensed(text, prompt)`, `Driver.Lens`, `ConfigSnapshot.Lens`, judge
+sites in the NOW closure judge and the agenda `invoke_` render under the
+lens; the fold re-derives lensed verdicts (`want = Lensed(lens, want)`)
+and `checkLenses` at `Recorded` refuses a lensed invocation whose name
+is not the attempt's, whose request does not begin with the lens text,
+or a judge request without the lens under a lensed attempt; fork
+children inherit the lens. `run.MeteringTarget` (subject goal, name,
+dimension, limit, why) and `run.Overage` (run-scoped, after Recorded,
+measured = `MeasuredOn(recorded usage)`, > limit) with door and fold
+rules; `IntakeCommand(…, extra...)`; `Driver.Target`, `meter` before
+the delivery, `MeteringLine` appended to every delivery with a target;
+`ParseTarget("dim=limit", why)`. `run.Inspect(rs)` — goal/family/arm,
+lens, recall counts + included revisions + exclusion reasons, policy
+enabled/excluded + mechanisms, every invocation's purpose/request
+hash/model/lens/terminal, the metering verdict — printed by `runs show`.
+CLI `--lens` (now/agenda/serve), `--target dim=limit --why` (now/agenda/
+submit); `process.Request.Target/TargetWhy`, `Options.Lens`. Contracts:
+`metering_target`, `overage`, `invocation.lens` declared; report 0/0.
+
+**Edge tests.** `TestLensSwapOnTheSameFacts` — two NOW runs of one
+goal, neutral and skeptic, model judge on: execute requests hash
+identically; the skeptic judge request is byte-for-byte
+`Lensed(lensText, neutralJudgeRequest)`; the invocation carries name +
+`lens_text` ref; both closures re-derive through the fold; `Inspect`
+names the lens; unknown lens ⇒ `ErrConfig` before any write; a lens on
+an execute request, over a `prompt` thought, or nameless ⇒ refused by
+the shell and by the door, head unchanged. `TestFoldLensRules` — the
+seven shapes (neutral clean, lensed clean, judge without the lens,
+neutral claiming a lens, wrong name, request lacking the prefix, lens
+text absent). `TestMeteringTargetIsMeasuredNeverEnforced` — under:
+line says under, no overage, target adjacent to the goal in its
+command; over: overage committed (measured 2.5, limit 2, cites the
+target), the line names it, the mission is still delivered, the event
+fires; no target ⇒ no line; `MeasuredOn` per dimension; cost-not-
+reported note; `ParseTarget` refusals (nine); door refusals (limit 0/
+inf, dimension, no why, wrong subject, not over, NaN, unscoped) with
+head unchanged; fold refusals on fresh replicas (target for no goal,
+second target, overage measuring what was not recorded, overage twice,
+citing another goal's target, on a run without a target, on an attempt
+that does not exist). Full race suite quiet, exit 0.
+
+**Live.** `planning/successor-acceptance.md` — every predicate row with
+record ids, run handles, request hashes, and the four things the live
+run taught (the blinded evaluator cannot score knowledge lessons and
+tombstoned two that had changed behavior; the fixture oracle measured
+the same lesson helpful; NOW executes inherit this repo's context via
+cwd; live admission is NOW-only).
+
+**Residuals.** (0) The oracle-class finding above is the v2 item this
+step opens: a lesson that supplies a fact needs an oracle that can
+check the fact. (1) `serve` never sets `ModelJudge` for NOW runs while
+`now --judge-model` does — the same goal gets `closure unknown` under
+the process and a judged closure in-process. (2) `Request.Cwd` is the
+process's cwd for every execute; a per-workspace working directory and
+an operator tool policy are owed before the Manti answer can match
+Python's. (3) `pgrep -f "mg serve"` matched the calling shell's own
+command line and killed it once during the live run — an ops trap,
+not a code one (anchor the pattern).
