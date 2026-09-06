@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 )
@@ -31,6 +32,18 @@ type Subprocess struct {
 	DefaultTimeout time.Duration
 	Lookup         func(string) (string, error) // exec.LookPath seam
 	Policy         ToolPolicy                   // the operator's tool policy for tool-bearing requests
+	// Env is appended to the child's environment for TOOL-BEARING requests
+	// only ("NAME=value"): the secrets store's injection (docs/SECRETS_DESIGN
+	// .md) plus the derived-secret drop path. Tool-less calls (judges,
+	// intent) never see it.
+	Env []string
+	// Redact maps injected NAME → value; every value is replaced by
+	// [REDACTED:NAME] in the response and the captured transcript of a
+	// tool-bearing call, so a goal-driven `env` never persists a secret.
+	Redact map[string]string
+	// AfterTools runs after every tool-bearing call returns (the drop-file
+	// ingest). Nil = nothing.
+	AfterTools func()
 }
 
 const subprocessName = "subprocess"
@@ -90,6 +103,9 @@ func (s *Subprocess) Complete(ctx context.Context, req Request, sink Sink) (*Res
 	defer os.Remove(capPath)
 	cmd := exec.CommandContext(cctx, s.Bin, s.args(req)...)
 	cmd.Stdin = bytes.NewReader(req.Prompt)
+	if req.Tools && len(s.Env) > 0 {
+		cmd.Env = append(os.Environ(), s.Env...)
+	}
 	if req.Cwd != "" {
 		cmd.Dir = req.Cwd
 	}
@@ -179,7 +195,41 @@ func (s *Subprocess) Complete(ctx context.Context, req Request, sink Sink) (*Res
 		reasons = append([]string{"no result event"}, reasons...)
 	}
 	res.Reason = strings.Join(reasons, "; ")
+	if req.Tools {
+		if len(s.Redact) > 0 {
+			res.Response = redact(res.Response, s.Redact)
+			res.Transcript = redact(res.Transcript, s.Redact)
+			res.Reason = string(redact([]byte(res.Reason), s.Redact))
+		}
+		if s.AfterTools != nil {
+			s.AfterTools()
+		}
+	}
 	return res, nil
+}
+
+// redact replaces every value in text with [REDACTED:NAME], longest value
+// first so an overlapping shorter secret cannot leave the tail of a longer
+// one behind. Kept local (invoke stays a leaf; secrets.Redact is the same
+// rule for callers outside the backend).
+func redact(text []byte, values map[string]string) []byte {
+	type kv struct{ k, v string }
+	var items []kv
+	for k, v := range values {
+		if v != "" {
+			items = append(items, kv{k, v})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if len(items[i].v) != len(items[j].v) {
+			return len(items[i].v) > len(items[j].v)
+		}
+		return items[i].k < items[j].k
+	})
+	for _, it := range items {
+		text = bytes.ReplaceAll(text, []byte(it.v), []byte("[REDACTED:"+it.k+"]"))
+	}
+	return text
 }
 
 // maxLine bounds one NDJSON line. The CLI's frames are small (tool outputs

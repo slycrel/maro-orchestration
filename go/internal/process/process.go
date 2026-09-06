@@ -55,6 +55,16 @@ type Options struct {
 	// Work is the working directory tool-bearing executes start in; "" =
 	// the workspace's own work/ (Root.Path("work")).
 	Work string
+	// Frame is the execute frame every driver runs under; "" = run.DefaultFrame.
+	// The CLI appends the secrets presence block here (docs/SECRETS_DESIGN.md).
+	Frame string
+}
+
+func (o Options) frame() string {
+	if o.Frame == "" {
+		return run.DefaultFrame
+	}
+	return o.Frame
 }
 
 // Server is a running process.
@@ -289,7 +299,7 @@ func (l *executor) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 	defer t.Stop()
 	lastErr, repeats := "", 0
 	for {
-		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health, Lens: l.s.opts.Lens, Work: l.s.opts.Work, Frame: run.DefaultFrame,
+		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health, Lens: l.s.opts.Lens, Work: l.s.opts.Work, Frame: l.s.opts.frame(),
 			Events: func(e run.Event) {
 				if e.Stage == "attempt" && e.Goal != "" {
 					l.s.conns.bind(e.Goal, e.Run) // the run's presentation goes to the client that submitted its goal

@@ -2364,3 +2364,40 @@ inode), prints commit + sha256 (the row's `go_binary_sha256`), smoke =
 `maro-go workspace`. The lane pins rows to the binary's hash, so a
 landed Go change is not live until this runs — the Go side of the
 "landed but not materialized" trap.
+
+## Post-v1 — the secrets store, Go side (2026-09-06)
+
+Decree (Jeremy, decision 5870f189): secrets management is the fix for
+container blindness, not flipping the container off — "both in python and
+go". The store is sops + age at `~/.maro/secrets/` (machine-level, engine-
+neutral; `MARO_SECRETS_DIR` overrides), managed by the Python CLI; the Go
+engine reads, injects, tells and ingests. `internal/secrets` is a leaf
+(stdlib only, shells out to `sops`): names without the key, values with it,
+the operator's `inject` policy (path.Match over ENV-style names — the same
+set Python's fnmatchcase yields), the presence block with wording identical
+to Python's, cleartext per-name metadata (origin operator|maro, run,
+service), and the drop-file ingest (maro-derived, source `drop`). The
+subprocess backend grew three seams: `Env` (tool-bearing calls only),
+`Redact` (longest value first, response + transcript + reason) and
+`AfterTools` (the ingest). `now`/`agenda`/`serve` wire the store through
+`wireSecrets`; `maro-go secrets list|check|get` is the read-only view.
+Live on this box the same day: 10 names, `YAHOO_*` injectable, both engines
+agree on the check.
+
+Patterns:
+
+105. **Engine-neutral state lives beside the user config, not in either
+     engine's workspace.** The Go engine never reads the Python workspace
+     (§13); a secret is a property of the machine. `~/.maro/secrets/` next
+     to `~/.maro/config.yml` is the one dir both engines can read without
+     either owning it.
+106. **Injection is per request kind, not per backend.** The same
+     `Subprocess` serves judges and executes; `Env`/`Redact`/`AfterTools`
+     key off `req.Tools`, so a judge never sees a credential and the
+     ingest never fires for one. The test pins both directions with one
+     fake CLI.
+107. **A fake CLI that overwrites its capture is read by the last caller.**
+     The NOW run's tail lens (diagnose, tool-less) also goes through the
+     fake `claude`; `cat > prompt.txt` left the diagnose prompt where the
+     execute frame was expected. Append with a separator; assert with
+     contains.

@@ -26,6 +26,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	spine "github.com/slycrel/maro-orchestration/go/internal/run"
+	"github.com/slycrel/maro-orchestration/go/internal/secrets"
 	"github.com/slycrel/maro-orchestration/go/internal/tail"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
 	_ "github.com/slycrel/maro-orchestration/go/internal/verdict" // registers the judging kinds
@@ -73,6 +74,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdInterrupt(args[1:], stdout)
 	case "status":
 		err = cmdStatus(stdout)
+	case "secrets":
+		err = cmdSecrets(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return 2
@@ -85,7 +88,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status | secrets list|check [--json]|get <name>")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -331,6 +334,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		spec = t
 	}
 	var b, jb invoke.Backend
+	frame := spine.DefaultFrame
 	switch backend {
 	case "subprocess":
 		s, err := invoke.NewSubprocess(model)
@@ -355,6 +359,9 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		if work == "" {
 			work = a.Path("work")
 		}
+		if sp, ok := b.(*invoke.Subprocess); ok {
+			frame += wireSecrets(sp, a, errw)
+		}
 		var lineage *spine.Lineage
 		if after != "" && fresh {
 			return fmt.Errorf("--after and --fresh contradict: one follows a run, the other refuses to look")
@@ -369,7 +376,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			}
 			fmt.Fprintf(errw, "follows: run %s (goal %s, root %s)\n", after, lineage.Goal, lineage.Root)
 		}
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: spine.DefaultFrame, After: lineage, Fresh: fresh, Context: contextText,
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: frame, After: lineage, Fresh: fresh, Context: contextText,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}
@@ -731,7 +738,8 @@ func cmdServe(args []string, out, errw io.Writer) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens, Work: work})
+	frame := spine.DefaultFrame + wireSecrets(b, a, errw)
+	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens, Work: work, Frame: frame})
 	if err != nil {
 		return err
 	}
@@ -954,4 +962,96 @@ func printImport(out io.Writer, rep *pack.Report) error {
 		fmt.Fprintf(out, "  %s → item %s revision %s (candidate, %s)\n", it.Origin, it.Item, it.Revision, how)
 	}
 	return nil
+}
+
+// wireSecrets connects the secrets store (docs/SECRETS_DESIGN.md) to a
+// subprocess backend: the inject policy's names ride into tool-bearing
+// calls as environment, every injected value is redacted from what comes
+// back, the derived-secret drop path is announced and ingested after each
+// tool-bearing call, and the returned frame suffix tells the worker what
+// exists on this machine. A store that will not open here warns and
+// injects nothing — the frame still tells.
+func wireSecrets(sp *invoke.Subprocess, a *workspace.Announced, errw io.Writer) string {
+	sec := secrets.Open()
+	drop := filepath.Join(a.Path("drop"), secrets.DropName)
+	inj, err := sec.Inject()
+	if err != nil {
+		fmt.Fprintf(errw, "secrets: nothing injected: %v\n", err)
+	}
+	if sec.Present() {
+		if err := os.MkdirAll(filepath.Dir(drop), 0o700); err == nil {
+			sp.Env = append(append([]string{}, inj.Env...), secrets.DropEnv+"="+drop)
+			sp.AfterTools = func() {
+				if stored, err := sec.IngestDrop(drop, ""); err != nil {
+					fmt.Fprintf(errw, "secrets: %v\n", err)
+				} else if len(stored) > 0 {
+					fmt.Fprintf(errw, "secrets: step derived %s (stored, origin=maro)\n", strings.Join(stored, ", "))
+				}
+			}
+		} else {
+			sp.Env = inj.Env
+			drop = ""
+		}
+		sp.Redact = inj.Values
+	}
+	return sec.FrameSuffix(inj.Names, drop)
+}
+
+// cmdSecrets is the Go engine's read-only view of the store: list, check,
+// get. Management (init, migrate, set, recipients) is `maro secrets` on
+// the Python side — one writer of the identity and the first encrypt.
+func cmdSecrets(args []string, out, errw io.Writer) error {
+	sec := secrets.Open()
+	verb := "check"
+	if len(args) > 0 {
+		verb = args[0]
+	}
+	switch verb {
+	case "list":
+		names := sec.Names()
+		if len(names) == 0 {
+			fmt.Fprintln(out, "no secrets store at "+sec.StorePath())
+			return nil
+		}
+		meta := sec.Meta()
+		inj := map[string]bool{}
+		for _, n := range secrets.Injectable(names, sec.Policy()) {
+			inj[n] = true
+		}
+		for _, n := range names {
+			mark := "  "
+			if inj[n] {
+				mark = "* "
+			}
+			fmt.Fprintln(out, mark+secrets.Describe(n, meta))
+		}
+		fmt.Fprintln(out, "(* = injected into tool-bearing steps per the inject policy)")
+		return nil
+	case "check":
+		r := sec.Check()
+		if len(args) > 1 && args[1] == "--json" {
+			b, _ := json.MarshalIndent(r, "", "  ")
+			fmt.Fprintln(out, string(b))
+		} else {
+			fmt.Fprintln(out, r.Render())
+		}
+		if r.Store == "" || (r.OpensHere != nil && !*r.OpensHere) {
+			return fmt.Errorf("secrets store not usable here")
+		}
+		return nil
+	case "get":
+		if len(args) < 2 {
+			return fmt.Errorf("secrets get <name>")
+		}
+		v, ok, err := sec.Get(args[1])
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("no value for %s", args[1])
+		}
+		fmt.Fprintln(out, v)
+		return nil
+	}
+	return fmt.Errorf("secrets: unknown verb %q (list|check|get)", verb)
 }
