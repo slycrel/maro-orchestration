@@ -136,6 +136,31 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("LLM backend available", False, f"detection failed: {str(exc)[:60]}"))
 
+    # Secrets store (docs/SECRETS_DESIGN.md, 2026-09-06): sops + age present,
+    # a store that opens here, and no plaintext residue left in the chain.
+    # Absent store = warn-shaped pass (the legacy .env still serves); a store
+    # that exists but cannot be opened here is a real failure.
+    try:
+        import secrets_store as _ss
+        _sst = _ss.check()
+        if not _sst["store"]:
+            results.append(_check(
+                "Secrets store", True,
+                "none yet — `maro secrets init` + `maro secrets migrate` "
+                + ("(sops+age installed)" if _sst["sops"] and _sst["age_keygen"]
+                   else "(install first: brew install sops age)")))
+        else:
+            _opens = _sst["opens_here"]
+            _detail = (f"{len(_sst['names'])} names, "
+                       f"{len(_sst['injectable'])} injectable, "
+                       f"{len(_sst['recipients'])} recipient(s)")
+            if _sst["plaintext_residue"]:
+                _detail += "; plaintext residue: " + ", ".join(_sst["plaintext_residue"])
+            results.append(_check("Secrets store", _opens is not False,
+                                  _detail if _opens else "store present but does not open here: " + _detail))
+    except Exception as exc:
+        results.append(_check("Secrets store", False, f"check failed: {str(exc)[:80]}"))
+
     # Escalation surface — how escalations reach a human. Two independent
     # surfaces (2026-07-12 decree, GOAL_BRAIN Decisions "escalation channel
     # DECREED"): (1) the durable file (output/escalations.jsonl) ships

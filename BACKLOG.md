@@ -6489,6 +6489,15 @@ both engines (R2 related → R1, R3 rerun → R1, R4 fresh, no call).
   "does X exist on the box" claims need a host-side presence probe
   (existence/name only, never contents) — or an ro mount of a
   credential *index*. Jeremy's decision: container stays ON.
+  **Built the same day** (docs/SECRETS_DESIGN.md, both engines): the
+  store's names are cleartext, so the execute frame carries a presence
+  index — every credential name on the box, which are injected here,
+  and the instruction never to report a held-back one as nonexistent.
+  Injection is by the operator's `~/.maro/secrets/inject` policy (ENV
+  into the container, the host lane and Go steps alike); a credential
+  a run OBTAINS comes back through `$MARO_SECRETS_DROP` and is stored
+  as maro-derived with the run handle. Remaining: the live re-ask of
+  the mail goal, and rotation/scoped-injection (design §10).
 - [ ] **Operator docs name no credential location.** `user/CONTEXT.md`
   (Jeremy's) never says where credentials live; the runs grepped
   `~/.maro/secrets` (wrong path) and never `~/claude/credentials-backup`.

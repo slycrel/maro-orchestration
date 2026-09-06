@@ -1508,6 +1508,98 @@ def _cmd_knowledge(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_secrets(args: argparse.Namespace) -> int:
+    """`maro secrets ...` — the management surface of docs/SECRETS_DESIGN.md.
+    Every verb but `get` prints names and metadata only."""
+    import json as _json
+    import secrets_store as ss
+    cmd = getattr(args, "secrets_cmd", None)
+    try:
+        if cmd == "init":
+            r = ss.init(force=bool(getattr(args, "force", False)))
+            print(f"secrets dir: {r['dir']}")
+            print(f"identity:    {r['identity']} ({'created' if r['created_identity'] else 'kept'})")
+            print(f"recipient:   {r['recipient']}")
+            print(f"store:       {ss.store_path()} ({'created' if r['created_store'] else 'kept'})")
+            print(f"policy:      {ss.policy_path()} ({'created' if r['created_policy'] else 'kept'})")
+            print("next: `maro secrets migrate` folds the plaintext .env in; "
+                  "edit the policy file to inject names into executor environments")
+            return 0
+        if cmd == "list":
+            meta = ss.read_meta()
+            known = ss.names()
+            if not known:
+                print("no secrets store" if not ss.store_present() else "(empty)")
+                return 0
+            inj = set(ss.injectable(known))
+            for n in known:
+                print(("* " if n in inj else "  ") + ss.describe(n, meta))
+            print("(* = injected into executor environments per the inject policy)")
+            return 0
+        if cmd == "check" or cmd is None:
+            st = ss.check()
+            if getattr(args, "json", False):
+                print(_json.dumps(st, indent=2, default=str))
+            else:
+                print(ss.render_check(st))
+            ok = bool(st["sops"]) and bool(st["store"]) and st["opens_here"] is not False
+            return 0 if ok else 1
+        if cmd == "get":
+            v = ss.get_value(args.name)
+            if v is None:
+                print(f"no value for {args.name}", file=sys.stderr)
+                return 1
+            print(v)
+            return 0
+        if cmd == "set":
+            if getattr(args, "stdin", False):
+                value = sys.stdin.readline().rstrip("\r\n")
+            elif getattr(args, "value", None) is not None:
+                value = args.value
+            else:
+                import getpass
+                value = getpass.getpass(f"value for {args.name}: ")
+            if not ss.store_present():
+                ss.init()
+            ss.set_value(
+                args.name, value,
+                origin=ss.ORIGIN_MARO if getattr(args, "maro", False) else ss.ORIGIN_OPERATOR,
+                source="cli", run=getattr(args, "run", None),
+                service=getattr(args, "service", None), note=getattr(args, "note", None))
+            print(f"stored {ss.describe(args.name)}")
+            return 0
+        if cmd == "unset":
+            ss.unset_value(args.name)
+            print(f"removed {args.name}")
+            return 0
+        if cmd == "migrate":
+            src = Path(args.source).expanduser() if getattr(args, "source", None) else None
+            r = ss.migrate(src, overwrite=bool(getattr(args, "overwrite", False)))
+            print(f"migrated from {r['source']} into {r['store']}")
+            print(f"added ({len(r['added'])}): {', '.join(r['added']) or '-'}")
+            if r["kept"]:
+                print(f"kept existing ({len(r['kept'])}): {', '.join(r['kept'])} (use --overwrite to replace)")
+            print("the plaintext file was left in place — retire it yourself once "
+                  "`maro secrets check` shows the store opening here")
+            return 0
+        if cmd == "edit":
+            import subprocess as _sp
+            env = dict(os.environ)
+            env["SOPS_AGE_KEY_FILE"] = str(ss.identity_path())
+            return _sp.call(ss.edit_argv(), env=env)
+        if cmd == "recipients":
+            add = getattr(args, "add", None)
+            recs = ss.add_recipient(add) if add else ss.recipients()
+            for r in recs:
+                print(r)
+            return 0
+    except (RuntimeError, ValueError) as exc:
+        print(f"secrets: {exc}", file=sys.stderr)
+        return 1
+    print(f"unknown secrets verb {cmd!r}", file=sys.stderr)
+    return 2
+
+
 def _cmd_eval(args: argparse.Namespace) -> int:
     from eval import run_eval
     benchmark_ids = [args.benchmark_id] if getattr(args, "benchmark_id", None) else None
@@ -2650,6 +2742,7 @@ _COMMAND_HANDLERS = {
     "eval": _cmd_eval,
     "opstatus": _cmd_opstatus,
     "dev-status": _cmd_dev_status,
+    "secrets": _cmd_secrets,
     "finalize-tail": _cmd_finalize_tail,
     "mission": _cmd_mission,
     "mission-status": _cmd_mission_status,

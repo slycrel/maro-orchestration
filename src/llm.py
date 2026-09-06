@@ -1192,6 +1192,29 @@ _CURRENT_STEP_LINK = "/tmp/maro-current-step.log"
 _NEVER_SCRUB_NAMES = frozenset({"MARO_HOSTED_FREE_ENABLED"})
 
 
+def _ingest_secret_drop(drop_host: Optional[str]) -> None:
+    """After an executor step: fold a derived-secret drop file (if the
+    worker wrote one) into the secrets store as maro-derived, stamped with
+    the run handle. Never raises — a lost ingest is logged, and the drop
+    file is left in place for a retry rather than lost."""
+    if not drop_host:
+        return
+    try:
+        from pathlib import Path as _P
+        import secrets_store as _ss
+        _run = None
+        try:
+            from runs import current_handle_id
+            _run = current_handle_id()
+        except Exception:
+            pass
+        stored = _ss.ingest_drop(_P(drop_host), run=_run)
+        if stored:
+            log.info("secrets: step derived %s (stored, origin=maro)", ", ".join(stored))
+    except Exception as exc:
+        log.warning("secrets drop ingest failed (file kept at %s): %s", drop_host, exc)
+
+
 def _scrub_secret_values(text: str, secret_env: Dict[str, str]) -> str:
     """Replace injected provider-key VALUES with [REDACTED:<NAME>] markers.
 
@@ -1215,7 +1238,7 @@ def _scrub_secret_values(text: str, secret_env: Dict[str, str]) -> str:
 def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                          liveness_timeout=None, poll_interval=2.0, cwd=None,
                          stream_probe=None, container_name=None,
-                         env_extra=None):
+                         env_extra=None, executor_step=False):
     """Run a subprocess in its own process group with streaming + liveness check.
 
     Streams the subprocess's stdout+stderr (merged) to a single temp file
@@ -1397,6 +1420,34 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     except Exception:
         pass
 
+    # Secrets store injection (docs/SECRETS_DESIGN.md, decree 2026-09-06 —
+    # decision 5870f189). EXECUTOR steps only: the names the operator's
+    # `inject` policy allows ride into the worker's environment on both
+    # lanes — merged into child_env on the host, copied across the docker
+    # boundary by the bare `-e NAME` passthrough in the container branch —
+    # and every injected value is scrubbed from captured output. The same
+    # block resolves the derived-secret DROP path (the run's scratch dir,
+    # bound at the container's /tmp) so a worker can hand a credential it
+    # obtained back to the store instead of printing it; ingest happens
+    # after the step below. Never raises: a broken store means no
+    # injection, and the frame already told the worker what exists.
+    _store_env: Dict[str, str] = {}
+    _drop_host: Optional[str] = None
+    if executor_step:
+        try:
+            import secrets_store as _ss
+            _store_env = _ss.container_env()
+            _secret_env = dict(_store_env)
+            import container_exec as _ce_drop
+            _scratch_for_drop = _ce_drop.run_scratch_dir()
+            _dp = _ss.drop_path(_scratch_for_drop)
+            if _dp is not None:
+                _drop_host = str(_dp)
+                child_env[_ss.DROP_ENV] = _drop_host
+        except Exception as _ss_exc:
+            log.warning("secrets store injection skipped: %s", _ss_exc)
+            _store_env, _secret_env = {}, {}
+
     # Bind the subprocess working directory to the caller's workspace when one
     # is supplied and exists. Without this, an agentic subprocess (`claude -p`)
     # inherits the parent's cwd and writes relative paths wherever that happens
@@ -1491,7 +1542,12 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         # file they came from) and in the container worker's env (the
         # decree's accepted exposure); _read_captured scrubs them from
         # captured output so they never persist in transcripts.
-        _secret_env = _ce.hosted_free_container_env()
+        _secret_env = {**_ce.hosted_free_container_env(), **_store_env}
+        if _drop_host and _scratch:
+            # The scratch dir IS the container's /tmp, so the drop file the
+            # worker writes at this path lands at _drop_host on the host.
+            import secrets_store as _ss_drop
+            _worker_env[_ss_drop.DROP_ENV] = "/tmp/" + _ss_drop.DROP_NAME
         if _secret_env:
             # Into the docker CLIENT's env only — the bare -e flags below
             # copy them across the boundary; worker_env stays value-free.
@@ -1502,6 +1558,12 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             passthrough_env=sorted(_secret_env.keys()),
             scratch_dir=_scratch)
         _container = container_name
+
+    if _container is None and _store_env:
+        # Host lane: the worker is the operator's user and could read the
+        # store itself; injection here is parity with the container lane
+        # and the Go engine, so a step written for one lane runs on all.
+        child_env = {**child_env, **_store_env}
 
     proc = subprocess.Popen(
         cmd,
@@ -1611,6 +1673,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 proc.wait(timeout=5)
             stdout = _read_captured()
             _cleanup_files()
+            _ingest_secret_drop(_drop_host)
             if kill_exc is not None:
                 # Probe-ordered kill: raise the probe's exception (e.g.
                 # BudgetRunawayError) so callers get the right class — a
@@ -1640,6 +1703,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
 
     stdout = _read_captured()
     _cleanup_files()
+    _ingest_secret_drop(_drop_host)
     result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, "")
     # The lane this call ACTUALLY ran on — a requested container can fall
     # back to host (unresolvable cwd above); failure attribution must follow
@@ -2718,7 +2782,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             result = _run_subprocess_safe(
                 cmd, input=prompt, timeout=_timeout, cwd=_cwd,
                 stream_probe=_build_stream_probes(model_str, agentic=not no_tools),
-                container_name=_container_name, env_extra=_env_extra)
+                container_name=_container_name, env_extra=_env_extra, executor_step=bool(executor) and not no_tools)
         except subprocess.TimeoutExpired as _texc:
             raise _subprocess_timeout_error("claude", _texc, _timeout)
         except FileNotFoundError:
@@ -2754,7 +2818,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     fresh_cmd, input=prompt, timeout=_timeout, cwd=_cwd,
                     env_extra=_env_extra,
                     stream_probe=_build_stream_probes(model_str, agentic=not no_tools),
-                    container_name=_container_name)
+                    container_name=_container_name, executor_step=bool(executor) and not no_tools)
             except subprocess.TimeoutExpired as _texc:
                 raise _subprocess_timeout_error("claude", _texc, _timeout)
             except FileNotFoundError:
@@ -2835,7 +2899,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                             cmd, input=prompt, timeout=_timeout, cwd=_cwd,
                             env_extra=_env_extra,
                             stream_probe=_build_stream_probes(model_str, agentic=not no_tools),
-                            container_name=_container_name)
+                            container_name=_container_name, executor_step=bool(executor) and not no_tools)
                     except subprocess.TimeoutExpired:
                         log.warning("rate limit retry timed out after %ds, will retry", _timeout)
                         continue

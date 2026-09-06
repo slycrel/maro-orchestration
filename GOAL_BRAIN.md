@@ -4371,3 +4371,38 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   (`shadow.go.enabled: true` + `shadow.go.binary` in
   `~/.maro/workspace/config.yml`) is a workspace-config write and stays
   Jeremy's.
+
+- **2026-09-06 (secrets management is the fix for container blindness — Jeremy; decision 5870f189):**
+  *"I do like that we're running 'secure' dockerized... we probably need a
+  way to manage secrets in a meaningful way; I prefer ENV injection in a
+  container... a more maro-specific management path for all of the
+  different ways it's run, rather than relying on you knowing the secrets
+  or having hermes injecting those directly. So that's ultimately the fix
+  on this one... rather than flipping that functionality on or off...
+  both in python and go... leverage some OSS or free secret management
+  utility."* And later: *"secrets should be both user-injected and
+  maro-derived and we might need meta-data on both."* Shipped the same
+  day in both engines (docs/SECRETS_DESIGN.md): sops + age store at
+  `~/.maro/secrets/` (names cleartext, values encrypted, one file / many
+  box recipients), lookup chain store > legacy plaintext, operator
+  `inject` policy → ENV into the container, the host lane and Go steps,
+  a presence index in every execute frame, cleartext per-name metadata
+  (origin operator|maro, run, service), and the `$MARO_SECRETS_DROP`
+  hand-back for credentials a run obtains. Container stays ON. Hermes
+  dispatch never carries a secret. The M6 Mac mini Jeremy ordered (32 GB,
+  arrives in a few weeks, shared between him and Maro) becomes a third
+  recipient when it lands.
+- **2026-09-06 (Maro answers its own questions; Telegram is the rare exception — Jeremy; decision 1d1ad8b0):**
+  *"I want to push things in the direction of 'maro answers its own
+  questions as much as possible'... having that capability sort of
+  prompts the simpler path of prompt-for-work, which is very easy to slip
+  into prompt-for-decision/judgement/permission from an LLM. So yeah, we
+  need to build that out, and it should be the rare exception, not the
+  norm."* Consequence for the question loop (BACKLOG mailbox arc #3): a
+  pending question pauses the run with a time box and a named no-input
+  alternative the run tries first; an answer resumes the run by handle;
+  asking is a counted, reviewable event, never a default path. Same
+  message, the meta point for this collaboration: *"sometimes that's
+  fantastic, on occasion we'd have been better off talking through things
+  a bit first... ideally we find a good path through the proper cognitive
+  load on both of our sides."*

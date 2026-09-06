@@ -251,6 +251,7 @@ py-modules = [
     "scheduler",
     "scope",
     "secret_scrub",
+    "secrets_store",
     "security",
     "shadow_lane",
     "sheriff",

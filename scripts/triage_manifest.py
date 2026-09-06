@@ -80,6 +80,7 @@ _add("derived-index", """
  portability.py:main""")
 _add("read-only", """
  metrics.py:_reverse_readline convo_miner.py:scan_session_logs
+ secrets_store.py:recipient secrets_store.py:recipients
  correspondence.py:render_transcript
  playbook.py:parse_entries playbook.py:_valid_compression
  knowledge_lens.py:load_standing_rules knowledge_lens.py:load_hypotheses

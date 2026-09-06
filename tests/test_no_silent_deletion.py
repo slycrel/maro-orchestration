@@ -72,6 +72,13 @@ ALLOWED_DELETION_SITES = {
         "ephemeral: clears stale loop-running marker (dead pid)",
     ("killswitch.py", "clear"):
         "user-invoked: the user clearing their own kill switch",
+    ("secrets_store.py", "_write_encrypted"):
+        "ephemeral: unlinks its own 0600 plaintext staging file after one "
+        "sops encrypt call (docs/SECRETS_DESIGN.md)",
+    ("secrets_store.py", "_shred"):
+        "ephemeral: zero-fills and removes a run's derived-secret DROP file "
+        "after its values are stored — a plaintext credential must not "
+        "outlive the step; a failed store leaves the file in place",
     ("shadow_lane.py", "_sweep_go_locked"):
         "ephemeral: the Go track's own SKIPPED gate stamp, and only one "
         "whose reason the gate no longer emits (a retired eligibility "

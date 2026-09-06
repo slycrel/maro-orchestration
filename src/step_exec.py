@@ -13,6 +13,7 @@ import json
 import hashlib
 import logging
 import os
+from pathlib import Path
 import re
 import sys
 import textwrap
@@ -302,7 +303,8 @@ EXECUTE_SYSTEM = (
 
 
 def execute_system_for_lane(adapter=None) -> str:
-    """The execute prompt for the lane this call is CONFIGURED for.
+    """The execute prompt for the lane this call is CONFIGURED for, plus
+    the secrets presence index for that lane (`_secrets_block`).
 
     Same cheap gate as the introspection mount-view notice: config says
     container and the run hasn't suppressed it. The actual containerize
@@ -321,6 +323,39 @@ def execute_system_for_lane(adapter=None) -> str:
     the true TOCTOU (lane dies between this render and dispatch) — loud
     command-not-found, worker falls back.
     """
+    base = _lane_prompt(adapter)
+    block = _secrets_block(container=base is not EXECUTE_SYSTEM)
+    return base + "\n\n" + block if block else base
+
+
+def _secrets_block(*, container: bool) -> str:
+    """The `## Secrets` paragraph for the execute frame (secrets_store
+    .presence_block): which credential names exist on this machine, which
+    are injected into this step's environment, and where to drop a
+    credential the worker obtains. Empty without a store. Never raises —
+    a torn store must not take the step's prompt down. Container lane:
+    injected = the operator's policy set + the hosted-free keys under
+    their own gate; the drop path is the container's /tmp (the run
+    scratch bind). Host lane: the same policy set, drop path host-side."""
+    try:
+        import secrets_store as _ss
+        import container_exec as _ce
+        injected = set(_ss.injectable(_ss.names()))
+        drop = None
+        scratch = _ce.run_scratch_dir()
+        if container:
+            injected |= set(_ce.hosted_free_container_env())
+            if scratch:
+                drop = Path("/tmp") / _ss.DROP_NAME
+        else:
+            drop = _ss.drop_path(scratch)
+        return _ss.presence_block(injected, host=not container, drop=drop)
+    except Exception as exc:
+        log.warning("secrets presence block skipped: %s", exc)
+        return ""
+
+
+def _lane_prompt(adapter=None) -> str:
     try:
         import container_exec as _ce
         if _ce.container_mode() != "off" and not _ce.container_suppressed():

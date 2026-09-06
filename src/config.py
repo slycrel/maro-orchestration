@@ -256,20 +256,41 @@ def credentials_env_file() -> Path:
     return local
 
 
+def _parse_dotenv_text(text: str) -> dict[str, str]:
+    """KEY=value pairs from dotenv text: comments and blanks skipped, one
+    layer of matching quotes stripped. Shared by the legacy plaintext
+    reader, the secrets-store migration and the derived-secret drop."""
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            k = k.strip()
+            if k:
+                result[k] = v.strip().strip('"').strip("'")
+    return result
+
+
 def load_credentials_env() -> dict[str, str]:
-    """Load key=value pairs from credentials env file."""
+    """Credential name → value from every file source, in precedence order:
+    the managed secrets store (`secrets_store`, sops + age, 2026-09-06) wins
+    over the legacy plaintext credentials env file (`credentials_env_file`),
+    which keeps serving names the store lacks — so the day the store
+    appears nothing breaks, and `maro secrets check` names the residue.
+    Callers layer the PROCESS env above this themselves (llm._get_key)."""
     result: dict[str, str] = {}
     path = credentials_env_file()
-    if not path.exists():
-        return result
+    if path.exists():
+        try:
+            result.update(_parse_dotenv_text(path.read_text()))
+        except OSError:
+            pass
     try:
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if "=" in line and not line.startswith("#"):
-                k, v = line.split("=", 1)
-                result[k.strip()] = v.strip().strip('"').strip("'")
-    except Exception:
-        pass
+        import secrets_store as _ss
+        result.update(_ss.load())
+    except Exception as exc:  # the store must never take the legacy path down
+        import logging
+        logging.getLogger("config").warning("secrets store lookup failed: %s", exc)
     return result
 
 
