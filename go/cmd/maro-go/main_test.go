@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,5 +67,50 @@ func TestCLIJournalStatusAndPublish(t *testing.T) {
 	out.Reset()
 	if code := run([]string{"journal", "publish"}, &out, &errw); code != 0 || !strings.Contains(out.String(), "published: 0") {
 		t.Fatalf("publish: %d %s %s", code, out.String(), errw.String())
+	}
+}
+
+// runs show --json is the run for another program: the summary with the
+// delivered payload as result, parseable, with the handle the CLI printed.
+func TestCLIRunsShowJSON(t *testing.T) {
+	t.Setenv(workspace.EnvOverride, filepath.Join(t.TempDir(), "ws"))
+	var out, errw bytes.Buffer
+	if code := run([]string{"now", "--backend", "scripted", "--fresh", "say hi"}, &out, &errw); code != 0 {
+		t.Fatalf("now exit %d: %s %s", code, out.String(), errw.String())
+	}
+	var handle string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(l, "run ") {
+			handle = strings.Fields(l)[1]
+		}
+	}
+	if handle == "" {
+		t.Fatalf("no run line:\n%s", out.String())
+	}
+	out.Reset()
+	if code := run([]string{"runs", "show", "--json", handle}, &out, &errw); code != 0 {
+		t.Fatalf("show exit %d: %s %s", code, out.String(), errw.String())
+	}
+	var s struct {
+		Handle  string `json:"handle"`
+		Outcome string `json:"outcome"`
+		Result  string `json:"result"`
+		Usage   struct {
+			Calls int `json:"calls"`
+		} `json:"usage"`
+		Landscape *struct{} `json:"landscape"`
+	}
+	// the workspace announcement comes first (every command); the JSON
+	// starts at the first line that is an object — the consumer's contract
+	body := out.String()[strings.Index(out.String(), "\n{")+1:]
+	if err := json.Unmarshal([]byte(body), &s); err != nil {
+		t.Fatalf("not json: %v\n%s", err, out.String())
+	}
+	if s.Handle != handle || s.Outcome != "delivered" || !strings.Contains(s.Result, "scripted response to: say hi") || s.Usage.Calls < 1 || s.Landscape == nil {
+		t.Fatalf("summary: %+v", s)
+	}
+	out.Reset()
+	if code := run([]string{"runs", "show", "--json", "deadbeef"}, &out, &errw); code == 0 {
+		t.Fatalf("unknown handle must fail")
 	}
 }

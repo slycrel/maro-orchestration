@@ -2268,3 +2268,51 @@ this entry: version the intent/plan/step/closure templates; bind the
 plan request byte-for-byte; a `Fresh` field on the goal record. Next:
 wire Go as the challenger in Python's shadow lane on the live goal
 stream.
+
+## Post-v1 — comparison rerun + the Go challenger arm in the shadow lane (2026-09-06)
+
+Jeremy: wire Go into the Python shadow lane "with a cap/off switch";
+export/reseed judged not worth it (the landscape reads run history,
+not lessons; imported lineage rows are quarantined) — a light rerun of
+the comparison protocol on clean workspaces ran instead
+(`planning/successor-comparison.md`, "Rerun"). Python 6/6 at $1.39
+(card) / 402 s; Go 5/6 at $0.54 / 254 s; the landscape made the SAME
+four decisions on both engines (R2 related → R1, R3 rerun → R1, R4
+fresh with no call). The one failure was Go's and real: a tool-less
+planner ran with no cwd, the CLI told it the launcher's directory was
+"current", it baked that absolute path into a step and the tool-bearing
+execute followed it — G4's file landed in the Python repo's checkout.
+09-05 passed by launcher accident. Fix: `Driver.work` gives EVERY
+request the work dir (this entry); acceptance = G4 rerun from the same
+launcher, file in `<ws>/work`, none in the repo. Unsettled from the
+rerun: Go's tail diagnose cost 3× per output token vs 09-05 with
+`cache_read 0` (probe: the CLI's `modelUsage` on that call — the receipt
+keeps only sums).
+
+Go side of the arm: `RunState.Judge` (the landscape's attempt-0 call,
+attached at the Landscape record), `run.Summarize` (`internal/run/
+summary.go`: mission, landscape, lineage, every call with its receipt,
+the usage sum with `cost_reported` false over any partial sum), and
+`maro-go runs show --json <handle>` (the summary + the delivered payload
+as `result`; the workspace announcement still comes first, the consumer
+parses from the first object line). 7 mutants killed (judge detach,
+partial-sum guard ×2, cost overwrite, attempt calls dropped, result
+dropped).
+
+Python side (main `99b3ba16` → this entry): `src/shadow_lane.py` Go
+track — `ARM_GO`, own switch `shadow.go.enabled`, own claim dir
+`<run-dir>/shadow-go/` (a SIBLING of `shadow/`: the star|plain track
+claims by that dir's existence), own daily cap from its own `arm: "go"`
+rows (`_today_ledger_count(arms)`), `go_eligible` (NOW primaries on the
+basic checks — the engine runs with `--deny-tools` naming every
+mutating/network tool, structural containment, no preamble; AGENDA
+primaries through the star|plain read-tier gate), `run_go_challenger`
+(engine on its own persistent workspace `shadow.go.workspace`, scratch
+work dir under the claim, then `runs show --json` for the row: handle,
+outcome, closure, calls, cost (None unless every call reported),
+landscape relation, binary sha256 as the version pin). 8 mutants
+killed. DEFAULTS.md rows, design doc "The Go track" with the
+pre-registered questions and the prediction on record (Go ≥ harness on
+NOW answers at lower cost; Go < harness on AGENDA depth until its
+workspace has accrued lessons). Live flip not made: `shadow.go.enabled`
+is a write to `~/.maro/workspace/config.yml`, Jeremy's.

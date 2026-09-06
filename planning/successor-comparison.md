@@ -128,6 +128,70 @@ successor's learning loop was only exercised in the acceptance run.
 **One-run caveat.** Every cell is n=1. A level check, not a
 statistic: a second pass would be worth it only if a cell flipped.
 
+## Rerun (2026-09-06, after features 1–2, clean workspaces on both engines)
+
+Same protocol, same six goals, plus a related sequence to exercise the
+landscape on both engines: R1 (three sentences on quarterly reports to a
+board), R2 (R1 + "and add what gross margins tell them" — a follow-up),
+R3 (R1 verbatim — a rerun), R4 (a haiku — unrelated). Python at
+`99b3ba16` + the Go arm this entry, Go at `ca1501e2`; fresh workspaces
+(`pyws2`, `c4`); haiku on both; the driver launched from the Python
+repo's checkout (which mattered — see G4).
+
+Cost source note: the 09-05 Python NOW cost ($0.005) was the
+step-costs row of the one answer call; the run's own outcome row says
+$0.063 with ~21k input tokens on BOTH days (verified in the 09-05
+workspace) — the NOW context (recall, enrichment, catalog), not the
+answer. This table uses the outcome row for NOW and the run card for
+AGENDA, so the Python column is honest to what the run recorded and NOT
+comparable to the 09-05 column without that note.
+
+| goal | lane | engine | calls | cost_usd | wall_s | fixture | landscape | notes |
+|---|---|---|---|---|---|---|---|---|
+| G1 ohm | now | Python | 1 | 0.0632 | 10.0 | PASS | fresh (no candidates) | 21k input tokens of NOW context for a one-word answer |
+| G1 ohm | now | Go | 2 | 0.0643 | 37.6 | PASS | fresh | execute $0.017 + tail diagnose $0.047 (2984 output tokens, cache_read 0 — 09-05's diagnose read 6.3k cached and cost $0.016; per-token 3× today, unsettled) |
+| G2 12:15 | now | Python | 1 | 0.0632 | 5.9 | PASS | fresh | |
+| G2 12:15 | now | Go | 2 | 0.0336 | 13.2 | PASS | fresh | |
+| G3 go.dev version | now | Python | 1 | 0.0632 | 7.9 | PASS | fresh | URL pre-fetched |
+| G3 go.dev version | now | Go | 2 | 0.0526 | 39.1 | PASS | fresh | `--deny-tools ""` |
+| G6 cannot verify | now | Python | 1 | 0.0632 | 5.9 | PASS | fresh | |
+| G6 cannot verify | now | Go | 2 | 0.0430 | 34.4 | PASS | fresh | |
+| G4 marker.txt | agenda | Python | 9 | 0.4800 (card; outcome row 1.2445) | 175.4 | PASS | fresh | 9 step-cost rows in the window (22 on 09-05); file in the project fence + run artifact |
+| G4 marker.txt | agenda | Go | 6 | 0.1378 | 42.0 | **FAIL** (placement) | fresh | closure achieved, but the file landed in the LAUNCHER's cwd: the tool-less planner ran with no cwd, the CLI told it the launcher's directory was "current", and it baked that absolute path into the step; the tool-bearing execute followed it. Fixed this entry: every request runs in the work dir (`Driver.work`). 09-05 passed only because the driver was launched from the work dir's parent |
+| G5 fizz.py | agenda | Python | 9 | 0.6531 (card; outcome row 1.3793) | 197.2 | PASS | fresh | |
+| G5 fizz.py | agenda | Go | 10 | 0.2125 | 87.9 | PASS | fresh | fizz.py in `<ws>/work` |
+| R1 board report | now | Python | 1 | 0.0294 | 8.0 | — | fresh (no candidates) | |
+| R1 board report | now | Go | 2 | 0.0472 | 44.3 | — | fresh | |
+| R2 + gross margins | now | Python | 2 | 0.0315 | 16.0 | — | **related → R1** (judge, hosted-free) | |
+| R2 + gross margins | now | Go | 3 | 0.0836 | 54.2 | — | **related → R1** (judge, 1 candidate) | |
+| R3 = R1 | now | Python | 2 | 0.0301 | 12.0 | — | **rerun → R1** (judge) | |
+| R3 = R1 | now | Go | 3 | 0.0799 | 45.4 | — | **rerun → R1** (judge, 2 candidates) | |
+| R4 haiku | now | Python | 1 | 0.0104 | 5.9 | — | fresh (no candidates) | below the floor, no call |
+| R4 haiku | now | Go | 2 | 0.0466 | 16.4 | — | fresh | no call |
+
+Totals (G-set): Python 6/6 at $1.39 (card) and 402 s; Go 5/6 at $0.54
+and 254 s. Landscape: both engines related R2 to R1, called R3 a rerun
+of R1, and left R4 fresh without a call — the same four decisions, the
+same chosen run, on both engines, first try.
+
+Reading. (1) The one regression is Go's, and it is the kind the
+protocol exists to catch: a fixture that passed on 09-05 by launcher
+accident, failed the moment the launcher moved — a cwd leak into a
+tool-less call. Now closed; the rerun on the fix is the acceptance
+(below). (2) The landscape is engine-invariant on this sequence: same
+candidates, same relation, same chosen run. (3) Go is 2.6× cheaper and
+1.6× faster on the G-set, down from 5.5× on cost because the NOW cost
+sources are now honest on the Python side (and Go's tail diagnose got
+pricier per token — unsettled, probe: the CLI's `modelUsage` on that
+call, which the receipt does not keep). (4) Python's NOW context is
+~21k input tokens for every NOW goal regardless of size — 12× the
+answer; a retrieval-handle question for the Python side, not a Go
+comparison finding.
+
+Shadow-lane baseline: these are the numbers the Go challenger arm
+(`shadow.go.*`, this entry) is expected to reproduce on the live stream:
+NOW answers agree, Go cost ≈ 0.5–1× Python's NOW, ≈ 0.3× on AGENDA.
+
 ## What comes next (Phase 4, second half)
 
 Add the same small feature on both engines and keep a per-feature

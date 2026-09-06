@@ -156,6 +156,7 @@ type RunState struct {
 	// run's, else its own. Related is the rendered context of the chosen
 	// run that rides into the run's requests ("" when fresh).
 	Landscape  *Landscape
+	Judge      *invoke.State // the landscape's judge call (attempt 0), when one was made; nil otherwise
 	Parent     record.RecordID
 	Root       record.RecordID
 	Related    []byte
@@ -559,6 +560,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			}
 			rs.Goal, rs.Family, rs.Target = g, fams[x.Goal], targets[x.Goal]
 			rs.Landscape = x
+			if x.Judge != "" {
+				rs.Judge = inv[x.Judge] // checkLandscape proved it this run's attempt-0 call
+			}
 			rs.Parent, rs.Root = lineageOf(g, x, runs)
 			related, err := RelatedContext(rs, runs, store.Get)
 			if err != nil {

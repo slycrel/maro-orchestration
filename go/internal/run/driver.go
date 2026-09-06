@@ -331,11 +331,16 @@ func (d *Driver) policy(ctx context.Context, rs *RunState, n uint32) (*learn.Pol
 	return pol, recs, nil
 }
 
-// work is the working directory for a tool-bearing request: the driver's
-// Work, made to exist (mkdir -p; 0755) and absolute. A tool-less request
-// has none — a judge does not run anywhere.
+// work is the working directory for every request when the driver has
+// one: Work, made to exist (mkdir -p; 0755) and absolute. Tool-less
+// requests run there too, not only the tool-bearing ones (comparison
+// rerun 2026-09-06: a tool-less planner inherited the LAUNCHER's cwd, the
+// CLI told it that was its working directory, and it baked that absolute
+// path into a step the tool-bearing execute then followed — the file
+// landed outside the work dir). The work dir is what "the current
+// directory" means to the run, for every call that could name it.
 func (d *Driver) work(tools bool) (string, error) {
-	if !tools || d.Work == "" {
+	if d.Work == "" {
 		return "", nil
 	}
 	abs, err := filepath.Abs(d.Work)

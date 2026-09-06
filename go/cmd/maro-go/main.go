@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -84,7 +85,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--after handle | --fresh] [--work dir] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--after handle | --fresh] [--work dir] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -429,6 +430,23 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 			led, err := spine.Fold(j.Production(), st)
 			if err != nil {
 				return err
+			}
+			// --json: the run's Summary for another program (the Python
+			// shadow lane), the delivered payload as result when one exists
+			if args[1] == "--json" && len(args) > 2 {
+				for _, rs := range led.Runs {
+					if spine.HandleOf(rs.Run) != args[2] {
+						continue
+					}
+					s := spine.Summarize(rs)
+					if payload, _, err := spine.LatestPayload(led, st, args[2]); err == nil {
+						s.Result = string(payload)
+					}
+					enc := json.NewEncoder(out)
+					enc.SetIndent("", "  ")
+					return enc.Encode(s)
+				}
+				return fmt.Errorf("no run with handle %s", args[2])
 			}
 			payload, m, err := spine.LatestPayload(led, st, args[1])
 			if err != nil {
