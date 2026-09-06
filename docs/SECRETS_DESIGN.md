@@ -215,6 +215,22 @@ maro-go secrets list|check|get    the same store, the Go engine's view
   policy file is the operator's lever — inject only what the goal class
   needs.
 
+**Backup convention.** The backup unit is the four files in
+`~/.maro/secrets/` (`maro.sops.env`, `meta.json`, `inject`,
+`age-identity.txt`). The first three may be copied anywhere — a private
+repo, another box, a cloud folder — because nothing in them opens without
+the identity. The identity goes wherever the operator keeps keys (a
+password manager, an offline copy), and a backup that holds both is
+plaintext-equivalent and must stay inside the box's own trust domain. A
+second box is better served as a *recipient* (`maro secrets recipients
+add`) than as a holder of this box's identity. The store is the source of
+truth for account logins as well as API keys; the operator should not keep
+a parallel plaintext list once a name is in the store (`maro secrets get
+NAME` is the way to read one). On this box the local backup at
+`~/claude/credentials-backup/maro/secrets/` holds all four by Jeremy's
+choice (same trust domain, never leaves the box); `refresh.sh` there
+re-copies them.
+
 ## 10. Residuals / next
 
 - **Rotation** is manual (`set` again). A `rotated_after` field in the
