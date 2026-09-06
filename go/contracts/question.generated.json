@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "lane_event",
-  "envelope": "control",
-  "schema": "lane_event/1",
-  "go_type": "supervise.LaneEvent",
+  "kind": "question",
+  "envelope": "production",
+  "schema": "question/1",
+  "go_type": "run.Question",
   "fields": [
     {
       "name": "header.ID",
@@ -78,31 +78,45 @@
       "from_header": true
     },
     {
-      "name": "Lane",
-      "wire": "lane",
+      "name": "Step",
+      "wire": "step",
+      "go_type": "int",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Question",
+      "wire": "question",
       "go_type": "string",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Event",
-      "wire": "event",
-      "go_type": "supervise.LaneEventKind",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Generation",
-      "wire": "generation",
-      "go_type": "int",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Reason",
-      "wire": "reason",
+      "name": "Why",
+      "wire": "why",
       "go_type": "string",
       "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "NoInputAlternative",
+      "wire": "no_input_alternative",
+      "go_type": "string",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Tried",
+      "wire": "tried",
+      "go_type": "bool",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Deadline",
+      "wire": "deadline",
+      "go_type": "time.Time",
+      "omittable": false,
       "is_thought": false
     }
   ],

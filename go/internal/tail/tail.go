@@ -163,7 +163,8 @@ func Signals(led *run.Ledger, rs *run.RunState, a *run.AttemptState) []Signal {
 			add(SignalInterrupted)
 		case strings.HasPrefix(rec.Reason, "blocked at step"):
 			add(SignalBlockedStep)
-		case strings.HasPrefix(rec.Reason, "needs clarification"):
+		case strings.HasPrefix(rec.Reason, "needs clarification"), strings.HasPrefix(rec.Reason, "needs answer"):
+			// the run is waiting on the operator, not failing: no signal, no lesson
 		default:
 			add(SignalBackendFailed)
 		}

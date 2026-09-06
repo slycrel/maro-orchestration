@@ -91,7 +91,9 @@ type AttemptState struct {
 	// AGENDA stages, as committed
 	Intent *IntentAssessment
 	Plan   *Plan
-	Steps  []*StepDone // by ordinal, dense from 1
+	// Question: the operator question the attempt ended on (NOW or AGENDA), when it asked one.
+	Question *Question
+	Steps    []*StepDone // by ordinal, dense from 1
 	// Verdicts this attempt committed (run-scoped), in Seq order.
 	Verdicts []*verdict.Verdict
 	// LastAt/LastRef: the newest attempt-scoped record the fold attached —
@@ -164,6 +166,9 @@ type RunState struct {
 	Root       record.RecordID
 	Related    []byte
 	TerminalAt uint64 // Seq of the transition that made the run terminal (0 = not yet)
+	// Answer: the operator's answer to the run's question (or its clarity-gate
+	// question), when one was committed. At most one per run.
+	Answer *Answer
 }
 
 // riders is what accompanies the goal text in every intent, plan and NOW
@@ -468,6 +473,37 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if a := attemptNoErr(runs, x.RunID, x.Attempt); a != nil {
 				a.touch(x)
 			}
+		case *Question:
+			a, err := attempt(get(x.RunID), x.Attempt, "question")
+			if err != nil {
+				return err
+			}
+			if a.Question != nil || a.Current() != Executing {
+				return fmt.Errorf("run: %s attempt %d question out of place (state %s, prior question %v)", x.RunID, x.Attempt, a.Current(), a.Question != nil)
+			}
+			a.Question = x
+			a.touch(x)
+		case *Answer:
+			rs := runs[x.Target]
+			if rs == nil {
+				return fmt.Errorf("run: answer %s targets unknown run %s", x.ID, x.Target)
+			}
+			var asked *AttemptState
+			for _, a := range rs.Attempts {
+				if a != nil && (a.Question != nil || (a.Intent != nil && !a.Intent.Clear)) {
+					asked = a
+				}
+			}
+			if asked == nil {
+				return fmt.Errorf("run: answer %s for run %s, which asked nothing", x.ID, x.Target)
+			}
+			if rs.Answer != nil {
+				return fmt.Errorf("run: answer %s for run %s, which is already answered", x.ID, x.Target)
+			}
+			if x.Question != "" && (asked.Question == nil || asked.Question.ID != x.Question) {
+				return fmt.Errorf("run: answer %s cites question %s, which is not the run's", x.ID, x.Question)
+			}
+			rs.Answer = x
 		case *Interrupt:
 			if runs[x.Target] == nil {
 				return fmt.Errorf("run: interrupt %s targets unknown run %s", x.ID, x.Target)

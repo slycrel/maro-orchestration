@@ -402,6 +402,11 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		if err := d.crash("after_step"); err != nil {
 			return nil, nil, err
 		}
+		if q, err := d.askAfterExecute(ctx, rs, n, k); err != nil {
+			return nil, nil, err
+		} else if q != nil {
+			return &Outcome{Terminal: invoke.TerminalFailed, Reason: NeedsAnswer(q), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: d.Backend.Capabilities().Model, Recall: sel.ID, Steps: len(done)}, nil, nil
+		}
 		if sd.Outcome == StepBlocked {
 			return &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("blocked at step %d: %s", k, steps[k-1]), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: d.Backend.Capabilities().Model, Recall: sel.ID, Steps: len(done)}, nil, nil
 		}

@@ -1,0 +1,44 @@
+{
+  "format_version": "2026-09-04",
+  "kind": "answer",
+  "lifecycle": "stable",
+  "provenance": "supplied",
+  "measured_by": "cmd/maro-go:TestCLIAskAnswerLoop",
+  "fields": {
+    "target": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestQuestionAndAnswerWire"
+    },
+    "question": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestQuestionAndAnswerWire"
+    },
+    "text": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestQuestionAndAnswerWire"
+    },
+    "source": {
+      "absence": "never",
+      "on_absence": "rejected",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestQuestionAndAnswerWire"
+    },
+    "late": {
+      "absence": "empty",
+      "on_absence": "tolerated",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestQuestionAndAnswerWire"
+    }
+  }
+}

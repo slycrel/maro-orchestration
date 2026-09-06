@@ -76,6 +76,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdStatus(stdout)
 	case "secrets":
 		err = cmdSecrets(args[1:], stdout, stderr)
+	case "answer":
+		err = cmdAnswer(args[1:], stdout, stderr)
+	case "asks":
+		err = cmdAsks(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return 2
@@ -88,7 +92,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status | secrets list|check [--json]|get <name>")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status | secrets list|check [--json]|get <name> | answer <handle> [--source s] [--backend b] [--model m] <text> | asks [--json]")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -359,8 +363,11 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		if work == "" {
 			work = a.Path("work")
 		}
+		askPath := ""
 		if sp, ok := b.(*invoke.Subprocess); ok {
 			frame += wireSecrets(sp, a, errw)
+			askPath = wireAsk(sp, a)
+			frame += "\n\n" + spine.AskInstructions(askPath)
 		}
 		var lineage *spine.Lineage
 		if after != "" && fresh {
@@ -376,7 +383,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			}
 			fmt.Fprintf(errw, "follows: run %s (goal %s, root %s)\n", after, lineage.Goal, lineage.Root)
 		}
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: frame, After: lineage, Fresh: fresh, Context: contextText,
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}
@@ -739,7 +746,9 @@ func cmdServe(args []string, out, errw io.Writer) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	frame := spine.DefaultFrame + wireSecrets(b, a, errw)
-	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens, Work: work, Frame: frame})
+	askPath := wireAsk(b, a)
+	frame += "\n\n" + spine.AskInstructions(askPath)
+	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens, Work: work, Frame: frame, AskPath: askPath})
 	if err != nil {
 		return err
 	}

@@ -89,6 +89,9 @@ type Driver struct {
 	Health func() []string
 	// Confined: every invocation runs tool-less (fork children).
 	Confined bool
+	// AskPath is the file a worker writes to ask the operator ($MARO_ASK,
+	// ask.go); read after every execute. Empty = this lane cannot ask.
+	AskPath string
 	// ChildOf: the fork this driver's run is a member of (child drivers).
 	ChildOf record.RecordID
 	// ModelJudge: a NOW run asks the closure judge (tool-less) after its
@@ -708,6 +711,13 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 			return nil, err
 		}
 		out.Response = ref
+	}
+	// a worker that asked the operator ends the attempt on its question:
+	// an honest failed terminal the answer's follow-up run continues from
+	if q, err := d.askAfterExecute(ctx, rs, n, 0); err != nil {
+		return nil, err
+	} else if q != nil {
+		out.Terminal, out.Reason = invoke.TerminalFailed, NeedsAnswer(q)
 	}
 	return out, nil
 }

@@ -94,5 +94,25 @@ func Inspect(rs *RunState) []string {
 			lines = append(lines, fmt.Sprintf("metering: %s — %s target %s (%s): not yet recorded", t.Name, t.Dimension, num(t.Limit), t.Why))
 		}
 	}
+	for _, at := range rs.Attempts {
+		if at == nil || at.Question == nil {
+			continue
+		}
+		q := at.Question
+		lines = append(lines, fmt.Sprintf("question (attempt %d, step %d, until %s): %s", q.Attempt, q.Step, q.Deadline.UTC().Format("2006-01-02 15:04Z"), q.Question))
+		if q.Why != "" {
+			lines = append(lines, "  why: "+q.Why)
+		}
+		if q.NoInputAlternative != "" {
+			lines = append(lines, fmt.Sprintf("  tried without the operator (%v): %s", q.Tried, q.NoInputAlternative))
+		}
+	}
+	if ans := rs.Answer; ans != nil {
+		late := ""
+		if ans.Late {
+			late = ", late"
+		}
+		lines = append(lines, fmt.Sprintf("answer (%s%s): %s", ans.Source, late, ans.Text))
+	}
 	return lines
 }

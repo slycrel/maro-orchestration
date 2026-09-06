@@ -2401,3 +2401,46 @@ Patterns:
      fake `claude`; `cat > prompt.txt` left the diagnose prompt where the
      execute frame was expected. Append with a separator; assert with
      contains.
+
+## Post-v1 — the operator-question lane, Go side (2026-09-06)
+
+Decree (Jeremy, decision 1d1ad8b0): the Telegram question loop gets built
+out, "and it should be the rare exception, not the norm" — push toward
+"maro answers its own questions as much as possible"; prompt-for-work
+slips easily into prompt-for-decision/judgement/permission. Both engines.
+The contract is the file the worker writes (`$MARO_ASK`, one JSON object:
+question / why / no_input_alternative / tried), read by the driver after
+the execute — never the worker's prose. Go: `internal/run/ask.go` (the
+instructions paragraph, word for word Python's; `ReadAsk` / `ArchiveAsk`;
+`Question` and `Answer` records; `askAfterExecute` on the NOW execute and
+after every AGENDA step) — the attempt ends on an honest failed terminal
+"needs answer: …", the tail treats it like "needs clarification" (no
+signal, no lesson). `maro-go answer <handle> <text>` commits the Answer
+against the asked run (refuses unasked / already answered; marks late past
+the 24 h time box) and runs the goal again in its lane, lineage `--after`
+the asked run, with the answer as operator context (`--context`), so the
+follow-up is a recorded run of its own and the worker is told not to ask
+again. `maro-go asks [--json]` is the ledger: pending / answered /
+expired. `runs show` prints the question and the answer. Serve wires the
+same path. Contracts: `question`, `answer` declared (0/0); tests: the
+file contract, the wire vocabulary, and the loop end to end with a fake
+worker that asks once.
+
+Patterns:
+
+108. **An ask is a file, not a sentence.** The driver reads `$MARO_ASK`
+     after the execute; "I asked the operator" in the response without the
+     file is not an ask, and a file without the sentence is. The same
+     boundary as the derived-secrets drop: a worker's side channel is a
+     path the frame names, and the engine reads it exactly once.
+109. **Resume by running the goal again, after the asked run.** No paused
+     process, no held lease: the answer is a record against the asked run
+     and the follow-up is a normal run with the answer as operator context
+     and the asked run as lineage. Everything the fold already knows about
+     lineage, recall and the landscape applies unchanged; the only new
+     state is two record kinds.
+110. **A follow-up assertion finds its prompt by content, not by
+     position.** The tail's lens calls come after the follow-up execute
+     through the same fake CLI (pattern 107's sibling); "the last prompt"
+     was the diagnosis lens. Search the captured calls for the answer
+     block, and assert it rode into exactly one of them.
