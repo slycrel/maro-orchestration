@@ -88,9 +88,15 @@ type Goal struct {
 	Parent        record.RecordID `json:"parent,omitempty"`
 	Root          record.RecordID `json:"root"`
 	Text          thought.Ref     `json:"text"`
-	Origin        GoalOrigin      `json:"origin"`
-	Lane          Lane            `json:"lane"` // the driver configuration this goal is routed to (explicit in v1)
-	Delivery      DeliveryPolicy  `json:"delivery"`
+	// Context is operator context handed in with the goal (the user docs an
+	// operator keeps: who they are, what "the maro box" means) — a recorded
+	// input, so the fold re-derives every request that carried it. Nil when
+	// none was given. It is context, not learning: nothing in it was minted
+	// by a run.
+	Context  *thought.Ref   `json:"context,omitempty"`
+	Origin   GoalOrigin     `json:"origin"`
+	Lane     Lane           `json:"lane"` // the driver configuration this goal is routed to (explicit in v1)
+	Delivery DeliveryPolicy `json:"delivery"`
 	// Arm is set when this goal runs as one arm of an experiment assignment:
 	// a replay goal (origin replay, re-running its parent, the unit) or a
 	// production goal admitted to a live experiment at intake (§5, §8a).
@@ -121,6 +127,14 @@ func (r *Goal) ValidateWire() error {
 	}
 	if r.Text.Kind != thought.Goal {
 		return fmt.Errorf("goal: text must be a goal thought, got %q", r.Text.Kind)
+	}
+	if r.Context != nil {
+		if err := r.Context.Validate(); err != nil {
+			return fmt.Errorf("goal: context: %w", err)
+		}
+		if r.Context.Kind != thought.Context {
+			return fmt.Errorf("goal: context must be a context thought, got %q", r.Context.Kind)
+		}
 	}
 	if !origins[r.Origin] {
 		return fmt.Errorf("goal: origin %q out of vocabulary", r.Origin)

@@ -105,6 +105,11 @@ type Driver struct {
 	// Fresh skips the landscape: the goal is the root of its own lineage
 	// and no prior run is consulted (recorded as such; no call).
 	Fresh bool
+	// Context is operator context handed in with the goal (the user docs);
+	// stored as a thought at intake and recorded on the goal, so it is a
+	// recorded input that rides into every intent, plan and NOW execute
+	// request. Nil = none.
+	Context []byte
 	// Lens is the persona lens every judge request of this driver's runs
 	// is rendered under (§13); "" or "neutral" = no prefix. Recorded in
 	// the attempt config; the fold checks each judge request begins with it.
@@ -399,6 +404,13 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 		return nil, err
 	}
 	goal, fam := Intake(goalText, ref, d.Origin.Name(), d.Lane, policy)
+	if len(bytes.TrimSpace(d.Context)) > 0 {
+		cref, err := d.Store.Put(thought.Context, d.Context)
+		if err != nil {
+			return nil, err
+		}
+		goal.Context = &cref
+	}
 	if (d.Origin.Name() == OriginReplay) != (d.Replay != nil) {
 		return nil, fmt.Errorf("%w: a replay origin needs a replay context, and only it", ErrConfig)
 	}
@@ -427,6 +439,9 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 		return nil, err
 	}
 	rs := &RunState{Run: record.RunID(record.NewID()), Goal: goal, Family: fam, Target: target}
+	if rs.Context, err = contextBlock(goal, d.Store.Get); err != nil {
+		return nil, err
+	}
 	d.emit(rs, 0, "intake", "", string(fam.Family))
 	if err := d.crash("after_intake"); err != nil {
 		return nil, err
@@ -662,7 +677,7 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 	if err != nil {
 		return nil, err
 	}
-	prompt := Lensed(ft, append(append(append([]byte{}, text...), rs.Related...), block...))
+	prompt := Lensed(ft, append(append(append([]byte{}, text...), rs.riders()...), block...))
 	tools := d.Backend.Capabilities().ActsOutward && !d.Confined
 	cwd, err := d.work(tools)
 	if err != nil {

@@ -32,11 +32,12 @@ const (
 	LessonText  Kind = "lesson_text"
 	Step        Kind = "step"       // one planned step's text (AGENDA)
 	Fixture     Kind = "fixture"    // an experiment unit's expected answer (deterministic oracle)
+	Context     Kind = "context"    // operator context handed in with a goal (the user docs); rides into the goal's requests
 	LensText    Kind = "lens_text"  // a persona lens: the text a judge/render request is prefixed with (§13)
 	FrameText   Kind = "frame_text" // an execute frame: the text a NOW execute request is prefixed with (the process's own instruction, never a persona)
 )
 
-var kinds = map[Kind]bool{Goal: true, Prompt: true, Response: true, StepResult: true, Deliverable: true, LessonText: true, Step: true, Fixture: true, LensText: true, FrameText: true}
+var kinds = map[Kind]bool{Goal: true, Prompt: true, Response: true, StepResult: true, Deliverable: true, LessonText: true, Step: true, Fixture: true, LensText: true, FrameText: true, Context: true}
 
 // Encoding says what a text backend may be handed (utf8) versus what only a
 // file transport may carry (bytes). Derived at store time, never declared by

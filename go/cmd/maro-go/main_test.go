@@ -114,3 +114,43 @@ func TestCLIRunsShowJSON(t *testing.T) {
 		t.Fatalf("unknown handle must fail")
 	}
 }
+
+// --context <file> hands the operator's docs to the run as a recorded
+// input; the summary names the context thought it carried, and a missing
+// file is refused before any run is made.
+func TestCLINowContextFile(t *testing.T) {
+	t.Setenv(workspace.EnvOverride, filepath.Join(t.TempDir(), "ws"))
+	ctxFile := filepath.Join(t.TempDir(), "context.md")
+	if err := os.WriteFile(ctxFile, []byte("USER CONTEXT (CONTEXT.md):\nThe maro box is the Mac Mini."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errw bytes.Buffer
+	if code := run([]string{"now", "--backend", "scripted", "--fresh", "--context", filepath.Join(t.TempDir(), "missing.md"), "what is the maro box"}, &out, &errw); code == 0 || !strings.Contains(errw.String(), "--context") {
+		t.Fatalf("a missing context file must be refused: exit %d %s", code, errw.String())
+	}
+	out.Reset()
+	errw.Reset()
+	if code := run([]string{"now", "--backend", "scripted", "--fresh", "--context", ctxFile, "what is the maro box"}, &out, &errw); code != 0 {
+		t.Fatalf("now exit %d: %s %s", code, out.String(), errw.String())
+	}
+	var handle string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(l, "run ") {
+			handle = strings.Fields(l)[1]
+		}
+	}
+	out.Reset()
+	if code := run([]string{"runs", "show", "--json", handle}, &out, &errw); code != 0 {
+		t.Fatalf("show exit %d: %s %s", code, out.String(), errw.String())
+	}
+	var s struct {
+		Context string `json:"context"`
+	}
+	body := out.String()[strings.Index(out.String(), "\n{")+1:]
+	if err := json.Unmarshal([]byte(body), &s); err != nil {
+		t.Fatalf("not json: %v\n%s", err, out.String())
+	}
+	if !strings.HasPrefix(s.Context, "s256v1:") {
+		t.Fatalf("summary must name the context thought: %+v", s)
+	}
+}

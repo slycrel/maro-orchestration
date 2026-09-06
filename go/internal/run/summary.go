@@ -22,6 +22,10 @@ type Summary struct {
 	Reason   string         `json:"reason,omitempty"`
 	Parent   string         `json:"parent,omitempty"`
 	Root     string         `json:"root"`
+	// Context is the operator-context thought the goal carried (its hash),
+	// "" when the goal was given none — so a consumer can tell a run that
+	// saw the operator's docs from one that did not.
+	Context string `json:"context,omitempty"`
 	// Landscape is the relation decision, nil when the lineage was set at
 	// intake (--after, a fork child, a replay arm).
 	Landscape *Landscape `json:"landscape,omitempty"`
@@ -67,6 +71,9 @@ func Summarize(rs *RunState) Summary {
 	m := MissionOf(rs)
 	s := Summary{Handle: m.Handle, Run: string(rs.Run), Attempt: m.Attempt, Outcome: m.Outcome, Terminal: m.Terminal, Closure: m.Closure,
 		Delivery: m.Delivery, Required: m.Required, Reason: m.Reason, Parent: string(rs.Parent), Root: string(rs.Root), Landscape: rs.Landscape}
+	if rs.Goal != nil && rs.Goal.Context != nil {
+		s.Context = rs.Goal.Context.Hash
+	}
 	if rs.Goal != nil {
 		s.Goal = string(rs.Goal.ID)
 	}

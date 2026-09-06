@@ -26,6 +26,13 @@
       "constraint": "unconstrained",
       "measured_by": "internal/run:TestJournalExecutesRunVocabulary"
     },
+    "context": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestGoalContextMustBeAContextThought"
+    },
     "origin": {
       "absence": "never",
       "on_absence": "rejected",

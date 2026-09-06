@@ -2316,3 +2316,51 @@ pre-registered questions and the prediction on record (Go ≥ harness on
 NOW answers at lower cost; Go < harness on AGENDA depth until its
 workspace has accrued lessons). Live flip not made: `shadow.go.enabled`
 is a write to `~/.maro/workspace/config.yml`, Jeremy's.
+
+## Post-v1 — the Go shadow arm goes live; operator-context parity (2026-09-06)
+
+Jeremy flipped it ("Let's turn it on… 9 per day; effectively unlimited")
+and widened it ("Widen the Go track's AGENDA eligibility to the
+tool-policy containment too. If we're going to shadow, let's do it
+right."): `shadow.go.enabled: true`, cap 9, both lanes eligible on the
+basic checks, a cron tick every 10 min (no heartbeat process runs on
+the box). First live pair, 37d0e041: the primary achieved a build-shaped
+NOW goal at $2.89/786 s; the Go run asked "what is 'the maro box'?" at
+$0.026/24 s. Not an engine gap — a CONTEXT gap: the champion's planner
+injects the operator docs (`user/GOALS.md`, `CONTEXT.md`, `SIGNALS.md`)
+and the challenger got none. CONTEXT.md answers that exact question.
+
+Go side (this entry): operator context is a RECORDED INPUT. New thought
+kind `context`; `Goal.Context *thought.Ref` (ValidateWire: a context
+thought or nothing); `Driver.Context []byte` stored at intake and cited
+by the goal record; `RunState.Context` rendered as a `## Operator
+context` block and loaded at both fold sites (landscape and attempt —
+the attempt site matters for `--after` goals, which never read the
+landscape; the mutant that dropped it survived until that case was
+tested); `rs.riders()` = context + related, replacing the five sites
+that appended `rs.Related` (intent, plan, NOW execute, and their
+re-derivations), so the fold verifies a request that carried context the
+way it verifies one that carried a related run. `--context <file>` on
+now/agenda; `Summary.Context` = the thought's hash. Contracts: `goal`
+gains a declared `context` line (omitted / tolerated / identity /
+unconstrained by D16). 9 mutants killed. Scope kept narrow on purpose:
+the context rides into the requests that decide (intent, plan) and the
+NOW execute; step executions and judges see their steps. Feeding it to
+the executor's steps is a separate call, to be made on evidence.
+
+Python side (main, same day): `shadow_lane._operator_context()` renders
+the same docs the same way the planner does (overlay over template,
+`clip(…, 4000)`), writes `<run-dir>/shadow-go/context.md`, passes
+`--context`; row fields `context_docs` / `context_sha256` /
+`context_chars` / `go_context` (the engine's hash — same bytes, so a
+mismatch is a transport defect), `tokens_cached` (the diagnose-cost
+question's denominator), and `go_reason` / `go_needs_clarification` /
+`go_question` — a clarification is recorded as "asked", never acted on
+(a shadow asks nobody). 8 mutants killed.
+
+`scripts/install-maro-go.sh`: builds `./cmd/maro-go` from the checkout
+into `~/.local/bin/maro-go` atomically (a sweep mid-exec keeps its old
+inode), prints commit + sha256 (the row's `go_binary_sha256`), smoke =
+`maro-go workspace`. The lane pins rows to the binary's hash, so a
+landed Go change is not live until this runs — the Go side of the
+"landed but not materialized" trap.

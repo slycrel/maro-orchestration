@@ -155,12 +155,38 @@ type RunState struct {
 	// derived: the goal's own when set there, else the landscape's chosen
 	// run's, else its own. Related is the rendered context of the chosen
 	// run that rides into the run's requests ("" when fresh).
-	Landscape  *Landscape
-	Judge      *invoke.State // the landscape's judge call (attempt 0), when one was made; nil otherwise
+	Landscape *Landscape
+	Judge     *invoke.State // the landscape's judge call (attempt 0), when one was made; nil otherwise
+	// Context is the goal's operator context rendered as the block that
+	// rides into its requests (nil when the goal carried none).
+	Context    []byte
 	Parent     record.RecordID
 	Root       record.RecordID
 	Related    []byte
 	TerminalAt uint64 // Seq of the transition that made the run terminal (0 = not yet)
+}
+
+// riders is what accompanies the goal text in every intent, plan and NOW
+// execute request: the operator context block, then the related-run block.
+// Both are recorded inputs; the fold re-derives the request from them.
+func (r *RunState) riders() []byte {
+	return append(append([]byte{}, r.Context...), r.Related...)
+}
+
+// contextBlock renders a goal's operator context for its requests; nil
+// when the goal carries none.
+func contextBlock(g *Goal, get func(thought.Ref) ([]byte, error)) ([]byte, error) {
+	if g == nil || g.Context == nil {
+		return nil, nil
+	}
+	text, err := get(*g.Context)
+	if err != nil {
+		return nil, fmt.Errorf("goal %s context: %w", g.ID, err)
+	}
+	if len(bytes.TrimSpace(text)) == 0 {
+		return nil, nil
+	}
+	return []byte("\n\n## Operator context\n" + string(text) + "\n"), nil
 }
 
 // Latest is the newest attempt.
@@ -559,6 +585,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				firstLandscape = x.Seq
 			}
 			rs.Goal, rs.Family, rs.Target = g, fams[x.Goal], targets[x.Goal]
+			if rs.Context, err = contextBlock(g, store.Get); err != nil {
+				return fmt.Errorf("run: %s: %w", x.RunID, err)
+			}
 			rs.Landscape = x
 			if x.Judge != "" {
 				rs.Judge = inv[x.Judge] // checkLandscape proved it this run's attempt-0 call
@@ -579,6 +608,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				rs.Goal, rs.Family, rs.Target = goals[x.Goal], fams[x.Goal], targets[x.Goal]
 				if rs.Goal == nil || rs.Family == nil || rs.Family.ID != x.Family {
 					return fmt.Errorf("run: %s attempt %d cites goal %s / family %s that were not committed first", x.RunID, x.Attempt, x.Goal, x.Family)
+				}
+				if rs.Context, err = contextBlock(rs.Goal, store.Get); err != nil {
+					return fmt.Errorf("run: %s: %w", x.RunID, err)
 				}
 				// fork children, replay arms and --after goals carry their
 				// lineage; every other production goal reads the landscape
@@ -695,7 +727,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if err != nil {
 				return err
 			}
-			if st.Invocation.Request != thought.Address(thought.Prompt, intentPrompt(goal, get(x.RunID).Related)) {
+			if st.Invocation.Request != thought.Address(thought.Prompt, intentPrompt(goal, get(x.RunID).riders())) {
 				return fmt.Errorf("run: %s attempt %d intent invocation %s was not asked the intent prompt", x.RunID, x.Attempt, x.Invocation)
 			}
 			resp, err := store.Get(st.Receipt.Response)
@@ -1492,7 +1524,7 @@ func checkExposure(rs *RunState, sel *learn.RecallSelection, get func(thought.Re
 			return fmt.Errorf("invocation %s request does not end with the recall rendering", invID)
 		}
 	} else {
-		want := thought.Address(thought.Prompt, Lensed(frame, append(append(append([]byte{}, goal...), rs.Related...), block...)))
+		want := thought.Address(thought.Prompt, Lensed(frame, append(append(append([]byte{}, goal...), rs.riders()...), block...)))
 		if invRec.Request != want {
 			return fmt.Errorf("invocation %s request is not frame+goal+recall (%s vs %s)", invID, invRec.Request.Hash, want.Hash)
 		}
