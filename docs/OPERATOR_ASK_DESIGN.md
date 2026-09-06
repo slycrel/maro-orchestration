@@ -49,7 +49,7 @@ cannot re-trigger the same question and the record survives.
 | | Python | Go |
 |---|---|---|
 | path (host lane) | `<run_dir>/scratch/ask-operator.json` | `<workspace>/drop/ask-operator.json` |
-| path (container) | `/tmp/ask-operator.json` (the scratch bind) | n/a (host only in v1) |
+| path as the worker sees it | the same file; `/tmp/ask-operator.json` when the step runs in the container (the scratch bind) | the same file |
 | env var | `MARO_ASK` (worker child env; container `-e`) | `MARO_ASK` (subprocess backend, tool-bearing calls) |
 | read by | `loop_execute` after each step | `Driver.askAfterExecute` after the NOW execute / each AGENDA step |
 
@@ -130,8 +130,10 @@ question channel.
 - **No question channel for judges or planners.** Only a tool-bearing
   execute can ask; a judge that wants the operator is a judge with a
   missing falsifier.
-- **No container ask path in Go** (host only in v1; the Go engine has no
-  container lane yet).
+- **Nothing container-specific.** The ask is a file in the worker's
+  scratch dir; where the worker ran is the executor's business. The one
+  container-aware line (the path string the worker sees through the
+  `/tmp` bind) is executor plumbing, the same as the secrets drop file.
 - **First live firing owed:** the mail re-ask (BACKLOG mailbox arc), with
   Jeremy's planner breakdown, is the first run expected to write the file
   for real. The time-box sweep has no cron line yet; add one when a
