@@ -30,7 +30,7 @@ log="$HOME/.hermes/logs/maro-inbox.log"
 
 # Preferred lane: Hermes composes the answer from the event data.
 if command -v hermes >/dev/null 2>&1; then
-  prompt="A maro job you dispatched just pushed a '${event}' event. Read the JSON at ${event_file}. Key fields: .goal is the user's ORIGINAL ASK, .answer_summary is a distilled answer, .deliverable_content is the full deliverable text (.deliverable_name; may be truncated if .deliverable_truncated), .goal_achieved / .goal_verdict_summary / .goal_verdict_gaps are the verifier's take, .job_id ties it to your dispatch record, .served_artifact_urls (when present) are public links to the run's actual deliverable files — include the most relevant one or two in your message so Jeremy can click through to the full artifact instead of relying on any summary. Compose the answer to the original ask and send it to Jeremy with: hermes send -t telegram:1741138930 '<message>'. Ground rules: answer the ask directly from the deliverable data — organize it however serves the reader; quote the data, never invent findings; if goal_achieved is false or there are gaps, say so plainly and relay the gaps; for a clarification_needed status relay .clarification_question and say you can re-dispatch with the answer. Keep it tight — a phone-glance message, not the whole report; mention the full report is available on request. When sent, move the event file to ${inbox}/processed/."
+  prompt="A maro job you dispatched just pushed a '${event}' event. Read the JSON at ${event_file}. Key fields: .goal is the user's ORIGINAL ASK, .answer_summary is a distilled answer, .deliverable_content is the full deliverable text (.deliverable_name; may be truncated if .deliverable_truncated), .goal_achieved / .goal_verdict_summary / .goal_verdict_gaps are the verifier's take, .job_id ties it to your dispatch record, .served_artifact_urls (when present) are public links to the run's actual deliverable files — include the most relevant one or two in your message so Jeremy can click through to the full artifact instead of relying on any summary. Compose the answer to the original ask and send it to Jeremy with: hermes send -t telegram:1741138930 '<message>'. Ground rules: answer the ask directly from the deliverable data — organize it however serves the reader; quote the data, never invent findings; if goal_achieved is false or there are gaps, say so plainly and relay the gaps; for a clarification_needed status relay .clarification_question and say the user can just reply with the answer — you pass it back with: ssh maro-dispatch \"answer ${job_or_handle} <their answer>\" (job_id or handle_id; the SAME run resumes, do not re-dispatch). For an operator_question event the run is PAUSED on .question: relay .question verbatim, .why in one line, and .no_input_alternative as what Maro already tried without them; give the deadline (.deadline) and say a reply resumes it (answer <handle_id> <text>, .handle_id). Keep it tight — a phone-glance message, not the whole report; mention the full report is available on request. When sent, move the event file to ${inbox}/processed/."
   nohup hermes -z "$prompt" >> "$log" 2>&1 &
   brain_pid=$!
   sleep 1
@@ -53,6 +53,24 @@ goal = str(d.get("goal", "") or d.get("reason", "")).strip()
 goal_short = goal[:120] + ("…" if len(goal) > 120 else "")
 job = str(d.get("job_id", "") or "")
 
+if event == "operator_question":
+    q = str(d.get("question", "") or "").strip()
+    alt = str(d.get("no_input_alternative", "") or "").strip()
+    hid = str(d.get("handle_id", "") or "")
+    lines = [f"❓ Maro is paused on a question — {goal_short}", f"Q: {q[:600]}"]
+    if alt:
+        lines.append(f"Tried without you: {alt[:300]}")
+    dl = str(d.get("deadline", "") or "")
+    if dl:
+        lines.append(f"Waiting until {dl}")
+    lines.append(f"Reply with the answer and I'll pass it back (run {hid}).")
+    print("\n".join(lines))
+    sys.exit(0)
+if event == "operator_question_expired":
+    q = str(d.get("question", "") or "").strip()
+    print(f"⏳ Maro's question went unanswered — {goal_short}\nQ: {q[:400]}\n"
+          f"A late answer still resumes it (run {d.get('handle_id', '')}).")
+    sys.exit(0)
 if event == "run_completed":
     status = str(d.get("status", "?"))
     if status == "clarification_needed":

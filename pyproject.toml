@@ -252,6 +252,7 @@ py-modules = [
     "scope",
     "secret_scrub",
     "secrets_store",
+    "operator_ask",
     "security",
     "shadow_lane",
     "sheriff",

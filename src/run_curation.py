@@ -1455,6 +1455,7 @@ _CURATOR_SPECS: List[CuratorSpec] = [
                                    "goal_verdict_downgrade_reason",
                                    "goal_verdict_gaps",
                                    "clarification_question",
+                                   "clarification_answer", "operator_ask",
                                    "stop_verdict", "stop_evidence",
                                    "pause_reason", "pause_family",
                                    "verdict_pending")),

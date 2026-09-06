@@ -251,6 +251,47 @@ def cmd_result(job_id: str) -> int:
     return _emit(out)
 
 
+def cmd_answer(ref: str, text: str) -> int:
+    """Answer a run's operator question and resume it, detached.
+
+    `ref` is a dispatch job_id (resolved to its handle) or a handle_id.
+    The resume is a queued continuation drained by the same detached
+    worker a dispatch uses, so the gate returns in seconds and the run
+    picks up under its own identity (operator_ask.answer).
+    """
+    import operator_ask
+
+    rec = _read_rec(ref)
+    handle_id = (rec or {}).get("handle_id") or ref
+    res = operator_ask.answer(handle_id, text, source="hermes-ssh")
+    if res.get("status") != "queued":
+        return _emit({"status": "error", "ref": ref,
+                      "error": res.get("error", "answer refused")}) or 2
+    job_id = res["job_id"]
+    new_rec = {
+        "job_id": job_id,
+        "goal": f"ANSWER for {res['handle_id']}: "
+                + text[:400] + ("…" if len(text) > 400 else ""),
+        "status": "dispatched",
+        "handle_id": res["handle_id"],
+        "answers": res["handle_id"],
+        "parent_job_id": (rec or {}).get("job_id"),
+        "dispatched_at": _now(),
+        "source": "hermes-ssh",
+    }
+    _write_rec(new_rec)
+    log = (DISPATCH_DIR / f"{job_id}.log").open("a")
+    subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve()), "worker", job_id],
+        stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        start_new_session=True, cwd=str(REPO),
+    )
+    return _emit({"job_id": job_id, "status": "dispatched",
+                  "handle_id": res["handle_id"], "late": res.get("late", False),
+                  "question": res.get("question", ""),
+                  "poll": f"status {job_id}", "fetch": f"result {job_id}"})
+
+
 def cmd_list() -> int:
     recs = []
     if DISPATCH_DIR.is_dir():
@@ -268,7 +309,7 @@ def cmd_list() -> int:
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return _emit({"error": "usage: dispatch.py enqueue|status|result|list|ping ..."}) or 2
+        return _emit({"error": "usage: dispatch.py enqueue|status|result|answer|list|ping ..."}) or 2
     verb, args = argv[0], argv[1:]
     if verb == "ping":
         return _emit({"status": "ok", "box": "maro", "time": _now()})
@@ -282,6 +323,8 @@ def main(argv: list[str]) -> int:
         return cmd_result(args[0])
     if verb == "list":
         return cmd_list()
+    if verb == "answer" and len(args) >= 2:
+        return cmd_answer(args[0], " ".join(args[1:]))
     return _emit({"error": f"bad verb/args: {verb}"}) or 2
 
 

@@ -1444,6 +1444,12 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             if _dp is not None:
                 _drop_host = str(_dp)
                 child_env[_ss.DROP_ENV] = _drop_host
+            # The operator-ask file rides the same scratch (operator_ask):
+            # the frame names the path; loop_execute reads it after the step.
+            import operator_ask as _oa
+            _ap = _oa.ask_path(_scratch_for_drop)
+            if _ap is not None:
+                child_env[_oa.ASK_ENV] = str(_ap)
         except Exception as _ss_exc:
             log.warning("secrets store injection skipped: %s", _ss_exc)
             _store_env, _secret_env = {}, {}
@@ -1548,6 +1554,8 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             # worker writes at this path lands at _drop_host on the host.
             import secrets_store as _ss_drop
             _worker_env[_ss_drop.DROP_ENV] = "/tmp/" + _ss_drop.DROP_NAME
+            import operator_ask as _oa_env
+            _worker_env[_oa_env.ASK_ENV] = _oa_env.CONTAINER_ASK_PATH
         if _secret_env:
             # Into the docker CLIENT's env only — the bare -e flags below
             # copy them across the boundary; worker_env stays value-free.

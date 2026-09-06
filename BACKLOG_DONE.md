@@ -10,6 +10,31 @@ Rotation policy (2026-08-16): when this file outgrows whole-file readability (25
 
 ---
 
+**Telegram answer loop — the operator-question lane, SHIPPED both engines 2026-09-06.**
+Decree `1d1ad8b0` (Jeremy): build it out, and keep it "the rare exception,
+not the norm". Design: `docs/OPERATOR_ASK_DESIGN.md`. Python:
+`src/operator_ask.py` — the execute frame names `$MARO_ASK`; a worker's
+JSON ask file (question / why / no_input_alternative / tried) becomes the
+typed pause `awaiting-clarification` with a 24 h time box
+(`ask.timeout_hours`), an `operator_question` escalation-class event
+(Telegram card + Hermes inbox), and `maro answer <handle> "<text>"`
+resumes the run by handle through the continuation lane (RESUME, same
+identity, answer in the ancestry context). Hermes gate verb `answer`
+(`dispatch.py answer`, source `hermes-ssh`); inbox prompt + SKILL say
+reply = `answer`, never a fresh dispatch. `maro asks [--sweep]` is the
+ledger. Go: `question` / `answer` records, `needs answer:` terminal,
+`maro-go answer` re-runs the goal `--after` the asked run with the answer
+as `--context`, `maro-go asks`. First live firing owed (the mail re-ask).
+
+*Original entry:* Hermes polls the bot; Maro's `telegram_listener.py` runs
+nowhere; `dispatch.py` has no resume verb; a `clarification_needed`
+returns the question and only a fresh dispatch follows. Needs: a
+pending-question pause (`pause.*` family) with a time box, a resume path
+keyed on the run, and the navigation class Jeremy named — wait for the
+answer, or try a path that needs no input, and record which.
+
+---
+
 **`scripts/mutate.py` negative control — SHIPPED 2026-08-16.**
 Filed and fixed the same day.
 

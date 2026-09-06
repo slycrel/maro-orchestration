@@ -2424,6 +2424,52 @@ def _load_resume_checkpoint(ref: str):
         return None
 
 
+def _cmd_answer(args: argparse.Namespace) -> int:
+    """Answer a paused run's operator question; resume it (operator_ask)."""
+    import operator_ask
+    text = args.text
+    if args.stdin:
+        text = sys.stdin.read()
+    res = operator_ask.answer(args.run_id, text, source=args.source)
+    if res.get("status") != "queued":
+        return fail("E_ANSWER", str(res.get("error", "answer refused")))
+    if args.detach:
+        if args.format == "json":
+            print(json.dumps(res))
+        else:
+            print(f"answer queued for {res['handle_id']} (job {res['job_id']}"
+                  + (", late" if res.get("late") else "") + ")")
+        return 0
+    try:
+        result = operator_ask.drain(res["job_id"])
+    except Exception as exc:
+        return fail("E_ANSWER", f"resume failed: {exc}")
+    status = getattr(result, "status", "") or ""
+    if args.format == "json":
+        print(json.dumps({**res, "resumed": True, "run_status": status,
+                          "result": str(getattr(result, "result", "") or "")[:2000]}))
+    else:
+        print(f"resumed {res['handle_id']} → {status}")
+        _r = str(getattr(result, "result", "") or "").strip()
+        if _r:
+            print(_r[:2000])
+    return 0 if status in ("done", "complete") else 1
+
+
+def _cmd_asks(args: argparse.Namespace) -> int:
+    """Every operator question on record; optionally expire past time boxes."""
+    import operator_ask
+    expired = operator_ask.sweep() if args.sweep else []
+    rows = operator_ask.list_asks(limit=args.limit)
+    if args.json:
+        print(json.dumps({"asks": rows, "expired": expired}, indent=2))
+    else:
+        if expired:
+            print(f"expired {len(expired)}: {', '.join(expired)}")
+        print(operator_ask.render_asks(rows))
+    return 0
+
+
 def _cmd_resume(args: argparse.Namespace) -> int:
     """Resume a crashed run from its checkpoint ((h) slice 3).
 
@@ -2706,6 +2752,8 @@ def _cmd_resume(args: argparse.Namespace) -> int:
 _COMMAND_HANDLERS = {
     "init": _cmd_init,
     "resume": _cmd_resume,
+    "answer": _cmd_answer,
+    "asks": _cmd_asks,
     "next": _cmd_next,
     "done": _cmd_done,
     "log": _cmd_log,

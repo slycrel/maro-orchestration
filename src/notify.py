@@ -62,6 +62,11 @@ DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
                   "stranded_run", "resume_refused_busy",
                   "resume_lock_unavailable", "recursion_checkin",
                   "self_improvement_verdict",
+                  # A worker's question to the operator (operator_ask,
+                  # decision 1d1ad8b0) and its time-box expiry: the run is
+                  # paused on it — a headless box's notify channel is the
+                  # only way the question reaches anyone.
+                  "operator_question", "operator_question_expired",
                   # Async-tail phase 2: the verdict follow-up to an
                   # answer-first run_completed (which went out with
                   # verdict_pending). Default-on — the split is only
@@ -80,7 +85,8 @@ DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
 # explicit `"blocking": False` payload field.
 ESCALATION_FILE_EVENTS = {"escalation", "backend_actionable", "stranded_run",
                           "resume_refused_busy", "resume_lock_unavailable",
-                          "recursion_checkin", "self_improvement_verdict"}
+                          "recursion_checkin", "self_improvement_verdict",
+                          "operator_question", "operator_question_expired"}
 
 
 def _config_get(key: str, default):

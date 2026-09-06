@@ -145,6 +145,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume.add_argument("--verbose", "-v", action="store_true", default=True)
     p_resume.add_argument("--format", choices=["text", "json"], default="text")
 
+    p_answer = sub.add_parser(
+        "answer",
+        help="Answer a paused run's operator question and resume it by handle (operator_ask)")
+    p_answer.add_argument("run_id", help="handle_id of the run that asked")
+    p_answer.add_argument("text", nargs="?", default="",
+                          help="the answer (or --stdin)")
+    p_answer.add_argument("--stdin", action="store_true",
+                          help="read the answer from stdin")
+    p_answer.add_argument("--detach", action="store_true",
+                          help="queue the resume and return; the next queue drain runs it")
+    p_answer.add_argument("--source", default="cli",
+                          help="who answered (recorded on the run)")
+    p_answer.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_asks = sub.add_parser(
+        "asks",
+        help="List every operator question runs have asked (pending/answered/expired); --sweep expires past time boxes")
+    p_asks.add_argument("--sweep", action="store_true",
+                        help="stamp expired on pending asks past their deadline")
+    p_asks.add_argument("--limit", type=int, default=50)
+    p_asks.add_argument("--json", action="store_true")
+
     p_evolver = sub.add_parser("evolver", help="Run meta-evolver — analyze outcomes + propose improvements (§19)")
     p_evolver.add_argument("--dry-run", action="store_true", help="Analyze without writing suggestions")
     p_evolver.add_argument("--min-outcomes", type=int, default=3, help="Minimum outcomes needed to run (default: 3)")

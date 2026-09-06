@@ -4405,4 +4405,9 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   message, the meta point for this collaboration: *"sometimes that's
   fantastic, on occasion we'd have been better off talking through things
   a bit first... ideally we find a good path through the proper cognitive
-  load on both of our sides."*
+  load on both of our sides."* **SHIPPED both engines the same day:**
+  `docs/OPERATOR_ASK_DESIGN.md` — `$MARO_ASK` file contract in the execute
+  frame (rare-exception wording), typed pause with a 24 h time box, `maro
+  answer <handle>` resumes by handle through the continuation lane, Hermes
+  gate `answer` verb, `maro asks` ledger; Go `question`/`answer` records +
+  `maro-go answer|asks`. First live firing owed: the mail re-ask.

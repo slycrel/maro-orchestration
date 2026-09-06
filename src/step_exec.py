@@ -324,8 +324,28 @@ def execute_system_for_lane(adapter=None) -> str:
     command-not-found, worker falls back.
     """
     base = _lane_prompt(adapter)
-    block = _secrets_block(container=base is not EXECUTE_SYSTEM)
-    return base + "\n\n" + block if block else base
+    container = base is not EXECUTE_SYSTEM
+    blocks = [b for b in (_secrets_block(container=container),
+                          _ask_block(container=container)) if b]
+    return base + "\n\n" + "\n\n".join(blocks) if blocks else base
+
+
+def _ask_block(*, container: bool) -> str:
+    """The `## Asking the operator` paragraph (operator_ask.instructions):
+    the one sanctioned way a worker asks — a file in the run scratch, read
+    after the step; the run pauses typed and resumes by handle with the
+    answer. Empty when no run scratch exists (nothing to read back)."""
+    try:
+        import operator_ask as _oa
+        import container_exec as _ce
+        scratch = _ce.run_scratch_dir()
+        if not scratch:
+            return ""
+        path = _oa.CONTAINER_ASK_PATH if container else str(_oa.ask_path(scratch))
+        return _oa.instructions(path)
+    except Exception as exc:
+        log.warning("operator-ask block skipped: %s", exc)
+        return ""
 
 
 def _secrets_block(*, container: bool) -> str:

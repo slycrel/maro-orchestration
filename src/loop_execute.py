@@ -1339,6 +1339,35 @@ def _execute_main_loop(
                     outcome.get("error_class") or "")
         except Exception:
             _env_pause = ""
+        # Operator question (operator_ask, decision 1d1ad8b0): the worker
+        # wrote the ask file in the run scratch. Same typed pause as the
+        # pre-run clarity gate (`awaiting-clarification`), so the
+        # continuation lane's strict-affirmative test resumes THIS run by
+        # handle once `maro answer` lands. Read after the step, never from
+        # the worker's prose — a claim "I asked" without the file is not an
+        # ask. Consumed (archived, never deleted) so the next step of the
+        # resumed run cannot re-trigger it.
+        _ask = None
+        if not _env_pause:
+            try:
+                import operator_ask as _oa
+                from container_exec import run_scratch_dir as _oa_scratch
+                _ask_file = _oa.ask_path(_oa_scratch())
+                _ask = _oa.read_ask(_ask_file)
+                if _ask:
+                    _oa.archive_ask(_ask_file)
+                    from stop_verdicts import PAUSE_OP_CLARIFICATION as _POC
+                    _env_pause = _POC
+                    outcome = dict(outcome)
+                    outcome["status"] = "blocked"
+                    outcome["stuck_reason"] = (
+                        f"asked the operator: {_ask['question'][:200]}")
+                    outcome["operator_ask"] = _ask
+                    _oa.pause_for_ask(
+                        _ask, handle_id=ctx.handle_id, goal=goal,
+                        step=step_text, loop_id=ctx.loop_id)
+            except Exception as _ask_exc:
+                log.warning("operator-ask check failed: %s", _ask_exc)
         if _env_pause:
             loop_status = "interrupted"
             stuck_reason = (outcome.get("stuck_reason")

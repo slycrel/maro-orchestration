@@ -55,6 +55,9 @@ _ESCALATION_CLASS_EVENTS = frozenset({
     "backend_actionable", "stranded_run", "resume_refused_busy",
     "resume_lock_unavailable", "recursion_checkin",
     "self_improvement_verdict",
+    # operator_ask: both render through their own branches above the
+    # generic one (the question leads, not "maro: operator question").
+    "operator_question", "operator_question_expired",
 })
 
 
@@ -178,6 +181,39 @@ def format_message(payload: dict) -> str:
         point = payload.get("point")
         if point:
             lines.append(f"(at {point}; job {payload.get('job_id', '?')})")
+        return "\n".join(lines)
+
+    # A worker's question to the operator (operator_ask): the run is paused
+    # on it. The question leads; the no-input alternative says what Maro
+    # tried first (the decree: asking is the rare exception); the answer
+    # verb is the whole return path.
+    if event == "operator_question":
+        lines = ["\u2753 maro has a question"]  # ❓
+        if goal_line:
+            lines.append(f"Goal: {goal_line}")
+        lines.append("Q: " + _tg_clip(str(payload.get("question", "")).strip(), 600))
+        why = str(payload.get("why", "")).strip()
+        if why:
+            lines.append("Why: " + _tg_clip(why, 300))
+        alt = str(payload.get("no_input_alternative", "")).strip()
+        if alt:
+            lines.append("Tried without you: " + _tg_clip(alt, 300))
+        deadline = str(payload.get("deadline", "")).strip()
+        if deadline:
+            lines.append(f"Waiting until {deadline}")
+        answer_with = str(payload.get("answer_with", "")).strip()
+        if answer_with:
+            lines.append(f"Answer: {answer_with}")
+        return "\n".join(lines)
+
+    if event == "operator_question_expired":
+        lines = ["\u23f3 maro's question went unanswered"]  # ⏳
+        if goal_line:
+            lines.append(f"Goal: {goal_line}")
+        lines.append("Q: " + _tg_clip(str(payload.get("question", "")).strip(), 600))
+        answer_with = str(payload.get("answer_with", "")).strip()
+        if answer_with:
+            lines.append(f"Still resumes (marked late): {answer_with}")
         return "\n".join(lines)
 
     # Async-tail phase 2: the verdict follow-up to an answer-first

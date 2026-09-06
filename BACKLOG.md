@@ -6503,13 +6503,6 @@ both engines (R2 related → R1, R3 rerun → R1, R4 fresh, no call).
   `~/.maro/secrets` (wrong path) and never `~/claude/credentials-backup`.
   Proposal for the template: a "Where things live" section (secrets
   file, backup dir, browser profile), presence-only.
-- [ ] **Telegram answer loop is not closed.** Hermes polls the bot; Maro's
-  `telegram_listener.py` runs nowhere; `dispatch.py` has no resume verb;
-  a `clarification_needed` returns the question and only a fresh
-  dispatch follows. Needs: a pending-question pause (`pause.*` family)
-  with a time box, a resume path keyed on the run, and the navigation
-  class Jeremy named — wait for the answer, or try a path that needs no
-  input, and record which.
 - [ ] **Hermes operator-first drift.** Jeremy: "operator first, dev helper
   second… more code assistant at this point." Audit the dispatch SKILL
   and Hermes replies against the operator bar (what Maro found, where it

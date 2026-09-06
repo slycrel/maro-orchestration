@@ -211,12 +211,32 @@ ssh maro-dispatch "status <job_id>"
 Non-`done` outcomes carry their own explanation (added 2026-07-16):
 
 - `clarification_needed` → `clarification_question` holds the exact question
-  Maro needs answered. Relay it to the user verbatim, then re-dispatch the
-  goal with the answer appended.
+  Maro needs answered. Relay it to the user verbatim, then pass their reply
+  back with `answer` (below) — the SAME run resumes. Do not re-dispatch the
+  goal: a re-dispatch is a new run that has to rediscover everything.
 - `incomplete` → `goal_verdict_gaps` lists what the verifier found missing
   (the truncated `goal_verdict_summary` alone can be misleading).
 - Any preflight-terminated run → `result_excerpt` carries the full result
   text (question, guard refusal, or error detail).
+
+## Answer a question (added 2026-09-06)
+
+```bash
+ssh maro-dispatch "answer <job_id|handle_id> <the user's answer, verbatim>"
+```
+
+A run that cannot proceed without something only the user has (a code sent
+to them, a choice that is theirs, a credential the box lacks) PAUSES and
+pushes an `operator_question` event (`.question`, `.why`,
+`.no_input_alternative` = what Maro tried first, `.deadline`, `.handle_id`).
+Relay the question; when the user replies, send their words with `answer`.
+The response is a dispatch record (`job_id`, `handle_id`, `late`) for the
+resume — poll it like any dispatch. The run resumes under its own
+identity with the answer in its next step's context; nothing is re-planned
+from scratch. `late: true` means the time box had passed — the resume still
+happens. Asking is Maro's rare exception, not a step: if a run asks for a
+decision or permission it could have made itself, say so to Jeremy — every
+ask is a counted, reviewed event (`maro asks` on the box).
 
 ## Pushed events — check the inbox FIRST (added 2026-07-17)
 
@@ -247,6 +267,8 @@ file to `processed/`.
   `~/.hermes/inbox/maro/processed/`.
 - No event file for a job you dispatched = the run is still going (or the
   push leg failed) — THEN use `status <job_id>` over ssh.
+- An `operator_question` event means the run is PAUSED waiting on the user:
+  relay it as a question, and send the reply back with `answer` (above).
 
 ## Fetch the final result
 
