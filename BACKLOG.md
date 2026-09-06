@@ -6476,6 +6476,37 @@ both engines (R2 related → R1, R3 rerun → R1, R4 fresh, no call).
   `~/claude/logs` rotation is a user-level logrotate in cron (03:15,
   size-triggered, 5 kept).
 
+### Mailbox-access arc findings (2026-09-06)
+
+- [ ] **Container blindness reads as host truth.** 0bd44fef: "Chrome is
+  not installed on this box", "no Yahoo credential anywhere on this box";
+  37d0e041: "no NVIDIA credential anywhere" — all false on the host, all
+  true inside the executor container (`executor.container: on`; secrets,
+  config, memory, `~/claude` unmounted by design). The run's own
+  positive-evidence discipline (claim_probe) confirmed the claims with
+  in-container probes. Fix shape: the executor frame must say what it
+  cannot see from here (a fence summary, not a sandbox disclaimer), and
+  "does X exist on the box" claims need a host-side presence probe
+  (existence/name only, never contents) — or an ro mount of a
+  credential *index*. Jeremy's decision: container stays ON.
+- [ ] **Operator docs name no credential location.** `user/CONTEXT.md`
+  (Jeremy's) never says where credentials live; the runs grepped
+  `~/.maro/secrets` (wrong path) and never `~/claude/credentials-backup`.
+  Proposal for the template: a "Where things live" section (secrets
+  file, backup dir, browser profile), presence-only.
+- [ ] **Telegram answer loop is not closed.** Hermes polls the bot; Maro's
+  `telegram_listener.py` runs nowhere; `dispatch.py` has no resume verb;
+  a `clarification_needed` returns the question and only a fresh
+  dispatch follows. Needs: a pending-question pause (`pause.*` family)
+  with a time box, a resume path keyed on the run, and the navigation
+  class Jeremy named — wait for the answer, or try a path that needs no
+  input, and record which.
+- [ ] **Hermes operator-first drift.** Jeremy: "operator first, dev helper
+  second… more code assistant at this point." Audit the dispatch SKILL
+  and Hermes replies against the operator bar (what Maro found, where it
+  is blind, what the user must supply, what it tries next); the mail
+  reply narrowed a capability ask to "mint an app password?".
+
 ---
 
 Full history in [BACKLOG_DONE.md](BACKLOG_DONE.md).

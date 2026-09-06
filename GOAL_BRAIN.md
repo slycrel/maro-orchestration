@@ -4327,6 +4327,23 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   (fresh / related / rerun), records the decision, and the decision
   supersedes string-identity shortcuts (the goal-slug Goal Ancestry
   block). Design note: successor repo `planning/feature-related-runs.md`.
+- **2026-09-06 (Hermes is an operator first — Jeremy):** *"it's not really
+  operating as an operator IMO, it's more code assistant at this point…
+  but it's an operator first, dev helper second."* And on the mail ask
+  that spiraled (1e92e15c → 0bd44fef): *"all of this is me pushing (again)
+  for maro to figure out how to access it in the first place… if all
+  else fails, there's driving the UI like a user to get access, along
+  with asking questions in telegram."* Finding the same session: the
+  runs' "no credential anywhere on this box" / "Chrome is not installed"
+  are CONTAINER facts, not host facts (`executor.container: on` since
+  2026-07-16; secrets, config, `~/claude` unmounted by design) — the
+  yahoo credentials sit in `~/claude/credentials-backup/…/credentials.txt`
+  and Chrome is installed. Open: the Telegram answer loop was never
+  closed (a `clarification_needed` only comes back as a fresh dispatch);
+  Jeremy names the navigation class to learn: *"if there needs to be an
+  answer, legit it can wait and pause for a time, or it can make an
+  attempt to try something else that doesn't need input."* Next: re-ask
+  the original ask with his planner breakdown.
 - **2026-09-06 (no daily budget that stops work — Jeremy, via dispatch 5c994cd9):**
   the goal he sent on 2026-09-05: *"There should be no daily budget that
   stops work."* Context: the $25 repo-default `budget.daily_usd` refused
