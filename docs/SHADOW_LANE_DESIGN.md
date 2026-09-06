@@ -75,8 +75,31 @@ Readout: after the run, `maro-go runs show --json <handle>` (the run's
 its receipt — the landscape judge included — and the usage sum with
 `cost_reported` honest about partial sums). Row fields: `go_handle`,
 `go_outcome`, `go_closure`, `go_calls`, `go_landscape`, `cost_usd`
-(None unless every call reported), `go_binary_sha256` (the version pin,
-the star arm's `prompt_sha256` analogue), `tool_policy`.
+(None unless every call reported), `tokens_cached` (cache-read tokens,
+so the diagnose-cost question below has its denominator),
+`go_binary_sha256` (the version pin, the star arm's `prompt_sha256`
+analogue), `tool_policy`; and `go_reason` / `go_needs_clarification` /
+`go_question` — the engine's intake may decide the goal is not clear
+enough to plan and ask a question instead of running (the first live
+pair, 37d0e041, did: "what is 'the maro box'?"). A shadow asks nobody,
+so the outcome is recorded as what it is (asked, not failed) and never
+acted on; the adjudication partitions on it.
+
+Operator-context parity (2026-09-06): the champion's planner injects the
+operator docs (`user/GOALS.md`, `CONTEXT.md`, `SIGNALS.md`, workspace
+overlay over repo template, `clip(…, 4000)` per doc as the breaker) into
+its plan prompt; the Go challenger got none, which is what 37d0e041's
+question was made of. The sweep now renders the same docs the same way
+(`shadow_lane._operator_context`), writes them to
+`<run-dir>/shadow-go/context.md`, and hands the file to the engine as
+`--context <file>` — a RECORDED input on the Go side (a `context`
+thought cited by the goal record; every intent, plan and NOW execute
+request carries it and the fold re-derives the request from it, so a
+journal that carried context verifies). Row fields: `context_docs` (which
+docs were present), `context_sha256`, `context_chars`, `go_context` (the
+engine's own hash of the thought it stored — the two hashes are of the
+same bytes, so a mismatch is a transport defect). No docs → no flag, and
+the row says so with an empty `context_docs`.
 
 Pre-registered questions for the Go track (adjudication at ~10 pairs,
 the same bar as star|plain): (1) delivered-answer agreement with the

@@ -519,6 +519,39 @@ def _parse_go_summary(text: str) -> dict:
     return {}
 
 
+GO_CONTEXT_DOCS = ("GOALS.md", "CONTEXT.md", "SIGNALS.md")
+GO_CONTEXT_CAP = 4000  # per doc; the same breaker the planner uses
+
+
+def _operator_context() -> Tuple[str, List[str]]:
+    """The operator docs the Python planner injects, rendered the same way.
+
+    Returns (text, docs): the concatenated "USER CONTEXT (<file>):" blocks
+    and the names of the docs that were present. Mirrors planner.py's
+    injection (workspace overlay over the repo template, clip() as the
+    breaker) so the Go challenger reads what the champion read — the first
+    live pair (37d0e041) failed on "what is the maro box?", a question the
+    operator's CONTEXT.md answers. Empty when no doc exists.
+    """
+    from config import user_file
+    from context_budget import clip
+
+    blocks: List[str] = []
+    docs: List[str] = []
+    for name in GO_CONTEXT_DOCS:
+        path = user_file(name)
+        if path is None:
+            continue
+        try:
+            text = clip(path.read_text(encoding="utf-8").strip(), GO_CONTEXT_CAP)
+        except OSError:
+            continue
+        if text:
+            blocks.append(f"USER CONTEXT ({name}):\n{text}")
+            docs.append(name)
+    return "\n\n".join(blocks), docs
+
+
 def run_go_challenger(run_dir: Path, goal: str, *, lane: str, binary: Path,
                       timeout: int, model: Optional[str] = None,
                       workspace: Optional[Path] = None) -> dict:
@@ -540,10 +573,24 @@ def run_go_challenger(run_dir: Path, goal: str, *, lane: str, binary: Path,
     scratch = run_dir / GO_DIR / "scratch"
     scratch.mkdir(parents=True, exist_ok=False)
 
+    # Operator context parity: the Go engine takes the operator docs as a
+    # recorded input (--context <file>); the file is kept beside the result
+    # so the pair can be read with what the challenger saw.
+    context_text, context_docs = _operator_context()
+    context_path = None
+    context_sha = None
+    if context_text:
+        context_path = run_dir / GO_DIR / "context.md"
+        context_path.write_text(context_text, encoding="utf-8")
+        context_sha = hashlib.sha256(context_text.encode("utf-8")).hexdigest()
+
     env_extra = _scrub_env_extra()
     env_extra["MARO_GO_WORKSPACE"] = str(ws)
     cmd = [str(binary), lane, "--backend", "subprocess", "--model", model,
-           "--work", str(scratch), "--deny-tools", GO_DENY_TOOLS, goal]
+           "--work", str(scratch), "--deny-tools", GO_DENY_TOOLS]
+    if context_path is not None:
+        cmd += ["--context", str(context_path)]
+    cmd.append(goal)
 
     binary_sha = None
     try:
@@ -590,6 +637,11 @@ def run_go_challenger(run_dir: Path, goal: str, *, lane: str, binary: Path,
     usage = summary.get("usage") if isinstance(summary.get("usage"), dict) else {}
     ls = summary.get("landscape") if isinstance(summary.get("landscape"), dict) else None
     outcome = summary.get("outcome")
+    reason = summary.get("reason") if isinstance(summary.get("reason"), str) else None
+    needs_clarification = bool(reason and reason.startswith("needs clarification"))
+    question = None
+    if needs_clarification:
+        question = reason.split(":", 1)[1].strip() if ":" in reason else ""
     models = sorted({str(c.get("model")) for c in summary.get("calls", [])
                      if isinstance(c, dict) and c.get("model")})
     meta = {
@@ -601,6 +653,7 @@ def run_go_challenger(run_dir: Path, goal: str, *, lane: str, binary: Path,
         "cost_usd": usage.get("cost_usd") if usage.get("cost_reported") else None,
         "tokens_in": usage.get("input_tokens") if usage else None,
         "tokens_out": usage.get("output_tokens") if usage else None,
+        "tokens_cached": usage.get("cache_read_tokens") if usage else None,
         "model": models[0] if len(models) == 1 else (models or model),
         "cli_version": None,
         # No preamble on this arm: containment is the work dir + the tool
@@ -620,6 +673,16 @@ def run_go_challenger(run_dir: Path, goal: str, *, lane: str, binary: Path,
         "go_outcome": outcome,
         "go_closure": summary.get("closure"),
         "go_calls": usage.get("calls") if usage else None,
+        "go_reason": reason,
+        # Recorded, not acted on: a clarification the shadow asked for
+        # reaches nobody (there is no requester behind the arm). The row
+        # says so, so the pair reads as "asked" rather than "failed".
+        "go_needs_clarification": needs_clarification,
+        "go_question": question,
+        "context_docs": context_docs,
+        "context_sha256": context_sha,
+        "context_chars": len(context_text),
+        "go_context": summary.get("context"),
         "go_landscape": ({"relation": ls.get("relation"), "chosen": ls.get("chosen"),
                           "rule": ls.get("rule")} if ls else None),
     }

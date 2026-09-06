@@ -793,11 +793,24 @@ def _go_summary(**over):
                   {"id": "i2", "attempt": 1, "purpose": "execute", "model": "haiku",
                    "usage": {"cost_usd": 0.004, "cost_reported": True}}],
         "usage": {"calls": 2, "receipted": 2, "unreceipted": 0, "input_tokens": 300,
-                  "output_tokens": 40, "cost_usd": 0.005, "cost_reported": True, "wall_ms": 900},
+                  "output_tokens": 40, "cache_read_tokens": 120, "cost_usd": 0.005,
+                  "cost_reported": True, "wall_ms": 900},
         "result": "the go engine's answer",
+        "context": "s256v1:" + "ab" * 32,
     }
     s.update(over)
     return s
+
+
+_CONTEXT_MARKER = "The maro box is the 2014 Mac Mini running Ubuntu headless."
+
+
+def _operator_docs(tmp_path):
+    """A workspace-overlay CONTEXT.md — what the planner injects for the champion."""
+    user = tmp_path / "user"
+    user.mkdir(exist_ok=True)
+    (user / "CONTEXT.md").write_text("# Context\n" + _CONTEXT_MARKER + "\n", encoding="utf-8")
+    return user / "CONTEXT.md"
 
 
 def _fake_go_engine(calls, *, run_stdout=_GO_RUN_STDOUT, summary=None, rc=0):
@@ -884,6 +897,7 @@ class TestGoArm:
         monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger(star_calls))
         binary = _fake_binary(tmp_path)
         _go_config(tmp_path, binary)
+        _operator_docs(tmp_path)
         monkeypatch.setenv("MARO_ORCH_ROOT", "/leak")
         rd = _make_run_dir(tmp_path, "aaaa0002", prompt=_BUILD_GOAL, lane="now",
                            extra={"model": "sonnet"})
@@ -907,6 +921,15 @@ class TestGoArm:
         assert "--fresh" not in cmd, "the engine decides the landscape itself"
         assert cmd[cmd.index("--work") + 1] == str(rd / "shadow-go" / "scratch")
         assert run_call["cwd"] == str(rd / "shadow-go" / "scratch")
+        # Operator-context parity: the challenger reads the same operator
+        # docs the champion's planner injects, as a recorded --context file
+        # kept beside the result; the row says which docs and their hash.
+        ctx_path = rd / "shadow-go" / "context.md"
+        assert cmd[cmd.index("--context") + 1] == str(ctx_path)
+        ctx_text = ctx_path.read_text(encoding="utf-8")
+        # (GOALS.md/SIGNALS.md resolve to the repo templates, as they do for
+        # the champion; the overlay CONTEXT.md is the operator's own)
+        assert "USER CONTEXT (CONTEXT.md):\n# Context\n" + _CONTEXT_MARKER in ctx_text
         env = run_call["env_extra"]
         assert env["MARO_ORCH_ROOT"] is None and env["WORKSPACE_ROOT"] is None
         assert env["MARO_WORKER_RUN"] == "1"
@@ -923,6 +946,13 @@ class TestGoArm:
         assert meta["tool_policy"] == {"deny": shadow_lane.GO_DENY_TOOLS}
         assert meta["go_binary_sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
         assert meta["model"] == "haiku"
+        assert meta["context_docs"] == ["GOALS.md", "CONTEXT.md", "SIGNALS.md"]
+        assert meta["context_sha256"] == hashlib.sha256(ctx_text.encode("utf-8")).hexdigest()
+        assert meta["context_chars"] == len(ctx_text)
+        assert meta["go_context"] == "s256v1:" + "ab" * 32
+        assert meta["tokens_cached"] == 120 and meta["tokens_in"] == 300
+        assert meta["go_needs_clarification"] is False and meta["go_question"] is None
+        assert meta["go_reason"] is None
 
         rows = [json.loads(l) for l in (tmp_path / "memory" / "shadow_ledger.jsonl").read_text().splitlines() if l.strip()]
         assert len(rows) == 1
@@ -1116,3 +1146,71 @@ class TestGoArm:
         assert shadow_lane._parse_go_summary(text)["handle"] == "ab"
         assert shadow_lane._parse_go_summary("workspace: /x\n") == {}
         assert shadow_lane._parse_go_summary('{"not": "it"}\n{"handle": "cd"}')["handle"] == "cd"
+
+
+class TestGoArmReadout:
+    """What the Go row records beyond the run: clarifications and context."""
+
+    def test_clarification_is_recorded_not_acted_on(self, tmp_path, monkeypatch):
+        import llm
+        calls = []
+        summary = _go_summary(outcome="mission_failed(execution)", closure="unknown",
+                              reason="needs clarification: What is the maro box?", result="")
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_go_engine(calls, summary=summary))
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger([]))
+        binary = _fake_binary(tmp_path)
+        _go_config(tmp_path, binary)
+        _operator_docs(tmp_path)
+        rd = _make_run_dir(tmp_path, "aaaa0003", prompt=_BUILD_GOAL, lane="now",
+                           extra={"model": "sonnet"})
+
+        result = shadow_lane.sweep(limit=5)
+
+        assert result["go_fired"] == 1 and len(calls) == 2
+        meta = json.loads((rd / "shadow-go" / "meta.json").read_text(encoding="utf-8"))
+        assert meta["is_error"] is True and meta["go_outcome"] == "mission_failed(execution)"
+        assert meta["go_needs_clarification"] is True
+        assert meta["go_question"] == "What is the maro box?"
+        assert meta["go_reason"] == "needs clarification: What is the maro box?"
+        rows = [json.loads(l) for l in (tmp_path / "memory" / "shadow_ledger.jsonl").read_text().splitlines() if l.strip()]
+        assert len(rows) == 1 and rows[0]["go_needs_clarification"] is True
+        assert rows[0]["go_question"] == "What is the maro box?"
+        # nothing answered the question: the arm asks nobody
+        assert (rd / "shadow-go" / "RESULT.md").read_text(encoding="utf-8") == ""
+
+    def test_no_operator_docs_means_no_context_flag(self, tmp_path, monkeypatch):
+        import config
+        import llm
+        calls = []
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_go_engine(calls))
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger([]))
+        monkeypatch.setattr(config, "user_file", lambda name: None)
+        binary = _fake_binary(tmp_path)
+        _go_config(tmp_path, binary)
+        rd = _make_run_dir(tmp_path, "aaaa0004", prompt=_BUILD_GOAL, lane="now",
+                           extra={"model": "sonnet"})
+
+        result = shadow_lane.sweep(limit=5)
+
+        assert result["go_fired"] == 1
+        cmd = calls[0]["cmd"]
+        assert "--context" not in cmd and cmd[-1] == _BUILD_GOAL
+        assert not (rd / "shadow-go" / "context.md").exists()
+        meta = json.loads((rd / "shadow-go" / "meta.json").read_text(encoding="utf-8"))
+        assert meta["context_docs"] == [] and meta["context_sha256"] is None and meta["context_chars"] == 0
+
+    def test_operator_context_mirrors_the_planner(self, tmp_path, monkeypatch):
+        """Same docs, same order, same block shape, same breaker as planner.py."""
+        import config
+        user = tmp_path / "user"
+        user.mkdir()
+        (user / "GOALS.md").write_text("goals here\n", encoding="utf-8")
+        (user / "SIGNALS.md").write_text("x" * 5000, encoding="utf-8")
+        monkeypatch.setattr(config, "user_file",
+                            lambda name: (user / name) if (user / name).exists() else None)
+        text, docs = shadow_lane._operator_context()
+        assert docs == ["GOALS.md", "SIGNALS.md"]
+        assert text.startswith("USER CONTEXT (GOALS.md):\ngoals here\n\nUSER CONTEXT (SIGNALS.md):\n")
+        from context_budget import clip
+        assert text.endswith(clip("x" * 5000, shadow_lane.GO_CONTEXT_CAP))
+        assert len(text) < 5000 + 200, "the breaker clipped the runaway doc"

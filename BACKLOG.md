@@ -6461,6 +6461,18 @@ both engines (R2 related → R1, R3 rerun → R1, R4 fresh, no call).
   (`src/shadow_lane.py`, own track: own switch, claim dir
   `<run-dir>/shadow-go/`, own cap; `docs/SHADOW_LANE_DESIGN.md` "The Go
   track"). Off by default; the live flip is a config write Jeremy owns.
+  ON this box since 2026-09-06 (cap 9/day, cron cadence). Same day:
+  operator-context parity (the Go run reads the operator docs the
+  champion's planner injects, as a recorded `--context` input),
+  clarification outcomes recorded as their own row fields,
+  `tokens_cached` on the row, `scripts/install-maro-go.sh` in the
+  successor repo rebuilds the pinned binary.
+- [ ] **Shadow-pair adjudication tooling + viz.** Build at ~10 Go rows:
+  a reader over `memory/shadow_ledger.jsonl` that partitions on
+  `primary_goal_shape` and `go_needs_clarification`, renders each pair
+  (primary answer vs `shadow-go/RESULT.md`, cost, wall, landscape
+  relation) and feeds the batch judge; a Pairs tab on the viz. Also:
+  rotate `~/claude/logs/shadow-sweep.log` (cron appends every 10 min).
 
 ---
 

@@ -72,6 +72,11 @@ ALLOWED_DELETION_SITES = {
         "ephemeral: clears stale loop-running marker (dead pid)",
     ("killswitch.py", "clear"):
         "user-invoked: the user clearing their own kill switch",
+    ("shadow_lane.py", "_sweep_go_locked"):
+        "ephemeral: the Go track's own SKIPPED gate stamp, and only one "
+        "whose reason the gate no longer emits (a retired eligibility "
+        "rule); the run's data is never touched — the stamp is the lane's "
+        "marker, re-evaluated on the next sweep (2026-09-06)",
     ("llm.py", "_run_subprocess_safe"):
         "ephemeral: temp prompt file for subprocess adapter",
     ("runs.py", "record_llm_call"):
