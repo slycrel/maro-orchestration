@@ -26,12 +26,59 @@ challenger re-run of the same goal, arm randomized:
 | harness (champion) | the primary run itself — maro's machinery + accrued learning | — |
 | `star` | headless frontier subprocess carrying the star SKILL.md contract (orchestration-as-prompt) | harness > star ⇒ the machinery/learning earn their keep beyond the pattern |
 | `plain` | headless frontier subprocess, bare goal, no orchestration teaching | star > plain ⇒ the orchestration pattern itself adds value; **plain ≥ harness ⇒ bitter-lesson red alert** |
+| `go` (2026-09-06, own track) | the Go successor engine (`maro-go now\|agenda`) on its own persistent workspace, scratch work dir, every mutating/network tool denied by tool policy | harness vs go ⇒ does the successor carry the machinery's value on the live stream; go ≥ harness at lower cost ⇒ the successor is ready to be the champion |
 
 Randomizing the arm per shadow keeps cost at one challenger per run while
 both comparison corpuses accumulate passively. "Plain might be sometimes
 better, sometimes worse than star, and we don't need to know today"
 (Jeremy) — the answer emerges when n is big enough, no dedicated
 experiment.
+
+### The Go track (2026-09-06)
+
+The `go` arm is not a third pick in the star|plain randomization — it is
+its own track inside the same sweep (same lock, so serial stays a system
+invariant): own switch (`shadow.go.enabled`, double opt-in with
+`shadow.enabled`), own claim dir (`<run-dir>/shadow-go/`, a SIBLING of
+`shadow/` because the star|plain track claims by the existence of
+`shadow/`), own daily cap counted from its own `arm: "go"` rows, own
+eligibility. Why own track: the live ledger held ONE star|plain row in
+three weeks (tight read-tier gate × sparse stream); the successor's
+challenger evidence cannot wait on a slot it would compete for, and a
+run may honestly carry both a star|plain shadow and a Go shadow.
+
+Eligibility: a NOW primary passes on the basic checks alone (done, not
+dry, organic, non-empty) — the engine runs with `--deny-tools` naming
+every mutating/network tool (`shadow_lane.GO_DENY_TOOLS`), so the goal
+text cannot act; containment is structural (the engine refuses the tool),
+not the star|plain preamble (instruction-level; `containment_preamble_
+version: null` on Go rows so the batch judge partitions). An AGENDA
+primary passes the same read-tier gate as star|plain (its steps run with
+read tools). Any other lane is a terminal skip (`lane!=now|agenda`).
+
+The engine keeps its OWN persistent workspace (`shadow.go.workspace`,
+default `<workspace_root>/shadow-go`): its landscape (related-run
+decisions) and lineage-scoped memory accrue across shadows the way the
+primary's do — a fresh workspace per shadow would measure a memoryless
+engine. It never reads this workspace (isolation invariant 3 holds by
+construction: the Go journal is not a Python store, and the env scrub
+unsets every `MARO_*` pointer before setting `MARO_GO_WORKSPACE`).
+
+Readout: after the run, `maro-go runs show --json <handle>` (the run's
+`Summary`: mission outcome/closure, landscape relation, every call with
+its receipt — the landscape judge included — and the usage sum with
+`cost_reported` honest about partial sums). Row fields: `go_handle`,
+`go_outcome`, `go_closure`, `go_calls`, `go_landscape`, `cost_usd`
+(None unless every call reported), `go_binary_sha256` (the version pin,
+the star arm's `prompt_sha256` analogue), `tool_policy`.
+
+Pre-registered questions for the Go track (adjudication at ~10 pairs,
+the same bar as star|plain): (1) delivered-answer agreement with the
+primary on NOW pairs; (2) cost and wall per pair (the 2026-09-05
+comparison predicts Go at ~1/5 the cost and ~2/3 the wall); (3) landscape
+relation on follow-ups — does the engine relate a run the primary
+related. Prediction on record: Go ≥ harness on NOW answers at lower cost;
+Go < harness on AGENDA depth until its workspace has accrued lessons.
 
 ## Design invariants
 
@@ -208,6 +255,9 @@ ON on this box), registered in docs/DEFAULTS.md.
 - Sandboxed eligibility expansion (worktree/container) so build-shaped
   goals can be shadowed safely — evidence-gated on v1 actually producing
   findings.
+- ~~Whether a NOW shadow should also run another engine~~ — the Go track
+  (2026-09-06) is exactly that: the successor as challenger, on its own
+  track so it never competes with star|plain for the run's slot.
 - Whether NOW shadows should also run the *harness* AGENDA arm ("would the
   machinery have done better?") — v1 keeps arms to star|plain to bound
   cost; revisit at first adjudication.

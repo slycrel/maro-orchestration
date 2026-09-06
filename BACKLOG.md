@@ -6436,6 +6436,32 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the
   purpose to the metering census once a denominator exists.
 
+### Two-engine rerun findings (2026-09-06) + the Go shadow arm
+
+Rerun of the comparison protocol on clean workspaces after features
+1–2 (`planning/successor-comparison.md` in the successor repo, "Rerun"
+section). Python 6/6; the landscape made the same four decisions on
+both engines (R2 related → R1, R3 rerun → R1, R4 fresh, no call).
+
+- [ ] **NOW context is ~21k input tokens for every NOW goal.** The
+  outcome row for a one-word answer (G1 "ohm") records 21,036 input
+  tokens and $0.063 — identical on 09-05 and 09-06, 12× the answer
+  call's own cost. The 09-05 ledger's $0.005 was the step-costs row of
+  the answer call alone; the run pays the context. Retrieval-handle
+  question (project_retrieval_graph_memory_direction): what in the NOW
+  frame is fixed-size regardless of the goal, and which parts a
+  one-word question could skip. Probe first: dump the NOW request for
+  G1 and size its blocks.
+- [ ] **Step-costs rows vs the outcome row on AGENDA.** G4's card says
+  $0.48, its outcome row $1.24 (397k input tokens), the in-window
+  step-costs rows $0.36. Three numbers for one run; the outcome row
+  looks like cache reads priced at full input rate. Decide which is the
+  run's cost of record and make the other two say so.
+- [x] **Go as the shadow lane's third arm** — `shadow.go.*`
+  (`src/shadow_lane.py`, own track: own switch, claim dir
+  `<run-dir>/shadow-go/`, own cap; `docs/SHADOW_LANE_DESIGN.md` "The Go
+  track"). Off by default; the live flip is a config write Jeremy owns.
+
 ---
 
 Full history in [BACKLOG_DONE.md](BACKLOG_DONE.md).

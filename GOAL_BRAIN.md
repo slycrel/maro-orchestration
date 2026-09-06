@@ -4327,3 +4327,17 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   (fresh / related / rerun), records the decision, and the decision
   supersedes string-identity shortcuts (the goal-slug Goal Ancestry
   block). Design note: successor repo `planning/feature-related-runs.md`.
+- **2026-09-06 (Go as the shadow-lane challenger, capped and switchable — Jeremy):**
+  on wiring the Go successor into Python's shadow lane: *"Let's wire that
+  with a cap/off switch as a bug if needed, and assume we're fine as far
+  as that goes for the shadow lane."* Wired as its own track
+  (`shadow.go.enabled`, `shadow.go.daily_cap`, own claim dir, own ledger
+  rows — `docs/SHADOW_LANE_DESIGN.md` "The Go track"); export/reseed of
+  the two workspaces judged not worth it (the landscape reads run
+  history, not lessons; imported lineage rows are quarantined) — a light
+  rerun of the comparison protocol ran instead as the post-feature
+  regression check and the shadow baseline (successor
+  `planning/successor-comparison.md`, "Rerun 2026-09-06"). The live flip
+  (`shadow.go.enabled: true` + `shadow.go.binary` in
+  `~/.maro/workspace/config.yml`) is a workspace-config write and stays
+  Jeremy's.
