@@ -49,6 +49,7 @@ import hashlib
 import json
 import logging
 import re
+import statistics
 import subprocess
 import sys
 import time
@@ -952,6 +953,7 @@ def _sweep_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
         }
         try:
             _append_ledger_row(row)
+            _refresh_pairs_page()
         except Exception as exc:
             # The ledger is the cap's only counting source — a lost row
             # means an executed challenger the next sweep can't see. Keep
@@ -1096,6 +1098,7 @@ def _sweep_go_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
         }
         try:
             _append_ledger_row(row)
+            _refresh_pairs_page()
         except Exception as exc:
             log.error("shadow sweep (go): ledger append failed for %s — writing "
                       "fallback row: %s", handle_id, exc)
@@ -1151,18 +1154,214 @@ def _primary_comparison_fields(run_dir: Path, meta: dict) -> dict:
 # CLI
 # ---------------------------------------------------------------------------
 
+def ledger_rows(path: Optional[Path] = None) -> List[dict]:
+    """Every parseable row of the shadow ledger, in file order. A torn or
+    foreign line is skipped, never fatal — the ledger is append-only and
+    the readers are the adjudication's input, not its gate."""
+    path = path if path is not None else _ledger_path()
+    if not path.is_file():
+        return []
+    rows: List[dict] = []
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            # Said, not swallowed (retention decree: a short list must be
+            # distinguishable from a short store) — the sweep log carries it.
+            log.warning("shadow ledger: %s line %d is not JSON — skipped", path, n)
+            continue
+        if not isinstance(row, dict):
+            log.warning("shadow ledger: %s line %d is not a row — skipped", path, n)
+            continue
+        rows.append(row)
+    return rows
+
+
+PAIR_EXCERPT_CHARS = 1500  # breaker on the inlined challenger result, marked when cut
+
+
+def _ratio(a, b) -> Optional[float]:
+    try:
+        if a is None or b is None or float(b) <= 0:
+            return None
+        return round(float(a) / float(b), 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _shape_key(shape) -> str:
+    if not isinstance(shape, dict):
+        return "?"
+    return f"{shape.get('worker_type') or '?'}/{shape.get('action_tier') or '?'}"
+
+
+def pair_view(row: dict) -> dict:
+    """One ledger row as the pair the adjudication reads: the primary's
+    side, the challenger's side, the two ratios, and — when the run dir
+    is still there — the challenger's result excerpt and the primary's
+    report page. Pure over the row except for those two best-effort reads.
+    """
+    arm = row.get("arm") or "?"
+    is_go = arm == ARM_GO
+    if is_go:
+        outcome = row.get("go_outcome") or row.get("exit_status") or "?"
+    else:
+        outcome = "error" if row.get("is_error") else ("ok" if row.get("exit_status") == "ok" else str(row.get("exit_status") or "?"))
+    asked = bool(row.get("go_needs_clarification")) if is_go else False
+    ls = row.get("go_landscape") if isinstance(row.get("go_landscape"), dict) else None
+    view: Dict[str, Any] = {
+        "handle_id": row.get("handle_id"),
+        "ts": row.get("ts"),
+        "arm": arm,
+        "lane": row.get("primary_lane") or row.get("lane"),
+        "shape": _shape_key(row.get("primary_goal_shape")),
+        "primary": {
+            "achieved": row.get("primary_goal_achieved"),
+            "cost_usd": row.get("primary_cost_usd"),
+            "wall_seconds": row.get("primary_wall_seconds"),
+            "model": row.get("primary_model"),
+        },
+        "challenger": {
+            "outcome": outcome,
+            "is_error": row.get("is_error"),
+            "asked": asked,
+            "question": row.get("go_question") if is_go else None,
+            "cost_usd": row.get("cost_usd"),
+            "wall_seconds": row.get("wall_seconds"),
+            "tokens_in": row.get("tokens_in"),
+            "tokens_out": row.get("tokens_out"),
+            "tokens_cached": row.get("tokens_cached"),
+            "model": row.get("model"),
+            "landscape": ls.get("relation") if ls else None,
+            "context_docs": row.get("context_docs") if is_go else None,
+            "binary": (row.get("go_binary_sha256") or "")[:8] or None,
+            "exit_status": row.get("exit_status"),
+        },
+        "cost_ratio": _ratio(row.get("cost_usd"), row.get("primary_cost_usd")),
+        "wall_ratio": _ratio(row.get("wall_seconds"), row.get("primary_wall_seconds")),
+        "run_dir": None,
+        "report": None,
+        "result_excerpt": None,
+    }
+    handle = row.get("handle_id")
+    if handle:
+        try:
+            from runs import resolve_run_dir
+            rd = resolve_run_dir(str(handle))
+            if rd is not None and rd.is_dir():
+                view["run_dir"] = rd.name
+                reports = sorted(p for p in (rd / "build").glob("*-report.html")) if (rd / "build").is_dir() else []
+                if reports:
+                    view["report"] = f"{rd.name}/build/{reports[-1].name}"
+                result = rd / (GO_DIR if is_go else "shadow") / "RESULT.md"
+                if not is_go and not result.is_file():
+                    result = rd / "shadow" / str(arm) / "RESULT.md"
+                if result.is_file():
+                    from context_budget import clip
+                    view["result_excerpt"] = clip(result.read_text(encoding="utf-8").strip(),
+                                                  PAIR_EXCERPT_CHARS)
+        except Exception:  # narrow-except: the excerpt is a convenience, the row is the record
+            pass
+    return view
+
+
+def pairs_summary(views: List[dict]) -> dict:
+    """Counts the pre-registered questions partition on. No judgement of
+    answer agreement here — that is the batch judge's, at ~10 rows."""
+    per_arm: Dict[str, int] = {}
+    per_shape: Dict[str, int] = {}
+    outcomes: Dict[str, int] = {}
+    asked = 0
+    achieved = 0
+    cost_ratios: List[float] = []
+    wall_ratios: List[float] = []
+    cost_c = cost_p = 0.0
+    for v in views:
+        per_arm[v["arm"]] = per_arm.get(v["arm"], 0) + 1
+        per_shape[v["shape"]] = per_shape.get(v["shape"], 0) + 1
+        o = str(v["challenger"]["outcome"])
+        outcomes[o] = outcomes.get(o, 0) + 1
+        asked += 1 if v["challenger"]["asked"] else 0
+        achieved += 1 if v["primary"]["achieved"] else 0
+        if v["cost_ratio"] is not None:
+            cost_ratios.append(v["cost_ratio"])
+            cost_c += float(v["challenger"]["cost_usd"])
+            cost_p += float(v["primary"]["cost_usd"])
+        if v["wall_ratio"] is not None:
+            wall_ratios.append(v["wall_ratio"])
+    return {
+        "rows": len(views),
+        "per_arm": per_arm,
+        "per_shape": per_shape,
+        "challenger_outcomes": outcomes,
+        "asked": asked,
+        "primary_achieved": achieved,
+        "cost": {"paired": len(cost_ratios),
+                 "median_ratio": round(statistics.median(cost_ratios), 3) if cost_ratios else None,
+                 "challenger_usd": round(cost_c, 4), "primary_usd": round(cost_p, 4)},
+        "wall": {"paired": len(wall_ratios),
+                 "median_ratio": round(statistics.median(wall_ratios), 3) if wall_ratios else None},
+        "agreement": None,  # the batch judge's; not derivable from the rows
+    }
+
+
+def pairs(rows: Optional[List[dict]] = None, *, arm: Optional[str] = None) -> Tuple[List[dict], dict]:
+    """(views, summary) over the ledger — newest first; `arm` filters."""
+    rows = ledger_rows() if rows is None else rows
+    views = [pair_view(r) for r in rows if arm is None or r.get("arm") == arm]
+    views.reverse()
+    return views, pairs_summary(views)
+
+
+def _fmt_usd(x) -> str:
+    return "-" if x is None else f"${float(x):.3f}"
+
+
+def _fmt_s(x) -> str:
+    return "-" if x is None else f"{float(x):.0f}s"
+
+
+def _render_pairs_text(views: List[dict], summary: dict) -> str:
+    lines = [f"{summary['rows']} pair(s)  arms={summary['per_arm']}  shapes={summary['per_shape']}  "
+             f"asked={summary['asked']}  primary_achieved={summary['primary_achieved']}",
+             f"cost: paired={summary['cost']['paired']} median_ratio={summary['cost']['median_ratio']} "
+             f"challenger={_fmt_usd(summary['cost']['challenger_usd'])} primary={_fmt_usd(summary['cost']['primary_usd'])}   "
+             f"wall: paired={summary['wall']['paired']} median_ratio={summary['wall']['median_ratio']}",
+             "agreement: (batch judge, at ~10 rows)", ""]
+    hdr = f"{'handle':8} {'arm':5} {'lane':6} {'shape':12} {'primary':>10} {'chal':>10} {'ratio':>6}  challenger outcome"
+    lines.append(hdr)
+    for v in views:
+        p, c = v["primary"], v["challenger"]
+        prim = ("ok" if p["achieved"] else "no") + " " + _fmt_usd(p["cost_usd"]) + "/" + _fmt_s(p["wall_seconds"])
+        chal = _fmt_usd(c["cost_usd"]) + "/" + _fmt_s(c["wall_seconds"])
+        out = str(c["outcome"])
+        if c["asked"]:
+            out += f' ASKED: {c["question"] or ""}'
+        elif c["landscape"]:
+            out += f" ({c['landscape']})"
+        ratio = "-" if v["cost_ratio"] is None else f"{v['cost_ratio']:.2f}"
+        lines.append(f"{str(v['handle_id'] or '?'):8} {v['arm']:5} {str(v['lane'] or '?'):6} {v['shape']:12} "
+                     f"{prim:>10} {chal:>10} {ratio:>6}  {out}")
+    return "\n".join(lines) + "\n"
+
+
+def _refresh_pairs_page() -> None:
+    """Best-effort: the viz's Pairs tab tracks the ledger (a sweep that
+    fires is the one moment the page goes stale). Never raises."""
+    try:
+        from loop_report import write_pairs_page
+        write_pairs_page()
+    except Exception:  # narrow-except: a page is a view; the ledger row is the record
+        log.debug("pairs page refresh skipped", exc_info=True)
+
+
 def _status() -> dict:
     path = _ledger_path()
     if not path.is_file():
         return {"rows": 0, "last": None, "per_arm": {}}
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except ValueError:
-            continue
+    rows = ledger_rows(path)
     per_arm: Dict[str, int] = {}
     for row in rows:
         arm = row.get("arm", "?")
@@ -1183,6 +1382,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_sweep.add_argument("--dry-run", action="store_true", help="report what WOULD fire; write nothing")
 
     sub.add_parser("status", help="ledger row count, last row, per-arm counts")
+    p_pairs = sub.add_parser("pairs", help="every champion–challenger pair the ledger holds, newest first")
+    p_pairs.add_argument("--arm", default=None, help="only this arm (star|plain|go)")
+    p_pairs.add_argument("--json", action="store_true")
 
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
     cmd = args.cmd
@@ -1200,6 +1402,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if cmd == "status":
         print(json.dumps(_status(), indent=2, default=str))
+        return 0
+
+    if cmd == "pairs":
+        views, summary = pairs(arm=args.arm)
+        if args.json:
+            print(json.dumps({"summary": summary, "pairs": views}, indent=2, default=str))
+        else:
+            print(_render_pairs_text(views, summary), end="")
         return 0
 
     parser.print_help()

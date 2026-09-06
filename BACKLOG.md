@@ -6467,12 +6467,14 @@ both engines (R2 related → R1, R3 rerun → R1, R4 fresh, no call).
   clarification outcomes recorded as their own row fields,
   `tokens_cached` on the row, `scripts/install-maro-go.sh` in the
   successor repo rebuilds the pinned binary.
-- [ ] **Shadow-pair adjudication tooling + viz.** Build at ~10 Go rows:
-  a reader over `memory/shadow_ledger.jsonl` that partitions on
-  `primary_goal_shape` and `go_needs_clarification`, renders each pair
-  (primary answer vs `shadow-go/RESULT.md`, cost, wall, landscape
-  relation) and feeds the batch judge; a Pairs tab on the viz. Also:
-  rotate `~/claude/logs/shadow-sweep.log` (cron appends every 10 min).
+- [ ] **Shadow-pair batch judge.** At ~10 Go rows: the answer-agreement
+  half of the pre-registered questions (primary answer vs
+  `shadow-go/RESULT.md`, judged), fed from `shadow_lane.pairs()`. The
+  reader + viz Pairs tab shipped 2026-09-06 (`python3 -m shadow_lane
+  pairs`, `runs_root()/pairs.html`; partitions on goal shape and
+  asked-vs-failed, median cost/wall ratios, result excerpt inline);
+  `~/claude/logs` rotation is a user-level logrotate in cron (03:15,
+  size-triggered, 5 kept).
 
 ---
 

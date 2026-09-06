@@ -101,6 +101,23 @@ engine's own hash of the thought it stored — the two hashes are of the
 same bytes, so a mismatch is a transport defect). No docs → no flag, and
 the row says so with an empty `context_docs`.
 
+Reading the pairs (2026-09-06): `python3 -m shadow_lane pairs [--arm
+go] [--json]` renders every ledger row as the pair the adjudication
+reads — the primary's side (achieved, cost, wall, model), the
+challenger's (outcome, asked-a-clarification + the question, cost, wall,
+tokens incl. cached, landscape relation, context docs, binary pin), the
+cost and wall ratios, and the challenger's result excerpt when the run
+dir is still there — with a summary that partitions on arm, goal shape
+and asked-vs-failed and gives median ratios. It does NOT claim answer
+agreement: that is the batch judge's, at ~10 rows. The same view is the
+viz's **Pairs tab** (`runs_root()/pairs.html`, `loop_report.
+write_pairs_page`, allowlisted in `viz_server`), refreshed by the
+runs-index write and by the sweep after every row it appends — the
+challenger result is inlined because `shadow-go/` is not a servable
+subtree. Rows written before the clarification fields existed read as
+"not asked"; nothing is backfilled (the engine's reason was not on the
+row, and the ledger is append-only).
+
 Pre-registered questions for the Go track (adjudication at ~10 pairs,
 the same bar as star|plain): (1) delivered-answer agreement with the
 primary on NOW pairs; (2) cost and wall per pair (the 2026-09-05

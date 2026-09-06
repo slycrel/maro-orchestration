@@ -2210,3 +2210,50 @@ def test_index_totals_accumulate_across_loops(monkeypatch, tmp_path):
     row = next(s for s in summaries if s["handle_id"] == "hsum")
     assert row["totals"]["tokens_in"] == 1000
     assert row["totals"]["tokens_out"] == 100
+
+
+def test_write_pairs_page_renders_the_ledger(monkeypatch, tmp_path):
+    """The Pairs tab: every shadow pair, the asked-vs-failed partition, the
+    challenger's result inline (shadow-go/ is not a servable subtree), and
+    the nav back to Runs. 2026-09-06, the Go track goes live."""
+    import shadow_lane
+    views = [{
+        "handle_id": "aaaa0009", "ts": "2026-09-06T10:00:00+00:00", "arm": "go", "lane": "now",
+        "shape": "build/READ",
+        "primary": {"achieved": True, "cost_usd": 2.0, "wall_seconds": 400.0, "model": "sonnet"},
+        "challenger": {"outcome": "mission_failed(execution)", "is_error": True, "asked": True,
+                       "question": "What is the maro box?", "cost_usd": 0.02, "wall_seconds": 20.0,
+                       "tokens_in": 300, "tokens_out": 40, "tokens_cached": 120, "model": "haiku",
+                       "landscape": "fresh", "context_docs": ["CONTEXT.md"], "binary": "5f900c6a",
+                       "exit_status": "ok"},
+        "cost_ratio": 0.01, "wall_ratio": 0.05, "run_dir": "aaaa0009-x",
+        "report": "aaaa0009-x/build/now-aaaa0009-report.html",
+        "result_excerpt": "Which <box> do you mean?",
+    }]
+    summary = shadow_lane.pairs_summary(views)
+    monkeypatch.setattr(shadow_lane, "pairs", lambda: (views, summary))
+    out = lr.write_pairs_page(tmp_path)
+    content = Path(out).read_text()
+    assert 'href="aaaa0009-x/build/now-aaaa0009-report.html">aaaa0009</a>' in content
+    assert "asked</span> What is the maro box?" in content
+    assert "Which &lt;box&gt; do you mean?" in content  # escaped, inline
+    assert "context: CONTEXT.md" in content and "cached=120" in content and "0.01×" in content
+    assert 'class="active" href="pairs.html"' in content and 'href="index.html"' in content
+    assert "batch judge" in content  # agreement is not this page's claim
+
+
+def test_write_pairs_page_empty_and_broken_ledger(monkeypatch, tmp_path):
+    import shadow_lane
+    monkeypatch.setattr(shadow_lane, "pairs", lambda: ([], shadow_lane.pairs_summary([])))
+    content = Path(lr.write_pairs_page(tmp_path)).read_text()
+    assert "No pairs yet" in content and 'href="index.html"' in content
+
+    def _boom():
+        raise RuntimeError("ledger unreadable")
+    monkeypatch.setattr(shadow_lane, "pairs", _boom)
+    assert lr.write_pairs_page(tmp_path) is None  # never raises
+
+
+def test_nav_tabs_carry_pairs():
+    nav = lr._nav_tabs("runs")
+    assert 'href="pairs.html">Pairs</a>' in nav

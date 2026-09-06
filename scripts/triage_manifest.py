@@ -87,7 +87,7 @@ _add("read-only", """
  evolver_scans.py:_load_baselines evolver_scans.py:_load_dated_diagnoses
  evolver_scans.py:_record_suggestion_outcomes graduation.py:scan_candidates
  graduation.py:_already_proposed graduation.py:verify_graduation_rules
- shadow_lane.py:_today_ledger_count shadow_lane.py:_status
+ shadow_lane.py:_today_ledger_count
  router.py:_count_skill_stats
  memory_quality.py:_load_corpus_from_workspace memory_quality.py:_load_paraphrase_queries
  navigator_shadow.py:_load_navigator_events memory_jsonl.py:_replay

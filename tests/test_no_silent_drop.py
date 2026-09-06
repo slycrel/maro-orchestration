@@ -282,7 +282,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("runs.py", "remove_run_index"): 1,
 
     ("shadow_lane.py", "_iter_run_dirs_newest_first"): 1,
-    ("shadow_lane.py", "_status"): 1,
     ("shadow_lane.py", "_today_ledger_count"): 1,
 
 

@@ -1214,3 +1214,112 @@ class TestGoArmReadout:
         from context_budget import clip
         assert text.endswith(clip("x" * 5000, shadow_lane.GO_CONTEXT_CAP))
         assert len(text) < 5000 + 200, "the breaker clipped the runaway doc"
+
+
+def _go_row(**over):
+    row = {
+        "handle_id": "aaaa0009", "arm": "go", "primary_lane": "now", "primary_goal_achieved": True,
+        "primary_goal_shape": {"worker_type": "build", "action_tier": "READ"},
+        "primary_cost_usd": 2.0, "primary_wall_seconds": 400.0, "primary_model": "sonnet",
+        "cost_usd": 0.02, "wall_seconds": 20.0, "tokens_in": 300, "tokens_out": 40, "tokens_cached": 120,
+        "model": "haiku", "exit_status": "ok", "is_error": True,
+        "go_outcome": "mission_failed(execution)", "go_needs_clarification": True,
+        "go_question": "What is the maro box?", "go_landscape": {"relation": "fresh", "chosen": "", "rule": "no_candidates"},
+        "context_docs": ["CONTEXT.md"], "go_binary_sha256": "5f900c6a" + "0" * 56,
+        "ts": "2026-09-06T10:00:00+00:00",
+    }
+    row.update(over)
+    return row
+
+
+class TestPairs:
+    """The adjudication's reader: one view per ledger row, the partition
+    the pre-registered questions need, and no judgement of agreement."""
+
+    def test_go_row_view_carries_both_sides_and_the_ratios(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        rd = _make_run_dir(tmp_path, "aaaa0009", prompt="what is the maro box", lane="now")
+        (rd / "build").mkdir()
+        (rd / "build" / "now-aaaa0009-report.html").write_text("<html/>")
+        (rd / "shadow-go").mkdir()
+        (rd / "shadow-go" / "RESULT.md").write_text("Which box do you mean?", encoding="utf-8")
+        v = shadow_lane.pair_view(_go_row())
+        assert v["handle_id"] == "aaaa0009" and v["arm"] == "go" and v["lane"] == "now"
+        assert v["shape"] == "build/READ"
+        assert v["primary"] == {"achieved": True, "cost_usd": 2.0, "wall_seconds": 400.0, "model": "sonnet"}
+        c = v["challenger"]
+        assert c["outcome"] == "mission_failed(execution)" and c["asked"] is True
+        assert c["question"] == "What is the maro box?" and c["landscape"] == "fresh"
+        assert c["tokens_cached"] == 120 and c["context_docs"] == ["CONTEXT.md"] and c["binary"] == "5f900c6a"
+        assert v["cost_ratio"] == 0.01 and v["wall_ratio"] == 0.05
+        assert v["run_dir"] == rd.name and v["report"] == f"{rd.name}/build/now-aaaa0009-report.html"
+        assert v["result_excerpt"] == "Which box do you mean?"
+
+    def test_star_row_view_and_missing_sources_are_none(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        row = {"handle_id": "bbbb0001", "arm": "star", "primary_lane": "agenda",
+               "primary_goal_achieved": True, "primary_cost_usd": None, "primary_wall_seconds": 100.0,
+               "cost_usd": 1.5, "wall_seconds": 50.0, "exit_status": "ok", "is_error": False,
+               "ts": "2026-09-06T09:00:00+00:00"}
+        v = shadow_lane.pair_view(row)
+        assert v["shape"] == "?" and v["challenger"]["outcome"] == "ok" and v["challenger"]["asked"] is False
+        assert v["cost_ratio"] is None and v["wall_ratio"] == 0.5
+        assert v["run_dir"] is None and v["report"] is None and v["result_excerpt"] is None
+        err = shadow_lane.pair_view(dict(row, is_error=True))
+        assert err["challenger"]["outcome"] == "error"
+        # a free primary is not a denominator: ratio None, never a crash
+        free = shadow_lane.pair_view(dict(row, primary_cost_usd=0.0, primary_wall_seconds=0))
+        assert free["cost_ratio"] is None and free["wall_ratio"] is None
+
+    def test_summary_partitions_and_never_judges_agreement(self):
+        rows = [_go_row(), _go_row(handle_id="aaaa0010", go_needs_clarification=False, go_question=None,
+                                   go_outcome="delivered", is_error=False, cost_usd=0.5,
+                                   primary_goal_shape={"worker_type": "research", "action_tier": "READ"}),
+                {"handle_id": "bbbb0001", "arm": "star", "primary_goal_achieved": False, "cost_usd": 1.0,
+                 "primary_cost_usd": 2.0, "exit_status": "ok", "is_error": False, "ts": "2026-09-05T00:00:00+00:00"}]
+        views, summary = shadow_lane.pairs(rows)
+        assert [v["handle_id"] for v in views] == ["bbbb0001", "aaaa0010", "aaaa0009"], "newest first"
+        assert summary["rows"] == 3 and summary["per_arm"] == {"go": 2, "star": 1}
+        assert summary["per_shape"] == {"build/READ": 1, "research/READ": 1, "?": 1}
+        assert summary["challenger_outcomes"] == {"mission_failed(execution)": 1, "delivered": 1, "ok": 1}
+        assert summary["asked"] == 1 and summary["primary_achieved"] == 2
+        assert summary["cost"]["paired"] == 3 and summary["cost"]["median_ratio"] == 0.25
+        assert summary["cost"]["challenger_usd"] == 1.52 and summary["cost"]["primary_usd"] == 6.0
+        assert summary["wall"]["paired"] == 2 and summary["agreement"] is None
+        only_go, s2 = shadow_lane.pairs(rows, arm="go")
+        assert len(only_go) == 2 and s2["per_arm"] == {"go": 2}
+
+    def test_cli_pairs_text_and_json(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        (tmp_path / "memory").mkdir()
+        (tmp_path / "memory" / "shadow_ledger.jsonl").write_text(
+            json.dumps(_go_row()) + "\n" + "not json\n" + json.dumps(_go_row(handle_id="aaaa0011")) + "\n")
+        assert shadow_lane.main(["pairs"]) == 0
+        out = capsys.readouterr().out
+        assert out.startswith("2 pair(s)") and "aaaa0011" in out and "ASKED: What is the maro box?" in out
+        assert "agreement: (batch judge" in out
+        assert shadow_lane.main(["pairs", "--json", "--arm", "go"]) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["summary"]["rows"] == 2 and data["pairs"][0]["handle_id"] == "aaaa0011"
+        assert shadow_lane.main(["pairs", "--arm", "plain"]) == 0
+        assert capsys.readouterr().out.startswith("0 pair(s)")
+
+    def test_sweep_refreshes_the_pairs_page_after_a_row(self, tmp_path, monkeypatch):
+        import llm
+        calls = []
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_go_engine(calls))
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger([]))
+        refreshed = []
+        monkeypatch.setattr(shadow_lane, "_refresh_pairs_page", lambda: refreshed.append(1))
+        binary = _fake_binary(tmp_path)
+        _go_config(tmp_path, binary)
+        _make_run_dir(tmp_path, "aaaa0012", prompt=_BUILD_GOAL, lane="now", extra={"model": "sonnet"})
+        assert shadow_lane.sweep(limit=5)["go_fired"] == 1
+        assert refreshed == [1], "the page tracks the ledger: refreshed once per appended row"
+
+    def test_refresh_never_raises(self, monkeypatch):
+        import loop_report
+        def _boom(root=None):
+            raise RuntimeError("disk gone")
+        monkeypatch.setattr(loop_report, "write_pairs_page", _boom)
+        shadow_lane._refresh_pairs_page()  # a page is a view; the row is the record
