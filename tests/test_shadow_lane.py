@@ -1078,6 +1078,39 @@ class TestGoArm:
         assert cmd[cmd.index("--model") + 1] == "sonnet"
         assert calls[0]["env_extra"]["MARO_GO_WORKSPACE"] == str(tmp_path / "elsewhere")
 
+    def test_stamp_from_a_retired_reason_is_rescanned_but_a_real_claim_is_not(self, tmp_path, monkeypatch):
+        import llm
+        calls = []
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_go_engine(calls))
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger([]))
+        _go_config(tmp_path, _fake_binary(tmp_path), daily_cap=9)
+        # The first cron ticks (2026-09-06) stamped build-shaped AGENDA
+        # runs `worker_type!=research` before the widening landed.
+        stale = _make_run_dir(tmp_path, "aaaa0020", prompt=_BUILD_GOAL, lane="agenda")
+        (stale / "shadow-go").mkdir()
+        (stale / "shadow-go" / "SKIPPED").write_text("worker_type!=research\n")
+        # A stamp the CURRENT gate produces stays terminal.
+        real = _make_run_dir(tmp_path, "aaaa0021", prompt=_BUILD_GOAL, lane="agenda", dry_run=True)
+        (real / "shadow-go").mkdir()
+        (real / "shadow-go" / "SKIPPED").write_text(shadow_lane.REASON_DRY_RUN + "\n")
+        # A dir with anything beyond the stamp is a real claim, whatever the stamp says.
+        claimed = _make_run_dir(tmp_path, "aaaa0022", prompt=_BUILD_GOAL, lane="agenda")
+        (claimed / "shadow-go" / "scratch").mkdir(parents=True)
+        (claimed / "shadow-go" / "SKIPPED").write_text("worker_type!=research\n")
+        assert shadow_lane._stale_go_stamp(stale / "shadow-go")
+        assert not shadow_lane._stale_go_stamp(real / "shadow-go")
+        assert not shadow_lane._stale_go_stamp(claimed / "shadow-go")
+
+        dry = shadow_lane.sweep(limit=5, dry_run=True)
+        assert dry["go_would_fire"] == [] and (stale / "shadow-go" / "SKIPPED").is_file(), "dry-run retires nothing"
+        result = shadow_lane.sweep(limit=5)
+        assert result["go_fired"] == 1
+        assert (stale / "shadow-go" / "meta.json").is_file()
+        assert not (stale / "shadow-go" / "SKIPPED").exists()
+        assert (real / "shadow-go" / "SKIPPED").is_file()
+        assert not (claimed / "shadow-go" / "meta.json").exists()
+        assert calls[0]["cmd"][-1] == _BUILD_GOAL and len(calls) == 2
+
     def test_parse_go_summary_skips_the_announcement(self):
         text = 'workspace: /x (env)\n{"handle": "ab", "usage": {}}\n'
         assert shadow_lane._parse_go_summary(text)["handle"] == "ab"

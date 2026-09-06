@@ -127,7 +127,14 @@ _TERMINAL_REASONS = frozenset({
     REASON_NOT_READ_TIER,
 })
 REASON_LANE = "lane!=now|agenda"
-_GO_TERMINAL_REASONS = _TERMINAL_REASONS | {REASON_LANE}
+# The Go track's terminal set is NARROWER than star|plain's: its gate never
+# asks the goal's shape (the tool policy is the containment), so the
+# research/read-tier reasons cannot be produced here. A SKIPPED stamp
+# carrying a reason outside this set is a stamp from an older, narrower
+# gate (2026-09-06: the first cron ticks stamped `worker_type!=research`
+# before the widening landed) and must not outlive the gate that wrote
+# it — `_stale_go_stamp` lets the sweep re-evaluate such a run.
+_GO_TERMINAL_REASONS = frozenset({REASON_DRY_RUN, REASON_NOT_ORGANIC, REASON_LANE})
 
 
 def eligible(goal: str, meta: dict) -> Tuple[bool, str]:
@@ -906,6 +913,24 @@ def _sweep_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
     return summary
 
 
+def _stale_go_stamp(go_dir: Path) -> bool:
+    """True iff the Go claim dir holds ONLY a SKIPPED stamp whose reason
+    the current Go gate cannot produce (a stamp from an older, narrower
+    gate). Anything else in the dir — a scratch, a result, an ERROR — is
+    a real claim and is never touched."""
+    try:
+        entries = [p.name for p in go_dir.iterdir()]
+    except OSError:
+        return False
+    if entries != ["SKIPPED"]:
+        return False
+    try:
+        reason = (go_dir / "SKIPPED").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return reason not in _GO_TERMINAL_REASONS
+
+
 def _sweep_go_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
                      dry_run: bool, lookback_hours: float) -> None:
     """The Go track of the sweep (same lock, own everything else): own
@@ -932,8 +957,22 @@ def _sweep_go_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
         summary["go_scanned"] += 1
         go_dir = run_dir / GO_DIR
         if go_dir.exists():
-            summary["go_skipped"] += 1
-            continue
+            if _stale_go_stamp(go_dir):
+                if dry_run:
+                    summary["go_skipped"] += 1
+                    continue
+                # A stamp from a retired reason is not a claim: retire the
+                # stamp (the only file the dir holds) and re-evaluate.
+                try:
+                    (go_dir / "SKIPPED").unlink()
+                    go_dir.rmdir()
+                except OSError as exc:
+                    summary["go_errors"] += 1
+                    log.warning("shadow sweep (go): could not retire stale stamp in %s: %s", run_dir.name, exc)
+                    continue
+            else:
+                summary["go_skipped"] += 1
+                continue
         try:
             meta = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
