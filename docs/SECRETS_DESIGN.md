@@ -137,9 +137,21 @@ executor's environment:
 | runtime | how the value travels | where the worker reads it |
 |---|---|---|
 | Python, containerized executor | docker client's env + bare `-e NAME` (never the argv) — the mechanism the hosted-free keys already used | `$NAME` inside the container |
-| Python, host lane | merged into the `claude -p` child env | `$NAME` |
-| Go engine (`maro-go now/agenda`) | `Subprocess.Env` appended to the child env for tool-bearing calls only | `$NAME` |
+| Python, host lane | a per-step `secrets.env` (0600) in the run scratch, written before the step and shredded after it; the child env carries only `$MARO_SECRETS_FILE` (no run scratch ⇒ merged into the child env, as the container lane does) | `grep '^NAME=' $MARO_SECRETS_FILE` |
+| Go engine (`maro-go now/agenda`) | `invoke.HandOff`: the same `secrets.env` (0600) under `<ws>/drop/`, written per tool-bearing call and shredded when it returns; `Subprocess.Env` carries only the two paths | `grep '^NAME=' $MARO_SECRETS_FILE` |
 | Hermes dispatch lane | **never** — a dispatch carries a goal, not credentials; the box resolves its own store | — |
+
+**Why a file on the host and env in the container** (Jeremy 2026-09-06):
+in docker the container's env *is* the silo — it starts empty, gets what
+`-e` names, dies with the container. On a general OS a process env is
+inherited by every descendant of the worker (each tool shell, MCP server,
+script), is readable from `/proc/*/environ` by the same user, and lands
+in whatever a child logs. A 0600 file the child is merely told about is
+read on purpose and gone when the step ends — the mirror of the drop
+file (§7). The presence block's wording follows the mechanism: "Injected
+for this step as NAME=value lines in <path> ($MARO_SECRETS_FILE; mode
+0600, shredded when the step ends)" on the host, "Injected into your
+environment as variables" in the container.
 
 Every injected value is scrubbed from captured output
 (`llm._scrub_secret_values`, already in place) so a goal-driven `env`
@@ -235,16 +247,10 @@ re-copies them.
 
 - **Rotation** is manual (`set` again). A `rotated_after` field in the
   metadata and a `check` warning are the obvious next slice.
-- **File hand-off on the host lane** (Jeremy 2026-09-06: ENV is right
-  for docker, where the container's env *is* the silo; on a general OS a
-  process env is inherited by every descendant of the worker — each tool
-  shell, MCP server, subprocess — and readable from `/proc/*/environ` by
-  the same user, so "it's all the same" is not true in a security sense).
-  Shape: the host lane and the Go subprocess backend write a per-step
-  `secrets.env` (0600) in the run scratch, hand only `$MARO_SECRETS_FILE`,
-  and remove it after the step — the mirror of the drop file (§7). The
-  container keeps `-e`. Worth doing when the host lane injects anything
-  beyond this box's own keys; today the policy set rides the env.
+- ~~File hand-off on the host lane~~ — SHIPPED 2026-09-06 (§6). Residue:
+  the no-scratch fallback still merges values into the env; every real
+  run has a scratch dir, so that path is the bare-`_run_subprocess_safe`
+  probe's, not a run's.
 - **Scoped injection per run** (a goal declaring which names it needs,
   the operator approving once) would replace the box-wide policy file
   when there is evidence a box-wide list is too coarse.

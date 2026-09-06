@@ -406,12 +406,55 @@ class TestExecutorSeams:
             return _FakeProc()
         monkeypatch.setattr("subprocess.Popen", _fake_popen)
         llm._run_subprocess_safe(["true"], timeout=5, executor_step=True)
+        # no run dir → nowhere for the hand-off file: the env carries them
         assert captured["env"]["YAHOO_USER"] == "u"
         assert "NVIDIA_API_KEY" not in captured["env"]
         assert ss.DROP_ENV not in captured["env"], "no run dir → no drop path"
+        assert ss.FILE_ENV not in captured["env"]
         # a tool-less / non-executor call gets nothing
         llm._run_subprocess_safe(["true"], timeout=5)
         assert "YAHOO_USER" not in captured["env"]
+
+    def test_host_lane_hands_values_over_as_a_file_not_env(self, fake_tools, tmp_path, monkeypatch):
+        """With a run scratch the host lane writes a per-step 0600 file and
+        tells the child only its path (design §10: a host env is inherited
+        by every descendant and /proc-readable; a file is read on purpose).
+        The file is shredded when the step ends — on the normal path and on
+        the failure path."""
+        import llm
+        from runs import scoped_run_dir
+        _seed(fake_tools, {"YAHOO_USER": "u-secret", "NVIDIA_API_KEY": "n"}, policy="YAHOO_*\n")
+        run_dir = tmp_path / "abcd1234-nick"
+        run_dir.mkdir()
+        hand = run_dir / "scratch" / ss.FILE_NAME
+        with scoped_run_dir(run_dir):
+            res = llm._run_subprocess_safe(
+                ["sh", "-c", 'test -z "$YAHOO_USER" || exit 3; '
+                             'test "$(stat -c %a "$MARO_SECRETS_FILE")" = 600 || exit 4; '
+                             'grep "^YAHOO_USER=" "$MARO_SECRETS_FILE" | sed "s/=.*/=seen/"; '
+                             'grep -c "^NVIDIA" "$MARO_SECRETS_FILE" && exit 5; true'],
+                timeout=20, executor_step=True)
+        assert res.returncode == 0, res.stdout
+        assert "YAHOO_USER=seen" in res.stdout
+        assert not hand.exists(), "hand-off file survived the step"
+        assert "u-secret" not in res.stdout
+        # failure path: a child that dies still leaves no file behind
+        with scoped_run_dir(run_dir):
+            res = llm._run_subprocess_safe(
+                ["sh", "-c", 'test -f "$MARO_SECRETS_FILE" && exit 7'],
+                timeout=20, executor_step=True)
+        assert res.returncode == 7
+        assert not hand.exists()
+        # the frame names the file, not variables
+        import step_exec
+        import container_exec as ce
+        monkeypatch.setattr(ce, "container_mode", lambda: "off")
+        monkeypatch.setattr(ce, "run_scratch_dir", lambda: str(run_dir / "scratch"))
+        host = step_exec.execute_system_for_lane()
+        assert "Injected for this step as NAME=value lines in " + str(hand) in host
+        assert "($" + ss.FILE_ENV + "; mode 0600, shredded when the step ends): YAHOO_USER." in host
+        assert "Injected into your environment as variables" not in host
+        assert "u-secret" not in host
 
     def test_executor_step_announces_the_drop_and_ingests_it(self, fake_tools, tmp_path, monkeypatch):
         import llm
@@ -430,13 +473,23 @@ class TestExecutorSeams:
         m = ss.read_meta()["MINTED_TOKEN"]
         assert m["origin"] == "maro" and m["run"] == "abcd1234" and m["source"] == "drop"
 
-    def test_injected_values_are_scrubbed_from_captured_output(self, fake_tools, monkeypatch):
+    def test_injected_values_are_scrubbed_from_captured_output(self, fake_tools, monkeypatch, tmp_path):
         import llm
         _seed(fake_tools, {"YAHOO_USER": "hunter2secret"}, policy="YAHOO_*\n")
+        # no run dir → env carries the value; a child that echoes it is scrubbed
         res = llm._run_subprocess_safe(["sh", "-c", 'echo "user=$YAHOO_USER"'],
                                        timeout=20, executor_step=True)
         assert "hunter2secret" not in res.stdout
         assert "[REDACTED:YAHOO_USER]" in res.stdout
+        # with a run dir → the file carries it; a child that cats it is scrubbed too
+        from runs import scoped_run_dir
+        run_dir = tmp_path / "abcd1234-nick"
+        run_dir.mkdir()
+        with scoped_run_dir(run_dir):
+            res = llm._run_subprocess_safe(["sh", "-c", 'cat "$MARO_SECRETS_FILE"'],
+                                           timeout=20, executor_step=True)
+        assert "hunter2secret" not in res.stdout
+        assert "YAHOO_USER=[REDACTED:YAHOO_USER]" in res.stdout
 
     def test_container_lane_passes_policy_names_bare(self, fake_tools, monkeypatch, tmp_path):
         """Container branch: policy names ride the bare `-e NAME` passthrough,
@@ -473,6 +526,7 @@ class TestExecutorSeams:
         host = step_exec.execute_system_for_lane()
         assert host.startswith(step_exec.EXECUTE_SYSTEM)
         assert "## Secrets" in host and "you are on the host" in host
+        assert "Injected into your environment as variables: YAHOO_USER." in host, "no run dir → env wording"
         monkeypatch.setattr(ce, "container_mode", lambda: "on")
         monkeypatch.setattr(ce, "container_suppressed", lambda: False)
         monkeypatch.setattr(ce, "image_bakes_verbs", lambda: False)

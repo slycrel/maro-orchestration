@@ -1433,6 +1433,8 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     # injection, and the frame already told the worker what exists.
     _store_env: Dict[str, str] = {}
     _drop_host: Optional[str] = None
+    _hand_off: Optional[Path] = None
+    _scratch_for_drop: Optional[str] = None
     if executor_step:
         try:
             import secrets_store as _ss
@@ -1571,7 +1573,36 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         # Host lane: the worker is the operator's user and could read the
         # store itself; injection here is parity with the container lane
         # and the Go engine, so a step written for one lane runs on all.
-        child_env = {**child_env, **_store_env}
+        # The values travel as a per-step 0600 FILE in the run scratch,
+        # not as env: on the host a process env is inherited by every
+        # descendant (tool shells, MCP servers) and readable from /proc by
+        # the same user, while a file the child is merely told about is
+        # read only on purpose and shredded when the step ends (design
+        # §10, Jeremy 2026-09-06). Without a run scratch there is nowhere
+        # to put the file and the env carries them as before.
+        try:
+            import secrets_store as _ss_file
+            _hp = _ss_file.file_path(_scratch_for_drop) if executor_step else None
+            if _hp is not None:
+                _hand_off = _ss_file.write_hand_off(_hp, _store_env)
+                child_env[_ss_file.FILE_ENV] = str(_hand_off)
+            else:
+                child_env = {**child_env, **_store_env}
+        except Exception as _hand_exc:
+            log.warning("secrets hand-off file failed (%s); injecting env instead", _hand_exc)
+            _hand_off = None
+            child_env = {**child_env, **_store_env}
+
+    def _after_step() -> None:
+        # The hand-off must not outlive the step on any path; then the
+        # derived-secret drop is folded into the store.
+        if _hand_off is not None:
+            try:
+                import secrets_store as _ss_rm
+                _ss_rm.remove_hand_off(_hand_off)
+            except Exception as _rm_exc:
+                log.warning("secrets hand-off %s not removed: %s", _hand_off, _rm_exc)
+        _ingest_secret_drop(_drop_host)
 
     proc = subprocess.Popen(
         cmd,
@@ -1681,7 +1712,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 proc.wait(timeout=5)
             stdout = _read_captured()
             _cleanup_files()
-            _ingest_secret_drop(_drop_host)
+            _after_step()
             if kill_exc is not None:
                 # Probe-ordered kill: raise the probe's exception (e.g.
                 # BudgetRunawayError) so callers get the right class — a
@@ -1703,6 +1734,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         try: os.killpg(proc.pid, signal.SIGKILL)
         except OSError: pass
         _cleanup_files()
+        _after_step()
         raise
     finally:
         # Best-effort process-group cleanup on normal completion too.
@@ -1711,7 +1743,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
 
     stdout = _read_captured()
     _cleanup_files()
-    _ingest_secret_drop(_drop_host)
+    _after_step()
     result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, "")
     # The lane this call ACTUALLY ran on — a requested container can fall
     # back to host (unresolvable cwd above); failure attribution must follow

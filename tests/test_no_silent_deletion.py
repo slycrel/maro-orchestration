@@ -75,6 +75,10 @@ ALLOWED_DELETION_SITES = {
     ("secrets_store.py", "_write_encrypted"):
         "ephemeral: unlinks its own 0600 plaintext staging file after one "
         "sops encrypt call (docs/SECRETS_DESIGN.md)",
+    ("secrets_store.py", "write_hand_off"):
+        "ephemeral staging: replaces a STALE per-step hand-off copy before writing "
+        "the fresh 0600 file (design §6/§10, 2026-09-06); the file holds injected "
+        "secret values only and is shredded when the step ends — never run data",
     ("secrets_store.py", "_shred"):
         "ephemeral: zero-fills and removes a run's derived-secret DROP file "
         "after its values are stored — a plaintext credential must not "

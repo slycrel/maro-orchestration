@@ -98,6 +98,8 @@ POLICY_NAME = "inject"
 META_NAME = "meta.json"
 DROP_NAME = "secrets-derived.env"   # inside a run's scratch dir
 DROP_ENV = "MARO_SECRETS_DROP"
+FILE_NAME = "secrets.env"           # host-lane hand-off, per step, 0600, shredded after
+FILE_ENV = "MARO_SECRETS_FILE"
 ORIGIN_OPERATOR = "operator"
 ORIGIN_MARO = "maro"
 
@@ -416,6 +418,48 @@ def drop_path(scratch_dir: Optional[str]) -> Optional[Path]:
     return Path(scratch_dir) / DROP_NAME
 
 
+def file_path(scratch_dir: Optional[str]) -> Optional[Path]:
+    """The host-lane hand-off file for a run scratch dir (None without one).
+    On the host a process env is inherited by every descendant of the
+    worker and readable from /proc by the same user; a 0600 file the child
+    is merely TOLD about is the silo the container's env gives for free
+    (Jeremy 2026-09-06, design §10). The container lane keeps `-e`."""
+    if not scratch_dir:
+        return None
+    return Path(scratch_dir) / FILE_NAME
+
+
+def write_hand_off(path: Path, values: Dict[str, str]) -> Path:
+    """Write NAME=value lines to `path` with mode 0600 (created fresh; a
+    stale copy is replaced). Values are written verbatim, one per line —
+    the drop file's format read back by config._parse_dotenv_text."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        for name, value in values.items():
+            fh.write(f"{name}={value}\n")
+    return path
+
+
+def remove_hand_off(path: Optional[Path]) -> None:
+    """Shred the hand-off file after the step (zero-fill, then unlink);
+    a missing file is fine."""
+    if path is not None and path.is_file():
+        _shred(path)
+
+
+def file_instructions(path: Path, names: Sequence[str]) -> str:
+    return ("Injected for this step as NAME=value lines in " + str(path) + " ($"
+            + FILE_ENV + "; mode 0600, shredded when the step ends): "
+            + ", ".join(names) + ". Read the line you need with `grep '^NAME=' $"
+            + FILE_ENV + "` or source the file in a subshell; never print or "
+            "persist a value.")
+
+
 def drop_instructions(path: Path) -> str:
     return ("If you OBTAIN a new credential while working (an app password you "
             "minted, a token you were issued, a session cookie), do not put it in "
@@ -486,7 +530,7 @@ def _shred(path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def presence_block(injected: Iterable[str] = (), *, host: bool,
-                   drop: Optional[Path] = None) -> str:
+                   drop: Optional[Path] = None, file: Optional[Path] = None) -> str:
     """The `## Secrets` paragraph for an execute frame. Identical wording
     in the Go engine (internal/secrets) — the two engines must tell a
     worker the same thing about the same store. Empty when no store.
@@ -495,6 +539,8 @@ def presence_block(injected: Iterable[str] = (), *, host: bool,
     the withheld names are one command away and the block says so.
     `host=False` (container): withheld names exist on the host and are
     NOT reachable — the block forbids the "no credential exists" reading.
+    `file`: the injected names travel as a 0600 hand-off file at this path
+    (host lane), not as env variables; the block says where.
     """
     known = names()
     if not known:
@@ -506,7 +552,9 @@ def presence_block(injected: Iterable[str] = (), *, host: bool,
              "Credentials for this machine are managed by Maro's secrets store "
              "(sops + age; names are readable, values are encrypted). "
              "Names in the store: " + ", ".join(describe(n, meta) for n in known) + "."]
-    if inj:
+    if inj and file is not None:
+        lines.append(file_instructions(file, inj))
+    elif inj:
         lines.append("Injected into your environment as variables: " + ", ".join(inj) + ".")
     if held:
         if host:

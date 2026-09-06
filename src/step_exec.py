@@ -356,7 +356,8 @@ def _secrets_block(*, container: bool) -> str:
     a torn store must not take the step's prompt down. Container lane:
     injected = the operator's policy set + the hosted-free keys under
     their own gate; the drop path is the container's /tmp (the run
-    scratch bind). Host lane: the same policy set, drop path host-side."""
+    scratch bind). Host lane: the same policy set, handed over as a 0600
+    file in the run scratch (not env), drop path host-side."""
     try:
         import secrets_store as _ss
         import container_exec as _ce
@@ -367,9 +368,10 @@ def _secrets_block(*, container: bool) -> str:
             injected |= set(_ce.hosted_free_container_env())
             if scratch:
                 drop = Path("/tmp") / _ss.DROP_NAME
-        else:
-            drop = _ss.drop_path(scratch)
-        return _ss.presence_block(injected, host=not container, drop=drop)
+            return _ss.presence_block(injected, host=False, drop=drop)
+        drop = _ss.drop_path(scratch)
+        return _ss.presence_block(injected, host=True, drop=drop,
+                                  file=_ss.file_path(scratch))
     except Exception as exc:
         log.warning("secrets presence block skipped: %s", exc)
         return ""
