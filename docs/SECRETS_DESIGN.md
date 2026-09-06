@@ -235,6 +235,16 @@ re-copies them.
 
 - **Rotation** is manual (`set` again). A `rotated_after` field in the
   metadata and a `check` warning are the obvious next slice.
+- **File hand-off on the host lane** (Jeremy 2026-09-06: ENV is right
+  for docker, where the container's env *is* the silo; on a general OS a
+  process env is inherited by every descendant of the worker — each tool
+  shell, MCP server, subprocess — and readable from `/proc/*/environ` by
+  the same user, so "it's all the same" is not true in a security sense).
+  Shape: the host lane and the Go subprocess backend write a per-step
+  `secrets.env` (0600) in the run scratch, hand only `$MARO_SECRETS_FILE`,
+  and remove it after the step — the mirror of the drop file (§7). The
+  container keeps `-e`. Worth doing when the host lane injects anything
+  beyond this box's own keys; today the policy set rides the env.
 - **Scoped injection per run** (a goal declaring which names it needs,
   the operator approving once) would replace the box-wide policy file
   when there is evidence a box-wide list is too coarse.
