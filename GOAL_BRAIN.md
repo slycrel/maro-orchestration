@@ -4327,6 +4327,19 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   (fresh / related / rerun), records the decision, and the decision
   supersedes string-identity shortcuts (the goal-slug Goal Ancestry
   block). Design note: successor repo `planning/feature-related-runs.md`.
+- **2026-09-06 (no daily budget that stops work — Jeremy, via dispatch 5c994cd9):**
+  the goal he sent on 2026-09-05: *"There should be no daily budget that
+  stops work."* Context: the $25 repo-default `budget.daily_usd` refused
+  run 1e92e15c (the yahoo-mail capability ask) with `out-of-budget` at
+  $25.87 spent that UTC day; the run he dispatched to remove the cap
+  (5c994cd9) went stuck because the run sandbox mounts the config
+  read-only. The session made the write for him: `~/.maro/config.yml`
+  `budget.daily_usd: 0` (backup `config.yml.bak-2026-09-06-daily-budget`).
+  Per-run breakers, the warn line and the extension ladder are untouched
+  — this retires only the cross-run daily gate, in line with the
+  2026-07-29 caps=circuit-breakers decree and the 2026-08-02 "no big
+  stoppage" ladder. 1e92e15c re-run as a follow-up in its lineage the
+  same session.
 - **2026-09-06 (Go as the shadow-lane challenger, capped and switchable — Jeremy):**
   on wiring the Go successor into Python's shadow lane: *"Let's wire that
   with a cap/off switch as a bug if needed, and assume we're fine as far
