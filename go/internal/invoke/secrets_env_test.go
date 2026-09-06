@@ -1,6 +1,8 @@
 package invoke
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -49,5 +51,40 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"user=%s 
 	}
 	if fired != 1 {
 		t.Fatalf("AfterTools fired on a tool-less call: %d", fired)
+	}
+}
+
+// The hand-off file: a tool-bearing child finds the values in a 0600 file
+// named by $MARO_SECRETS_FILE and NOT in its env; the file is gone when the
+// call returns; a tool-less call gets neither.
+func TestSubprocessHandOffFile(t *testing.T) {
+	dir := t.TempDir()
+	echo := writeFake(t, dir, "read-file", `cat >/dev/null
+mode=$(stat -c %a "$MARO_SECRETS_FILE" 2>/dev/null)
+line=$(grep '^YAHOO_USER=' "$MARO_SECRETS_FILE" 2>/dev/null)
+printf '{"type":"result","subtype":"success","is_error":false,"result":"env=%s mode=%s line=%s","usage":{"input_tokens":1,"output_tokens":1}}\n' "$YAHOO_USER" "$mode" "$line"
+`)
+	sh, _ := newShell(t)
+	file := filepath.Join(dir, "drop", "secrets.env")
+	b := &Subprocess{Bin: echo, Model: "sonnet", DefaultTimeout: 10 * time.Second,
+		Env:     []string{"MARO_SECRETS_DROP=/ws/drop/secrets-derived.env"},
+		HandOff: &HandOff{Path: file, EnvName: "MARO_SECRETS_FILE", Lines: []string{"YAHOO_USER=u-long-value"}},
+		Redact:  map[string]string{"YAHOO_USER": "u-long-value"}}
+	out, err := sh.Invoke(ctxBg, b, execReq("read the file"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(out.Response); got != "env= mode=600 line=YAHOO_USER=[REDACTED:YAHOO_USER]" {
+		t.Fatalf("response %q", got)
+	}
+	if _, err := os.Stat(file); err == nil {
+		t.Fatal("hand-off file survived the call")
+	}
+	out2, err := sh.Invoke(ctxBg, b, Request{Purpose: PurposeJudge, Prompt: []byte("judge"), Tools: false}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(out2.Response); got != "env= mode= line=" {
+		t.Fatalf("a tool-less call must not get the file: %q", got)
 	}
 }

@@ -37,7 +37,8 @@ esac
 const fakeClaudeSh = `#!/bin/sh
 cat >> "$FAKE_PROMPT_OUT"; printf "\n----\n" >> "$FAKE_PROMPT_OUT"
 if [ -n "$MARO_SECRETS_DROP" ]; then printf 'MINTED_TOKEN=tok-1\n' > "$MARO_SECRETS_DROP"; fi
-printf '{"type":"result","subtype":"success","is_error":false,"result":"user=%s","usage":{"input_tokens":1,"output_tokens":1}}\n' "$YAHOO_USER"
+user=$(grep '^YAHOO_USER=' "$MARO_SECRETS_FILE" 2>/dev/null | cut -d= -f2-)
+printf '{"type":"result","subtype":"success","is_error":false,"result":"user=%s env=%s","usage":{"input_tokens":1,"output_tokens":1}}\n' "$user" "$YAHOO_USER"
 `
 
 func secretsFixture(t *testing.T, policy string) (dir string) {
@@ -118,7 +119,8 @@ func TestCLINowInjectsAndIngestsSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"## Secrets", "Injected into your environment as variables: YAHOO_USER.", "Not injected (you are on the host, same user as the operator): MARO_SECRETS_STORE, NVIDIA_API_KEY.", "NVIDIA_API_KEY (operator, 2026-09-06, nvidia)", "($" + secrets.DropEnv + ")"} {
+	ws := os.Getenv(workspace.EnvOverride)
+	for _, want := range []string{"## Secrets", "Injected for this step as NAME=value lines in " + filepath.Join(ws, "drop", secrets.FileName) + " ($" + secrets.FileEnv + "; mode 0600, shredded when the step ends): YAHOO_USER.", "Not injected (you are on the host, same user as the operator): MARO_SECRETS_STORE, NVIDIA_API_KEY.", "NVIDIA_API_KEY (operator, 2026-09-06, nvidia)", "($" + secrets.DropEnv + ")"} {
 		if !strings.Contains(string(prompt), want) {
 			t.Fatalf("frame lacks %q:\n%s", want, prompt)
 		}
@@ -127,8 +129,8 @@ func TestCLINowInjectsAndIngestsSecrets(t *testing.T) {
 		t.Fatal("a value leaked into the prompt")
 	}
 	// the worker's answer named the injected value: redacted on the way back
-	if strings.Contains(out.String(), "u-secret") || !strings.Contains(out.String(), "[REDACTED:YAHOO_USER]") {
-		t.Fatalf("response not redacted:\n%s", out.String())
+	if strings.Contains(out.String(), "u-secret") || !strings.Contains(out.String(), "user=[REDACTED:YAHOO_USER] env=") {
+		t.Fatalf("response not redacted, or the value rode the env:\n%s", out.String())
 	}
 	if !strings.Contains(errw.String(), "secrets: step derived MINTED_TOKEN (stored, origin=maro)") {
 		t.Fatalf("ingest not reported:\n%s", errw.String())
@@ -140,7 +142,7 @@ func TestCLINowInjectsAndIngestsSecrets(t *testing.T) {
 	if m := sec.Meta()["MINTED_TOKEN"]; m.Origin != secrets.OriginMaro || m.Source != "drop" {
 		t.Fatalf("meta %+v", m)
 	}
-	if entries, _ := filepath.Glob(filepath.Join(os.Getenv(workspace.EnvOverride), "drop", "*")); len(entries) != 0 {
-		t.Fatalf("drop file survived: %v", entries)
+	if entries, _ := filepath.Glob(filepath.Join(ws, "drop", "*")); len(entries) != 0 {
+		t.Fatalf("drop or hand-off file survived: %v", entries)
 	}
 }

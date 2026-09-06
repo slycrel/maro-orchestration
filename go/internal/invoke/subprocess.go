@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -44,6 +45,55 @@ type Subprocess struct {
 	// AfterTools runs after every tool-bearing call returns (the drop-file
 	// ingest). Nil = nothing.
 	AfterTools func()
+	// HandOff, when set with Lines, is written as a 0600 file at Path before
+	// every TOOL-BEARING call and shredded when the call returns (any path);
+	// the child sees only EnvName=Path. This is how injected secret VALUES
+	// reach a host worker — never through Env, which every descendant of
+	// the child inherits (docs/SECRETS_DESIGN.md §10).
+	HandOff *HandOff
+}
+
+// HandOff is the per-call secrets file the subprocess backend hands a
+// tool-bearing child (see Subprocess.HandOff).
+type HandOff struct {
+	Path    string
+	EnvName string
+	Lines   []string // "NAME=value"
+}
+
+// write creates the file fresh with mode 0600 (a stale copy is replaced).
+func (h *HandOff) write() error {
+	if err := os.MkdirAll(filepath.Dir(h.Path), 0o700); err != nil {
+		return err
+	}
+	if err := os.Remove(h.Path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	f, err := os.OpenFile(h.Path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	for _, l := range h.Lines {
+		if _, err := f.WriteString(l + "\n"); err != nil {
+			f.Close()
+			return err
+		}
+	}
+	return f.Close()
+}
+
+// shred zero-fills and removes the file; a missing file is fine.
+func (h *HandOff) shred() {
+	st, err := os.Stat(h.Path)
+	if err != nil {
+		return
+	}
+	if f, err := os.OpenFile(h.Path, os.O_WRONLY, 0); err == nil {
+		f.Write(make([]byte, st.Size()))
+		f.Sync()
+		f.Close()
+	}
+	os.Remove(h.Path)
 }
 
 const subprocessName = "subprocess"
@@ -105,6 +155,16 @@ func (s *Subprocess) Complete(ctx context.Context, req Request, sink Sink) (*Res
 	cmd.Stdin = bytes.NewReader(req.Prompt)
 	if req.Tools && len(s.Env) > 0 {
 		cmd.Env = append(os.Environ(), s.Env...)
+	}
+	if req.Tools && s.HandOff != nil && len(s.HandOff.Lines) > 0 {
+		if err := s.HandOff.write(); err != nil {
+			return nil, fmt.Errorf("%w: secrets hand-off: %v", ErrBeforeDispatch, err)
+		}
+		defer s.HandOff.shred()
+		if cmd.Env == nil {
+			cmd.Env = os.Environ()
+		}
+		cmd.Env = append(cmd.Env, s.HandOff.EnvName+"="+s.HandOff.Path)
 	}
 	if req.Cwd != "" {
 		cmd.Dir = req.Cwd

@@ -983,13 +983,20 @@ func printImport(out io.Writer, rep *pack.Report) error {
 func wireSecrets(sp *invoke.Subprocess, a *workspace.Announced, errw io.Writer) string {
 	sec := secrets.Open()
 	drop := filepath.Join(a.Path("drop"), secrets.DropName)
+	file := filepath.Join(a.Path("drop"), secrets.FileName)
 	inj, err := sec.Inject()
 	if err != nil {
 		fmt.Fprintf(errw, "secrets: nothing injected: %v\n", err)
 	}
 	if sec.Present() {
 		if err := os.MkdirAll(filepath.Dir(drop), 0o700); err == nil {
-			sp.Env = append(append([]string{}, inj.Env...), secrets.DropEnv+"="+drop)
+			// values ride a per-call 0600 file (invoke.HandOff), the env
+			// carries only the two paths
+			sp.Env = []string{secrets.DropEnv + "=" + drop}
+			sp.HandOff = &invoke.HandOff{Path: file, EnvName: secrets.FileEnv, Lines: inj.Env}
+			if len(inj.Env) == 0 {
+				file = ""
+			}
 			sp.AfterTools = func() {
 				if stored, err := sec.IngestDrop(drop, ""); err != nil {
 					fmt.Fprintf(errw, "secrets: %v\n", err)
@@ -998,12 +1005,13 @@ func wireSecrets(sp *invoke.Subprocess, a *workspace.Announced, errw io.Writer) 
 				}
 			}
 		} else {
+			// nowhere to put a file: the env carries the values, as before
 			sp.Env = inj.Env
-			drop = ""
+			drop, file = "", ""
 		}
 		sp.Redact = inj.Values
 	}
-	return sec.FrameSuffix(inj.Names, drop)
+	return sec.FrameSuffix(inj.Names, file, drop)
 }
 
 // cmdSecrets is the Go engine's read-only view of the store: list, check,

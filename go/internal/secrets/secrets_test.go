@@ -120,7 +120,7 @@ func TestParsersMatchThePythonReading(t *testing.T) {
 
 func TestNoStoreIsQuiet(t *testing.T) {
 	s := New(t.TempDir())
-	if s.Present() || s.Names() != nil || s.Presence(nil, "") != "" {
+	if s.Present() || s.Names() != nil || s.Presence(nil, "", "") != "" {
 		t.Fatal("an absent store must be silent")
 	}
 	if v, err := s.Load(); v != nil || err != nil {
@@ -227,7 +227,7 @@ func TestPresenceTellsWhatExistsAndWhatIsInjected(t *testing.T) {
 		t.Fatal(err)
 	}
 	inj, _ := s.Inject()
-	p := s.Presence(inj.Names, "/ws/drop/"+DropName)
+	p := s.Presence(inj.Names, "", "/ws/drop/"+DropName)
 	for _, want := range []string{
 		"## Secrets",
 		"Names in the store: YAHOO_USER (maro-derived by run 1a2b3c4d, 2026-09-06), NVIDIA_API_KEY (operator, 2026-09-06, nvidia).",
@@ -243,10 +243,15 @@ func TestPresenceTellsWhatExistsAndWhatIsInjected(t *testing.T) {
 	if strings.Contains(p, "=u") || strings.Contains(p, "=n") {
 		t.Fatal("a value leaked into the presence block")
 	}
-	if s.FrameSuffix(nil, "") != "\n\n"+s.Presence(nil, "") {
+	// with a hand-off file the block names the file, not variables
+	pf := s.Presence(inj.Names, "/ws/drop/"+FileName, "")
+	if !strings.Contains(pf, "Injected for this step as NAME=value lines in /ws/drop/"+FileName+" ($"+FileEnv+"; mode 0600, shredded when the step ends): YAHOO_USER.") || strings.Contains(pf, "environment as variables") {
+		t.Fatalf("file wording:\n%s", pf)
+	}
+	if s.FrameSuffix(nil, "", "") != "\n\n"+s.Presence(nil, "", "") {
 		t.Fatal("frame suffix shape")
 	}
-	if New(t.TempDir()).FrameSuffix(nil, "") != "" {
+	if New(t.TempDir()).FrameSuffix(nil, "", "") != "" {
 		t.Fatal("no store ⇒ empty suffix")
 	}
 }

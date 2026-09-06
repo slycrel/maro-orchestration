@@ -46,6 +46,14 @@ const (
 	// names it in the worker's environment.
 	DropName = "secrets-derived.env"
 	DropEnv  = "MARO_SECRETS_DROP"
+	// FileName is the per-step hand-off file the subprocess backend writes
+	// (0600, NAME=value lines) and shreds after the call; FileEnv names its
+	// path to the child. On the host a process env is inherited by every
+	// descendant and readable from /proc by the same user; a file the
+	// child is merely told about is read on purpose (design §10, Jeremy
+	// 2026-09-06). Same names as Python's secrets_store.FILE_NAME/FILE_ENV.
+	FileName = "secrets.env"
+	FileEnv  = "MARO_SECRETS_FILE"
 
 	OriginOperator = "operator"
 	OriginMaro     = "maro"
@@ -417,7 +425,9 @@ func Describe(name string, meta map[string]Meta) string {
 // engine runs its steps on the host as the operator's user). Empty
 // without a store. drop, when set, is the path a worker drops a derived
 // credential at.
-func (s *Store) Presence(injected []string, drop string) string {
+// file, when set, is the hand-off path the injected values travel in
+// (the env wording is used when it is empty — the no-scratch fallback).
+func (s *Store) Presence(injected []string, file, drop string) string {
 	known := s.Names()
 	if len(known) == 0 {
 		return ""
@@ -438,7 +448,9 @@ func (s *Store) Presence(injected []string, drop string) string {
 	}
 	lines := []string{"## Secrets",
 		"Credentials for this machine are managed by Maro's secrets store (sops + age; names are readable, values are encrypted). Names in the store: " + strings.Join(described, ", ") + "."}
-	if len(in) > 0 {
+	if len(in) > 0 && file != "" {
+		lines = append(lines, FileInstructions(file, in))
+	} else if len(in) > 0 {
 		lines = append(lines, "Injected into your environment as variables: "+strings.Join(in, ", ")+".")
 	}
 	if len(held) > 0 {
@@ -451,6 +463,13 @@ func (s *Store) Presence(injected []string, drop string) string {
 	return strings.Join(lines, "\n")
 }
 
+// FileInstructions tells a worker where this step's injected values are —
+// identical to the Python wording (secrets_store.file_instructions).
+func FileInstructions(file string, names []string) string {
+	return "Injected for this step as NAME=value lines in " + file + " ($" + FileEnv + "; mode 0600, shredded when the step ends): " +
+		strings.Join(names, ", ") + ". Read the line you need with `grep '^NAME=' $" + FileEnv + "` or source the file in a subshell; never print or persist a value."
+}
+
 // DropInstructions tells a worker how to hand back a credential it
 // obtained — identical to the Python wording.
 func DropInstructions(drop string) string {
@@ -460,8 +479,8 @@ func DropInstructions(drop string) string {
 
 // FrameSuffix is what the engine appends to its execute frame: "" when
 // there is nothing to say, else a blank line and the presence block.
-func (s *Store) FrameSuffix(injected []string, drop string) string {
-	p := s.Presence(injected, drop)
+func (s *Store) FrameSuffix(injected []string, file, drop string) string {
+	p := s.Presence(injected, file, drop)
 	if p == "" {
 		return ""
 	}

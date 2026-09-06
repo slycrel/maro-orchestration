@@ -2444,3 +2444,32 @@ Patterns:
      through the same fake CLI (pattern 107's sibling); "the last prompt"
      was the diagnosis lens. Search the captured calls for the answer
      block, and assert it rode into exactly one of them.
+
+### Post-v1 — secrets hand-off file on the host lane (2026-09-06, evening)
+
+Jeremy, on the secrets store: "ENV is great for docker in general... at a
+general OS level a .env file is more siloed... from here it looks like
+it's all the same; I think it's not in a security sense." He is right: in
+a container the env is the silo; on the host the worker's env is inherited
+by every tool shell and MCP server it spawns and is `/proc`-readable by the
+same user. So the Go subprocess backend grew `invoke.HandOff`: before every
+tool-bearing call the injected values are written to `<ws>/drop/secrets.env`
+(0600, created O_EXCL), the child env carries only `$MARO_SECRETS_FILE`, and
+the file is zero-filled and removed when the call returns (defer — every
+path). `Subprocess.Env` now carries just the two paths. Python mirrors it in
+`_run_subprocess_safe` (host lane, run scratch), same file name, same env
+name, same presence wording.
+
+- **111. The mechanism decides the wording.** `Presence(injected, file,
+  drop)` says "Injected for this step as NAME=value lines in <path>" when
+  a file carries the values and "Injected into your environment as
+  variables" when the env does (the no-scratch fallback, and Python's
+  container lane). A frame that says "variables" while the values are in
+  a file sends the worker to `$YAHOO_USER` and an empty string — the
+  false-absence failure this whole arc exists to remove, re-created by a
+  stale sentence.
+- **112. The leaf owns the lifetime.** `invoke` stays a leaf (no import of
+  `secrets`): `HandOff` is three fields and two methods, and the shred is
+  a `defer` inside `Complete` so a timeout, a parse error or a panic in
+  the stream reader all leave no file. The caller (`wireSecrets`) only
+  decides the path and the lines.
