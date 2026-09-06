@@ -28,10 +28,15 @@ a scratch work dir with every mutating/network tool denied by tool policy
 (structural containment, no preamble). It is its OWN track: own switch
 (`shadow.go.enabled`), own daily cap, own claim dir (`<run-dir>/shadow-go/`)
 so it never competes with the star|plain pick for a run's one shadow slot,
-own ledger rows (`arm: "go"`). NOW primaries are eligible on the basic
-checks alone (the tool policy is the side-effect guard); AGENDA primaries
-pass the same read-tier gate as star|plain. Same isolation invariant: the
-Go engine never reads or writes this workspace's learning paths.
+own ledger rows (`arm: "go"`). Both lanes' primaries are eligible on the
+basic checks alone — the tool policy is the side-effect guard (Jeremy
+2026-09-06: "widen the Go track's AGENDA eligibility to the tool-policy
+containment too; if we're going to shadow, let's do it right"). A
+build-shaped goal therefore runs in Go with no write tools and fails
+honestly; its row carries `primary_goal_shape` (worker type + action
+tier) so adjudication can partition those pairs. Same isolation
+invariant: the Go engine never reads or writes this workspace's learning
+paths.
 
 CLI (dev tool, like maro-introspect):
     PYTHONPATH=src python3 -m shadow_lane sweep [--limit N] [--verbose] [--dry-run]
@@ -160,11 +165,14 @@ def eligible(goal: str, meta: dict) -> Tuple[bool, str]:
 
 
 def go_eligible(goal: str, meta: dict) -> Tuple[bool, str]:
-    """Eligibility for the Go track. A NOW primary passes on the basic
-    checks (done, not dry, organic, non-empty) — the challenger's tool
-    policy denies every mutating/network tool, so the goal text cannot
-    act; an AGENDA primary passes the same read-tier gate as star|plain
-    (its steps run with read tools). Any other lane is a terminal skip."""
+    """Eligibility for the Go track: the basic checks (done, not dry,
+    organic, non-empty) for BOTH lanes — the challenger's tool policy
+    denies every mutating/network tool, so the goal text cannot act
+    whatever its shape (structural containment; the read-tier gate is
+    the star|plain track's, whose containment is a preamble). Any other
+    lane is a terminal skip. The cost of the width: a build-shaped goal
+    runs without write tools and fails honestly — `primary_goal_shape`
+    on the row is what partitions those pairs at adjudication."""
     meta = meta or {}
     if meta.get("status") != "done":
         return False, REASON_NOT_DONE
@@ -175,11 +183,28 @@ def go_eligible(goal: str, meta: dict) -> Tuple[bool, str]:
     if not (goal or "").strip():
         return False, REASON_EMPTY_GOAL
     lane = str(meta.get("lane") or "")
-    if lane == "now":
+    if lane in ("now", "agenda"):
         return True, ""
-    if lane == "agenda":
-        return eligible(goal, meta)
     return False, REASON_LANE
+
+
+def goal_shape(goal: str) -> dict:
+    """The primary goal's shape as the star|plain gate sees it (worker
+    type + action tier) — recorded on every Go row so the adjudication
+    can partition "could have succeeded without write tools" from "could
+    not". Best-effort: a classifier failure yields None, never blocks."""
+    out: Dict[str, Any] = {"worker_type": None, "action_tier": None}
+    try:
+        from workers import infer_worker_type
+        out["worker_type"] = infer_worker_type(goal)
+    except Exception:  # narrow-except: classification is annotation, not a gate
+        pass
+    try:
+        import constraint
+        out["action_tier"] = constraint.classify_action_tier(goal)
+    except Exception:
+        pass
+    return out
 
 
 def pick_arm(handle_id: str) -> str:
@@ -962,6 +987,7 @@ def _sweep_go_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
             "primary_lane": meta.get("lane"),
             "primary_goal_achieved": meta.get("goal_achieved"),
             "primary_ended_at": meta.get("ended_at"),
+            "primary_goal_shape": goal_shape(goal),
             **_primary_comparison_fields(run_dir, meta),
             **challenger_meta,
             "ts": datetime.now(timezone.utc).isoformat(),

@@ -837,11 +837,22 @@ class TestGoEligible:
         ok, reason = shadow_lane.go_eligible(_BUILD_GOAL, {"status": "done", "lane": "now"})
         assert ok and reason == ""
 
-    def test_agenda_primary_needs_the_read_tier_gate(self):
-        ok, reason = shadow_lane.go_eligible(_BUILD_GOAL, {"status": "done", "lane": "agenda"})
-        assert not ok and reason == shadow_lane.REASON_NOT_RESEARCH
-        ok, _ = shadow_lane.go_eligible(_RESEARCH_GOAL, {"status": "done", "lane": "agenda"})
-        assert ok
+    def test_agenda_primary_passes_on_the_basic_checks_too(self):
+        # Jeremy 2026-09-06: the tool policy IS the containment for both
+        # lanes; the read-tier gate is the star|plain track's, whose
+        # containment is only a preamble.
+        for goal in (_BUILD_GOAL, _RESEARCH_GOAL, _WRITE_TIER_RESEARCH_GOAL):
+            ok, reason = shadow_lane.go_eligible(goal, {"status": "done", "lane": "agenda"})
+            assert ok and reason == "", goal
+        ok, _ = shadow_lane.eligible(_BUILD_GOAL, {"status": "done", "lane": "agenda"})
+        assert not ok, "the star|plain gate is unchanged"
+
+    def test_goal_shape_annotates_what_the_gate_would_have_said(self):
+        assert shadow_lane.goal_shape(_BUILD_GOAL)["worker_type"] == "build"
+        assert shadow_lane.goal_shape(_RESEARCH_GOAL)["worker_type"] == "research"
+        import constraint
+        assert shadow_lane.goal_shape(_RESEARCH_GOAL)["action_tier"] == constraint.ACTION_TIER_READ
+        assert shadow_lane.goal_shape(_WRITE_TIER_RESEARCH_GOAL)["action_tier"] != constraint.ACTION_TIER_READ
 
     def test_basic_checks_come_first_and_other_lanes_are_terminal(self):
         assert shadow_lane.go_eligible(_RESEARCH_GOAL, {"status": "running", "lane": "now"}) == (False, shadow_lane.REASON_NOT_DONE)
@@ -938,7 +949,7 @@ class TestGoArm:
         result = shadow_lane.sweep(limit=5)
         assert result["fired"] == 0 and result["go_fired"] == 0
 
-    def test_agenda_primary_uses_the_read_tier_gate_with_a_terminal_stamp(self, tmp_path, monkeypatch):
+    def test_build_shaped_agenda_primary_fires_with_tools_denied_and_its_shape_on_the_row(self, tmp_path, monkeypatch):
         import llm
         calls = []
         monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_go_engine(calls))
@@ -946,9 +957,20 @@ class TestGoArm:
         _go_config(tmp_path, _fake_binary(tmp_path))
         rd = _make_run_dir(tmp_path, "aaaa0004", prompt=_BUILD_GOAL, lane="agenda")
         result = shadow_lane.sweep(limit=5)
-        assert result["go_fired"] == 0 and result["go_skipped"] == 1
-        assert (rd / "shadow-go" / "SKIPPED").read_text().strip() == shadow_lane.REASON_NOT_RESEARCH
-        assert calls == []
+        # Go fires (tool policy is the containment); star|plain still
+        # stamps its read-tier skip — two gates, two verdicts, one run.
+        assert result["go_fired"] == 1 and result["fired"] == 0
+        assert (rd / "shadow" / "SKIPPED").read_text().strip() == shadow_lane.REASON_NOT_RESEARCH
+        cmd = calls[0]["cmd"]
+        assert cmd[1] == "agenda" and cmd[cmd.index("--deny-tools") + 1] == shadow_lane.GO_DENY_TOOLS
+        rows = [json.loads(l) for l in (tmp_path / "memory" / "shadow_ledger.jsonl").read_text().splitlines() if l.strip()]
+        assert rows[0]["primary_goal_shape"]["worker_type"] == "build"
+        assert rows[0]["primary_goal_shape"]["action_tier"] is not None
+        # A lane that is neither is still a terminal skip.
+        rd2 = _make_run_dir(tmp_path, "aaaa0104", prompt=_BUILD_GOAL, lane="heartbeat")
+        result = shadow_lane.sweep(limit=5)
+        assert result["go_fired"] == 0
+        assert (rd2 / "shadow-go" / "SKIPPED").read_text().strip() == shadow_lane.REASON_LANE
 
     def test_caps_are_counted_per_track(self, tmp_path, monkeypatch):
         import llm

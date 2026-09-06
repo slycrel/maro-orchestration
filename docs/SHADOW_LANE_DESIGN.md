@@ -47,14 +47,20 @@ three weeks (tight read-tier gate × sparse stream); the successor's
 challenger evidence cannot wait on a slot it would compete for, and a
 run may honestly carry both a star|plain shadow and a Go shadow.
 
-Eligibility: a NOW primary passes on the basic checks alone (done, not
-dry, organic, non-empty) — the engine runs with `--deny-tools` naming
-every mutating/network tool (`shadow_lane.GO_DENY_TOOLS`), so the goal
-text cannot act; containment is structural (the engine refuses the tool),
-not the star|plain preamble (instruction-level; `containment_preamble_
-version: null` on Go rows so the batch judge partitions). An AGENDA
-primary passes the same read-tier gate as star|plain (its steps run with
-read tools). Any other lane is a terminal skip (`lane!=now|agenda`).
+Eligibility: a primary of EITHER lane passes on the basic checks alone
+(done, not dry, organic, non-empty) — the engine runs with
+`--deny-tools` naming every mutating/network tool
+(`shadow_lane.GO_DENY_TOOLS`), so the goal text cannot act whatever its
+shape; containment is structural (the engine refuses the tool), not the
+star|plain preamble (instruction-level; `containment_preamble_version:
+null` on Go rows so the batch judge partitions). Shipped first with the
+star|plain read-tier gate on AGENDA; widened the same day (Jeremy: "if
+we're going to shadow, let's do it right"). The cost of the width, on
+record: a build-shaped goal runs in Go without write tools and fails
+honestly — those pairs say nothing about engine quality, so every Go
+row carries `primary_goal_shape` (worker type + action tier as the
+star|plain gate would have classified it) and the adjudication
+partitions on it. Any other lane is a terminal skip (`lane!=now|agenda`).
 
 The engine keeps its OWN persistent workspace (`shadow.go.workspace`,
 default `<workspace_root>/shadow-go`): its landscape (related-run
@@ -207,7 +213,9 @@ adjudication pass over pairs → comparison verdicts → GOAL_BRAIN
 
 Module: `src/shadow_lane.py` (sweep + eligibility + runner + ledger), CLI
 `python3 -m shadow_lane sweep|status`. Cadence wiring into the existing
-post-run/heartbeat sweep family. Config namespace `shadow.*` (default OFF;
+post-run/heartbeat sweep family (on this box, 2026-09-06: a crontab
+entry every 10 minutes — no heartbeat process runs here, so the
+heartbeat tick was never a live cadence). Config namespace `shadow.*` (default OFF;
 ON on this box), registered in docs/DEFAULTS.md.
 
 ### Seam map (recon 2026-08-14)
