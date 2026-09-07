@@ -10,13 +10,13 @@ status: living
 
 | verified | target | aspirational | verified share |
 |---|---|---|---|
-| **19** (30d: +0) | 25 | 6 | 38% |
+| **19** (30d: +0) | 26 | 6 | 37% |
 
 - ledger last updated 0d ago — the count above is current enough to read as real.
 
 **Throughput and fan-out**
 
-- 35 commits in 7d, 527 in 30d
+- 37 commits in 7d, 529 in 30d
 - **Actionable Stack** open boxes: **79** (30d: +40)
 - net new open items per 10 commits: **+0.76** — findings are outrunning closure
 - ⚠ this delta counts one SECTION, so an archive pass or a re-org moves it without any work changing hands. Read the rate as a coarse direction, never as a score.
@@ -24,7 +24,7 @@ status: living
 **Actionable Stack, by kind** — the three things it contains, which look identical on the page
 
 - 21 entries with open work (9 of them waiting on evidence, not on a person)
-- 20 entries that are narrative records with no open checkbox — shipped work, not queue
+- 22 entries that are narrative records with no open checkbox — shipped work, not queue
 
 **12 live entries declare no stopping rule** — no kill criterion, falsifier, or evidence gate. These are where 0→1-approaching-1 rabbit holes live:
 

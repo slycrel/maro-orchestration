@@ -143,6 +143,7 @@ question channel.
 - **No auto-resume of a paused run without an answer.** The no-input
   alternative is the worker's, tried before the ask; the engine does not
   invent one after.
+- **Not the channel for missing software.** A worker that lacks a tool writes an environment request, not a question: the engine builds it or escalates to the ORCHESTRATOR (`docs/ENV_REQUEST_DESIGN.md`, decree ea9e311f). The third question on 084d3c1f ("approval to install Chromium") was this lane's job.
 - **No question channel for judges or planners.** Only a tool-bearing
   execute can ask; a judge that wants the operator is a judge with a
   missing falsifier.

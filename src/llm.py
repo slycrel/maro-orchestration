@@ -1558,6 +1558,17 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             _worker_env[_ss_drop.DROP_ENV] = "/tmp/" + _ss_drop.DROP_NAME
             import operator_ask as _oa_env
             _worker_env[_oa_env.ASK_ENV] = _oa_env.CONTAINER_ASK_PATH
+            import env_request as _er_env
+            _worker_env[_er_env.REQUEST_ENV] = _er_env.CONTAINER_REQUEST_PATH
+        # Per-project image layer (env_request): the project's current
+        # layer when one exists for this base and is present in docker,
+        # else None → the configured base image.
+        _project_image = None
+        try:
+            import env_request as _er_img
+            _project_image = _er_img.effective_image(_er_img.current_project())
+        except Exception as _pi_exc:
+            log.debug("project image resolution skipped: %s", _pi_exc)
         if _secret_env:
             # Into the docker CLIENT's env only — the bare -e flags below
             # copy them across the boundary; worker_env stays value-free.
@@ -1566,7 +1577,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             cmd, name=container_name, workdir=_cwd_real,
             mounts=_mounts, worker_env=_worker_env,
             passthrough_env=sorted(_secret_env.keys()),
-            scratch_dir=_scratch)
+            scratch_dir=_scratch, image=_project_image)
         _container = container_name
 
     if _container is None and _store_env:

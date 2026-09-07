@@ -4411,3 +4411,28 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   answer <handle>` resumes by handle through the continuation lane, Hermes
   gate `answer` verb, `maro asks` ledger; Go `question`/`answer` records +
   `maro-go answer|asks`. First live firing owed: the mail re-ask.
+- **2026-09-07 (Maro installs what it needs — root at image build only; escalate to the ORCHESTRATOR, not the user — Jeremy; decision ea9e311f):**
+  After 084d3c1f's third question offered "approval to install Chromium"
+  that the run could not execute (slim image, host uid, no sudo, `--rm`
+  per step): *"the app password is a distraction; the user shouldn't be
+  bootstrapping maro, it should be doing it itself… I'm more interested
+  in solving the pattern here — maro can't 'safely' install software it
+  needs to get its job done; we need to help facilitate that."* Rule
+  agreed: no runtime root ever; root only at `docker build` from an
+  artifact; policy-gated. Then the correction on who decides: *"we should
+  escalate to the orchestrator, not the ask lane unless the orchestrator
+  says so… orchestrator guides in place of the user, user gets involved if
+  they must. So I'd be ok with a notification of the ask and an escalation
+  to the orchestrator (you, poe, or user if CLI which seems unlikely in
+  the future honestly)."* **SHIPPED (Python) the same day:**
+  `docs/ENV_REQUEST_DESIGN.md` — `$MARO_ENV_REQUEST` file contract in the
+  container frame, policy (allowed / escalate / rejected) + per-project
+  grants, per-project executor image layers from a generated Dockerfile
+  under `<workspace>/executor-layers/`, same-step re-run on the new
+  image, `escalation` event with `audience: orchestrator` + Hermes brain
+  prompt that decides (`answer <handle> allow|deny`), grant + build applied
+  on `allow` before the resume. Owed: Go parity, tool presence in the
+  frame, the live in-step ask (2FA codes die with the step), first live
+  firing on the mail goal. Same night: the General Problem note (decision
+  6b3ed05d) — today's mail run ≈ a one-shot prompt; the "learn a language
+  to draw a kanji" class is the target.

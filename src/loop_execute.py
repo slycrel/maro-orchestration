@@ -340,6 +340,7 @@ def _execute_main_loop(
     _step_retries: Dict[str, int] = {}  # roadblock resilience: retries per step text
     _error_fingerprints: Dict[str, List[str]] = {}  # Phase 62: error fingerprints per step text
     _step_tier_overrides: Dict[str, str] = {}  # step_text → escalated tier on retry
+    _env_retries: Dict[str, int] = {}  # env_request: re-runs of a step after a build/refusal
     # Phase 57: session-level lagging signal — if verify failures cluster, raise the global tier.
     # Tracks consecutive verify failures; at threshold, adapter baseline escalates.
     _session_verify_failures: int = 0
@@ -1347,6 +1348,69 @@ def _execute_main_loop(
         # the worker's prose — a claim "I asked" without the file is not an
         # ask. Consumed (archived, never deleted) so the next step of the
         # resumed run cannot re-trigger it.
+        # Environment request (env_request, decision ea9e311f): the worker
+        # wrote what it lacks in the run scratch. In policy → the engine
+        # builds the project's next image layer and runs THIS step again on
+        # it (retry idiom of loop_blocked: re-arm what the step saw, add the
+        # note, re-queue). Out of policy → escalate to the orchestrator on
+        # the same typed pause as a question. Read after the step, never
+        # from the prose; consumed (archived) so a retry cannot re-trigger.
+        if not _env_pause:
+            try:
+                import env_request as _er
+                from container_exec import run_scratch_dir as _er_scratch
+                _er_file = _er.request_path(_er_scratch())
+                _er_req = None
+                _er_note = ""
+                try:
+                    _er_req = _er.read_request(_er_file)
+                except ValueError as _er_bad:
+                    _er.archive_request(_er_file)
+                    _er_note = f"Environment request ignored — {_er_bad}. Write one JSON object with `need` and package lists."
+                if _er_req is not None:
+                    _er.archive_request(_er_file)
+                    _er_out = _er.handle(
+                        _er_req, project=ctx.project,
+                        container=str(_step_venue or "").startswith("container"),
+                        handle_id=ctx.handle_id or "", step=step_text)
+                    if _er_out.kind == "escalate":
+                        from stop_verdicts import PAUSE_OP_CLARIFICATION as _POC
+                        _env_pause = _POC
+                        outcome = dict(outcome)
+                        outcome["status"] = "blocked"
+                        outcome["stuck_reason"] = (
+                            "escalated an install request to the orchestrator: "
+                            + ", ".join(_er_out.verdict.escalate and [f"{s_}:{x_}" for s_, x_, _ in _er_out.verdict.escalate] or []))
+                        outcome["env_request"] = _er_req
+                        _er.pause_for_request(
+                            _er_out, handle_id=ctx.handle_id or "", goal=goal,
+                            project=ctx.project or "default", step=step_text,
+                            loop_id=ctx.loop_id)
+                    else:
+                        _er_note = _er_out.note
+                        try:
+                            from run_trace import record_edge as _er_edge
+                            _er_edge("step.env_request", "env." + _er_out.kind,
+                                     loop_id=ctx.loop_id, step_idx=step_idx,
+                                     added=(_er_out.build.added if _er_out.build else []))
+                        except Exception:
+                            pass
+                if _er_note and not _env_pause:
+                    _env_retries[step_text] = _env_retries.get(step_text, 0) + 1
+                    if _env_retries[step_text] <= _er.MAX_RETRIES_PER_STEP:
+                        log.warning("env_request step=%d: %s — re-running the step",
+                                    step_idx, _er_note[:160])
+                        if verbose:
+                            print(f"[maro] step {step_idx}: {_er_note[:120]}", file=sys.stderr, flush=True)
+                        _pending_context.extend(list(_delivered_contributions))
+                        _pending_context.append("env_request", "context", _er_note)
+                        remaining_steps.insert(0, step_text)
+                        remaining_indices.insert(0, item_index)
+                        step_idx -= 1
+                        continue
+                    log.warning("env_request step=%d: retry cap reached; the step's outcome stands", step_idx)
+            except Exception as _er_exc:
+                log.warning("env-request check failed: %s", _er_exc)
         _ask = None
         if not _env_pause:
             try:

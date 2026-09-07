@@ -263,7 +263,19 @@ def pending(ref: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _continuation_reason(goal: str, question: str, text: str) -> str:
+def _continuation_reason(goal: str, question: str, text: str, outcome: str = "") -> str:
+    if outcome:
+        # An env_request escalation: the orchestrator's verb was applied on
+        # the host (grant + build) before the resume; the worker needs the
+        # outcome, not the verb.
+        return (
+            f"CONTINUATION of: {goal}\n\n"
+            f"== Orchestrator decision ==\n"
+            f"The run paused on an install request: {question}\n"
+            f"Outcome: {outcome}\n"
+            f"Continue from where the run paused; do not request it again.\n"
+            f"== End orchestrator decision =="
+        )
     return (
         f"CONTINUATION of: {goal}\n\n"
         f"== Operator answer ==\n"
@@ -376,6 +388,16 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
     rec.update({"status": STATUS_ANSWERED, "answer": text[:2000],
                 "answered_at": _iso(now), "answer_source": source,
                 "late": late})
+    outcome_text = ""
+    if str(rec.get("kind") or "") == "env_request":
+        try:
+            import env_request as _er
+            _verb, outcome_text = _er.apply_answer(rec, text)
+            rec["decision"] = _verb or "unclear"
+            rec["outcome"] = outcome_text[:1000]
+        except Exception as exc:
+            outcome_text = f"the orchestrator's answer could not be applied: {exc}"
+            log.warning("answer: env_request apply failed: %s", exc)
     try:
         from runs import stamp_run_metadata_for
         stamp_run_metadata_for(handle_id, {
@@ -394,7 +416,7 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
         task = enqueue(
             lane="agenda",
             source="loop_continuation",
-            reason=_continuation_reason(goal, question, text),
+            reason=_continuation_reason(goal, question, text, outcome_text),
             continuation_depth=1,
             origin=origin,
         )
@@ -478,6 +500,7 @@ def list_asks(limit: int = 50) -> List[Dict[str, Any]]:
             "answered_at": str(rec.get("answered_at") or ""),
             "late": bool(rec.get("late", False)),
             "tried": bool(rec.get("tried", False)),
+            "kind": str(rec.get("kind") or "question"),
             "goal": str(meta.get("prompt") or "")[:120],
         })
     rows.sort(key=lambda r: r["asked_at"], reverse=True)
@@ -531,7 +554,8 @@ def render_asks(rows: List[Dict[str, Any]]) -> str:
     out = []
     for r in rows:
         mark = {"pending": "?", "answered": "✓", "expired": "×"}.get(r["status"], "·")
-        line = f"{mark} {r['handle_id']}  {r['status']:<8} {r['asked_at']}  {r['question'][:100]}"
+        kind = " [install]" if r.get("kind") == "env_request" else ""
+        line = f"{mark} {r['handle_id']}  {r['status']:<8}{kind} {r['asked_at']}  {r['question'][:100]}"
         if r["status"] == STATUS_PENDING and r["deadline"]:
             line += f"  (until {r['deadline']})"
         if r["late"]:

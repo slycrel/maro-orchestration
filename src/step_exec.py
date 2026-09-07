@@ -326,8 +326,26 @@ def execute_system_for_lane(adapter=None) -> str:
     base = _lane_prompt(adapter)
     container = base is not EXECUTE_SYSTEM
     blocks = [b for b in (_secrets_block(container=container),
-                          _ask_block(container=container)) if b]
+                          _ask_block(container=container),
+                          _env_block(container=container)) if b]
     return base + "\n\n" + "\n\n".join(blocks) if blocks else base
+
+
+def _env_block(*, container: bool) -> str:
+    """The `## Installing what you need` paragraph (env_request.instructions):
+    container lane only — a worker on the host has its own user-level
+    installers. Empty when no run scratch exists or the lane is off."""
+    if not container:
+        return ""
+    try:
+        import env_request as _er
+        import container_exec as _ce
+        if not _er.enabled() or not _ce.run_scratch_dir():
+            return ""
+        return _er.instructions(_er.CONTAINER_REQUEST_PATH)
+    except Exception as exc:
+        log.warning("env-request block skipped: %s", exc)
+        return ""
 
 
 def _ask_block(*, container: bool) -> str:

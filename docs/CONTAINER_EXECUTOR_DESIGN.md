@@ -108,6 +108,14 @@ worker transcripts actually use.
 > Fallback for hosts where the image can't be built: mount the host binary —
 > proven in the trial, documented as the degraded mode.
 
+**Per-project layers (2026-09-07, `docs/ENV_REQUEST_DESIGN.md`):** the base
+image above stays fixed; a run that lacks a tool requests it by file and the
+engine builds `maro-executor:p-<project>-l<N>-<cli>-r<rev>` from a generated
+Dockerfile (`FROM <base>` + package lines) under
+`<workspace>/executor-layers/<project>/`. Root at build time only; the
+runtime `--user` line is unchanged. `llm._run_subprocess_safe` picks the
+project image when one exists for the current base.
+
 ### Auth — the trap, named
 
 The claude CLI's OAuth state lives under `~/.claude` and the CLI **writes**

@@ -158,7 +158,12 @@ def format_message(payload: dict) -> str:
     goal_line = goal[:200] + ("…" if len(goal) > 200 else "")
 
     if event == "escalation":
-        lines = ["\U0001f514 maro needs a human"]  # 🔔
+        if str(payload.get("audience", "")) == "orchestrator":
+            # env_request (decision ea9e311f): the orchestrator decides;
+            # the user is notified, not asked — the card says so.
+            lines = ["\U0001f527 maro wants to install software — the orchestrator decides"]  # 🔧
+        else:
+            lines = ["\U0001f514 maro needs a human"]  # 🔔
         if goal_line:
             lines.append(f"Goal: {goal_line}")
         # §9.6 (2026-07-27): the single-chasm decision line leads when

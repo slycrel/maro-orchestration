@@ -238,6 +238,30 @@ happens. Asking is Maro's rare exception, not a step: if a run asks for a
 decision or permission it could have made itself, say so to Jeremy — every
 ask is a counted, reviewed event (`maro asks` on the box).
 
+## Decide an install request (added 2026-09-07)
+
+A containerized run that lacks a tool asks the ENGINE for it, not you: in
+policy (ordinary apt/pip/npm packages) the box builds a per-project image
+layer and re-runs the step on its own — you hear nothing. Out of policy
+(a source not enabled, or a package on the deny list: sudo, ssh, docker,
+systemd, cron…) the run pauses and pushes an `escalation` event with
+`.point == env_request` and `.audience == orchestrator`. **That decision is
+yours** (decree 2026-09-07: the orchestrator guides in place of the user;
+the user gets involved only if they must):
+
+```bash
+ssh maro-dispatch "answer <handle_id> allow"            # grants + builds + resumes
+ssh maro-dispatch "answer <handle_id> deny <why>"       # resumes without it
+```
+
+Allow ordinary tooling for the stated need (`.request` by source,
+`.summary` = what for, `.reason` = why policy escalated) and tell Jeremy in
+one line what you allowed. Deny packages unrelated to the need, ones that
+replace the box's services with no stated reason, or enormous ones. Involve
+Jeremy only when the request touches his accounts, money, or the box's
+role. `allow` records a project grant on the box, so the same package never
+escalates again for that project; `maro asks` lists these as `[install]`.
+
 ## Run-report identity and stale-loop diagnosis
 
 When a user asks whether a Maro web report is the right run—or says its goal is right but its step results/conclusion are wrong—**do not infer identity from a report URL or a dispatch list alone.** Resolve the dispatched job first:
