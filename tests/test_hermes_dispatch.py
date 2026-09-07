@@ -262,3 +262,24 @@ def test_result_legacy_envelope_rec_marks_fallback_nonverbatim(
     out = json.loads(capsys.readouterr().out)
     assert out["delivery"]["you_asked"] == "old truncated display goal…"
     assert out["delivery"]["verbatim"] is False
+
+
+def test_read_rec_resolves_handle_for_a_job_still_in_flight(tmp_path, monkeypatch):
+    """The worker writes handle_id only when the run ends; a live operator
+    question needs it NOW (2026-09-07: Hermes could not target 2fd65744's
+    live SMS ask and the code died). Resolve from run metadata meanwhile."""
+    import runs
+    mod = _load_dispatch(tmp_path, monkeypatch)
+    mod.DISPATCH_DIR.mkdir(parents=True, exist_ok=True)
+    rec = {"job_id": "task-inflight-1", "status": "running", "handle_id": None}
+    mod._rec_path("task-inflight-1").write_text(json.dumps(rec))
+    assert mod._read_rec("task-inflight-1")["handle_id"] is None  # no run yet
+    runs.create_run_dir("c1234567", prompt="g", lane="agenda", model="mid",
+                        extra_metadata={"origin": {"job_id": "task-inflight-1"}})
+    got = mod._read_rec("task-inflight-1")
+    assert got["handle_id"] == "c1234567"
+    assert got["handle_id_source"].startswith("run-metadata")
+    # A record that already carries the handle is left alone.
+    rec2 = {"job_id": "task-done-1", "status": "done", "handle_id": "deadbeef"}
+    mod._rec_path("task-done-1").write_text(json.dumps(rec2))
+    assert mod._read_rec("task-done-1")["handle_id"] == "deadbeef"

@@ -65,9 +65,41 @@ def _write_rec(rec: dict) -> None:
 
 def _read_rec(job_id: str) -> dict | None:
     try:
-        return json.loads(_rec_path(job_id).read_text())
+        rec = json.loads(_rec_path(job_id).read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return None
+    if isinstance(rec, dict) and not rec.get("handle_id"):
+        # The worker writes handle_id only when the run ENDS, but a live
+        # operator question needs the handle NOW: Hermes could not target
+        # 2fd65744's live SMS ask (2026-09-07 17:48Z, "live jobs expose no
+        # handle_id") and the code died. The run's metadata carries the
+        # job id from intake, so resolve it from there while in flight.
+        hid = _handle_for_job(job_id)
+        if hid:
+            rec["handle_id"] = hid
+            rec.setdefault("handle_id_source", "run-metadata (in flight)")
+    return rec
+
+
+def _handle_for_job(job_id: str) -> str | None:
+    """Resolve a job id to its run handle from run metadata (`origin.job_id`),
+    newest run first. Read-only; None when no run has started yet."""
+    try:
+        from runs import runs_root
+        root = runs_root()
+        dirs = sorted((d for d in root.iterdir() if d.is_dir()),
+                      key=lambda d: d.stat().st_mtime, reverse=True)
+    except Exception:
+        return None
+    for d in dirs[:200]:
+        try:
+            meta = json.loads((d / "metadata.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        origin = meta.get("origin") if isinstance(meta, dict) else None
+        if isinstance(origin, dict) and origin.get("job_id") == job_id:
+            return str(meta.get("handle_id") or d.name.split("-", 1)[0])
+    return None
 
 
 def _task_status(job_id: str) -> str | None:
