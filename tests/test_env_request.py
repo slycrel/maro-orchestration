@@ -181,6 +181,32 @@ class TestDockerfile:
         df = er.render_dockerfile("b", [], ["requests[security]>=2.31"], ["@playwright/test@^1"])
         assert "'requests[security]>=2.31'" in df and "'@playwright/test@^1'" in df
 
+    def test_browsers_bake_playwright_at_build_time(self, ws):
+        """Seen live (084d3c1f): pip playwright alone re-downloads ~400 MB of
+        browser per --rm step and `--with-deps` needs root the worker
+        lacks. `browsers` moves both to build time."""
+        v = er.evaluate({"need": "browser", "browsers": ["firefox", "opera"]})
+        assert v.browsers == ["firefox"] and v.rejected == [("browser", "opera", "unknown browser (chromium / firefox / webkit)")]
+        assert v.allowed_specs == ["browser:firefox"] and v.any_allowed
+        df = er.render_dockerfile("b", [], [], [], browsers=["firefox"])
+        assert "python3-pip" in df and "pip install --no-cache-dir --break-system-packages playwright" in df
+        assert "ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright" in df
+        assert "python3 -m playwright install --with-deps firefox && chmod -R a+rX /opt/ms-playwright" in df
+        df2 = er.render_dockerfile("b", [], ["playwright==1.47"], [], browsers=["chromium"])
+        pip_line = [l for l in df2.splitlines() if "pip install" in l]
+        assert len(pip_line) == 1 and pip_line[0].endswith("playwright==1.47"), "a pinned playwright is kept, not doubled"
+
+    def test_browsers_accumulate_in_the_manifest(self, ws, fake_build, tmp_path):
+        p = tmp_path / er.REQUEST_NAME
+        p.write_text(json.dumps({"need": "browser", "playwright": ["Firefox"]}))
+        req = er.read_request(p)
+        assert req["browsers"] == ["firefox"]
+        br = er.build_layer("p", er.evaluate(req))
+        assert br.added == ["browser:firefox"] and "install --with-deps firefox" in br.dockerfile
+        assert er.status("p")["browsers"] == ["firefox"]
+        br2 = er.build_layer("p", er.evaluate({"need": "x", "apt": ["curl"]}))
+        assert "install --with-deps firefox" in br2.dockerfile, "the browser survives later layers"
+
     def test_empty_sources_render_no_run_line(self):
         df = er.render_dockerfile("b", ["curl"], [], [])
         assert df.count("\nRUN ") == 1 and "pip" not in df and "npm" not in df
@@ -415,7 +441,7 @@ class TestLoop:
         assert [e for e, _ in events] == ["escalation"], "the orchestrator's event, not the user's question"
         payload = events[0][1]
         assert payload["point"] == "env_request" and payload["audience"] == "orchestrator"
-        assert payload["request"] == {"apt": ["systemd"], "pip": [], "npm": []}
+        assert payload["request"] == {"apt": ["systemd"], "pip": [], "npm": [], "browsers": []}
         assert payload["answer_with"] == 'maro answer abcd1234 "<your answer>"'
         assert "deny list" in payload["reason"]
         # the ledger names it

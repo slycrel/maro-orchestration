@@ -46,9 +46,16 @@ there and ends its step:
 
 ```json
 {"need": "drive a headless browser for the Yahoo login",
- "apt": ["chromium"], "pip": [], "npm": ["playwright"],
+ "apt": [], "pip": ["playwright"], "npm": [], "browsers": ["firefox"],
  "tried": "which chromium / npx playwright — both absent, no sudo"}
 ```
+
+`browsers` (chromium / firefox / webkit) is not a package source: it bakes a
+Playwright browser and its system libraries into the image at build time
+and implies `pip: playwright`. Added after the first live firing (§8): a
+pip-only playwright leaves the browser as a ~400 MB per-step runtime
+download that dies with `--rm`, and `playwright install --with-deps` needs
+root the worker does not have.
 
 The engine reads the file after the step and nothing else. "I installed
 X" in the prose without the file is a fabrication claim like any other
@@ -103,8 +110,10 @@ layers.jsonl     one line per build: layer, image, added, ok, seconds, reason, f
 The Dockerfile is `FROM <base image>` + `USER root` + one `RUN` per
 source (`apt-get install --no-install-recommends …`, `pip install
 --break-system-packages …` with `python3-pip` added to apt automatically
-because the slim base has none, `npm install -g …`). Root exists in those
-lines and nowhere else; the runtime still starts every step with `--user
+because the slim base has none, `npm install -g …`, and for `browsers`
+`ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright` + `playwright install
+--with-deps …` made world-readable so the `--user <uid>` worker finds the
+binaries). Root exists in those lines and nowhere else; the runtime still starts every step with `--user
 <host uid>`. The image tag is
 `maro-executor:p-<project-slug>-l<N>-<cli>-r<rev>` — the base's `-<cli>-r<rev>`
 tail is preserved so `container_exec`'s verbs-baked detection still reads
@@ -201,8 +210,25 @@ lists these as `[install]`.
   variant (worker writes the ask, polls for an answer file, the engine
   feeds the reply into scratch) is the piece the mail goal cannot skip.
   Not built; design owed.
-- **First live firing:** the mail goal re-fired on this lane — expected to
-  request chromium + playwright (in policy → autonomous build), log in
-  with the stored credentials, and stop at the 2FA challenge until the
-  live ask exists. Named falsifier: Yahoo bot detection on headless Linux
-  Chromium.
+- ~~**First live firing**~~ — DONE 2026-09-07 03:59–04:22Z on run
+  084d3c1f (job task-20260907T035946Z-e44ba9ac), from the recorded answer
+  "install what you need". Observed sequence: request 1 named the wrong
+  Debian packages (`chromium-browser`, `python3-playwright`) → build
+  failed in 3.8 s → the failure tail went back to the worker → request 2
+  (`firefox-esr`, `xvfb`, pip `playwright`) → layer 1 built in 82 s
+  (image `maro-executor:p-weve-used-chrome-on-the-l1-2.1.210-r3`, 1.49 GB)
+  → the same step re-ran on the new image → the worker downloaded a
+  browser at runtime (`playwright install`; `--with-deps` failed on `su`,
+  as designed) → a real Playwright login on login.yahoo.com with the
+  stored credentials → landed on
+  `login.yahoo.com/account/challenge/challenge-selector` → wrote the ask
+  file → fourth question 04:18Z "Yahoo 2FA code required" (card + Hermes
+  turn within 2 s). The falsifier did not fire: Yahoo served the 2FA
+  challenge to headless Linux, it did not block the login. Two nothings
+  the operator did: no package name, no image, no answer during the
+  build. Residual found and closed the same day: the browser binaries
+  were a per-step download (host probe of the built image: *Executable
+  doesn't exist at ~/.cache/ms-playwright/firefox-1538*) → the `browsers`
+  key (§2, §4) bakes them at build time. Still open above: the live ask,
+  since the 2FA code the run is now paused on is consumed by the session
+  that requested it.

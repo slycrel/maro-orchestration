@@ -55,6 +55,12 @@ REQUEST_NAME = "env-request.json"
 REQUEST_ENV = "MARO_ENV_REQUEST"
 CONTAINER_REQUEST_PATH = "/tmp/" + REQUEST_NAME
 SOURCES = ("apt", "pip", "npm")
+# Playwright browsers are a build-time download, not a package: `playwright
+# install --with-deps <name>` needs root for the system libs and ~400 MB
+# per browser that would otherwise be re-downloaded every `--rm` step (seen
+# live on 084d3c1f, 2026-09-07). Requested as `"browsers": ["firefox"]`;
+# implies pip playwright.
+BROWSERS = ("chromium", "firefox", "webkit")
 MAX_PER_SOURCE = 20
 MAX_RETRIES_PER_STEP = 2
 LAYERS_DIR = "executor-layers"
@@ -121,7 +127,10 @@ def instructions(path) -> str:
         "software the image lacks, write ONE JSON object to `" + str(path) + "` "
         "and end your step:\n"
         '{"need": "<what it is for>", "apt": ["<package>"], "pip": [], "npm": [], '
-        '"tried": "<what you tried without it>"}\n'
+        '"browsers": [], "tried": "<what you tried without it>"}\n'
+        "`browsers` takes chromium / firefox / webkit and bakes a Playwright browser "
+        "with its system libraries into the image (a per-step `playwright install` "
+        "re-downloads hundreds of MB and dies with the step). "
         "The engine builds a new image with those packages (root at build time, "
         "never in your step) and runs THIS step again on it; the retry opens with "
         "\"Environment updated\" naming what landed. A request outside policy goes to "
@@ -173,10 +182,12 @@ def read_request(path) -> Optional[Dict[str, Any]]:
             raise ValueError(f"{src}: more than {MAX_PER_SOURCE} packages in one request")
         req[src] = items
         total += len(items)
+    req["browsers"] = [b.lower() for b in _as_list(d.get("browsers") or d.get("playwright"))]
+    total += len(req["browsers"])
     if not req["need"]:
         raise ValueError("env-request.json has no `need`")
     if total == 0:
-        raise ValueError("env-request.json names no packages (apt/pip/npm)")
+        raise ValueError("env-request.json names no packages (apt/pip/npm/browsers)")
     return req
 
 
@@ -206,14 +217,16 @@ class Verdict:
     allowed: Dict[str, List[str]] = field(default_factory=lambda: {s: [] for s in SOURCES})
     escalate: List[Tuple[str, str, str]] = field(default_factory=list)  # (source, spec, why)
     rejected: List[Tuple[str, str, str]] = field(default_factory=list)  # (source, spec, why)
+    browsers: List[str] = field(default_factory=list)
 
     @property
     def allowed_specs(self) -> List[str]:
-        return [f"{s}:{x}" for s in SOURCES for x in self.allowed.get(s, [])]
+        return ([f"{s}:{x}" for s in SOURCES for x in self.allowed.get(s, [])]
+                + [f"browser:{b}" for b in self.browsers])
 
     @property
     def any_allowed(self) -> bool:
-        return any(self.allowed.get(s) for s in SOURCES)
+        return any(self.allowed.get(s) for s in SOURCES) or bool(self.browsers)
 
 
 def _bare_name(source: str, spec: str) -> str:
@@ -251,6 +264,13 @@ def evaluate(req: Dict[str, Any], grants: Sequence[str] = ()) -> Verdict:
                 v.escalate.append((src, spec, f"{spec} is on the deny list (env.install.deny)"))
                 continue
             v.allowed[src].append(spec)
+    for b in req.get("browsers", []) or []:
+        if b not in BROWSERS:
+            v.rejected.append(("browser", b, "unknown browser (chromium / firefox / webkit)"))
+        elif "pip" not in sources:
+            v.escalate.append(("browser", b, "browsers ride pip playwright, and pip installs are not in policy"))
+        else:
+            v.browsers.append(b)
     return v
 
 
@@ -337,10 +357,17 @@ def add_grants(project: str, specs: Sequence[str]) -> Dict[str, Any]:
 
 
 def render_dockerfile(base: str, apt: Sequence[str], pip: Sequence[str],
-                      npm: Sequence[str], *, project: str = "", layer: int = 0) -> str:
+                      npm: Sequence[str], *, project: str = "", layer: int = 0,
+                      browsers: Sequence[str] = ()) -> str:
     """The reviewable artifact. Root happens in these RUN lines and nowhere
-    else; the runtime still starts every step with `--user <host uid>`."""
+    else; the runtime still starts every step with `--user <host uid>`.
+    Playwright browsers land in a world-readable `/opt/ms-playwright` so the
+    `--user <uid>` worker finds them (`PLAYWRIGHT_BROWSERS_PATH`)."""
     apt = list(apt)
+    pip = list(pip)
+    browsers = [b for b in browsers if b in BROWSERS]
+    if browsers and not any(_bare_name("pip", x) == "playwright" for x in pip):
+        pip.append("playwright")
     if pip and "python3-pip" not in apt:
         apt.append("python3-pip")  # the slim base has no pip
     lines = [
@@ -360,6 +387,11 @@ def render_dockerfile(base: str, apt: Sequence[str], pip: Sequence[str],
             + " ".join(shlex.quote(x) for x in pip))
     if npm:
         lines.append("RUN npm install -g " + " ".join(shlex.quote(x) for x in npm))
+    if browsers:
+        lines.append("ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright")
+        lines.append("RUN python3 -m playwright install --with-deps "
+                     + " ".join(shlex.quote(b) for b in browsers)
+                     + " && chmod -R a+rX /opt/ms-playwright")
     return "\n".join(lines) + "\n"
 
 
@@ -426,6 +458,11 @@ def build_layer(project: str, verdict: Verdict, *, reason: str = "") -> BuildRes
             if spec not in pkgs[s]:
                 pkgs[s].append(spec)
                 added.append(f"{s}:{spec}")
+    browsers = list(m.get("browsers") or [])
+    for b in verdict.browsers:
+        if b not in browsers:
+            browsers.append(b)
+            added.append(f"browser:{b}")
     layer = int(m.get("layer") or 0) + 1
     tag = image_tag(project, layer)
     if not added and m.get("image") and m.get("base") == base and _EXISTS(str(m["image"])):
@@ -433,7 +470,7 @@ def build_layer(project: str, verdict: Verdict, *, reason: str = "") -> BuildRes
     d = layer_dir(project)
     d.mkdir(parents=True, exist_ok=True)
     df_text = render_dockerfile(base, pkgs["apt"], pkgs["pip"], pkgs["npm"],
-                                project=project, layer=layer)
+                                project=project, layer=layer, browsers=browsers)
     df = d / "Dockerfile"
     df.write_text(df_text, encoding="utf-8")
     timeout_s = float(_cfg("env.install.build_timeout_s", 900) or 900)
@@ -445,6 +482,7 @@ def build_layer(project: str, verdict: Verdict, *, reason: str = "") -> BuildRes
         pass
     if ok:
         m.update({"project": project, "base": base, "layer": layer, "image": tag,
+                  "browsers": browsers,
                   "updated_at": _iso(datetime.now(timezone.utc)), **pkgs})
         save_manifest(project, m)
     try:
@@ -584,7 +622,8 @@ def pause_for_request(outcome: Outcome, *, handle_id: str, goal: str, project: s
         "status": STATUS_PENDING,
         "source": "worker",
         "project": project,
-        "request": {s: list(req.get(s) or []) for s in SOURCES},
+        "request": {**{s: list(req.get(s) or []) for s in SOURCES},
+                    "browsers": list(req.get("browsers") or [])},
         "escalate": [f"{s}:{spec}" for s, spec, _ in v.escalate],
         "escalate_why": [why for _, _, why in v.escalate],
     }
@@ -656,6 +695,7 @@ def apply_answer(rec: Dict[str, Any], text: str) -> Tuple[str, str]:
                     "nor denied; proceed without it unless the reply says otherwise.")
     add_grants(project, specs)
     req = {s: list((rec.get("request") or {}).get(s) or []) for s in SOURCES}
+    req["browsers"] = list((rec.get("request") or {}).get("browsers") or [])
     req["need"] = str(rec.get("why") or "")
     m = load_manifest(project)
     v = evaluate(req, grants=m.get("grants") or [])
@@ -674,6 +714,7 @@ def status(project: str) -> Dict[str, Any]:
     return {"project": project, "image": m.get("image") or "", "base": m.get("base") or "",
             "layer": int(m.get("layer") or 0),
             **{s: list(m.get(s) or []) for s in SOURCES},
+            "browsers": list(m.get("browsers") or []),
             "grants": list(m.get("grants") or []),
             "dockerfile": str(d / "Dockerfile") if (d / "Dockerfile").is_file() else "",
             "updated_at": m.get("updated_at") or ""}
