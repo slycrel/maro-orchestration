@@ -1662,6 +1662,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     except Exception:
         _live_scratch = None
     _live_extend = 0.0        # elapsed-seconds ceiling granted by a pending live ask
+    _live_hold_until = 0.0    # liveness held until this monotonic time (a bounced worker is fixing its ask, not stalled)
     try:
         while True:
             rc = proc.poll()
@@ -1723,9 +1724,13 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 except Exception:
                     _live = None
                 if _live:
-                    last_seen = now
                     _live_extend = max(_live_extend,
                                        elapsed + float(_live.get("remaining_s") or 0) + 120.0)
+                    _live_hold_until = max(_live_hold_until,
+                                           now + (60.0 if _live.get("bounced") else 0.0))
+                    last_seen = now
+                elif now < _live_hold_until:
+                    last_seen = now
 
             if timeout and elapsed >= max(float(timeout), _live_extend):
                 kill_reason = f"wall-clock timeout after {int(elapsed)}s"

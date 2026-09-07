@@ -668,6 +668,7 @@ class TestGrounding:
         assert "every link in it must resolve" in text and '"sent"' in text
         assert '"live": true' in text and "/tmp/ask-answer.json" in text
         assert '{"bounce": "..."}' in text and "printing a line every 30 s" in text
+        assert "a bounce is never a reason to end the step" in text
         assert "10 minutes" in text
         assert "live" not in oa.instructions("/x/ask-operator.json").lower().split("consumed")[0] or True
 
@@ -755,6 +756,30 @@ class TestLive:
         assert oa.answer("abcd1234", "again")["status"] == "error", "a delivered live answer is final"
 
     def test_watch_bounces_a_bad_live_ask_through_the_answer_file(self, ws, monkeypatch):
+        """A dead link is a hard bounce. The bounce still GRANTS the window
+        (70aa9fd8: the step's 600 s wall clock killed a bounced worker ten
+        seconds after the real text went out)."""
+        import runs
+        events = _capture_emit(monkeypatch)
+        monkeypatch.setattr(oa, "_PROBE_URL", lambda url: "returns HTTP 404")
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        (scratch / oa.ASK_NAME).write_text(json.dumps({**CODE_ASK, "why": "see https://x.example/dead"}))
+        with runs.scoped_run_dir(rd):
+            out = oa.watch_live(str(scratch), handle_id="abcd1234")
+        assert out and out["bounced"] is True and out["remaining_s"] == 600.0
+        assert events == [], "the operator never sees it"
+        reply = json.loads((scratch / oa.ANSWER_NAME).read_text())
+        assert reply["answer"] == "" and "returns HTTP 404" in reply["bounce"]
+        assert not (scratch / oa.ASK_NAME).exists() and list(scratch.glob("ask-operator.*.asked.json"))
+        assert "operator_ask" not in _meta(rd)
+
+    def test_live_code_ask_without_sent_is_announced_with_a_warning_not_bounced(self, ws, monkeypatch):
+        """70aa9fd8 08:13Z: the code HAD been sent; the bounce for a missing
+        `sent` cost the attempt. The operator can judge 'did a text arrive'
+        — so it rides the card as unverified. Non-live code asks still
+        bounce (the pause lane cannot carry a code)."""
         import runs
         events = _capture_emit(monkeypatch)
         rd = _mk_run("abcd1234")
@@ -762,12 +787,37 @@ class TestLive:
         scratch.mkdir(exist_ok=True)
         (scratch / oa.ASK_NAME).write_text(json.dumps({**CODE_ASK, "sent": ""}))
         with runs.scoped_run_dir(rd):
-            assert oa.watch_live(str(scratch), handle_id="abcd1234") is None
-        assert events == [], "the operator never sees it"
-        reply = json.loads((scratch / oa.ANSWER_NAME).read_text())
-        assert reply["answer"] == "" and "how it was sent" in reply["bounce"]
-        assert not (scratch / oa.ASK_NAME).exists() and list(scratch.glob("ask-operator.*.asked.json"))
-        assert "operator_ask" not in _meta(rd)
+            out = oa.watch_live(str(scratch), handle_id="abcd1234")
+        assert out and out["live"] is True and not out.get("bounced")
+        assert [e for e, _ in events] == ["operator_question"]
+        assert events[0][1]["unverified"] and "did not say how it triggered the code" in events[0][1]["unverified"][0]
+        assert not (scratch / oa.ANSWER_NAME).exists(), "no bounce"
+        assert oa.ground({**CODE_ASK, "sent": "", "live": False}), "a non-live code ask still bounces"
+        assert oa.ground({**CODE_ASK, "sent": ""}) and oa.ground({**CODE_ASK, "sent": ""}, soft=[]) == []
+
+    def test_a_new_ask_after_the_mark_is_a_new_question(self, ws, monkeypatch):
+        """The worker re-asks in the same step (after a bounce, or a second
+        question): the stale marker and answer file are retired and the
+        new ask is announced — it was never announced before this fix."""
+        import runs
+        events = _capture_emit(monkeypatch)
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        (scratch / oa.ASK_NAME).write_text(json.dumps(CODE_ASK))
+        with runs.scoped_run_dir(rd):
+            first = oa.watch_live(str(scratch), handle_id="abcd1234")
+            assert first and oa.answer("abcd1234", "111111")["status"] == "delivered"
+            time.sleep(0.05)  # a later mtime is what marks a new ask
+            second_q = {**CODE_ASK, "question": "Yahoo sent a second 6-digit code — what is it?"}
+            (scratch / oa.ASK_NAME).write_text(json.dumps(second_q))
+            second = oa.watch_live(str(scratch), handle_id="abcd1234")
+        assert second and second["question"] == second_q["question"] and not second.get("bounced")
+        assert [e for e, _ in events] == ["operator_question", "operator_question"]
+        assert not (scratch / oa.ANSWER_NAME).exists(), "the stale answer was retired, not served"
+        assert len(list(scratch.glob("ask-live.*.done.json"))) == 1 and list(scratch.glob("ask-answer.*.json"))
+        assert _meta(rd)["operator_ask"]["question"] == second_q["question"]
+        assert _meta(rd)["operator_ask"]["status"] == "pending"
 
     def test_poll_loop_holds_liveness_and_stretches_the_wall_clock(self, ws, tmp_path, monkeypatch):
         """The literal runner: a worker script writes a live ask, then sleeps
@@ -810,6 +860,51 @@ class TestLive:
         assert res.returncode == 0, res.stdout
         assert "654321" in res.stdout
         assert [e for e, _ in events] == ["operator_question"] and events[0][1]["live"] is True
+
+    def test_poll_loop_grants_the_window_on_a_bounce_too(self, ws, tmp_path, monkeypatch):
+        """The worker's ask is bounced (dead link); it fixes it and re-asks
+        in the same step; the operator answers. The step outlives its 2 s
+        wall clock and 1 s liveness ceiling throughout."""
+        import threading
+        import runs
+        import llm
+        events = _capture_emit(monkeypatch)
+        monkeypatch.setattr(oa, "_PROBE_URL", lambda url: "returns HTTP 404")
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        ask_file = scratch / oa.ASK_NAME
+        ans_file = scratch / oa.ANSWER_NAME
+        bad = {**CODE_ASK, "why": "see https://x.example/dead"}
+        script = tmp_path / "worker.sh"
+        script.write_text(
+            "#!/bin/sh\n"
+            f"cat > '{ask_file}' <<'EOF'\n{json.dumps(bad)}\nEOF\n"
+            f"i=0; while [ ! -f '{ans_file}' ]; do i=$((i+1)); [ $i -gt 40 ] && exit 3; sleep 0.2; done\n"
+            f"grep -q bounce '{ans_file}' || exit 4\n"
+            f"rm -f '{ans_file}'; sleep 1.5\n"
+            f"cat > '{ask_file}' <<'EOF'\n{json.dumps(CODE_ASK)}\nEOF\n"
+            f"i=0; while [ ! -f '{ans_file}' ]; do i=$((i+1)); [ $i -gt 60 ] && exit 5; sleep 0.2; done\n"
+            f"cat '{ans_file}'\n"
+        )
+        script.chmod(0o755)
+
+        def _operator():
+            for _ in range(200):
+                if events:
+                    break
+                time.sleep(0.05)
+            time.sleep(1.5)
+            oa.answer("abcd1234", "654321", source="test")
+        t = threading.Thread(target=_operator, daemon=True)
+        t.start()
+        with runs.scoped_run_dir(rd):
+            res = llm._run_subprocess_safe([str(script)], timeout=2, liveness_timeout=1,
+                                           poll_interval=0.2, cwd=str(tmp_path))
+        t.join(5)
+        assert res.returncode == 0, (res.returncode, res.stdout)
+        assert "654321" in res.stdout
+        assert [e for e, _ in events] == ["operator_question"], "the bounced ask never reached the operator"
 
     def test_live_window_closed_with_the_step_becomes_a_pause_without_a_second_card(self, ws, tmp_path, monkeypatch):
         fake = tmp_path / "claude"

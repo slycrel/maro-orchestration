@@ -123,8 +123,10 @@ def instructions(path, answer_path_: Optional[str] = None) -> str:
             f"poll {answer_path_} every few seconds for up to {mins} minutes, "
             "printing a line every 30 s so the step is not judged stalled. It "
             'arrives as {"answer": "..."}; a {"bounce": "..."} means the ask '
-            "failed a check — fix it and write it again. If the window closes, "
-            "end the step stating the gap."
+            "failed a check — delete the answer file, fix the ask and write it "
+            "again IN THE SAME STEP with the browser still open; a bounce is "
+            "never a reason to end the step. If the window closes, end the "
+            "step stating the gap."
         )
     return (
         "## Asking the operator\n"
@@ -243,8 +245,16 @@ def asks_for_code(ask: Dict[str, Any]) -> bool:
     return bool(_CODE_RE.search(q)) and "code" in q.lower()
 
 
-def ground(ask: Dict[str, Any]) -> List[str]:
-    """Problems that must reach the WORKER, not the operator. Empty = pass."""
+def ground(ask: Dict[str, Any], *, soft: Optional[List[str]] = None) -> List[str]:
+    """Problems that must reach the WORKER (a bounce). Empty = pass.
+
+    `soft`, when given, collects problems the OPERATOR can judge instead —
+    they ride the card as `unverified` rather than bouncing. Today that is
+    one case: a LIVE code ask that does not say how the code was sent. The
+    operator knows whether a text arrived; bouncing it cost a real attempt
+    (70aa9fd8, 2026-09-07 08:13Z: the code HAD been sent, the bounce made
+    the worker re-ask, and the step's wall clock killed it first).
+    """
     problems: List[str] = []
     for url in _links(ask)[:5]:
         why = _PROBE_URL(url)
@@ -254,10 +264,14 @@ def ground(ask: Dict[str, Any]) -> List[str]:
                 "page that does not exist; fix the link or drop it")
     if asks_for_code(ask):
         if not str(ask.get("sent") or "").strip():
-            problems.append(
-                "you ask for a code but do not say how it was sent: trigger the delivery "
-                "yourself first (choose the SMS or authenticator option on the challenge "
-                'page), then put the confirmation you saw in "sent" and ask again')
+            msg = ("you ask for a code but do not say how it was sent: trigger the delivery "
+                   "yourself first (choose the SMS or authenticator option on the challenge "
+                   'page), then put the confirmation you saw in "sent" and ask again')
+            if ask.get("live") and soft is not None:
+                soft.append("Maro did not say how it triggered the code — if no text arrived, "
+                            "reply 'no code' and it will press the button")
+            else:
+                problems.append(msg)
         if not ask.get("live"):
             problems.append(
                 "a code is consumed by the session that requested it and this ask ends the "
@@ -459,6 +473,27 @@ def watch_live(scratch, *, handle_id: str = "", goal: str = "", step: str = "",
             return None
         mark = _read_mark(scratch)
         if mark is not None:
+            # A NEW ask file after the mark (the worker re-asked in the same
+            # step — after a bounce, or a second question) is a new question:
+            # retire the mark and the stale answer file and fall through.
+            try:
+                newer = p.stat().st_mtime > float(mark.get("ask_mtime") or 0) + 1e-6
+            except (ValueError, OSError):
+                newer = False
+            if newer:
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                try:
+                    os.replace(_mark_path(scratch), Path(scratch) / f"ask-live.{stamp}.done.json")
+                except OSError:
+                    pass
+                ap0 = answer_path(str(scratch))
+                if ap0 is not None and ap0.is_file():
+                    try:
+                        os.replace(ap0, unique_archive(Path(scratch) / f"ask-answer.{stamp}.json"))
+                    except OSError:
+                        pass
+                mark = None
+        if mark is not None:
             if mark.get("status") != STATUS_PENDING:
                 return None
             ap = answer_path(str(scratch))
@@ -475,7 +510,8 @@ def watch_live(scratch, *, handle_id: str = "", goal: str = "", step: str = "",
         ask = read_ask(p)
         if not ask or not ask.get("live"):
             return None
-        problems = ground(ask)
+        soft: List[str] = []
+        problems = ground(ask, soft=soft)
         now = datetime.now(timezone.utc)
         if problems:
             archive_ask(p)
@@ -488,8 +524,12 @@ def watch_live(scratch, *, handle_id: str = "", goal: str = "", step: str = "",
                             handle_id=handle_id or None, problems=len(problems))
             except Exception:
                 pass
-            return None
-        record = _record(ask, step=step, now=now, live=True)
+            # The worker is fixing its ask, not stalled, and the code it
+            # may already have sent is on the clock: grant the window now
+            # (70aa9fd8: the bounce left the step on its 600 s wall clock,
+            # which killed it ten seconds after the text went out).
+            return {"bounced": True, "status": "bounced", "remaining_s": live_wait_s()}
+        record = _record(ask, step=step, now=now, live=True, unverified=soft)
         try:
             from runs import stamp_run_metadata
             stamp_run_metadata({META_KEY: record, "clarification_question": record["question"]})
@@ -503,7 +543,8 @@ def watch_live(scratch, *, handle_id: str = "", goal: str = "", step: str = "",
             pass
         _notify(record, handle_id=handle_id, goal=goal)
         try:
-            _mark_path(scratch).write_text(json.dumps(record), encoding="utf-8")
+            _mark_path(scratch).write_text(
+                json.dumps({**record, "ask_mtime": p.stat().st_mtime}), encoding="utf-8")
         except OSError as exc:
             log.warning("live ask: mark not written: %s", exc)
         return {**record, "remaining_s": live_wait_s()}

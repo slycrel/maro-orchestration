@@ -178,7 +178,7 @@ verification step on a step's output should have caught this. Decision
 | probe | fails when | who gets it |
 |---|---|---|
 | links (`question`, `why`, `no_input_alternative`, `sent`; up to five) | HEAD/GET answers ≥ 400 or the host is unreachable (8 s) | the worker |
-| code request (`asks_for_code`: 2FA / OTP / 6-digit / verification code / passcode …) | no `sent` — the ask does not say how the worker triggered delivery and what confirmation it saw | the worker |
+| code request (`asks_for_code`: 2FA / OTP / 6-digit / verification code / passcode …) | no `sent` — the ask does not say how the worker triggered delivery and what confirmation it saw | the worker for a pause-lane ask; for a LIVE ask the OPERATOR, as an `unverified` line ("if no text arrived, reply 'no code'") — the operator can judge whether a text came, and bouncing cost a real attempt (70aa9fd8 08:13Z: the code HAD been sent) |
 | code request | not `live` — the code is consumed by the session that asked and a pause ends it (§8) | the worker |
 
 A failing ask is **bounced**: the step re-runs once (the loop_blocked
@@ -206,6 +206,22 @@ requested it, so the browser has to outlive the question. `ask.live_wait_s`
 | engine, mid-step | `llm._run_subprocess_safe`'s poll loop calls `operator_ask.watch_live(scratch)` each tick: a live ask that fails §7 is bounced through the answer file at once; one that passes is recorded on the run (`live: true`, deadline = now + window, NOT a pause), traced `step.ask → ask.live`, announced with the usual card + Hermes leg marked LIVE (minutes left, `sent`), and remembered in a scratch marker so it is announced once. While it is pending the liveness clock is held and the wall clock may stretch to the window + 120 s, so a 10-minute wait fits inside a 600 s step |
 | operator | the same verb: `maro answer <handle> <code>` / gate `answer <handle> <code>` → the reply lands in the answer file, the record says `delivery: live`, the gate reports `delivered` (no resume job) |
 | engine, after the step | `close_live` consumes the marker and the answer file (both archived). Answered → the step's own outcome stands. Unanswered → the same question becomes a normal pause with a 24 h box, **no second card** (`pause_for_ask(record=…, notify=False)`); a late reply resumes the run as before |
+
+Learned on the second live attempt (70aa9fd8, 2026-09-07 08:02–08:14Z):
+the worker asked at minute eleven of a 600 s step; the ask was bounced
+(no `sent`), so no window was granted, and the wall clock killed the step
+ten seconds after the real text went out — the code was orphaned. Three
+rules from it: a **bounce grants the window too** (`watch_live` returns
+`bounced` with `remaining_s`; the poll loop stretches the wall clock and
+holds liveness 60 s while the worker fixes its ask); a **new ask file
+after the marker is a new question** (mtime later than the announced
+file's: the marker and any stale answer file are retired, archived, and
+the new ask is announced — before this a re-ask in the same step was
+never announced); and the frame says **a bounce is never a reason to end
+the step**. A `sent` claim is still a claim: the gate checks that the
+worker said how it triggered delivery, not that it did (the first attempt
+misread "You'll get a verification code" as confirmation) — the
+screenshot the worker saves is the operator's check, not the engine's.
 
 Not here: a live ask that a step never announced (the poll loop did not
 run, e.g. a mocked executor) is treated as a normal pause with a card.
