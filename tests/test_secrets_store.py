@@ -539,6 +539,41 @@ class TestExecutorSeams:
         assert "/tmp/" + ss.DROP_NAME in cont
         assert "=u" not in cont and "=g" not in cont
 
+    def test_frame_never_promises_what_the_process_cannot_decrypt(self, fake_tools, monkeypatch):
+        """Run 084d3c1f (2026-09-07): resumed through the SSH gate with a PATH
+        without sops, nothing was injected, the frame still said
+        'Injected ... YAHOO_PASSWORD' and the worker's `env | grep` came back
+        empty. The frame must say NOT injected, with the reason."""
+        import container_exec as ce
+        import step_exec
+        _seed(fake_tools, {"YAHOO_USER": "u"}, policy="YAHOO_*\n")
+        monkeypatch.setattr(ss, "sops_bin", lambda: None)
+        monkeypatch.setattr(ss, "_find_tool", lambda name: None)
+        ss.reset_cache()
+        assert ss.container_env() == {}
+        assert "sops is not installed" in (ss.decrypt_problem() or "")
+        monkeypatch.setattr(ce, "container_mode", lambda: "on")
+        monkeypatch.setattr(ce, "container_suppressed", lambda: False)
+        monkeypatch.setattr(ce, "image_bakes_verbs", lambda: False)
+        monkeypatch.setattr(ce, "hosted_free_container_env", lambda: {})
+        monkeypatch.setattr(ce, "run_scratch_dir", lambda: "/host/run/scratch")
+        cont = step_exec.execute_system_for_lane()
+        assert "Injected into your environment as variables" not in cont
+        assert "NOT injected although the policy allows them: YAHOO_USER — sops is not installed" in cont
+        assert "allowed by policy but not delivered" in cont
+
+    def test_tools_are_found_off_path_in_the_known_dirs(self, fake_tools, tmp_path, monkeypatch):
+        """A worker spawned by the SSH gate or cron has a bare PATH; the
+        Homebrew / ~/.local dirs are where the tools live on this box."""
+        monkeypatch.setattr(ss.shutil, "which", lambda name: None)
+        assert ss.sops_bin() is None or not ss.sops_bin().startswith(str(tmp_path))
+        d = tmp_path / "tools"; d.mkdir()
+        (d / "sops").write_text("#!/bin/sh\n"); (d / "sops").chmod(0o755)
+        (d / "age-keygen").write_text("#!/bin/sh\n")   # not executable → not found
+        monkeypatch.setattr(ss, "_TOOL_DIRS", (str(tmp_path / "missing"), str(d)))
+        assert ss.sops_bin() == str(d / "sops")
+        assert ss.age_keygen_bin() is None
+
     def test_execute_frame_unchanged_without_a_store(self, fake_tools, monkeypatch):
         import container_exec as ce
         import step_exec

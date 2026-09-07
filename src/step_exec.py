@@ -361,17 +361,25 @@ def _secrets_block(*, container: bool) -> str:
     try:
         import secrets_store as _ss
         import container_exec as _ce
-        injected = set(_ss.injectable(_ss.names()))
+        # What the mechanism will ACTUALLY deliver (container_env decrypts,
+        # cached per store mtime), not what the policy would allow: a
+        # process where sops is missing must not promise the variables.
+        policy = set(_ss.injectable(_ss.names()))
+        injected = set(_ss.container_env().keys())
+        undelivered = sorted(policy - injected)
+        why = _ss.decrypt_problem() or ""
         drop = None
         scratch = _ce.run_scratch_dir()
         if container:
             injected |= set(_ce.hosted_free_container_env())
             if scratch:
                 drop = Path("/tmp") / _ss.DROP_NAME
-            return _ss.presence_block(injected, host=False, drop=drop)
+            return _ss.presence_block(injected, host=False, drop=drop,
+                                      undelivered=undelivered, undelivered_why=why)
         drop = _ss.drop_path(scratch)
         return _ss.presence_block(injected, host=True, drop=drop,
-                                  file=_ss.file_path(scratch))
+                                  file=_ss.file_path(scratch),
+                                  undelivered=undelivered, undelivered_why=why)
     except Exception as exc:
         log.warning("secrets presence block skipped: %s", exc)
         return ""

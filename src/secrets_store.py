@@ -149,12 +149,42 @@ def meta_path() -> Path:
     return secrets_dir() / META_NAME
 
 
+# Where the tools live when PATH does not say (a dispatch worker spawned by
+# the SSH gate, a cron sweep, a systemd unit): the first live operator
+# answer (2026-09-07, run 084d3c1f) resumed through the gate with a PATH
+# that lacked the Homebrew bin dir, sops was "not installed", nothing was
+# injected — while the frame still promised the variables.
+_TOOL_DIRS = ("/home/linuxbrew/.linuxbrew/bin", "/opt/homebrew/bin",
+              "/usr/local/bin", "~/.local/bin", "~/.maro/bin")
+
+
+def _find_tool(name: str) -> Optional[str]:
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in _TOOL_DIRS:
+        cand = Path(d).expanduser() / name
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return str(cand)
+    return None
+
+
 def sops_bin() -> Optional[str]:
-    return shutil.which("sops")
+    return _find_tool("sops")
 
 
 def age_keygen_bin() -> Optional[str]:
-    return shutil.which("age-keygen")
+    return _find_tool("age-keygen")
+
+
+_decrypt_problem: Optional[str] = None
+
+
+def decrypt_problem() -> Optional[str]:
+    """Why the last load() delivered nothing (None after a good decrypt):
+    the frame says this instead of promising an injection that did not
+    happen."""
+    return _decrypt_problem
 
 
 def store_present() -> bool:
@@ -238,6 +268,7 @@ def load(*, use_cache: bool = True) -> Dict[str, str]:
     try:
         proc = _run_sops(["-d", "--output-type", "json", str(path)])
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        _set_problem("sops is not installed (or not on this process's PATH)")
         _warn_once("sops-unavailable", "secrets store present at %s but cannot be "
                    "decrypted here: %s", path, exc)
         _cache.update(stamp=stamp, values={})
@@ -246,23 +277,31 @@ def load(*, use_cache: bool = True) -> Dict[str, str]:
         why = ("no age identity can open it (SOPS_AGE_KEY_FILE=%s)" % identity_path()
                if proc.returncode == _SOPS_EXIT_NO_KEY
                else "sops exit %d: %s" % (proc.returncode, (proc.stderr or "").strip()[-200:]))
+        _set_problem("the store does not decrypt here: " + str(why))
         _warn_once("sops-decrypt", "secrets store %s not decrypted: %s", path, why)
         _cache.update(stamp=stamp, values={})
         return {}
     try:
         raw = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError as exc:
+        _set_problem("the store decrypted to non-JSON")
         _warn_once("sops-json", "secrets store %s decrypted to non-JSON: %s", path, exc)
         _cache.update(stamp=stamp, values={})
         return {}
     for k, v in (raw.items() if isinstance(raw, dict) else []):
         if isinstance(k, str) and not k.startswith("sops"):
             values[k] = "" if v is None else str(v)
+    _set_problem(None)
     _cache.update(stamp=stamp, values=dict(values))
     return values
 
 
 _warned: set = set()
+
+
+def _set_problem(why: Optional[str]) -> None:
+    global _decrypt_problem
+    _decrypt_problem = why
 
 
 def _warn_once(key: str, msg: str, *args: object) -> None:
@@ -530,7 +569,8 @@ def _shred(path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def presence_block(injected: Iterable[str] = (), *, host: bool,
-                   drop: Optional[Path] = None, file: Optional[Path] = None) -> str:
+                   drop: Optional[Path] = None, file: Optional[Path] = None,
+                   undelivered: Iterable[str] = (), undelivered_why: str = "") -> str:
     """The `## Secrets` paragraph for an execute frame. Identical wording
     in the Go engine (internal/secrets) — the two engines must tell a
     worker the same thing about the same store. Empty when no store.
@@ -541,6 +581,9 @@ def presence_block(injected: Iterable[str] = (), *, host: bool,
     NOT reachable — the block forbids the "no credential exists" reading.
     `file`: the injected names travel as a 0600 hand-off file at this path
     (host lane), not as env variables; the block says where.
+    `undelivered`: names the policy allows that this process could NOT
+    inject (the store did not decrypt here) — said plainly, so the frame
+    never promises a variable the mechanism did not deliver.
     """
     known = names()
     if not known:
@@ -552,10 +595,16 @@ def presence_block(injected: Iterable[str] = (), *, host: bool,
              "Credentials for this machine are managed by Maro's secrets store "
              "(sops + age; names are readable, values are encrypted). "
              "Names in the store: " + ", ".join(describe(n, meta) for n in known) + "."]
+    undel = [n for n in known if n in set(undelivered) and n not in set(injected)]
     if inj and file is not None:
         lines.append(file_instructions(file, inj))
     elif inj:
         lines.append("Injected into your environment as variables: " + ", ".join(inj) + ".")
+    if undel:
+        lines.append("NOT injected although the policy allows them: " + ", ".join(undel)
+                     + " — " + (undelivered_why or "the value is not in the store")
+                     + ". Do not look for them in your environment; report this as "
+                     "\"allowed by policy but not delivered\" and name the reason.")
     if held:
         if host:
             lines.append(
