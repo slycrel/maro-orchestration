@@ -365,3 +365,26 @@ func TestReportRenders(t *testing.T) {
 		t.Fatal("value in report")
 	}
 }
+
+// A bare PATH (cron, the SSH gate) still finds sops in the known dirs; a
+// non-executable file there does not count.
+func TestLookupFallsBackToKnownDirs(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "sops"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(d, "age-keygen"), []byte("#!/bin/sh\n"), 0o644)
+	old := FallbackDirs
+	FallbackDirs = []string{filepath.Join(d, "missing"), d}
+	defer func() { FallbackDirs = old }()
+	if p, err := lookPath("sops"); err != nil || p != filepath.Join(d, "sops") {
+		t.Fatalf("fallback lookup: %q %v", p, err)
+	}
+	if _, err := lookPath("age-keygen"); err == nil {
+		t.Fatal("a non-executable file must not be found")
+	}
+	if New(t.TempDir()).Lookup == nil {
+		t.Fatal("New must wire the fallback lookup")
+	}
+}

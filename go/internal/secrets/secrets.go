@@ -95,9 +95,33 @@ func Open() *Store {
 	return New(dir)
 }
 
+// FallbackDirs is where the tools live when PATH does not say — a cron
+// sweep or a worker spawned by the SSH gate carries a bare PATH (the
+// first live operator answer, 2026-09-07, resumed with no sops on PATH and
+// nothing injected while the frame promised the variables).
+var FallbackDirs = []string{"/home/linuxbrew/.linuxbrew/bin", "/opt/homebrew/bin", "/usr/local/bin", "~/.local/bin", "~/.maro/bin"}
+
+// lookPath is exec.LookPath, then FallbackDirs.
+func lookPath(name string) (string, error) {
+	if p, err := exec.LookPath(name); err == nil {
+		return p, nil
+	}
+	home, _ := os.UserHomeDir()
+	for _, d := range FallbackDirs {
+		if strings.HasPrefix(d, "~/") && home != "" {
+			d = filepath.Join(home, d[2:])
+		}
+		p := filepath.Join(d, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+			return p, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
 // New is a store over an explicit dir.
 func New(dir string) *Store {
-	return &Store{Dir: dir, Lookup: exec.LookPath, Exec: runExec}
+	return &Store{Dir: dir, Lookup: lookPath, Exec: runExec}
 }
 
 func runExec(bin string, args []string, env []string) ([]byte, int, error) {
