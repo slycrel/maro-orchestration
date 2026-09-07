@@ -125,8 +125,12 @@ def instructions(path, answer_path_: Optional[str] = None) -> str:
             'arrives as {"answer": "..."}; a {"bounce": "..."} means the ask '
             "failed a check — delete the answer file, fix the ask and write it "
             "again IN THE SAME STEP with the browser still open; a bounce is "
-            "never a reason to end the step. If the window closes, end the "
-            "step stating the gap."
+            "never a reason to end the step. A code belongs to the browser "
+            "session that requested it: if you re-request one (a new login, a "
+            "second 'Get code'), every earlier code is dead — never enter one "
+            "you already hold; delete the answer file, write a new ask and wait "
+            "for the new answer. If the window closes, end the step stating "
+            "the gap."
         )
     return (
         "## Asking the operator\n"

@@ -223,6 +223,18 @@ worker said how it triggered delivery, not that it did (the first attempt
 misread "You'll get a verification code" as confirmation) — the
 screenshot the worker saves is the operator's check, not the engine's.
 
+Learned on the same run's later steps (08:20–08:44Z, codes relayed by
+hand): after a stale code was rejected the worker restarted the whole
+login — which requests a NEW code — and then entered the code it already
+held, hard-coded into the script. A code belongs to the browser session
+that requested it, so re-requesting kills every code in hand; the worker
+also never wrote an ask for those later codes, so no card went out for
+them (an ask that is not written is not announced — this is the system
+working, not a delivery failure). The frame now says: never enter a code
+you already hold after re-requesting; delete the answer file, write a new
+ask, wait for the new answer. Run stopped and re-fired on the fixed
+engine 08:52Z.
+
 Not here: a live ask that a step never announced (the poll loop did not
 run, e.g. a mocked executor) is treated as a normal pause with a card.
 Go successor parity for §7–§8 is owed.
