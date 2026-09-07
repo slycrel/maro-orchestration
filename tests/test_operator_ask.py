@@ -448,7 +448,9 @@ class TestSurfaces:
         assert msg.startswith("❓ maro has a question")
         assert "Q: " + ASK["question"] in msg
         assert "Tried without you: " + ASK["no_input_alternative"] in msg
-        assert 'Answer: maro answer abcd1234' in msg
+        assert "Answer in the Hermes DM" in msg
+        assert 'Or from the box: maro answer abcd1234' in msg
+        assert msg.index("Answer in the Hermes DM") < msg.index("Or from the box"), "where before how"
         exp = format_message({"event_type": "operator_question_expired", "goal": "g",
                               "question": "q", "answer_with": "maro answer x \"<a>\""})
         assert exp.startswith("⏳") and "marked late" in exp

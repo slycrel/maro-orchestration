@@ -201,9 +201,14 @@ def format_message(payload: dict) -> str:
         deadline = str(payload.get("deadline", "")).strip()
         if deadline:
             lines.append(f"Waiting until {deadline}")
+        # This card lands in the ops channel, which nobody listens in;
+        # Hermes routes replies from its DM only (2026-09-06: two replies
+        # here went nowhere). Say where to answer before saying how.
+        lines.append("Answer in the Hermes DM (reply to Poe's card there), "
+                     "not in this channel.")
         answer_with = str(payload.get("answer_with", "")).strip()
         if answer_with:
-            lines.append(f"Answer: {answer_with}")
+            lines.append(f"Or from the box: {answer_with}")
         return "\n".join(lines)
 
     if event == "operator_question_expired":
