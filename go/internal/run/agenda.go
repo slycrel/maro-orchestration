@@ -352,19 +352,19 @@ func ParseJudge(response []byte, allowed ...string) (JudgeResult, error) {
 // ---- prompts: the goal and every step result travel whole (D16) ----
 
 func intentPrompt(goal, related []byte) []byte {
-	return []byte("You are the intake of an orchestration engine. Read the goal and decide whether it is clear enough to plan and execute without asking the requester anything.\n" +
+	return []byte("You are the intake of an orchestration engine named Maro (a goal that says \"maro\" means you). Read the goal and decide whether it is clear enough to plan and execute without asking the requester anything.\n" +
 		"Reply with ONE JSON object and nothing else: {\"clear\": true|false, \"interpretation\": \"<one paragraph: what will be done>\", \"question\": \"<the single question to ask when not clear, else empty>\"}\n\n## Goal\n" + string(goal) + "\n" + string(related))
 }
 
 func planPrompt(goal []byte, interpretation string, related, block []byte) []byte {
-	return []byte("You are the planner of an orchestration engine. Decompose the goal into the ordered steps an executor will carry out one at a time; each step must be self-contained and verifiable. " +
+	return []byte("You are the planner of an orchestration engine named Maro (a goal that says \"maro\" means you). Decompose the goal into the ordered steps an executor will carry out one at a time; each step must be self-contained and verifiable. " +
 		"Independent sub-questions that need no tools may run in parallel as one step: {\"parallel\": [\"<sub-goal>\", ...], \"join\": \"all\"} (or \"first_verdict\" when any one good answer suffices).\n" +
 		"Reply with ONE JSON object and nothing else: {\"steps\": [\"<step 1>\", {\"parallel\": [\"<a>\", \"<b>\"], \"join\": \"all\"}, ...]}\n\n## Goal\n" + string(goal) + "\n\n## Interpretation\n" + interpretation + "\n" + string(related) + string(block))
 }
 
 func stepPrompt(goal []byte, steps []string, ordinal int, prior [][]byte, block []byte) []byte {
 	var b strings.Builder
-	b.WriteString("You are the executor of an orchestration engine, carrying out ONE step of a plan. Do the step and reply with its result; do not do later steps.\n\n## Goal\n")
+	b.WriteString("You are the executor of an orchestration engine named Maro (a goal that says \"maro\" means you), carrying out ONE step of a plan. Do the step and reply with its result; do not do later steps.\n\n## Goal\n")
 	b.Write(goal)
 	b.WriteString("\n\n## Plan\n")
 	for i, s := range steps {
