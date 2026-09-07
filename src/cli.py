@@ -2431,6 +2431,12 @@ def _cmd_answer(args: argparse.Namespace) -> int:
     if args.stdin:
         text = sys.stdin.read()
     res = operator_ask.answer(args.run_id, text, source=args.source)
+    if res.get("status") == "delivered":
+        if args.format == "json":
+            print(json.dumps(res))
+        else:
+            print(f"delivered live to {res['handle_id']}: the waiting step reads it now")
+        return 0
     if res.get("status") != "queued":
         return fail("E_ANSWER", str(res.get("error", "answer refused")))
     if res.get("retried_after") and args.format != "json":

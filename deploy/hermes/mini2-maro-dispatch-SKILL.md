@@ -238,6 +238,26 @@ happens. Asking is Maro's rare exception, not a step: if a run asks for a
 decision or permission it could have made itself, say so to Jeremy — every
 ask is a counted, reviewed event (`maro asks` on the box).
 
+## Live questions (added 2026-09-07)
+
+An `operator_question` event with `.live: true` is not a paused run: the
+worker is still running and polling for the answer for at most `.wait_s`
+seconds (a 2FA code it just had sent — `.sent` says how). Relay it the
+moment it lands, lead with the minutes left, and pass the reply back with
+the same verb:
+
+```
+ssh maro-dispatch "answer <handle_id> <the code or reply>"
+```
+
+The gate answers `{"status": "delivered"}` — the waiting step reads it;
+there is no resume job to watch. If the window closed before the reply,
+the same question is now a normal pause and the same verb resumes the run
+(`"status": "dispatched"`). Maro checks its own questions before sending
+them (links must resolve; a code request must say how delivery was
+triggered); when `.unverified` is present, say plainly what it could not
+verify.
+
 ## Decide an install request (added 2026-09-07)
 
 A containerized run that lacks a tool asks the ENGINE for it, not you: in

@@ -1452,6 +1452,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             _ap = _oa.ask_path(_scratch_for_drop)
             if _ap is not None:
                 child_env[_oa.ASK_ENV] = str(_ap)
+                child_env[_oa.ANSWER_ENV] = str(_oa.answer_path(_scratch_for_drop))
         except Exception as _ss_exc:
             log.warning("secrets store injection skipped: %s", _ss_exc)
             _store_env, _secret_env = {}, {}
@@ -1558,6 +1559,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             _worker_env[_ss_drop.DROP_ENV] = "/tmp/" + _ss_drop.DROP_NAME
             import operator_ask as _oa_env
             _worker_env[_oa_env.ASK_ENV] = _oa_env.CONTAINER_ASK_PATH
+            _worker_env[_oa_env.ANSWER_ENV] = _oa_env.CONTAINER_ANSWER_PATH
             import env_request as _er_env
             _worker_env[_er_env.REQUEST_ENV] = _er_env.CONTAINER_REQUEST_PATH
         # Per-project image layer (env_request): the project's current
@@ -1644,6 +1646,22 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     last_cpu = 0 if proc.poll() is not None else _session_cpu_ticks(proc.pid)
     kill_reason = None
     kill_exc = None            # probe-ordered kill carries its own exception
+    # Live operator ask (operator_ask.watch_live): a worker that wrote a
+    # live ask is waiting on the operator, not stalled — while the ask is
+    # pending the liveness clock is held and the wall clock is allowed to
+    # stretch to the ask's own window (+ grace), so a 10-minute wait fits
+    # inside a 600 s step. Scratch is the run's; outside a run there is none.
+    _live_scratch = None
+    _live_ctx: Dict[str, str] = {}
+    try:
+        from container_exec import run_scratch_dir as _live_rsd
+        _live_scratch = _live_rsd()
+        if _live_scratch is not None:
+            _rc = _current_run_context()
+            _live_ctx = {"handle_id": _rc.get("handle_id", ""), "goal": _rc.get("goal", "")}
+    except Exception:
+        _live_scratch = None
+    _live_extend = 0.0        # elapsed-seconds ceiling granted by a pending live ask
     try:
         while True:
             rc = proc.poll()
@@ -1698,7 +1716,18 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 except Exception as _probe_err:
                     log.debug("stream probe error (non-fatal): %s", _probe_err)
 
-            if timeout and elapsed >= timeout:
+            if _live_scratch is not None:
+                try:
+                    import operator_ask as _oa_live
+                    _live = _oa_live.watch_live(_live_scratch, **_live_ctx)
+                except Exception:
+                    _live = None
+                if _live:
+                    last_seen = now
+                    _live_extend = max(_live_extend,
+                                       elapsed + float(_live.get("remaining_s") or 0) + 120.0)
+
+            if timeout and elapsed >= max(float(timeout), _live_extend):
                 kill_reason = f"wall-clock timeout after {int(elapsed)}s"
                 break
             if liveness_timeout and (now - last_seen) >= liveness_timeout:

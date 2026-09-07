@@ -151,7 +151,62 @@ question channel.
   scratch dir; where the worker ran is the executor's business. The one
   container-aware line (the path string the worker sees through the
   `/tmp` bind) is executor plumbing, the same as the secrets drop file.
-- **First live firing owed:** the mail re-ask (BACKLOG mailbox arc), with
-  Jeremy's planner breakdown, is the first run expected to write the file
-  for real. The time-box sweep has no cron line yet; add one when a
-  question has actually expired.
+- **No unverified question reaches the operator unflagged** (§7): a link
+  that does not resolve or a code request with no delivery evidence goes
+  back to the worker first; what still fails rides the card as
+  `unverified`.
+- ~~First live firing owed~~ — run 084d3c1f, 2026-09-07, asked FIVE times
+  (IMAP refused → app password → install approval → 2FA code with a dead
+  link and no code sent → the same question again after Jeremy's "I never
+  received a code"). Questions 3–5 are what §7, §8 and the env-request
+  lane exist to prevent. The time-box sweep still has no cron line; add
+  one when a question has actually expired.
+
+## 7. Grounding — an ask is a claim (2026-09-07)
+
+084d3c1f's fourth question read *"Open https://account.yahoo.com/security
+and provide the 6-digit code from your phone."* The link 404'd (the
+worker guessed it) and no code had been sent: the script had landed on
+Yahoo's method-chooser page and closed the browser without choosing a
+method. Jeremy, from the user's side: *"I never received a code"* — and
+the resumed run asked the identical question again. His read: the
+verification step on a step's output should have caught this. Decision
+`c6a3bb47`.
+
+`operator_ask.ground(ask)` runs on the host before any card goes out:
+
+| probe | fails when | who gets it |
+|---|---|---|
+| links (`question`, `why`, `no_input_alternative`, `sent`; up to five) | HEAD/GET answers ≥ 400 or the host is unreachable (8 s) | the worker |
+| code request (`asks_for_code`: 2FA / OTP / 6-digit / verification code / passcode …) | no `sent` — the ask does not say how the worker triggered delivery and what confirmation it saw | the worker |
+| code request | not `live` — the code is consumed by the session that asked and a pause ends it (§8) | the worker |
+
+A failing ask is **bounced**: the step re-runs once (the loop_blocked
+retry idiom) with *"Your question to the operator was NOT sent — it
+failed a check: …"* at the top of its context, and the ask is archived
+beside the next one (same-second archives get a `-1` suffix; never
+overwritten). A second failure passes through with the problems on the
+record and on the card as `unverified` — the gate tells the operator what
+Maro could not verify about its own question; it never blocks them.
+Trace edge `step.ask → ask.bounced`. Test seam `_PROBE_URL`.
+
+The frame says both rules up front (`instructions`): links must resolve;
+a code request says in `sent` how YOU triggered delivery (choose the SMS
+or authenticator option first) and what you saw.
+
+## 8. Live asks — the worker waits, the engine announces mid-step
+
+The pause lane ends the step; a 2FA code is consumed by the session that
+requested it, so the browser has to outlive the question. `ask.live_wait_s`
+(600) is the window.
+
+| | |
+|---|---|
+| worker | writes the ask with `"live": true` and KEEPS RUNNING (browser open), polling `$MARO_ASK_ANSWER` (`<scratch>/ask-answer.json`, `/tmp/ask-answer.json` in the container) every few seconds, printing a line every 30 s; on `{"answer": …}` it enters the code; on `{"bounce": …}` it fixes the ask and writes it again; when the window closes it ends the step stating the gap |
+| engine, mid-step | `llm._run_subprocess_safe`'s poll loop calls `operator_ask.watch_live(scratch)` each tick: a live ask that fails §7 is bounced through the answer file at once; one that passes is recorded on the run (`live: true`, deadline = now + window, NOT a pause), traced `step.ask → ask.live`, announced with the usual card + Hermes leg marked LIVE (minutes left, `sent`), and remembered in a scratch marker so it is announced once. While it is pending the liveness clock is held and the wall clock may stretch to the window + 120 s, so a 10-minute wait fits inside a 600 s step |
+| operator | the same verb: `maro answer <handle> <code>` / gate `answer <handle> <code>` → the reply lands in the answer file, the record says `delivery: live`, the gate reports `delivered` (no resume job) |
+| engine, after the step | `close_live` consumes the marker and the answer file (both archived). Answered → the step's own outcome stands. Unanswered → the same question becomes a normal pause with a 24 h box, **no second card** (`pause_for_ask(record=…, notify=False)`); a late reply resumes the run as before |
+
+Not here: a live ask that a step never announced (the poll loop did not
+run, e.g. a mocked executor) is treated as a normal pause with a card.
+Go successor parity for §7–§8 is owed.

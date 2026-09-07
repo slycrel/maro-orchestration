@@ -42,6 +42,8 @@ import logging
 import os
 import re
 import shlex
+
+import context_budget as _cb
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -172,8 +174,8 @@ def read_request(path) -> Optional[Dict[str, Any]]:
     if not isinstance(d, dict):
         raise ValueError("env-request.json must be one JSON object")
     req: Dict[str, Any] = {
-        "need": str(d.get("need") or d.get("why") or "").strip()[:600],
-        "tried": str(d.get("tried") or d.get("no_install_alternative") or "").strip()[:600],
+        "need": _cb.clip(str(d.get("need") or d.get("why") or "").strip(), 600),
+        "tried": _cb.clip(str(d.get("tried") or d.get("no_install_alternative") or "").strip(), 600),
     }
     total = 0
     for src in SOURCES:
@@ -199,7 +201,8 @@ def archive_request(path) -> Optional[Path]:
     if not p.is_file():
         return None
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    target = p.with_name(f"env-request.{stamp}.requested.json")
+    from operator_ask import unique_archive as _ua
+    target = _ua(p.with_name(f"env-request.{stamp}.requested.json"))
     n = 0
     while target.exists():
         n += 1
@@ -490,7 +493,7 @@ def build_layer(project: str, verdict: Verdict, *, reason: str = "") -> BuildRes
             fh.write(json.dumps({
                 "at": _iso(datetime.now(timezone.utc)), "layer": layer, "image": tag,
                 "base": base, "added": added, "ok": ok, "seconds": secs,
-                "reason": reason[:300], "detail": "" if ok else _tail(out, 600),
+                "reason": _cb.clip(reason, 300), "detail": "" if ok else _tail(out, 600),
             }) + "\n")
     except OSError:
         pass
@@ -582,7 +585,7 @@ def handle(req: Dict[str, Any], *, project: Optional[str], container: bool,
     if v.escalate:
         return Outcome("escalate", decision_line(proj, v, req, handle_id or "<handle>"),
                        verdict=v, request=req)
-    br = build_layer(proj, v, reason=str(req.get("need") or "")[:300])
+    br = build_layer(proj, v, reason=_cb.clip(str(req.get("need") or ""), 300))
     rej = ("; also refused (malformed): " + ", ".join(f"{s}:{spec}" for s, spec, _ in v.rejected)
            if v.rejected else "")
     if br.ok:
@@ -651,7 +654,7 @@ def pause_for_request(outcome: Outcome, *, handle_id: str, goal: str, project: s
             "status": "paused",
             "point": ESCALATION_POINT,
             "decision": outcome.note,
-            "summary": f"install {', '.join(record['escalate'])} for {project}: {record['why'][:200]}",
+            "summary": f"install {', '.join(record['escalate'])} for {project}: {_cb.clip(record['why'], 200)}",
             "reason": "; ".join(record["escalate_why"]),
             "project": project,
             "request": record["request"],

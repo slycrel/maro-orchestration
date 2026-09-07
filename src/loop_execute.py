@@ -341,6 +341,7 @@ def _execute_main_loop(
     _error_fingerprints: Dict[str, List[str]] = {}  # Phase 62: error fingerprints per step text
     _step_tier_overrides: Dict[str, str] = {}  # step_text → escalated tier on retry
     _env_retries: Dict[str, int] = {}  # env_request: re-runs of a step after a build/refusal
+    _ask_bounces: Dict[str, int] = {}  # operator_ask grounding: re-runs of a step whose ask failed a probe
     # Phase 57: session-level lagging signal — if verify failures cluster, raise the global tier.
     # Tracks consecutive verify failures; at threshold, adapter baseline escalates.
     _session_verify_failures: int = 0
@@ -1418,18 +1419,67 @@ def _execute_main_loop(
                 from container_exec import run_scratch_dir as _oa_scratch
                 _ask_file = _oa.ask_path(_oa_scratch())
                 _ask = _oa.read_ask(_ask_file)
+                _live_done = _oa.close_live(_oa_scratch()) if _ask_file is not None else None
                 if _ask:
                     _oa.archive_ask(_ask_file)
                     from stop_verdicts import PAUSE_OP_CLARIFICATION as _POC
-                    _env_pause = _POC
-                    outcome = dict(outcome)
-                    outcome["status"] = "blocked"
-                    outcome["stuck_reason"] = (
-                        f"asked the operator: {_ask['question'][:200]}")
-                    outcome["operator_ask"] = _ask
-                    _oa.pause_for_ask(
-                        _ask, handle_id=ctx.handle_id, goal=goal,
-                        step=step_text, loop_id=ctx.loop_id)
+                    if _live_done and _live_done.get("answered"):
+                        # Asked live, answered live: the step consumed the
+                        # answer; its own outcome stands. Nothing to pause.
+                        log.info("live ask answered within the step (%s)",
+                                 _ask["question"][:80])
+                        outcome = dict(outcome)
+                        outcome["operator_ask"] = {**_ask, "answered_live": True}
+                    elif _live_done:
+                        # The live window closed with the step: the same
+                        # question becomes a pause (no second card).
+                        _env_pause = _POC
+                        outcome = dict(outcome)
+                        outcome["status"] = "blocked"
+                        outcome["stuck_reason"] = (
+                            f"asked the operator (live window closed): {_ask['question'][:200]}")
+                        outcome["operator_ask"] = _ask
+                        _oa.pause_for_ask(
+                            _ask, handle_id=ctx.handle_id, goal=goal,
+                            step=step_text, loop_id=ctx.loop_id,
+                            record=_live_done, notify=False)
+                    else:
+                        # Grounding (2026-09-07): probe the ask before the
+                        # operator sees it. A failing ask goes back to the
+                        # worker once (re-run idiom); after that it passes
+                        # through marked unverified — honest over blocking.
+                        _problems = _oa.ground(_ask)
+                        _ask_bounces[step_text] = _ask_bounces.get(step_text, 0) + (1 if _problems else 0)
+                        if _problems and _ask_bounces[step_text] <= _oa.MAX_BOUNCES_PER_STEP:
+                            _bounce_note = ("Your question to the operator was NOT sent — "
+                                            "it failed a check: " + " | ".join(_problems)
+                                            + ". Fix it and ask again, or proceed without.")
+                            log.warning("ask bounced step=%d: %s", step_idx, _bounce_note[:200])
+                            if verbose:
+                                print(f"[maro] step {step_idx}: ask bounced — {_problems[0][:100]}",
+                                      file=sys.stderr, flush=True)
+                            try:
+                                from run_trace import record_edge as _ask_edge
+                                _ask_edge("step.ask", "ask.bounced", loop_id=ctx.loop_id,
+                                          step_idx=step_idx, problems=len(_problems))
+                            except Exception:
+                                pass
+                            _pending_context.extend(list(_delivered_contributions))
+                            _pending_context.append("operator_ask", "context", _bounce_note)
+                            remaining_steps.insert(0, step_text)
+                            remaining_indices.insert(0, item_index)
+                            step_idx -= 1
+                            continue
+                        _env_pause = _POC
+                        outcome = dict(outcome)
+                        outcome["status"] = "blocked"
+                        outcome["stuck_reason"] = (
+                            f"asked the operator: {_ask['question'][:200]}")
+                        outcome["operator_ask"] = _ask
+                        _oa.pause_for_ask(
+                            _ask, handle_id=ctx.handle_id, goal=goal,
+                            step=step_text, loop_id=ctx.loop_id,
+                            unverified=_problems)
             except Exception as _ask_exc:
                 log.warning("operator-ask check failed: %s", _ask_exc)
         if _env_pause:

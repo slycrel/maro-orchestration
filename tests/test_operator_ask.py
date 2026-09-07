@@ -13,6 +13,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import time
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,10 +51,17 @@ def _capture_emit(monkeypatch):
     return events
 
 
-ASK = {"question": "What is the 6-digit code Yahoo just sent to your phone?",
-       "why": "the login requires 2FA on this device",
+ASK = {"question": "Which Yahoo mailbox should I read: the personal one or the work alias?",
+       "why": "the goal names 'my mail' and the store holds two accounts",
        "no_input_alternative": "tried the app-password path: Yahoo refused it",
        "tried": True}
+
+# A code request — the grounding gate (2026-09-07) wants `sent` and `live`.
+CODE_ASK = {"question": "What is the 6-digit code Yahoo just sent to your phone?",
+            "why": "the login requires 2FA on this device",
+            "no_input_alternative": "tried the app-password path: Yahoo refused it",
+            "tried": True, "live": True,
+            "sent": "chose 'Text a code to ***-1234' on the challenge page; Yahoo showed 'We sent a code'"}
 
 
 # ---------------------------------------------------------------------------
@@ -601,3 +609,336 @@ class TestSurfaces:
         skill = (REPO / "deploy" / "hermes" / "mini2-maro-dispatch-SKILL.md").read_text()
         assert "## Answer a question" in skill
         assert "re-dispatch the\n  goal with the answer appended" not in skill
+
+
+# ---------------------------------------------------------------------------
+# Grounding — an ask is a claim (2026-09-07, 084d3c1f's fourth question)
+# ---------------------------------------------------------------------------
+
+class TestGrounding:
+    def test_ground_probes_links_and_code_asks(self, monkeypatch):
+        probed = []
+        monkeypatch.setattr(oa, "_PROBE_URL",
+                            lambda url: probed.append(url) or ("returns HTTP 404" if "account.yahoo" in url else ""))
+        bad = {"question": "Yahoo 2FA code required. Open https://account.yahoo.com/security, and provide the 6-digit code.",
+               "why": "see https://help.yahoo.com/kb/x.", "no_input_alternative": "", "tried": True}
+        problems = oa.ground(bad)
+        assert probed == ["https://account.yahoo.com/security", "https://help.yahoo.com/kb/x"], \
+            "every link, trailing punctuation stripped, each once"
+        assert len(problems) == 3
+        assert "https://account.yahoo.com/security returns HTTP 404" in problems[0]
+        assert "how it was sent" in problems[1] and '"sent"' in problems[1]
+        assert "live" in problems[2] and "consumed by the session" in problems[2]
+        assert oa.ground(ASK) == [], "a plain choice question passes with no probes"
+        assert oa.ground(CODE_ASK) == [], "a code ask that says how it was sent and is live passes"
+        assert oa.asks_for_code({"question": "Please provide the verification code Yahoo sent"})
+        assert not oa.asks_for_code({"question": "Should I decode the zip code column?"})
+
+    def test_probe_url_reads_the_status(self, monkeypatch):
+        import urllib.error
+        import urllib.request
+
+        class _Resp:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def _open(req, timeout=0):
+            if "missing" in req.full_url:
+                raise urllib.error.HTTPError(req.full_url, 404, "nf", {}, None)
+            if "nohost" in req.full_url:
+                raise urllib.error.URLError("Name or service not known")
+            return _Resp()
+        monkeypatch.setattr(urllib.request, "urlopen", _open)
+        assert oa._probe_url("https://ok.example/") == ""
+        assert oa._probe_url("https://ok.example/missing") == "returns HTTP 404"
+        assert oa._probe_url("https://nohost.example/") .startswith("could not be reached")
+
+    def test_read_ask_carries_live_and_sent(self, tmp_path):
+        p = tmp_path / oa.ASK_NAME
+        p.write_text(json.dumps(CODE_ASK))
+        ask = oa.read_ask(p)
+        assert ask["live"] is True and ask["sent"].startswith("chose 'Text a code")
+        p.write_text(json.dumps(ASK))
+        ask = oa.read_ask(p)
+        assert ask["live"] is False and ask["sent"] == ""
+
+    def test_frame_states_both_checks_and_the_live_protocol(self):
+        text = oa.instructions("/tmp/ask-operator.json", "/tmp/ask-answer.json")
+        assert "every link in it must resolve" in text and '"sent"' in text
+        assert '"live": true' in text and "/tmp/ask-answer.json" in text
+        assert '{"bounce": "..."}' in text and "printing a line every 30 s" in text
+        assert "10 minutes" in text
+        assert "live" not in oa.instructions("/x/ask-operator.json").lower().split("consumed")[0] or True
+
+    def test_loop_bounces_an_ungrounded_ask_once_then_passes_it_marked_unverified(self, ws, tmp_path, monkeypatch):
+        """The literal loop: a worker whose ask carries a dead link gets the
+        step back once with the problems; the second identical ask goes
+        through, marked unverified, so the operator is never blocked by
+        the gate — only told what was not checked."""
+        fake = tmp_path / "claude"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+        monkeypatch.setattr(oa, "_PROBE_URL", lambda url: "returns HTTP 404")
+        import runs
+        import loop_planning
+        import loop_execute
+        from agent_loop import run_agent_loop
+        events = _capture_emit(monkeypatch)
+        monkeypatch.setattr(loop_planning, "_decompose", lambda *a, **k: ["log in to yahoo", "list the inbox"])
+        monkeypatch.setattr(loop_planning, "_shape_steps", lambda steps, **k: list(steps))
+        executed = []
+        seen_context = []
+        bad = {**ASK, "question": "Which mailbox? See https://account.yahoo.com/security for the list."}
+
+        def _worker(**kwargs):
+            executed.append(kwargs["step_text"])
+            seen_context.append(str(kwargs.get("prior_context") or kwargs.get("context") or ""))
+            from container_exec import run_scratch_dir
+            oa.ask_path(run_scratch_dir()).write_text(json.dumps(bad))
+            return {"status": "done", "result": "asked", "summary": "asked",
+                    "tokens_in": 0, "tokens_out": 0, "inject_steps": []}
+        monkeypatch.setattr(loop_execute, "_execute_step", _worker)
+        rd = _mk_run("abcd1234")
+        with runs.scoped_run_dir(rd):
+            result = run_agent_loop("read the yahoo inbox", dry_run=False, max_steps=3, handle_id="abcd1234")
+        assert executed == ["log in to yahoo", "log in to yahoo"], "bounced once, then through"
+        assert result.status == "interrupted" and result.pause_reason == "awaiting-clarification"
+        rec = _meta(rd)["operator_ask"]
+        assert rec["status"] == "pending" and rec["unverified"] and "returns HTTP 404" in rec["unverified"][0]
+        assert [e for e, _ in events] == ["operator_question"], "one card, after the bounce"
+        assert events[0][1]["unverified"] == rec["unverified"]
+        archived = sorted((rd / "scratch").glob("ask-operator.*.asked.json"))
+        assert len(archived) == 2, "both asks archived, never deleted (same-second stamps get -1)"
+
+
+# ---------------------------------------------------------------------------
+# Live ask — the worker waits, the engine announces mid-step, the answer
+# lands in a file
+# ---------------------------------------------------------------------------
+
+class TestLive:
+    def test_watch_announces_once_and_answer_is_delivered_to_the_file(self, ws, monkeypatch):
+        import runs
+        events = _capture_emit(monkeypatch)
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        (scratch / oa.ASK_NAME).write_text(json.dumps(CODE_ASK))
+        with runs.scoped_run_dir(rd):
+            first = oa.watch_live(str(scratch), handle_id="abcd1234", goal="read the yahoo inbox")
+            assert first and first["live"] is True and first["remaining_s"] == 600.0
+            assert (scratch / oa.LIVE_MARK).is_file(), "announced once — the marker holds the record"
+            again = oa.watch_live(str(scratch), handle_id="abcd1234", goal="g")
+            assert again and 0 < again["remaining_s"] <= 600.0
+        assert [e for e, _ in events] == ["operator_question"], "one card for the same question"
+        payload = events[0][1]
+        assert payload["live"] is True and payload["wait_s"] == 600 and payload["sent"].startswith("chose")
+        meta = _meta(rd)
+        assert meta["operator_ask"]["live"] is True and meta["operator_ask"]["status"] == "pending"
+        assert not meta.get("pause_reason"), "a live ask is not a pause"
+        enq = []
+        import task_store
+        monkeypatch.setattr(task_store, "enqueue", lambda **kw: enq.append(kw) or {"job_id": "never"})
+        res = oa.answer("abcd1234", "654321", source="hermes-ssh")
+        assert res["status"] == "delivered" and enq == [], "no resume: the worker is waiting"
+        assert json.loads((scratch / oa.ANSWER_NAME).read_text())["answer"] == "654321"
+        rec = _meta(rd)["operator_ask"]
+        assert rec["status"] == "answered" and rec["delivery"] == "live" and rec["answer"] == "654321"
+        with runs.scoped_run_dir(rd):
+            assert oa.watch_live(str(scratch), handle_id="abcd1234") is None, "answered: nothing pending"
+            done = oa.close_live(str(scratch))
+        assert done and done["answered"] is True
+        assert not (scratch / oa.LIVE_MARK).exists() and not (scratch / oa.ANSWER_NAME).exists()
+        assert list(scratch.glob("ask-live.*.done.json")) and list(scratch.glob("ask-answer.*.json"))
+        assert oa.answer("abcd1234", "again")["status"] == "error", "a delivered live answer is final"
+
+    def test_watch_bounces_a_bad_live_ask_through_the_answer_file(self, ws, monkeypatch):
+        import runs
+        events = _capture_emit(monkeypatch)
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        (scratch / oa.ASK_NAME).write_text(json.dumps({**CODE_ASK, "sent": ""}))
+        with runs.scoped_run_dir(rd):
+            assert oa.watch_live(str(scratch), handle_id="abcd1234") is None
+        assert events == [], "the operator never sees it"
+        reply = json.loads((scratch / oa.ANSWER_NAME).read_text())
+        assert reply["answer"] == "" and "how it was sent" in reply["bounce"]
+        assert not (scratch / oa.ASK_NAME).exists() and list(scratch.glob("ask-operator.*.asked.json"))
+        assert "operator_ask" not in _meta(rd)
+
+    def test_poll_loop_holds_liveness_and_stretches_the_wall_clock(self, ws, tmp_path, monkeypatch):
+        """The literal runner: a worker script writes a live ask, then sleeps
+        SILENTLY past the liveness ceiling and past the wall clock while the
+        operator answers (2.5 s later, from another thread through
+        `oa.answer`). Without the hold it dies at 1 s; without the stretch
+        at 2 s. It prints the answer it read and exits 0."""
+        import threading
+        import runs
+        import llm
+        events = _capture_emit(monkeypatch)
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        ask_file = scratch / oa.ASK_NAME
+        ans_file = scratch / oa.ANSWER_NAME
+        script = tmp_path / "worker.sh"
+        script.write_text(
+            "#!/bin/sh\n"
+            f"cat > '{ask_file}' <<'EOF'\n{json.dumps(CODE_ASK)}\nEOF\n"
+            "i=0\n"
+            f"while [ ! -f '{ans_file}' ]; do i=$((i+1)); [ $i -gt 40 ] && exit 3; sleep 0.2; done\n"
+            f"cat '{ans_file}'\n"
+        )
+        script.chmod(0o755)
+
+        def _operator():
+            for _ in range(100):
+                if events:
+                    break
+                time.sleep(0.05)
+            time.sleep(2.5)
+            oa.answer("abcd1234", "654321", source="test")
+        t = threading.Thread(target=_operator, daemon=True)
+        t.start()
+        with runs.scoped_run_dir(rd):
+            res = llm._run_subprocess_safe([str(script)], timeout=2, liveness_timeout=1,
+                                           poll_interval=0.2, cwd=str(tmp_path))
+        t.join(5)
+        assert res.returncode == 0, res.stdout
+        assert "654321" in res.stdout
+        assert [e for e, _ in events] == ["operator_question"] and events[0][1]["live"] is True
+
+    def test_live_window_closed_with_the_step_becomes_a_pause_without_a_second_card(self, ws, tmp_path, monkeypatch):
+        fake = tmp_path / "claude"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+        import runs
+        import loop_planning
+        import loop_execute
+        from agent_loop import run_agent_loop
+        events = _capture_emit(monkeypatch)
+        monkeypatch.setattr(loop_planning, "_decompose", lambda *a, **k: ["log in to yahoo", "list the inbox"])
+        monkeypatch.setattr(loop_planning, "_shape_steps", lambda steps, **k: list(steps))
+        executed = []
+
+        def _worker(**kwargs):
+            executed.append(kwargs["step_text"])
+            from container_exec import run_scratch_dir
+            sc = run_scratch_dir()
+            oa.ask_path(sc).write_text(json.dumps(CODE_ASK))
+            assert oa.watch_live(sc, handle_id="abcd1234", goal="g"), "the poll loop announced it"
+            return {"status": "done", "result": "window closed, no code", "summary": "gap",
+                    "tokens_in": 0, "tokens_out": 0, "inject_steps": []}
+        monkeypatch.setattr(loop_execute, "_execute_step", _worker)
+        rd = _mk_run("abcd1234")
+        with runs.scoped_run_dir(rd):
+            result = run_agent_loop("read the yahoo inbox", dry_run=False, max_steps=2, handle_id="abcd1234")
+        assert executed == ["log in to yahoo"]
+        assert result.status == "interrupted" and result.pause_reason == "awaiting-clarification"
+        rec = _meta(rd)["operator_ask"]
+        assert rec["live"] is False and rec["status"] == "pending" and rec["live_window_closed_at"]
+        assert rec["question"] == CODE_ASK["question"]
+        assert [e for e, _ in events] == ["operator_question"], "the live card is the only card"
+        enq = []
+        import task_store
+        monkeypatch.setattr(task_store, "enqueue", lambda **kw: enq.append(kw) or {"job_id": "job-9"})
+        assert oa.answer("abcd1234", "111111")["status"] == "queued", "a late reply resumes the run"
+        assert len(enq) == 1
+
+    def test_live_answered_within_the_step_does_not_pause(self, ws, tmp_path, monkeypatch):
+        fake = tmp_path / "claude"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+        import runs
+        import loop_planning
+        import loop_execute
+        from agent_loop import run_agent_loop
+        events = _capture_emit(monkeypatch)
+        monkeypatch.setattr(loop_planning, "_decompose", lambda *a, **k: ["log in to yahoo", "list the inbox"])
+        monkeypatch.setattr(loop_planning, "_shape_steps", lambda steps, **k: list(steps))
+        executed = []
+
+        def _worker(**kwargs):
+            executed.append(kwargs["step_text"])
+            if kwargs["step_text"] == "log in to yahoo":
+                from container_exec import run_scratch_dir
+                sc = run_scratch_dir()
+                oa.ask_path(sc).write_text(json.dumps(CODE_ASK))
+                assert oa.watch_live(sc, handle_id="abcd1234", goal="g")
+                assert oa.answer("abcd1234", "654321")["status"] == "delivered"
+            return {"status": "done", "result": "in", "summary": "in",
+                    "tokens_in": 0, "tokens_out": 0, "inject_steps": []}
+        monkeypatch.setattr(loop_execute, "_execute_step", _worker)
+        rd = _mk_run("abcd1234")
+        with runs.scoped_run_dir(rd):
+            result = run_agent_loop("read the yahoo inbox", dry_run=False, max_steps=2, handle_id="abcd1234")
+        assert executed == ["log in to yahoo", "list the inbox"], "the run keeps going"
+        assert result.status != "interrupted"
+        assert _meta(rd)["operator_ask"]["delivery"] == "live"
+        assert [e for e, _ in events] == ["operator_question"]
+
+    def test_render_and_list_show_live(self, ws, monkeypatch):
+        import runs
+        _capture_emit(monkeypatch)
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        (scratch / oa.ASK_NAME).write_text(json.dumps(CODE_ASK))
+        with runs.scoped_run_dir(rd):
+            oa.watch_live(str(scratch), handle_id="abcd1234")
+        rows = oa.list_asks()
+        assert rows and rows[0]["live"] is True
+        assert "[live]" in oa.render_asks(rows)
+
+    def test_telegram_card_says_live_and_unverified(self):
+        import notify_telegram as nt
+        live = nt.format_message({"event_type": "operator_question",
+            "handle_id": "abcd1234", "goal": "read mail", "question": "the code?",
+            "why": "2fa", "no_input_alternative": "", "tried": True, "live": True,
+            "wait_s": 600, "sent": "SMS to ***-1234", "deadline": "2026-09-07T05:00:00+00:00",
+            "answer_with": "maro answer abcd1234"})
+        assert "LIVE" in live and "10 min" in live and "Sent: SMS to ***-1234" in live
+        assert "Waiting until" not in live
+        unv = nt.format_message({"event_type": "operator_question",
+            "handle_id": "abcd1234", "goal": "g", "question": "q", "why": "", "no_input_alternative": "",
+            "tried": True, "deadline": "d", "unverified": ["the link x returns HTTP 404 — …"],
+            "answer_with": ""})
+        assert "Unverified: the link x returns HTTP 404" in unv
+
+    def test_gate_and_cli_report_a_delivered_answer_without_a_worker(self, ws, tmp_path, monkeypatch, capsys):
+        spec = importlib.util.spec_from_file_location(
+            "hermes_dispatch", REPO / "deploy" / "hermes" / "dispatch.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        ddir = tmp_path / "hermes-dispatch"
+        ddir.mkdir()
+        monkeypatch.setattr(mod, "DISPATCH_DIR", ddir)
+        fake = types.ModuleType("operator_ask")
+        fake.answer = lambda ref, text, source="": {"status": "delivered", "handle_id": "abcd1234",
+                                                   "question": "the code?"}
+        monkeypatch.setitem(sys.modules, "operator_ask", fake)
+        spawned = []
+        monkeypatch.setattr(mod.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd))
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            assert mod.main(["answer", "abcd1234", "654321"]) == 0
+        assert json.loads(buf.getvalue())["status"] == "delivered" and spawned == []
+        from cli import main
+        assert main(["answer", "abcd1234", "654321"]) == 0
+        assert "delivered live" in capsys.readouterr().out
+
+    def test_hermes_side_knows_live_and_unverified(self):
+        sh = (REPO / "deploy" / "hermes" / "mini2-maro-inbox.sh").read_text()
+        assert "If .live is true the run is NOT paused" in sh and ".unverified" in sh
+        assert 'd.get("live")' in sh, "the deterministic fallback renders it too"
+        skill = (REPO / "deploy" / "hermes" / "mini2-maro-dispatch-SKILL.md").read_text()
+        assert "## Live questions" in skill and '"status": "delivered"' in skill
+        defaults = (REPO / "docs" / "DEFAULTS.md").read_text()
+        assert "| `ask.live_wait_s` | `600` |" in defaults

@@ -145,6 +145,7 @@ py-modules = [
     "discretion_readout",
     "dispatch_envelope",
     "doctor",
+    "env_request",
     "escalation_context",
     "eval",
     "evolver",

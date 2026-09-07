@@ -10,6 +10,12 @@ Rotation policy (2026-08-16): when this file outgrows whole-file readability (25
 
 ---
 
+### SHIPPED 2026-09-07 — Live (in-step) ask for time-boxed inputs — a 2FA code dies with the step that asked for it (FOUND 2026-09-07, mail arc design)
+
+The ask lane ends the step, the container dies, and the resume takes minutes (post-pause tail + admission + pre-flight). A 2FA code is consumed by the session that requested it, so a browser login cannot survive the pause: the resumed run gets a fresh challenge and a fresh code. Needed: a time-boxed in-step variant — the worker writes the ask, keeps its process alive and polls for an answer file in scratch; the engine watches the ask file mid-step, fires the same card + Hermes leg, and drops the operator's reply into scratch when it arrives (`maro answer` writes the file instead of enqueueing a resume when the asking step is still live). Jeremy 2026-09-07: not willing to tie his SMS number to the mini, willing to relay a code by hand — so the loop has to close inside the code's lifetime (~10 min). Design owed; the mail goal cannot finish without it (`docs/ENV_REQUEST_DESIGN.md` §8). **Live evidence 2026-09-07 04:18Z:** run 084d3c1f, on its self-built browser image, drove a real Playwright login and landed on Yahoo's challenge-selector page, then wrote the ask ("Yahoo 2FA code required") through the pause lane — the question is pending and any code relayed into it arrives at a dead session. This is now the only piece between the mail goal and delivery.
+
+**Shipped 2026-09-07** with the ask-grounding gate (`docs/OPERATOR_ASK_DESIGN.md` §7–§8; decision c6a3bb47). Trigger: 084d3c1f's fourth question carried a dead link and no code had been sent; after Jeremy's "I never received a code" the run asked the identical question again.
+
 **Telegram answer loop — the operator-question lane, SHIPPED both engines 2026-09-06.**
 Decree `1d1ad8b0` (Jeremy): build it out, and keep it "the rare exception,
 not the norm". Design: `docs/OPERATOR_ASK_DESIGN.md`. Python:

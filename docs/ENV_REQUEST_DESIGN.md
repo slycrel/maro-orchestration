@@ -204,12 +204,11 @@ lists these as `[install]`.
   on the host". With this lane the honest line is "not in this image —
   request it", which makes the request the deliberate move instead of a
   guess.
-- **Live (in-step) ask for time-boxed inputs.** A 2FA code is consumed by
-  the session that requested it, so the browser must stay alive while the
-  operator answers. The pause lane ends the step; a time-boxed in-step
-  variant (worker writes the ask, polls for an answer file, the engine
-  feeds the reply into scratch) is the piece the mail goal cannot skip.
-  Not built; design owed.
+- ~~**Live (in-step) ask for time-boxed inputs.**~~ BUILT 2026-09-07:
+  `docs/OPERATOR_ASK_DESIGN.md` §8 (worker keeps running and polls
+  `$MARO_ASK_ANSWER`; the engine announces mid-step; the answer lands in a
+  file) plus §7 grounding (a code request must say how delivery was
+  triggered, and must be live).
 - ~~**First live firing**~~ — DONE 2026-09-07 03:59–04:22Z on run
   084d3c1f (job task-20260907T035946Z-e44ba9ac), from the recorded answer
   "install what you need". Observed sequence: request 1 named the wrong

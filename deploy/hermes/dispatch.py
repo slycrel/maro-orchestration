@@ -264,6 +264,11 @@ def cmd_answer(ref: str, text: str) -> int:
     rec = _read_rec(ref)
     handle_id = (rec or {}).get("handle_id") or ref
     res = operator_ask.answer(handle_id, text, source="hermes-ssh")
+    if res.get("status") == "delivered":
+        # Live ask: the worker is waiting on the answer file inside its
+        # running step — nothing to resume, no worker to spawn.
+        return _emit({"status": "delivered", "handle_id": res["handle_id"],
+                      "question": res.get("question", "")})
     if res.get("status") != "queued":
         return _emit({"status": "error", "ref": ref,
                       "error": res.get("error", "answer refused")}) or 2

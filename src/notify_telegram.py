@@ -204,8 +204,18 @@ def format_message(payload: dict) -> str:
         if alt:
             lines.append("Tried without you: " + _tg_clip(alt, 300))
         deadline = str(payload.get("deadline", "")).strip()
-        if deadline:
+        if payload.get("live"):
+            mins = max(1, int(float(payload.get("wait_s") or 600) // 60))
+            lines.append(f"\u23f1 LIVE: the worker is waiting right now — answer within "
+                         f"{mins} min or it moves on")  # ⏱
+        elif deadline:
             lines.append(f"Waiting until {deadline}")
+        sent = str(payload.get("sent", "")).strip()
+        if sent:
+            lines.append("Sent: " + _tg_clip(sent, 200))
+        unverified = payload.get("unverified") or []
+        if unverified:
+            lines.append("\u26a0 Unverified: " + _tg_clip("; ".join(str(u) for u in unverified), 300))  # ⚠
         # This card lands in the ops channel, which nobody listens in;
         # Hermes routes replies from its DM only (2026-09-06: two replies
         # here went nowhere). Say where to answer before saying how.

@@ -360,7 +360,8 @@ def _ask_block(*, container: bool) -> str:
         if not scratch:
             return ""
         path = _oa.CONTAINER_ASK_PATH if container else str(_oa.ask_path(scratch))
-        return _oa.instructions(path)
+        answer = _oa.CONTAINER_ANSWER_PATH if container else str(_oa.answer_path(scratch))
+        return _oa.instructions(path, answer)
     except Exception as exc:
         log.warning("operator-ask block skipped: %s", exc)
         return ""
