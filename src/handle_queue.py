@@ -396,8 +396,14 @@ def handle_task(
             # the filesystem check keeps it honest (1bfd0894: "finish and
             # correct the tire..." minted a fresh slug while the prior brief
             # lived in another project, so finish silently became start-over).
-            if (_nav_decision is not None
-                    and getattr(_nav_decision, "move", "") == "execute"):
+            # Binds on ANY move that carries a pick (2026-09-07, run
+            # 38cfec83: the navigator chose "extend" — plan first — and
+            # named the prior project only in prose; the execute-only
+            # check here dropped the pick and the follow-up landed in a
+            # fresh project whose container could not see the logged-in
+            # browser profile the goal depended on). Which move the
+            # navigator makes is orthogonal to where the work lives.
+            if _nav_decision is not None:
                 try:
                     _cand = str((getattr(_nav_decision, "payload", {}) or {})
                                 .get("project") or "").strip()

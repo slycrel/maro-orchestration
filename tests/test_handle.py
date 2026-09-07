@@ -756,7 +756,7 @@ class TestNavigatorProjectContinuation:
     one in its execute payload; the pick binds only when it names an
     existing project dir."""
 
-    def _run(self, monkeypatch, tmp_path, payload):
+    def _run(self, monkeypatch, tmp_path, payload, move="execute"):
         _setup(monkeypatch, tmp_path)
         import handle as handle_mod
         from types import SimpleNamespace
@@ -776,7 +776,7 @@ class TestNavigatorProjectContinuation:
         monkeypatch.setattr(
             "navigator_shadow.shadow_dispatch_live",
             lambda *a, **kw: SimpleNamespace(
-                move="execute", confidence=0.92,
+                move=move, confidence=0.92,
                 reasoning="continues prior work", payload=payload))
         monkeypatch.setattr(handle_mod, "_navigator_act_dispatch",
                             lambda *a, **kw: None)
@@ -789,6 +789,18 @@ class TestNavigatorProjectContinuation:
         (tmp_path / "projects" / "prior-tire-research").mkdir(parents=True)
         cap = self._run(monkeypatch, tmp_path,
                         {"instruction": "go", "project": "prior-tire-research"})
+        assert cap["project"] == "prior-tire-research"
+        assert cap["origin"]["dispatch_navigator"]["project"] == "prior-tire-research"
+
+    def test_extend_move_binds_too(self, monkeypatch, tmp_path):
+        """2026-09-07 (run 38cfec83): an "extend" (plan-first) move that
+        names the prior project must land there as well — the execute-only
+        check dropped the pick and the follow-up started over in a fresh
+        project."""
+        (tmp_path / "projects" / "prior-tire-research").mkdir(parents=True)
+        cap = self._run(monkeypatch, tmp_path,
+                        {"instruction": "plan", "expected_artifact": "PLAN.md",
+                         "project": "prior-tire-research"}, move="extend")
         assert cap["project"] == "prior-tire-research"
         assert cap["origin"]["dispatch_navigator"]["project"] == "prior-tire-research"
 
