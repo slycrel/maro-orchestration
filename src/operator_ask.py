@@ -275,6 +275,31 @@ def _continuation_reason(goal: str, question: str, text: str) -> str:
     )
 
 
+_RESUME_FAILED = ("refused_busy", "error", "failed")
+
+
+def _last_resume_failed(handle_id: str) -> Optional[str]:
+    """A failure status when EVERY recorded resume of this run ended
+    without running the loop (refused_busy / error / failed) and none is
+    still queued — else None. An answer whose resume was refused is an
+    answer that never arrived; the next `answer` (same text or new) must
+    be allowed to re-drive it. A resume that ran, or one still pending,
+    closes the door."""
+    try:
+        from task_store import list_tasks
+        tasks = [t for t in list_tasks()
+                 if str(t.get("source") or "") == "loop_continuation"
+                 and str((t.get("origin") or {}).get("parent_handle_id") or "") == handle_id]
+    except Exception:
+        return None
+    if not tasks:
+        return None
+    statuses = [str(t.get("result_status") or t.get("status") or "") for t in tasks]
+    if all(st in _RESUME_FAILED for st in statuses):
+        return statuses[-1]
+    return None
+
+
 def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
     """Stamp the answer on the run and enqueue its resume.
 
@@ -282,10 +307,12 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
     "queued" or "error" (with "error" text). The task is a
     `loop_continuation` whose origin names the run as parent — the queue's
     strict-affirmative resume test routes it as the same run.
+
+    An already-answered run is refused UNLESS its last resume never ran
+    (refused_busy / error): then this answer re-drives it — with the new
+    text, or with the recorded answer when `text` is empty.
     """
     text = (text or "").strip()
-    if not text:
-        return {"status": "error", "error": "empty answer"}
     rd = _run_dir(ref)
     if rd is None:
         return {"status": "error", "error": f"no run found for {ref!r}"}
@@ -303,9 +330,17 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
     if not rec:
         return {"status": "error",
                 "error": f"run {handle_id} has no operator question to answer"}
+    retried = None
     if rec.get("status") == STATUS_ANSWERED:
-        return {"status": "error",
-                "error": f"run {handle_id} was already answered at {rec.get('answered_at')}"}
+        retried = _last_resume_failed(handle_id)
+        if not retried:
+            return {"status": "error",
+                    "error": f"run {handle_id} was already answered at {rec.get('answered_at')}"}
+        if not text:
+            text = str(rec.get("answer") or "").strip()
+        log.info("answer: re-driving %s — the previous resume ended %s", handle_id, retried)
+    if not text:
+        return {"status": "error", "error": "empty answer"}
     if meta.get("goal_verdict_source"):
         return {"status": "error",
                 "error": f"run {handle_id} already reached a verdict; dispatch a new goal instead"}
@@ -352,9 +387,12 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
                     handle_id=handle_id, source=source, late=late)
     except Exception:
         pass
-    return {"status": "queued", "handle_id": handle_id,
-            "job_id": str(task.get("job_id") or ""), "late": late,
-            "question": question}
+    out = {"status": "queued", "handle_id": handle_id,
+           "job_id": str(task.get("job_id") or ""), "late": late,
+           "question": question}
+    if retried:
+        out["retried_after"] = retried
+    return out
 
 
 def drain(job_id: str) -> Any:

@@ -153,6 +153,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="the answer (or --stdin)")
     p_answer.add_argument("--stdin", action="store_true",
                           help="read the answer from stdin")
+    p_answer.add_argument("--retry", action="store_true",
+                          help="re-drive an answered run whose resume never ran "
+                               "(refused_busy); reuses the recorded answer when no text is given")
     p_answer.add_argument("--detach", action="store_true",
                           help="queue the resume and return; the next queue drain runs it")
     p_answer.add_argument("--source", default="cli",

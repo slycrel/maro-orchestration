@@ -370,6 +370,7 @@ class TestAnswer:
             seen["handle_id"] = kwargs.get("handle_id")
             seen["ctx"] = kwargs.get("ancestry_context_extra") or ""
             seen["goal"] = goal
+            seen["wait"] = kwargs.get("admission_wait_s")
             return _R()
         with patch("agent_loop.run_agent_loop", side_effect=_fake_loop):
             handle_task(task, dry_run=True)
@@ -377,6 +378,35 @@ class TestAnswer:
         assert seen["goal"] == "read the yahoo inbox"
         assert "The operator answered: 123456" in seen["ctx"]
         assert "do not ask it again" in seen["ctx"]
+        # the answer WAITS for the asking worker's post-pause tail to
+        # release the project slot (run 084d3c1f, 2026-09-07: refused_busy
+        # at +2 s, the worker ended at +3.5 min, the answer went nowhere)
+        assert seen["wait"] == 900.0
+
+    def test_answer_re_drives_a_resume_that_was_refused_busy(self, ws, monkeypatch):
+        """An answered run whose resume ended refused_busy is answerable
+        again (recorded text reused when none is given); one whose resume
+        ran is not."""
+        import task_store
+        rd = self._paused(ws, monkeypatch)
+        first = oa.answer("abcd1234", "123456")
+        assert first["status"] == "queued"
+        again = oa.answer("abcd1234", "654321")
+        assert again["status"] == "error" and "already answered" in again["error"]
+        # the queued resume ran into the slot and was refused
+        task_store.claim(first["job_id"])
+        task_store.complete(first["job_id"], result_status="refused_busy")
+        redo = oa.answer("abcd1234", "")
+        assert redo["status"] == "queued" and redo["retried_after"] == "refused_busy"
+        assert _meta(rd)["operator_ask"]["answer"] == "123456", "no text → the recorded answer"
+        assert oa.answer("abcd1234", "654321")["status"] == "error", "the retry's resume is still queued → no double drive"
+        task_store.claim(redo["job_id"])
+        task_store.complete(redo["job_id"], result_status="refused_busy")
+        redo2 = oa.answer("abcd1234", "654321", source="telegram")
+        assert redo2["status"] == "queued" and _meta(rd)["operator_ask"]["answer"] == "654321"
+        task_store.claim(redo2["job_id"])
+        task_store.complete(redo2["job_id"], result_status="done")
+        assert oa.answer("abcd1234", "x")["status"] == "error", "a resume that ran closes the door"
 
     def test_drain_runs_the_queued_answer_inline(self, ws, monkeypatch):
         rd = self._paused(ws, monkeypatch)

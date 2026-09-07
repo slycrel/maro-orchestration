@@ -145,6 +145,19 @@ def handle_task(
             log.info("continuation RESUME of %s (pause_reason=%r)",
                      _parent_handle, _parent_meta.get("pause_reason"))
             set_current_run_dir(_resume_rd)
+            # An operator's answer often lands while the asking worker is
+            # still in its post-pause tail (curation, lesson extraction —
+            # ~3 min on 2026-09-07, run 084d3c1f): the project slot is
+            # still held and an immediate resume is refused_busy, which
+            # left the run paused with a recorded answer nobody re-drove.
+            # The answer waits for the slot instead (ask.resume_wait_s).
+            _wait_s = None
+            if str(_origin.get("source") or "") == "operator_answer":
+                try:
+                    from config import get as _cfg_get
+                    _wait_s = float(_cfg_get("ask.resume_wait_s", 900) or 0)
+                except Exception:
+                    _wait_s = 900.0
             try:
                 _result = run_agent_loop(
                     _cont_goal,
@@ -155,6 +168,7 @@ def handle_task(
                     ancestry_context_extra=_filtered_ctx,
                     measurement_class=str(_origin.get("measurement_class") or ""),
                     handle_id=_parent_handle,
+                    admission_wait_s=_wait_s,
                 )
             finally:
                 # Drain-batch hygiene the old scoped_run_dir(None) provided:

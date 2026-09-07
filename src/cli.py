@@ -2433,6 +2433,8 @@ def _cmd_answer(args: argparse.Namespace) -> int:
     res = operator_ask.answer(args.run_id, text, source=args.source)
     if res.get("status") != "queued":
         return fail("E_ANSWER", str(res.get("error", "answer refused")))
+    if res.get("retried_after") and args.format != "json":
+        print(f"re-driving {res['handle_id']}: the previous resume ended {res['retried_after']}")
     if args.detach:
         if args.format == "json":
             print(json.dumps(res))

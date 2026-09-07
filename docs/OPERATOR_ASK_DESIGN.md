@@ -98,6 +98,18 @@ Continue from where the run paused, using this answer; do not ask it again.
 Inline by default (the CLI drains the queued task and exits when the resumed
 run finishes); `--detach` leaves it for the queue.
 
+**The asking worker still holds the project slot.** After it writes the
+ask the worker runs its post-pause tail (record, curate, notify — minutes),
+and the per-project admission gate is a flock it keeps until then. An
+answer that lands inside that window used to come back `refused_busy` and
+the run stayed paused with its answer recorded (first live firing,
+084d3c1f, 2026-09-07). Now an operator-answer resume waits for the slot
+(`ask.resume_wait_s`, default 900 s) instead of refusing; and `maro answer
+<handle>` — text optional, `--retry` in the CLI — re-drives a run whose
+every recorded resume ended `refused_busy` / `error` / `failed`, reusing the
+recorded answer when none is given. A resume that ran, or one still
+queued, keeps the door closed ("already answered").
+
 **Hermes / Telegram** — the gate grows an `answer <handle> <text>` verb
 (`deploy/hermes/maro-ssh-gate.sh` → `dispatch.py answer`, source
 `hermes-ssh`, a detached worker records the resumed run under its own job
