@@ -408,6 +408,28 @@ class TestAnswer:
         task_store.complete(redo2["job_id"], result_status="done")
         assert oa.answer("abcd1234", "x")["status"] == "error", "a resume that ran closes the door"
 
+    def test_re_drive_counts_only_resumes_since_the_current_answer(self, ws, monkeypatch):
+        """A run that asked twice: the first answer's resume RAN (and paused
+        on the second question); the second answer's resume was refused.
+        Only resumes since the second answer count, so the re-drive is
+        allowed — the live shape of 084d3c1f (2026-09-07)."""
+        import runs
+        import task_store
+        rd = self._paused(ws, monkeypatch)
+        first = oa.answer("abcd1234", "123456")
+        task_store.claim(first["job_id"])
+        task_store.complete(first["job_id"], result_status="interrupted")
+        with runs.scoped_run_dir(rd):
+            oa.pause_for_ask(dict(ASK, question="And the app password?"), handle_id="abcd1234", goal="read the yahoo inbox")
+        second = oa.answer("abcd1234", "app-pw")
+        assert second["status"] == "queued"
+        task_store.claim(second["job_id"])
+        task_store.complete(second["job_id"], result_status="refused_busy")
+        redo = oa.answer("abcd1234", "")
+        assert redo["status"] == "queued", redo
+        assert redo["retried_after"] == "refused_busy"
+        assert _meta(rd)["operator_ask"]["answer"] == "app-pw", "the CURRENT question's answer is reused"
+
     def test_drain_runs_the_queued_answer_inline(self, ws, monkeypatch):
         rd = self._paused(ws, monkeypatch)
         res = oa.answer("abcd1234", "123456")

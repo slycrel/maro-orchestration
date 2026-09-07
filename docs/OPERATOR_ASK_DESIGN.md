@@ -108,7 +108,11 @@ the run stayed paused with its answer recorded (first live firing,
 <handle>` — text optional, `--retry` in the CLI — re-drives a run whose
 every recorded resume ended `refused_busy` / `error` / `failed`, reusing the
 recorded answer when none is given. A resume that ran, or one still
-queued, keeps the door closed ("already answered").
+queued, keeps the door closed ("already answered"). Which resumes belong
+to the current question is exact: each answer stamps its task id on the
+record (`resume_job_ids`); a run that asked twice is judged by the second
+question's resumes only, never by the first's (which legitimately ran and
+paused again).
 
 **Hermes / Telegram** — the gate grows an `answer <handle> <text>` verb
 (`deploy/hermes/maro-ssh-gate.sh` → `dispatch.py answer`, source

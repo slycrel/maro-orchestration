@@ -51,7 +51,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Sequence, Any, Dict, List, Optional
 
 log = logging.getLogger("maro.operator_ask")
 
@@ -278,18 +278,37 @@ def _continuation_reason(goal: str, question: str, text: str) -> str:
 _RESUME_FAILED = ("refused_busy", "error", "failed")
 
 
-def _last_resume_failed(handle_id: str) -> Optional[str]:
-    """A failure status when EVERY recorded resume of this run ended
+def _stamp_key(s: str) -> str:
+    """ISO stamps from the two writers compared as one shape (Z / +00:00)."""
+    return str(s or "").replace("+00:00", "Z")
+
+
+def _last_resume_failed(handle_id: str, since: str = "",
+                        job_ids: Sequence[str] = ()) -> Optional[str]:
+    """A failure status when EVERY resume of the CURRENT question ended
     without running the loop (refused_busy / error / failed) and none is
     still queued — else None. An answer whose resume was refused is an
     answer that never arrived; the next `answer` (same text or new) must
     be allowed to re-drive it. A resume that ran, or one still pending,
-    closes the door."""
+    closes the door.
+
+    The current question's resumes are the tasks whose ids the record
+    stamped (`resume_job_ids`); a record from before that stamp existed
+    falls back to every resume queued since the answer time. Resumes of
+    an earlier question of the same run (a run may ask more than once)
+    do not count either way."""
     try:
         from task_store import list_tasks
         tasks = [t for t in list_tasks()
                  if str(t.get("source") or "") == "loop_continuation"
                  and str((t.get("origin") or {}).get("parent_handle_id") or "") == handle_id]
+        if job_ids:
+            wanted = set(job_ids)
+            tasks = [t for t in tasks if str(t.get("job_id") or "") in wanted]
+        else:
+            tasks = [t for t in tasks
+                     if _stamp_key((t.get("timestamps") or {}).get("queued_at_utc") or "")
+                     >= _stamp_key(since)]
     except Exception:
         return None
     if not tasks:
@@ -332,7 +351,8 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
                 "error": f"run {handle_id} has no operator question to answer"}
     retried = None
     if rec.get("status") == STATUS_ANSWERED:
-        retried = _last_resume_failed(handle_id)
+        retried = _last_resume_failed(handle_id, since=str(rec.get("answered_at") or ""),
+                                      job_ids=[str(j) for j in (rec.get("resume_job_ids") or [])])
         if not retried:
             return {"status": "error",
                     "error": f"run {handle_id} was already answered at {rec.get('answered_at')}"}
@@ -381,6 +401,14 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
     except Exception as exc:
         return {"status": "error", "handle_id": handle_id,
                 "error": f"could not enqueue the resume: {exc}"}
+    try:
+        from runs import stamp_run_metadata_for
+        ids = [str(j) for j in (rec.get("resume_job_ids") or []) if str(j)]
+        ids.append(str(task.get("job_id") or ""))
+        rec["resume_job_ids"] = ids
+        stamp_run_metadata_for(handle_id, {META_KEY: rec})
+    except Exception as exc:
+        log.warning("answer: resume id stamp failed: %s", exc)
     try:
         from run_trace import record_edge
         record_edge("pause.awaiting-clarification", "answer.queued",
