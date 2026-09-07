@@ -170,6 +170,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_asks.add_argument("--limit", type=int, default=50)
     p_asks.add_argument("--json", action="store_true")
 
+    p_reconcile = sub.add_parser(
+        "reconcile-runs",
+        help="Stamp runs whose worker process died mid-flight (no ended_at, dead pid) as `stranded`; --dry-run lists them")
+    p_reconcile.add_argument("--dry-run", action="store_true",
+                             help="list the candidates, stamp nothing")
+    p_reconcile.add_argument("--limit", type=int, default=20)
+    p_reconcile.add_argument("--grace-s", type=float, default=None,
+                             help="minimum metadata age before a dead pid counts (default 600)")
+    p_reconcile.add_argument("--json", action="store_true")
+
     p_evolver = sub.add_parser("evolver", help="Run meta-evolver — analyze outcomes + propose improvements (§19)")
     p_evolver.add_argument("--dry-run", action="store_true", help="Analyze without writing suggestions")
     p_evolver.add_argument("--min-outcomes", type=int, default=3, help="Minimum outcomes needed to run (default: 3)")

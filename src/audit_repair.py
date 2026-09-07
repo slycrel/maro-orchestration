@@ -544,6 +544,134 @@ def _repair_one(
 _ORPHAN_GRACE_S = 3600.0
 
 
+_DEAD_RUN_GRACE_S = 600.0
+
+
+def sweep_dead_runs(
+    *, grace_s: float = _DEAD_RUN_GRACE_S, limit: int = 20,
+    dry_run: bool = False,
+) -> dict:
+    """Give a run whose owning process died mid-flight an honest terminal
+    status (BACKLOG 2026-09-07, runs 38cfec83 / 50dea643 / 2a779342).
+
+    Signature: metadata has a `pid`, no `ended_at`, and that pid is gone.
+    A killed worker (operator `kill`, OOM, box reboot) never reaches
+    finalize_run, so the record says nothing forever — the rerun brief then
+    reads the attempt as "possibly still in flight" and the navigator binds
+    the next dispatch to a dead attempt's project. The stamp reuses the
+    existing INTERRUPT vocabulary (`stranded` — a stranded owner is exactly
+    this) with `stop_verdict: external-interrupt` and the evidence line;
+    no goal verdict is invented (a crash is not failure evidence).
+    `grace_s` guards the spawn window (pid recorded before the process is
+    checkable) and a metadata write that is still in progress: the record
+    must be older than the grace. A pid that exists but is not ours is a
+    recycled pid — treated as dead, like sweep_verdict_orphans. Serialized
+    under the same repair pidfile. Returns counts for the caller's log line.
+    """
+    from proc_lock import acquire_pidfile
+    from runs import runs_root, stamp_run_metadata_for
+
+    root = runs_root()
+    if not root.is_dir():
+        return {"status": "completed", "stamped": 0, "considered": 0}
+    now = time.time()
+    candidates = []
+    for run_dir in root.iterdir():
+        if not run_dir.is_dir():
+            continue
+        meta = _read_metadata(run_dir)
+        if meta is None or meta.get("ended_at"):
+            continue
+        try:
+            pid = int(meta.get("pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid <= 0:
+            continue  # no owner recorded — nothing to corroborate against
+        if _pid_alive(pid):
+            continue
+        try:
+            age_s = now - (run_dir / "metadata.json").stat().st_mtime
+        except OSError:
+            continue
+        if age_s <= grace_s:
+            continue
+        candidates.append((run_dir, pid))
+    if not candidates:
+        return {"status": "completed", "stamped": 0, "considered": 0}
+    if dry_run:
+        return {"status": "dry_run", "stamped": 0,
+                "considered": len(candidates),
+                "handles": [str((_read_metadata(rd) or {}).get("handle_id")
+                                or rd.name.split("-", 1)[0])
+                            for rd, _ in candidates[:limit]]}
+
+    acquired = acquire_pidfile(
+        _REPAIR_LOCK, payload={"command": "dead-run-sweep"})
+    if acquired.status == "busy":
+        return {"status": "busy", "stamped": 0, "considered": len(candidates)}
+    if acquired.status == "unavailable":
+        return {"status": "unavailable", "stamped": 0,
+                "error": acquired.error}
+    stamped = 0
+    handles: List[str] = []
+    try:
+        for run_dir, pid in candidates[:limit]:
+            # Re-read under the lock: finalize may have landed since the scan.
+            meta = _read_metadata(run_dir)
+            if meta is None or meta.get("ended_at"):
+                continue
+            if _pid_alive(pid):
+                continue
+            handle_id = str(
+                meta.get("handle_id") or run_dir.name.split("-", 1)[0])
+            ended = datetime.now(timezone.utc).isoformat()
+            fields = {
+                "status": "stranded",
+                "ended_at": ended,
+                "stop_verdict": "external-interrupt",
+                "stop_evidence": (
+                    f"owning pid {pid} is gone with no ended_at; stamped by "
+                    f"the dead-run sweep at {ended}"),
+                "dead_run_sweep": {"pid": pid, "stamped_at": ended},
+            }
+            if stamp_run_metadata_for(handle_id, fields) is None:
+                log.warning("dead-run sweep: stamp failed for %s — retrying "
+                            "next sweep", handle_id)
+                continue
+            stamped += 1
+            handles.append(handle_id)
+            try:
+                from run_curation import refresh_run_card_classification
+                from loop_report import write_reports_for_run_dir
+                refresh_run_card_classification(handle_id, run_dir=run_dir)
+                write_reports_for_run_dir(run_dir)
+            except Exception:
+                log.debug("dead-run sweep: surface refresh failed for %s",
+                          handle_id, exc_info=True)
+    finally:
+        try:
+            acquired.release()
+        except Exception:
+            pass
+    return {"status": "completed", "stamped": stamped,
+            "considered": len(candidates), "handles": handles}
+
+
+def _pid_alive(pid: int) -> bool:
+    """True only when `pid` exists AND is ours (a recycled pid owned by
+    another user cannot be the run's process)."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return False
+    except OSError:
+        return False
+
+
 def sweep_verdict_orphans(
     *, grace_s: float = _ORPHAN_GRACE_S, limit: int = 20,
 ) -> dict:

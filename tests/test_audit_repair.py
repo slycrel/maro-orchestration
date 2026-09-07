@@ -623,3 +623,78 @@ def test_orphan_sweep_refresh_clears_pending_card_class(monkeypatch):
     assert refreshed.get("verdict_pending") is None
     assert refreshed["success_class"] == "done-unverified"
     assert refreshed["goal_verdict_source"] == "verdict_pending_orphaned"
+
+
+# --- dead-run sweep (2026-09-07: killed workers said nothing forever) ------
+
+def _dead_pid() -> int:
+    """A pid that certainly does not exist: spawn-and-reap a child."""
+    import subprocess
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    return proc.pid
+
+
+def _age_metadata(rd, seconds: float = 3600.0) -> None:
+    import os
+    import time
+    old = time.time() - seconds
+    os.utime(rd / "metadata.json", (old, old))
+
+
+def _seed_run(handle: str, **fields):
+    rd = runs.create_run_dir(handle, prompt="g", lane="agenda", model="mid")
+    meta = _metadata(rd)
+    meta.update(fields)
+    (rd / "metadata.json").write_text(json.dumps(meta))
+    return rd
+
+
+def test_dead_run_sweep_stamps_stranded_from_dead_pid():
+    from audit_repair import sweep_dead_runs
+    rd = _seed_run("b0000001", pid=_dead_pid())
+    _age_metadata(rd)
+    res = sweep_dead_runs()
+    assert res["stamped"] == 1 and res["handles"] == ["b0000001"]
+    meta = _metadata(rd)
+    assert meta["status"] == "stranded"
+    assert meta["ended_at"]
+    assert meta["stop_verdict"] == "external-interrupt"
+    assert str(meta["dead_run_sweep"]["pid"]) in meta["stop_evidence"]
+    # No goal verdict invented: a crash is not failure evidence.
+    assert meta.get("goal_achieved") is None
+    # Idempotent: the stamped run is no longer a candidate.
+    assert sweep_dead_runs()["stamped"] == 0
+
+
+def test_dead_run_sweep_reads_stranded_as_not_in_flight():
+    from audit_repair import sweep_dead_runs
+    from rerun_identity import AttemptRecord, _resolve
+    rd = _seed_run("b0000002", pid=_dead_pid())
+    _age_metadata(rd)
+    att = AttemptRecord(handle_id="b0000002")
+    _resolve(att)
+    assert "in flight" in att.standing or att.status in ("", "running")
+    sweep_dead_runs()
+    att = AttemptRecord(handle_id="b0000002")
+    _resolve(att)
+    assert att.status == "stranded"
+    assert "in flight" not in att.standing
+
+
+def test_dead_run_sweep_leaves_live_ended_young_and_pidless_runs_alone():
+    import os
+    from audit_repair import sweep_dead_runs
+    live = _seed_run("b0000003", pid=os.getpid())
+    _age_metadata(live)
+    ended = _seed_run("b0000004", pid=_dead_pid(),
+                      ended_at="2026-09-07T00:00:00+00:00", status="done")
+    _age_metadata(ended)
+    young = _seed_run("b0000005", pid=_dead_pid())   # fresh mtime: in grace
+    pidless = _seed_run("b0000006", pid=None)
+    _age_metadata(pidless)
+    res = sweep_dead_runs()
+    assert res["stamped"] == 0
+    for rd in (live, young, pidless):
+        assert not _metadata(rd).get("ended_at")
+    assert _metadata(ended)["status"] == "done"

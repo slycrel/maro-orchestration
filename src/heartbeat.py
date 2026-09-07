@@ -446,6 +446,18 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     except Exception:
         log.debug("verdict-orphan sweep failed", exc_info=True)
 
+    # Dead-run sweep: a worker killed mid-flight (operator kill, OOM, reboot)
+    # never reaches finalize_run; stamp it `stranded` from its dead pid so the
+    # rerun brief stops reading it as "possibly still in flight" (2026-09-07).
+    try:
+        from audit_repair import sweep_dead_runs
+        _dead = sweep_dead_runs(limit=5)
+        if _dead.get("stamped"):
+            result["dead_runs_stamped"] = _dead["stamped"]
+            log.info("dead-run sweep stamped %d run(s)", _dead["stamped"])
+    except Exception:
+        log.debug("dead-run sweep failed", exc_info=True)
+
     # Async-tail phase 3 stranded-tail sweep: a run whose tail process died —
     # or whose parent never dispatched one — leaves its jobs pending in
     # `<run_dir>/build/tail_jobs.jsonl` with no live claim. Phase 1's

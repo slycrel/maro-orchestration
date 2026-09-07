@@ -2464,6 +2464,24 @@ def _cmd_answer(args: argparse.Namespace) -> int:
     return 0 if status in ("done", "complete") else 1
 
 
+def _cmd_reconcile_runs(args: argparse.Namespace) -> int:
+    from audit_repair import sweep_dead_runs
+    kw = {"limit": args.limit, "dry_run": bool(args.dry_run)}
+    if args.grace_s is not None:
+        kw["grace_s"] = args.grace_s
+    res = sweep_dead_runs(**kw)
+    if args.json:
+        print(json.dumps(res, indent=2))
+        return 0
+    verb = "would stamp" if args.dry_run else "stamped"
+    print(f"[maro] dead-run sweep: {res.get('status')}; {verb} "
+          f"{len(res.get('handles') or []) if args.dry_run else res.get('stamped', 0)} "
+          f"of {res.get('considered', 0)} candidate(s)")
+    for h in res.get("handles") or []:
+        print(f"  {h}")
+    return 0
+
+
 def _cmd_asks(args: argparse.Namespace) -> int:
     """Every operator question on record; optionally expire past time boxes."""
     import operator_ask
@@ -2762,6 +2780,7 @@ _COMMAND_HANDLERS = {
     "resume": _cmd_resume,
     "answer": _cmd_answer,
     "asks": _cmd_asks,
+    "reconcile-runs": _cmd_reconcile_runs,
     "next": _cmd_next,
     "done": _cmd_done,
     "log": _cmd_log,
