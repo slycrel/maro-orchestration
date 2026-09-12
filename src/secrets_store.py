@@ -496,7 +496,10 @@ def file_instructions(path: Path, names: Sequence[str]) -> str:
             + FILE_ENV + "; mode 0600, shredded when the step ends): "
             + ", ".join(names) + ". Read the line you need with `grep '^NAME=' $"
             + FILE_ENV + "` or source the file in a subshell; never print or "
-            "persist a value.")
+            "persist a value. This file is the ONLY sanctioned path to a "
+            "secret: the names are deliberately not in your env, and you must "
+            "never decrypt the store yourself (no sops/age, never read "
+            "~/.maro/secrets) — a value you were not given is not yours to fetch.")
 
 
 def drop_instructions(path: Path) -> str:
