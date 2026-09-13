@@ -1897,3 +1897,177 @@ class TestTheSettledWorldSurvivesCrashesAndRaces:
         assert meta["landscape"]["relation"] == "related" and meta["landscape"]["chosen"] == b
         assert meta["origin"]["parent_handle_id"] == b
         assert (loop_kwargs[0]["project"], meta["project"], meta["project_binding"]) == ("client-b", "client-b", "landscape")
+
+
+class TestTheTransitionHasOneLifecycle:
+    """Review round 7 (2026-09-13): from the transition write to the retry's
+    return there is one revert path; a settlement the run could not record
+    is retried at the finalize; a transition orphaned without a verdict
+    marker is reverted by its own sweep; a partial reservation leaves no
+    staging behind."""
+
+    def test_a_failure_before_the_retry_reverts_the_transition(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        import handle as handle_mod
+        import landscape
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        from orch_items import projects_root
+        import llm
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        adapter = _NowAndJudge(_related(1, "carries it forward"))
+        from quality_gate import next_model_tier
+        retry_tier = next_model_tier("cheap")
+        built = []
+
+        def factory(*x, **k):
+            built.append(k.get("model"))
+            if k.get("model") == retry_tier:
+                raise RuntimeError("adapter unavailable")
+            return adapter
+
+        monkeypatch.setattr(llm, "build_adapter", factory)
+        projects = []
+
+        def _fake_run(g, *x, **k):
+            projects.append(k.get("project", ""))
+            return LoopResult(loop_id="lr-1", project=k.get("project", ""), goal=g, status="done", stuck_reason=None,
+                              steps=[StepOutcome(index=0, text="s", status="done", result="o", iteration=0)])
+
+        gate = MagicMock()
+        gate.escalate = True
+        gate.contested_claims = []
+        gate.reason = "weak"
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=ClosureVerdict(complete=True, confidence=0.65, gaps=[], summary="weak",
+                                               checks_run=2, checks_passed=1)), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            r = handle(GOAL_FOLLOW_UP, force_lane="agenda", model="cheap", dry_run=False)
+        assert retry_tier in built, built
+        assert projects == ["board-reports"] and r.status == "done"
+        meta = _meta(r.handle_id)
+        assert (meta["project"], meta["project_binding"]) == ("board-reports", "landscape")
+        t = meta["project_transition"]
+        assert t["outcome"] == "reverted" and t["settled_at"] and t["to"] == "board-reports-escalated"
+        assert landscape.run_settled(meta) is True
+        # the settled run is a candidate again, with the delivered project
+        cands, _, _ = landscape.candidates(GOAL_FOLLOW_UP + " and headcount")
+        assert any(c["handle_id"] == r.handle_id and c["project"] == "board-reports" for c in cands)
+
+    def test_a_settlement_the_run_could_not_record_is_retried_at_the_finalize(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        import landscape
+        import handle as handle_mod
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        real = runs.stamp_run_metadata
+        refused = []
+
+        def refusing_settlements(fields):
+            t = fields.get("project_transition")
+            if isinstance(t, dict) and t.get("settled_at"):
+                refused.append(t["outcome"])
+                return None
+            return real(fields)
+
+        monkeypatch.setattr(runs, "stamp_run_metadata", refusing_settlements)
+        r, projects = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert projects == ["board-reports", "board-reports-escalated"]
+        assert refused == ["adopted", "adopted"], refused  # two attempts in the run
+        meta = _meta(r.handle_id)
+        # the finalize carried the settlement in the marker's resolving write
+        assert (meta["project"], meta["project_binding"]) == ("board-reports-escalated", "escalated")
+        assert meta["project_transition"]["outcome"] == "adopted" and meta["project_transition"]["settled_at"]
+        assert landscape.run_settled(meta) is True
+        assert r.handle_id not in handle_mod._UNSETTLED_TRANSITIONS
+        # the reverting settlement takes the same road
+        _setup(monkeypatch, tmp_path / "two")
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        refused.clear()
+        r2, projects2 = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")),
+                                        second_status="stuck")
+        assert projects2 == ["board-reports", "board-reports-escalated"] and refused == ["reverted", "reverted"]
+        meta2 = _meta(r2.handle_id)
+        assert (meta2["project"], meta2["project_binding"]) == ("board-reports", "landscape")
+        assert meta2["project_transition"]["outcome"] == "reverted" and landscape.run_settled(meta2) is True
+
+    def test_a_transition_orphaned_without_a_marker_is_reverted_by_its_sweep(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import os
+        import inspect
+        from datetime import datetime, timezone
+        import runs
+        import landscape
+        import heartbeat
+        from audit_repair import sweep_transition_orphans
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        (projects_root() / "board-reports-escalated").mkdir(parents=True)
+        active = {"kind": "escalation", "from": "board-reports", "from_binding": "landscape",
+                  "to": "board-reports-escalated", "since": "2026-09-13T00:00:01+00:00"}
+        base = {"project": "board-reports-escalated", "project_binding": "escalated", "project_transition": active}
+        # (i) no marker at all (verdict follow-up off), owner dead
+        no_marker = _finished_run(GOAL_QUARTERLY, "A.", extra=dict(base))
+        # (ii) a RESOLVED marker, owner dead: the verdict sweep will never look
+        resolved = _finished_run(GOAL_QUARTERLY + " again", "B.", extra={
+            **base, "verdict_pending": {"since": "2026-09-13T00:00:00+00:00", "resolved_at": "2026-09-13T00:10:00+00:00"}})
+        # (iii) an ACTIVE marker: the verdict sweep's, not this one's
+        marked = _finished_run(GOAL_QUARTERLY + " thrice", "C.", extra={
+            **base, "verdict_pending": {"since": "2026-09-13T00:00:00+00:00", "loop_id": "x"}})
+        # (iv) too young, (v) owner alive
+        young = _finished_run(GOAL_QUARTERLY + " four", "D.", extra={
+            **base, "project_transition": {**active, "since": datetime.now(timezone.utc).isoformat()}})
+        alive = _finished_run(GOAL_QUARTERLY + " five", "E.", extra=dict(base))
+        for hid in (no_marker, resolved, marked, young):
+            runs.stamp_run_metadata_for(hid, {"pid": _dead_pid()})
+        runs.stamp_run_metadata_for(alive, {"pid": os.getpid()})
+        for hid in (no_marker, resolved, marked, young, alive):
+            assert landscape.run_settled(_meta(hid)) is False
+        res = sweep_transition_orphans(grace_s=60)
+        assert res == {"status": "completed", "stamped": 2, "considered": 4}, res
+        for hid in (no_marker, resolved):
+            m = _meta(hid)
+            assert (m["project"], m["project_binding"]) == ("board-reports", "landscape")
+            assert m["project_transition"]["outcome"] == "reverted"
+            assert m["project_transition"]["settled_by"] == "transition_orphan_sweep"
+            assert landscape.run_settled(m) is True
+        for hid in (marked, young, alive):
+            m = _meta(hid)
+            assert m["project"] == "board-reports-escalated" and "settled_at" not in m["project_transition"]
+        # the sweep runs where the verdict sweep runs
+        assert "sweep_transition_orphans" in inspect.getsource(heartbeat)
+
+    def test_a_partial_initialisation_leaves_no_staging_behind(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import file_lock
+        from pathlib import Path
+        import handle as handle_mod
+        from orch_items import projects_root, ensure_project
+        base = "tell-me-about-the-book"
+        ensure_project(base, "Tell me about the book Systemantics")
+        root = projects_root()
+        real_write = file_lock.atomic_write
+        written = []
+
+        def failing_after_next(path, *a, **k):
+            written.append(Path(path).name)
+            if Path(path).name == "DECISIONS.md":
+                raise OSError("disk full after NEXT.md")
+            return real_write(path, *a, **k)
+
+        monkeypatch.setattr(file_lock, "atomic_write", failing_after_next)
+        before = sorted(p.name for p in root.iterdir())
+        with pytest.raises(OSError):
+            handle_mod._free_project_name(base, (base,), "Tell me about the book Chaos")
+        assert "NEXT.md" in written and "DECISIONS.md" in written
+        assert sorted(p.name for p in root.iterdir()) == before
+        assert not [p for p in root.iterdir() if p.name.startswith(".reserve-")]

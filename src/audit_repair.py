@@ -672,6 +672,108 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def sweep_transition_orphans(
+    *, grace_s: float = _ORPHAN_GRACE_S, limit: int = 20,
+) -> dict:
+    """Revert crash-orphaned project transitions whose verdict marker is
+    NOT active (resolved, or never written — `notify.verdict_followup`
+    off): the verdict sweep only sees active markers, and a run left
+    with an active `project_transition` past its end is otherwise held
+    out of the landscape forever and points every metadata reader at an
+    undelivered retry workspace (review 2026-09-13 round 7). Same
+    corroboration as the verdict sweep: the transition aged past
+    `grace_s` AND the recorded owner pid dead. The revert is
+    `landscape.settle_project_transition` (the delivered project restored
+    in the same write). Serialized under the repair pidfile."""
+    from proc_lock import acquire_pidfile
+    from runs import runs_root, stamp_run_metadata_for
+    from landscape import settle_project_transition
+
+    def _transition_only(meta: dict) -> bool:
+        vp = meta.get("verdict_pending")
+        if isinstance(vp, dict) and not vp.get("resolved_at"):
+            return False  # the verdict sweep owns it (and reverts the transition too)
+        t = meta.get("project_transition")
+        return isinstance(t, dict) and not t.get("settled_at")
+
+    root = runs_root()
+    if not root.is_dir():
+        return {"status": "completed", "stamped": 0, "considered": 0}
+    candidates = []
+    for run_dir in root.iterdir():
+        if not run_dir.is_dir():
+            continue
+        meta = _read_metadata(run_dir)
+        if meta is None or not meta.get("ended_at") or not _transition_only(meta):
+            continue
+        candidates.append(run_dir)
+    if not candidates:
+        return {"status": "completed", "stamped": 0, "considered": 0}
+    acquired = acquire_pidfile(
+        _REPAIR_LOCK, payload={"command": "transition-orphan-sweep"})
+    if acquired.status == "busy":
+        return {"status": "busy", "stamped": 0}
+    if acquired.status == "unavailable":
+        return {"status": "unavailable", "stamped": 0,
+                "error": acquired.error}
+    stamped = considered = 0
+    try:
+        now = time.time()
+        for run_dir in candidates:
+            if stamped >= max(1, int(limit)):
+                break
+            meta = _read_metadata(run_dir)
+            if meta is None or not meta.get("ended_at") or not _transition_only(meta):
+                continue
+            considered += 1
+            t = meta["project_transition"]
+            handle_id = str(meta.get("handle_id") or run_dir.name.split("-", 1)[0])
+            try:
+                since = datetime.fromisoformat(
+                    str(t.get("since", "")).replace("Z", "+00:00"))
+                age_s = now - since.timestamp()
+            except (TypeError, ValueError):
+                age_s = grace_s + 1
+            if age_s <= grace_s:
+                continue
+            try:
+                _pid = int(meta.get("pid") or 0)
+            except (TypeError, ValueError):
+                _pid = 0
+            if _pid > 0:
+                try:
+                    os.kill(_pid, 0)
+                    continue  # owning process is alive — let it settle
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    continue  # exists, not ours — alive
+            fields = settle_project_transition(meta, by="transition_orphan_sweep")
+            if not fields:
+                continue
+            if stamp_run_metadata_for(handle_id, fields) is None:
+                log.warning("transition-orphan sweep: revert write failed for %s "
+                            "— retrying next sweep", handle_id)
+                continue
+            stamped += 1
+            try:
+                from run_curation import refresh_run_card_classification
+                from loop_report import write_reports_for_run_dir
+                refresh_run_card_classification(handle_id, run_dir=run_dir)
+                write_reports_for_run_dir(run_dir)
+            except Exception:
+                log.debug("transition-orphan sweep: surface refresh failed "
+                          "for %s", handle_id, exc_info=True)
+            log.info("transition-orphan sweep: %s reverted %s → %s (aged %.0fs)",
+                     handle_id, t.get("to"), fields.get("project"), age_s)
+        return {"status": "completed", "stamped": stamped, "considered": considered}
+    finally:
+        try:
+            acquired.handle.close()
+        except Exception:
+            pass
+
+
 def sweep_verdict_orphans(
     *, grace_s: float = _ORPHAN_GRACE_S, limit: int = 20,
 ) -> dict:

@@ -57,6 +57,12 @@ ALLOWED_DELETION_SITES = {
     ("checkpoint.py", "delete_checkpoint"):
         "user-invoked: `checkpoint delete` CLI only; no automatic caller "
         "(finalize's delete-on-done removed 2026-07-10, retention decree)",
+    ("handle.py", "_free_project_name"):
+        "ephemeral: the sibling allocator's own `.reserve-*` staging "
+        "directory, created by the same call moments earlier and never "
+        "published (the rename did not happen) — no run/user data; a "
+        "published reservation is never removed (landscape review r6–r7, "
+        "2026-09-13)",
     ("file_lock.py", "atomic_write"):
         "ephemeral: temp-file swap inside the atomic-write primitive",
     ("path_rewrite.py", "rewrite_file"):

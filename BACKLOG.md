@@ -6546,7 +6546,26 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   the rename fail and the next name is tried; the staging directory is
   removed when the reservation does not happen); the clarification
   caller's post-commit diagnostic moved out of the failure handler (the
-  same defect as round 5's, one layer up). Recorded, not changed: a project deleted
+  same defect as round 5's, one layer up). Round 7: the transition has
+  ONE lifecycle — everything from the transition write to the retry's
+  return (the learning drain, the adapter build, the loop) is inside the
+  revert path (an adapter build raising had left the transition active
+  with the retry project as the record, swallowed by the gate's
+  handler); a settlement write (adopted/reverted) gets two attempts and
+  then rides the finalize's marker-resolving write (`_UNSETTLED_TRANSITIONS`,
+  process-local) so "verdict resolved" implies "transition settled";
+  `audit_repair.sweep_transition_orphans` (heartbeat, beside the verdict
+  sweep) reverts an active transition whose verdict marker is resolved
+  or absent (follow-up off) once aged past the grace with a dead owner —
+  the verdict sweep only ever saw active markers; the reservation's
+  `ensure_project` runs inside the cleanup scope (a partial
+  initialisation left `.reserve-*` behind); deletion census: the
+  staging rmtree allow-listed as ephemeral. Direction recorded: a
+  settlement that fails in the run AND at the finalize is reverted by
+  the sweep even when the retry had been adopted — the retry's adoption
+  is durable only when its write is; the original's identity was
+  durable before the retry started, and the retry's work stays on disk
+  in its own directory. Recorded, not changed: a project deleted
   between selection and loop init is recreated empty by
   `ensure_project` (deletion is manual and opt-in here — data-retention
   decree — and the window is seconds); a follow-up arriving in the

@@ -437,8 +437,15 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     # NOT the evolver cadence, which the default health-only heartbeat never
     # schedules (review 2026-08-13: the sweep was unreachable by default).
     try:
-        from audit_repair import sweep_verdict_orphans
+        from audit_repair import sweep_verdict_orphans, sweep_transition_orphans
         _orphans = sweep_verdict_orphans(limit=5)
+        try:
+            _pt_orphans = sweep_transition_orphans(limit=5)
+            if _pt_orphans.get("stamped"):
+                log.info("heartbeat: transition-orphan sweep reverted %s run(s)",
+                         _pt_orphans["stamped"])
+        except Exception:
+            log.debug("heartbeat: transition-orphan sweep failed", exc_info=True)
         if _orphans.get("stamped"):
             result["verdict_orphans_stamped"] = _orphans["stamped"]
             log.info("verdict-orphan sweep stamped %d run(s)",

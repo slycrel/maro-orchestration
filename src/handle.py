@@ -306,6 +306,11 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 _PROJECT_MATCH_MIN_LEN = 6
 _PROJECT_SIBLING_CAP = 999
+# A project-transition settlement whose write failed in the run, keyed by
+# handle id: the finalize retries it in the write that resolves the verdict
+# marker (review 2026-09-13 round 7). Process-local by nature — a process
+# death loses it, and the transition-orphan sweep then reverts.
+_UNSETTLED_TRANSITIONS: dict = {}
 
 
 def _free_project_name(base: str, exclude: "tuple[str, ...]", mission: str) -> str:
@@ -333,8 +338,9 @@ def _free_project_name(base: str, exclude: "tuple[str, ...]", mission: str) -> s
     NAME: suffixing cannot repair a path-shaped identity (review
     2026-09-13 rounds 3–4). The private staging directory is the
     allocator's own and is removed when the reservation does not
-    happen; only a process death leaves one (`.reserve-*`, never a
-    candidate for any resolver)."""
+    happen — a partial initialisation included (review r7); only a
+    process death leaves one (`.reserve-*`, never a candidate for any
+    resolver)."""
     from landscape import project_name
     if not project_name(base):
         raise ValueError(f"not a project name: {base!r}")
@@ -352,10 +358,11 @@ def _free_project_name(base: str, exclude: "tuple[str, ...]", mission: str) -> s
     # mission text loop_init / mission.py record: goal[:80]); a failure
     # here propagates — the loop's own init would fail on the same store
     staging = f".reserve-{uuid.uuid4().hex[:12]}"
-    _oi.ensure_project(staging, mission[:80])
     staged = root / staging
     published = False
     try:
+        _oi.ensure_project(staging, mission[:80])
+
         def _claim(name: str) -> bool:
             target = root / name
             if name in exclude or target.is_symlink() or target.exists():
@@ -1038,12 +1045,22 @@ def handle(
                     _vp_meta = _meta_all.get("verdict_pending") or {}
                     if not isinstance(_vp_meta, dict):
                         _vp_meta = {}
+                    # a project-transition settlement the run could not
+                    # record goes in the SAME write as the marker's
+                    # resolution: "verdict resolved" must imply "transition
+                    # settled" for every reader (review 2026-09-13 round 7)
+                    _fin_fields: dict = dict(_UNSETTLED_TRANSITIONS.pop(_hid, None) or {})
                     if _vp_meta and not _vp_meta.get("resolved_at"):
-                        from runs import stamp_run_metadata_for as _srm_resolve
                         _resolved = dict(_vp_meta)
                         _resolved["resolved_at"] = datetime.now(
                             timezone.utc).isoformat()
-                        _srm_resolve(_hid, {"verdict_pending": _resolved})
+                        _fin_fields["verdict_pending"] = _resolved
+                    if _fin_fields:
+                        from runs import stamp_run_metadata_for as _srm_resolve
+                        if _srm_resolve(_hid, _fin_fields) is None and "project_transition" in _fin_fields:
+                            log.error("project transition settlement for %s not recorded at the "
+                                      "finalize either; the transition-orphan sweep will revert "
+                                      "to the delivered project", _hid)
                 except Exception:
                     _vp_meta = {}
                 _tail_lid = ""
@@ -3807,20 +3824,32 @@ def _handle_impl(
                         from runs import stamp_run_metadata as _stamp_esc
                         def _stamp_project_pair(_proj, _bind, _transition=None):
                             # the pair and, when given, the transition
-                            # record go in ONE write; True when recorded
+                            # record go in ONE write; True when recorded.
+                            # Two attempts; a SETTLEMENT (adopted/reverted)
+                            # that still fails is handed to the finalize,
+                            # which retries it in the write that resolves the
+                            # verdict marker — the record must not say "in
+                            # transition" past the run's end (review r7)
                             _fields = {"project": _proj, "project_binding": _bind}
                             if _transition is not None:
                                 _fields["project_transition"] = _transition
-                            try:
-                                if _stamp_esc(_fields) is None:
-                                    log.warning("project binding: %s (%s) not recorded in run metadata",
-                                                _proj, _bind)
-                                    return False
-                                return True
-                            except Exception:
+                            for _attempt in (1, 2):
+                                try:
+                                    if _stamp_esc(_fields) is not None:
+                                        return True
+                                except Exception:
+                                    log.warning("project binding: %s (%s) write %d raised",
+                                                _proj, _bind, _attempt, exc_info=True)
+                            if _transition is not None and _transition.get("settled_at"):
+                                _UNSETTLED_TRANSITIONS[handle_id] = dict(_fields)
+                                log.error("project transition %s → %s settlement (%s) not recorded; "
+                                          "retried at the finalize, else recovery reverts to the "
+                                          "delivered project", _transition.get("from"),
+                                          _transition.get("to"), _transition.get("outcome"))
+                            else:
                                 log.warning("project binding: %s (%s) not recorded in run metadata",
-                                            _proj, _bind, exc_info=True)
-                                return False
+                                            _proj, _bind)
+                            return False
                         # The transition is DURABLE before the destination
                         # changes: `from` is the delivered project, restored by
                         # whoever settles the run if this process dies before
@@ -3848,53 +3877,61 @@ def _handle_impl(
                                            "project transition could not be recorded — shipping "
                                            "the original loop's output.")
                     if _action == "escalate" and _next_tier and _esc_ready:
-                        if verbose:
-                            print(f"[maro:{handle_id}] re-running with model={_next_tier}",
-                                  file=sys.stderr, flush=True)
-                        # Deferred learning drains early here: the retry's
-                        # decompose recalls lessons from the loop it is
-                        # retrying, so they must exist before it plans.
-                        # Tail-scoped: these extraction calls are the failed
-                        # loop's tail spend (review 2026-08-13 — escalation
-                        # paths were the unscoped remainder).
-                        from metrics import tail_cost_scope as _esc_scope
-                        with _esc_scope(
-                                getattr(loop_result, "loop_id", "") or "",
-                                "learning"):
-                            # Durable records first (they hold the tail since
-                            # 2026-08-20), then the in-process fallback
-                            # registry. LEARNING only, and no surface
-                            # refresh: the run is not over — maintenance is
-                            # still owed to the finalize block, and the card
-                            # this would re-render is mid-flight.
-                            try:
-                                from tail_jobs import (run_jobs as _tail_run,
-                                                       KIND_LEARNING)
-                                _tail_run(handle_id, kinds=(KIND_LEARNING,),
-                                          refresh=False, respect_claim=False)
-                            except Exception as _esc_tail_exc:
-                                log.warning(
-                                    "early learning drain failed for %s: %s",
-                                    handle_id, _esc_tail_exc)
-                            _drain_deferred_learning(handle_id)
-                        _escalated_adapter = build_adapter(model=_next_tier)
-                        _pre_escalation_loop = loop_result
-                        _pre_escalation_loop_id = getattr(loop_result, "loop_id", None)
-                        # Preserve the normal run contract (measurement
-                        # provenance, handle identity, deferred learning,
-                        # callback/context, repo fence) while changing only
-                        # the fields intrinsic to an escalation retry.
-                        _escalate_kwargs = dict(_loop_kwargs)
-                        _escalate_kwargs.update({
-                            "project": _escalated_project,
-                            "model": _next_tier,
-                            "adapter": _escalated_adapter,
-                            "dry_run": False,
-                            "verbose": verbose,
-                            "loop_reason": "quality_gate_escalate",
-                            "parent_loop_id": _pre_escalation_loop_id,
-                        })
+                        # ONE lifecycle from the transition write to the
+                        # retry's return: anything that raises in between —
+                        # the learning drain, the adapter build, the loop —
+                        # reverts the transition before the error goes up to
+                        # the gate's handler, which ships the original loop
+                        # (review 2026-09-13 round 7: the adapter build sat
+                        # outside the revert and left the transition active
+                        # with the retry project as the record).
                         try:
+                            if verbose:
+                                print(f"[maro:{handle_id}] re-running with model={_next_tier}",
+                                      file=sys.stderr, flush=True)
+                            # Deferred learning drains early here: the retry's
+                            # decompose recalls lessons from the loop it is
+                            # retrying, so they must exist before it plans.
+                            # Tail-scoped: these extraction calls are the failed
+                            # loop's tail spend (review 2026-08-13 — escalation
+                            # paths were the unscoped remainder).
+                            from metrics import tail_cost_scope as _esc_scope
+                            with _esc_scope(
+                                    getattr(loop_result, "loop_id", "") or "",
+                                    "learning"):
+                                # Durable records first (they hold the tail since
+                                # 2026-08-20), then the in-process fallback
+                                # registry. LEARNING only, and no surface
+                                # refresh: the run is not over — maintenance is
+                                # still owed to the finalize block, and the card
+                                # this would re-render is mid-flight.
+                                try:
+                                    from tail_jobs import (run_jobs as _tail_run,
+                                                           KIND_LEARNING)
+                                    _tail_run(handle_id, kinds=(KIND_LEARNING,),
+                                              refresh=False, respect_claim=False)
+                                except Exception as _esc_tail_exc:
+                                    log.warning(
+                                        "early learning drain failed for %s: %s",
+                                        handle_id, _esc_tail_exc)
+                                _drain_deferred_learning(handle_id)
+                            _escalated_adapter = build_adapter(model=_next_tier)
+                            _pre_escalation_loop = loop_result
+                            _pre_escalation_loop_id = getattr(loop_result, "loop_id", None)
+                            # Preserve the normal run contract (measurement
+                            # provenance, handle identity, deferred learning,
+                            # callback/context, repo fence) while changing only
+                            # the fields intrinsic to an escalation retry.
+                            _escalate_kwargs = dict(_loop_kwargs)
+                            _escalate_kwargs.update({
+                                "project": _escalated_project,
+                                "model": _next_tier,
+                                "adapter": _escalated_adapter,
+                                "dry_run": False,
+                                "verbose": verbose,
+                                "loop_reason": "quality_gate_escalate",
+                                "parent_loop_id": _pre_escalation_loop_id,
+                            })
                             loop_result = run_agent_loop(message, **_escalate_kwargs)
                         except BaseException:
                             # the retry never delivered: the run's project is
