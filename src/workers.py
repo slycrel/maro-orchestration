@@ -49,6 +49,12 @@ class WorkerResult:
     stuck_reason: Optional[str] = None
     tokens_in: int = 0
     tokens_out: int = 0
+    # Round 19 (2026-09-13): the billed cost and the cache-read share of
+    # `tokens_in`, kept like step and specialist outcomes keep them —
+    # before this a refused ticket's known bill and its input pricing
+    # distinction were dropped at the worker boundary.
+    cost_usd: float = 0.0
+    cache_read_tokens: int = 0
     memory_slice_injected: bool = False  # A/B experiment: was memory slice injected?
     # Behavior side of the A/B (2026-08-09): did the result show lexical
     # contact with the injected items? None = not judged (no injection or
@@ -300,7 +306,7 @@ def dispatch_worker(
             purpose="worker-ticket",  # EDGE 6: agentic seam, was unlabeled in call records
         )
     except Exception as exc:
-        _ecls, _partial, _fresh = "", "", 0
+        _ecls, _partial, _fresh, _fresh_out, _cost, _cache = "", "", 0, 0, 0.0, 0
         try:
             from llm_errors import classify_error as _cls, call_usage_evidence as _cue
             _ecls = str(_cls(exc).error_class or "")
@@ -310,8 +316,9 @@ def dispatch_worker(
             _ev = _cue(exc)
             # Same total-input convention as step outcomes (round 11).
             _partial, _fresh, _fresh_out = _ev["partial"], _ev["tokens_in"] + _ev["cache_read"], _ev["tokens_out"]
+            _cost, _cache = float(_ev["cost"]), int(_ev["cache_read"])
         except Exception:
-            _fresh_out = 0
+            pass
         return WorkerResult(
             worker_type=worker_type,
             ticket=ticket,
@@ -322,6 +329,8 @@ def dispatch_worker(
             error_class=_ecls,
             tokens_in=_fresh,
             tokens_out=_fresh_out,
+            cost_usd=_cost,
+            cache_read_tokens=_cache,
         )
 
     if resp.tool_calls:
@@ -337,6 +346,8 @@ def dispatch_worker(
                 result=_wr_result,
                 tokens_in=resp.input_tokens,
                 tokens_out=resp.output_tokens,
+                cost_usd=float(getattr(resp, 'cost_usd', 0.0) or 0.0),
+                cache_read_tokens=int(getattr(resp, 'cache_read_tokens', 0) or 0),
             )
         elif tc.name == "flag_blocked":
             return WorkerResult(
@@ -347,6 +358,8 @@ def dispatch_worker(
                 stuck_reason=tc.arguments.get("reason", "unknown"),
                 tokens_in=resp.input_tokens,
                 tokens_out=resp.output_tokens,
+                cost_usd=float(getattr(resp, 'cost_usd', 0.0) or 0.0),
+                cache_read_tokens=int(getattr(resp, 'cache_read_tokens', 0) or 0),
                 blocked_origin="worker",
             )
 
@@ -359,6 +372,8 @@ def dispatch_worker(
             result=resp.content,
             tokens_in=resp.input_tokens,
             tokens_out=resp.output_tokens,
+            cost_usd=float(getattr(resp, 'cost_usd', 0.0) or 0.0),
+            cache_read_tokens=int(getattr(resp, 'cache_read_tokens', 0) or 0),
         )
 
     return WorkerResult(
@@ -368,6 +383,11 @@ def dispatch_worker(
         result=resp.content,
         stuck_reason="Worker produced no useful output",
         blocked_origin="empty",
+        # An empty answer was still a paid call (round 19 sibling).
+        tokens_in=resp.input_tokens,
+        tokens_out=resp.output_tokens,
+        cost_usd=float(getattr(resp, 'cost_usd', 0.0) or 0.0),
+        cache_read_tokens=int(getattr(resp, 'cache_read_tokens', 0) or 0),
     )
 
 

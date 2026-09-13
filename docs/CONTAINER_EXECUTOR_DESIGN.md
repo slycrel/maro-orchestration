@@ -841,6 +841,54 @@ exception adds and re-raises with its class and evidence intact.
 Pinned for both brakes (300100/20/$1.75 and 100/20/$0.50, both
 attempts' text in order, class preserved).
 
+*Review round 19 (2026-09-13, codex skeptic + QA, whole chunk): two
+HIGHs on the plain-text/terminal readers, one HIGH on the exhaustion
+classification, one HIGH on the worker/director accounting; all
+fixed.* (lxxvii) **A string-only array is not plain text.**
+`_plain_text_capture` tested only for `{`, so a diagnostic ARRAY of
+strings (`["... OAuth session expired ...", "... hit your limit ..."]`)
+read as the CLI's plain-text surface: its quoted phrases authorised a
+replay and, in the exhaustion message, a host login story. The test is
+now "no `{` and no `[` anywhere" — a bracket means structured content
+and the safe direction is no phrase reading at all; such a capture's
+failure detail names itself ("stream capture without a terminal
+result"). Pinned: the OAuth+limit string array → one launch, neither
+`auth_actionable` nor `retry_at`, no quoted text in the message; the
+plain-text limit error and the column-0 event still retry. (lxxviii)
+**Only an affirmative `rejected` status is a rate limit.** Every
+non-null `rate_limit_info.status` other than "allowed" counted as a
+rejection, so a wrong-typed (`false`, `[]`, `{}`, `1`) or unknown
+("weird", "rejected_soon") status was a confident instruction to
+replay an executor call. `rejected` alone sets the flag; `allowed*`
+passes; anything else is a malformed event, counted and warned.
+Pinned for six malformed values (one launch, one warning) with
+allowed/rejected controls. (lxxix) **The rate-limit marker is
+structural.** The retry predicate read every terminal field, but the
+exhaustion classification text-matched the bounded display message:
+with `result: "partial work"` and the reset in `errors[]`, the display
+showed the partial work, the terminal-failure marker classified
+`fatal`, and the exhausted limit lost its `no-tokens` pause. Both
+exhaustion errors and the ordinary failure now carry
+`maro_rate_limited = _terminal_rate_limited(obj)` (the one reading the
+predicate uses), and `classify_error` honours it ahead of the marked
+terminal failure's FATAL rule. Pinned for retries / cap / rc=0
+endings: `retry_at`, the no-tokens pause, spend of every attempt; a
+limit-less terminal failure stays `fatal`. (lxxx) **Worker cost and
+cache reads reach the director.** `WorkerResult` carried a failed
+ticket's partial output and token counts but not its cost or
+cache-read tokens (the round-10 evidence record had both); the paid
+attempts behind a container-auth refusal or a runaway kill reached the
+director as free work, and success results dropped the same two
+fields. `WorkerResult`/`DirectorResult` gained `cost_usd` and
+`cache_read_tokens`; every worker-result constructor fills them
+(failure evidence, `deliver_result`, `flag_blocked`, content fallback
+and the empty-answer block — a paid call with no answer was recording
+zero tokens too); the director sums them at both worker-result sites
+and the log's worker rows carry them. Pinned through the real
+`dispatch_worker` (`ContainerAuthExpired` with fresh 37 / cache 100 /
+out 9 / $0.12 → tokens_in 137, cost 0.12, cache 100; success, empty
+and evidence-less controls) and `_write_director_log`.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

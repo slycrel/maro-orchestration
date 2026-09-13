@@ -2453,14 +2453,7 @@ def _rate_limited_failure(stdout: str) -> bool:
         # an `error_max_turns` behind a rejected rate_limit_event bought a
         # replay of an executor call that had already done its work). It
         # is a rate-limit story only if the failure itself says so.
-        # Every text field, in full (round 16): an auth failure behind a
-        # partial-work `result` or a long diagnostic decides here too.
-        if _terminal_auth_field(obj) is not None:
-            return False
-        _tl = "\n".join(_terminal_error_fields(obj)).lower()
-        _subtype = str(obj.get("subtype") or "").lower()
-        return bool("hit your limit" in _tl or "rate limit" in _tl or "rate_limit" in _tl
-                    or "rate_limit" in _subtype)
+        return _terminal_rate_limited(obj)
     if _parse_stream_json(stdout)["rate_limited"]:
         return True
     # The phrase backup is for the CLI's PLAIN-TEXT error surface only
@@ -2471,10 +2464,35 @@ def _rate_limited_failure(stdout: str) -> bool:
     return _plain_text_capture(stdout) and _rate_limit_phrase(stdout)
 
 
+def _terminal_rate_limited(obj: Optional[dict]) -> bool:
+    """Does this terminal failure object say rate limit — in ANY of its
+    text fields, in full (round 16), or its subtype — with no auth field
+    outranking it? The ONE reading the retry predicate and the
+    exceptions' `maro_rate_limited` marker share (round 19: the marker's
+    absence let the classifier read the bounded display detail, so a
+    reset carried in `errors[]` behind a partial-work `result` classified
+    an exhausted limit as fatal — no no-tokens pause)."""
+    if not isinstance(obj, dict):
+        return False
+    # Every text field, in full (round 16): an auth failure behind a
+    # partial-work `result` or a long diagnostic decides here too.
+    if _terminal_auth_field(obj) is not None:
+        return False
+    _tl = "\n".join(_terminal_error_fields(obj)).lower()
+    _subtype = str(obj.get("subtype") or "").lower()
+    return bool("hit your limit" in _tl or "rate limit" in _tl or "rate_limit" in _tl
+                or "rate_limit" in _subtype)
+
+
 def _plain_text_capture(stdout: str) -> bool:
-    """Is this capture the CLI's plain-text surface (no JSON object in it
-    at all), the only shape whose free text may be read as a signal?"""
-    return "{" not in (stdout or "")
+    """Is this capture the CLI's plain-text surface — no JSON object OR
+    array anywhere in it (round 19: a string-only diagnostic array passed
+    as plain text and its quoted phrases authorised a replay and a host
+    login story) — the only shape whose free text may be read as a
+    signal? A bracket anywhere means structured content; the safe
+    direction is no phrase reading at all."""
+    text = stdout or ""
+    return "{" not in text and "[" not in text
 
 
 def _rate_limit_phrase(text: str) -> bool:
@@ -2638,8 +2656,13 @@ def _parse_stream_json(text: str) -> dict:
                 malformed += 1
                 _info = None
             status = (_info or {}).get("status")
-            if status is not None and status != "allowed":
+            if status == "rejected":
                 out["rate_limited"] = True
+            elif status is not None and not (isinstance(status, str) and status.startswith("allowed")):
+                # Round 19: every non-null value but "allowed" read as a
+                # rejection — a wrong-typed or unknown status was a
+                # confident instruction to replay an executor call.
+                malformed += 1
     if malformed:
         log.warning("claude stream: %d malformed event(s)/block(s) skipped — tool-event "
                     "evidence is incomplete; the terminal frame is read on its own", malformed)
@@ -3415,8 +3438,11 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                             )
                         if isinstance(_rl_obj, dict):
                             # The CLI ran to a terminal result: never a
-                            # failover/replay story (round 12's marker).
+                            # failover/replay story (round 12's marker);
+                            # the limit is stated STRUCTURALLY (round 19),
+                            # not by the bounded display text.
                             _rl_err.maro_terminal_failure = True  # type: ignore[attr-defined]
+                            _rl_err.maro_rate_limited = _terminal_rate_limited(_rl_obj)  # type: ignore[attr-defined]
                         # Every attempt's spend rides the exhaustion error
                         # too (round 17): the last capture's, then the
                         # replaced ones'.
@@ -3505,6 +3531,10 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     # The CLI ran to a terminal result of its own: this
                     # failure is never a failover/retry story (round 12).
                     _err.maro_terminal_failure = True  # type: ignore[attr-defined]
+                    # A rate-limited terminal failure that reached here
+                    # (rc=0, or the retries could not clear it) says so
+                    # structurally (round 19).
+                    _err.maro_rate_limited = _terminal_rate_limited(_err_obj)  # type: ignore[attr-defined]
                     # The failed call's own spend and output ride on the
                     # exception so the blocked outcome can record them
                     # (rounds 9 + 12: an auth failure AFTER work was

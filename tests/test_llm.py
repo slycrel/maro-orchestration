@@ -4562,3 +4562,117 @@ def test_paid_retry_evidence_survives_a_runaway_kill(monkeypatch, tmp_path, brak
     assert ev["partial"].index("Attempt one") < ev["partial"].index("SECOND ATTEMPT")
     assert classify_error(err, backend="subprocess").error_class == (
         "token_runaway" if brake == "token" else "budget_runaway")
+
+
+# ---------------------------------------------------------------------------
+# Review round 19 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+def test_string_array_diagnostics_never_authorize_retry_or_host_auth(monkeypatch, tmp_path):
+    # Round 19: `_plain_text_capture` tested only for `{`, so a string-only
+    # diagnostic ARRAY passed as plain text — its quoted phrases authorised
+    # a replay and, in the exhaustion message, a host login story.
+    from llm import _failure_detail, _plain_text_capture, _rate_limited_failure
+    from llm_errors import classify_error
+    _r16_container_lane(monkeypatch, tmp_path)
+    capture = json.dumps(["Example: " + _R16_OAUTH, "Example: hit your limit · resets 3pm"])
+    assert _plain_text_capture(capture) is False and _rate_limited_failure(capture) is False
+    assert _failure_detail(capture, None, 300) == "stream capture without a terminal result"
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, capture)) as run:
+        with pytest.raises(RuntimeError) as ei:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1
+    assert _R16_OAUTH not in str(ei.value) and "hit your limit" not in str(ei.value)
+    assert classify_error(ei.value, backend="subprocess").error_class not in ("auth_actionable", "retry_at")
+    # (the no-terminal-object raw auth search for the BREAKER is a recorded
+    # residual — clear it so the controls below launch at all)
+    import container_exec as ce
+    ce.clear_auth_breaker("round-19 control"); ce.reset_container_caches()
+    # the indented twin and a bracketed prefix are structured/unknown too — never phrase-read
+    for shape in ("   " + capture, "[note] " + "You've hit your limit · resets 3pm"):
+        assert _plain_text_capture(shape) is False and _rate_limited_failure(shape) is False
+    # positive controls: the plain-text surface, and the structured event
+    plain = "You've hit your limit · resets 3pm"
+    assert _plain_text_capture(plain) is True and _rate_limited_failure(plain) is True
+    assert _failure_detail(plain, None, 300) == plain
+    event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, event)) as run:
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 2
+
+
+@pytest.mark.parametrize("status", [False, [], {}, "weird", 1, "rejected_soon"])
+def test_a_malformed_rate_limit_status_does_not_relaunch(monkeypatch, tmp_path, caplog, status):
+    # Round 19: every non-null status but "allowed" read as a rejection —
+    # a wrong-typed or unknown value was a confident instruction to
+    # replay an executor call. Only affirmative "rejected" authorises
+    # backoff; anything else is counted as malformed and warned.
+    import logging
+    from llm import _parse_stream_json, _rate_limited_failure
+    _r16_container_lane(monkeypatch, tmp_path)
+    event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": status}})
+    with caplog.at_level(logging.WARNING, logger="maro.llm"):
+        parsed = _parse_stream_json(event)
+    assert parsed["rate_limited"] is False and "malformed" in caplog.text
+    assert _rate_limited_failure(event) is False
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, event)) as run:
+        with pytest.raises(RuntimeError, match="claude subprocess failed"):
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1
+    # controls: allowed (and allowed_warning) → not limited, no warning; rejected → limited
+    caplog.clear()
+    for ok in ("allowed", "allowed_warning"):
+        with caplog.at_level(logging.WARNING, logger="maro.llm"):
+            assert _parse_stream_json(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": ok}}))["rate_limited"] is False
+    assert "malformed" not in caplog.text
+    assert _parse_stream_json(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}))["rate_limited"] is True
+
+
+@pytest.mark.parametrize("ending", ["retries", "cap", "rc0"])
+def test_a_reset_in_errors_behind_a_partial_result_still_pauses(monkeypatch, tmp_path, ending):
+    # Round 19: the retry predicate read every terminal field, but the
+    # exhaustion classification read the bounded display message — with
+    # `result: "partial work"` and the reset in `errors[]`, the display
+    # preferred the partial work, the terminal marker classified `fatal`,
+    # and the exhausted limit missed its no-tokens pause. The limit is now
+    # stated structurally (`maro_rate_limited`).
+    from llm import _rate_limited_failure, _terminal_rate_limited
+    from llm_errors import call_usage_evidence, classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for, PAUSE_ERR_NO_TOKENS
+    _r16_container_lane(monkeypatch, tmp_path)
+    terminal = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                           "result": "partial work", "errors": ["You've hit your limit · resets 3pm"],
+                           "usage": {"input_tokens": 100, "output_tokens": 20}, "total_cost_usd": 0.5})
+    assert _terminal_rate_limited(json.loads(terminal)) is True and _rate_limited_failure(terminal) is True
+    a = ClaudeSubprocessAdapter()
+    rc = 1
+    if ending == "retries":
+        a._rate_limit_max_retries = 1; launches = 2
+    elif ending == "cap":
+        a._rate_limit_max_retries = 3; a._rate_limit_wait = 601; launches = 1
+    else:  # a zero exit with the same explicit terminal failure (rounds 8/9)
+        a._rate_limit_max_retries = 1; launches = 2; rc = 0
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(rc, terminal)) as run:
+        with pytest.raises(RuntimeError) as ei:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == launches
+    assert "partial work" in str(ei.value), "the display detail is unchanged"
+    assert getattr(ei.value, "maro_terminal_failure", False) and getattr(ei.value, "maro_rate_limited", False)
+    assert classify_error(ei.value, backend="subprocess").error_class == "retry_at"
+    assert environmental_pause_for(_blocked_outcome_from_exc(ei.value)) == PAUSE_ERR_NO_TOKENS
+    ev = call_usage_evidence(ei.value)
+    assert ev["tokens_in"] == 100 * launches and ev["cost"] == pytest.approx(0.5 * launches)
+    # negative control: a terminal failure that says nothing about a limit stays fatal
+    other = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                        "result": "partial work", "errors": ["ran out of turns"]})
+    assert _terminal_rate_limited(json.loads(other)) is False
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, other)):
+        with pytest.raises(RuntimeError) as ei2:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert classify_error(ei2.value, backend="subprocess").error_class == "fatal"

@@ -107,6 +107,11 @@ class DirectorResult:
     project: Optional[str] = None
     tokens_in: int = 0
     tokens_out: int = 0
+    # Round 19: the workers' billed cost and cache reads, summed (tickets
+    # and revisions, refused ones included) — the director's own calls
+    # are metered separately by the adapter's call records.
+    cost_usd: float = 0.0
+    cache_read_tokens: int = 0
     elapsed_ms: int = 0
     log_path: Optional[str] = None
     worker_slice: bool = False  # was memory.worker_slice active for this run? (default-on since 2026-07-08)
@@ -423,6 +428,8 @@ def run_director(
         adapter = build_adapter(model=assign_model_by_role("planner"))
 
     total_tokens_in = 0
+    total_cost_usd = 0.0
+    total_cache_read = 0
     total_tokens_out = 0
 
     # Phase 1: Produce SPEC + tickets
@@ -543,6 +550,8 @@ def run_director(
                 log.warning("director: slice_echo failed for ticket %s: %s", ticket.ticket_id, exc)
         total_tokens_in += result.tokens_in
         total_tokens_out += result.tokens_out
+        total_cost_usd += float(getattr(result, "cost_usd", 0.0) or 0.0)
+        total_cache_read += int(getattr(result, "cache_read_tokens", 0) or 0)
 
         # Spot-check: worker result should reference the requested worker_type
         if result.worker_type != ticket.worker_type:
@@ -608,6 +617,8 @@ def run_director(
                         log.warning("director: slice_echo failed for revision of ticket %s: %s", ticket.ticket_id, exc)
                 total_tokens_in += result.tokens_in
                 total_tokens_out += result.tokens_out
+                total_cost_usd += float(getattr(result, "cost_usd", 0.0) or 0.0)
+                total_cache_read += int(getattr(result, "cache_read_tokens", 0) or 0)
                 _env_pause = _worker_environmental_pause(result)
                 if _env_pause:
                     director_pause_reason = _env_pause
@@ -763,6 +774,8 @@ def run_director(
         project=project,
         tokens_in=total_tokens_in,
         tokens_out=total_tokens_out,
+        cost_usd=total_cost_usd,
+        cache_read_tokens=total_cache_read,
         elapsed_ms=elapsed,
         log_path=log_path,
         worker_slice=worker_slice_enabled,
@@ -1168,6 +1181,9 @@ def _write_director_log(
                     "unaccepted_draft_length": len(getattr(r, "unaccepted_draft", "") or ""),
                     "tokens_in": r.tokens_in,
                     "tokens_out": r.tokens_out,
+                    # Round 19: the bill and the cache share, durable too.
+                    "cost_usd": float(getattr(r, "cost_usd", 0.0) or 0.0),
+                    "cache_read_tokens": int(getattr(r, "cache_read_tokens", 0) or 0),
                 }
                 for r in worker_results
             ],

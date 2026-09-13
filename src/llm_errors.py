@@ -272,8 +272,10 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
     # to FAILOVER and the wrapper re-ran the finished work elsewhere). The
     # step is blocked; the loop's own recovery decides what to do next.
     if getattr(exc, "maro_terminal_failure", False):
-        if "limit" in msg and "resets" in msg:
-            # A stated reset is a wait, not a replay — same rule as below.
+        if getattr(exc, "maro_rate_limited", False) or ("limit" in msg and "resets" in msg):
+            # A stated limit is a wait, not a replay — same rule as below.
+            # The structural marker (round 19) outranks the bounded display
+            # text, which may show a partial-work `result` instead.
             return _mk(RETRY_AT, retryable=True)
         return _mk(FATAL)
 

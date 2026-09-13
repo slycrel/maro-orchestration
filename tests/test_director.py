@@ -4105,3 +4105,36 @@ def test_a_refused_revision_with_partial_output_keeps_both(monkeypatch, tmp_path
     assert result.worker_results[0].unaccepted_draft == "draft"
     assert "(draft — its revision was refused" in result.report and "\ndraft" in result.report
     assert "(partial — refused by the environment" in result.report and "REVISION PARTIAL" in result.report
+
+
+def test_director_log_and_totals_carry_worker_cost_and_cache(monkeypatch, tmp_path):
+    # Review round 19: worker rows in the director log and the director's
+    # totals carried tokens only — a ticket's cost and cache reads (the
+    # paid attempts behind a refusal) vanished between the worker and the
+    # run record.
+    _setup(monkeypatch, tmp_path)
+    worker_results = [
+        WorkerResult(worker_type="general", ticket="t1", status="blocked", result="partial",
+                     tokens_in=137, tokens_out=9, cost_usd=0.12, cache_read_tokens=100,
+                     error_class="container_auth", blocked_origin="adapter"),
+        WorkerResult(worker_type="general", ticket="t2", status="done", result="ok",
+                     tokens_in=1, tokens_out=2, cost_usd=0.05, cache_read_tokens=3),
+    ]
+    tickets = [Ticket(ticket_id="t1", worker_type="general", task="do the thing")]
+    path_str = _write_director_log(
+        project=None, director_id="test19", directive="do the thing", spec="[spec]",
+        tickets=tickets, worker_results=worker_results, status="done", elapsed_ms=10,
+        worker_slice=False,
+    )
+    from orch_items import resolve_artifact_path
+    payload = json.loads(resolve_artifact_path(path_str).read_text(encoding="utf-8"))
+    rows = payload["worker_results"]
+    assert (rows[0]["cost_usd"], rows[0]["cache_read_tokens"]) == (pytest.approx(0.12), 100)
+    assert (rows[1]["cost_usd"], rows[1]["cache_read_tokens"]) == (pytest.approx(0.05), 3)
+    # the DirectorResult carries the sums (both worker-result sites feed them)
+    from director import DirectorResult
+    _base = dict(director_id="d", directive="x", plan_acceptance="explicit", status="done", spec="",
+                 tickets=tickets, worker_results=worker_results, review_decisions=[], report="")
+    dr = DirectorResult(cost_usd=0.17, cache_read_tokens=103, **_base)
+    assert (dr.cost_usd, dr.cache_read_tokens) == (0.17, 103)
+    assert (DirectorResult(**_base).cost_usd, DirectorResult(**_base).cache_read_tokens) == (0.0, 0)
