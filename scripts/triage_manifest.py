@@ -70,6 +70,7 @@ _add("subprocess", """
  container_exec.py:_credentials_expiry_probe worktree.py:_sanitize_untrusted_git""")
 _add("stream", """
  llm.py:_parse_stream_json llm.py:_stream_events llm.py:_is_plain_missing_session_error
+ llm.py:_assistant_text_tail
  orch_bridges.py:_tail_lines orch_bridges.py:_extract_session_result_from_text
  orch_bridges.py:command_execution_bridge orch_bridges.py:command_execution_bridge._execute
  orch_bridges.py:review_command_validation_bridge

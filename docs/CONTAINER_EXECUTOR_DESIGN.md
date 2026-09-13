@@ -561,6 +561,47 @@ returned "" and zero accounting; it now records the partial output,
 usage, cost and llm_errors class, and the parent's blocked outcome
 carries the class.
 
+*Review round 12 (2026-09-13, codex skeptic + QA, whole chunk): two HIGHs
+on the terminal-result seam, four accounting/ledger carry-throughs; all
+fixed.* (li) **A terminal execution failure is never replayed.** The CLI's
+own terminal verdicts (`error_max_turns` and kin) became the generic
+"claude subprocess failed (rc=…)" text, which the classifier reads as
+`failover` — so the `FailoverAdapter` re-ran finished executor work on
+the next backend. The terminal branch now marks the error
+(`maro_terminal_failure`), and the classifier returns `fatal` for the
+marker after the auth/billing/container checks (a stated limit reset
+still classifies `retry_at`); the wrapper propagates instead of
+replaying. Pinned with a fallback spy that must never be called. (lii)
+**One rule for the terminal frame.** `_extract_result_object` returned
+the FIRST `type: result` object while `_parse_stream_json` kept the
+LAST; a capture carrying a success frame ahead of an auth-error frame
+completed as a confident `done`. Both readers now keep the last frame
+(pinned in both orderings at rc 0 and 1). (liii) **Cache reads
+attribute across combined calls.** The tool_search re-call folded the
+first call's input/output but not its cache reads; the blocked builder
+had no first-call cache input; `TeamResult` had no cache field, so the
+parent kept only its own. All three fold now (`cache_read_tokens`
+builder parameter; `TeamResult.cache_read_tokens` from the response or
+the failure evidence). (liv) **Cache creation is read independently of
+the input counter.** A terminal frame whose `input_tokens` was null or
+absent lost its `cache_creation_input_tokens` — the larger uncached
+ingest; each counter is validated (and warned) on its own and summed
+when either is present. (lv) **A terminal failure keeps the assistant's
+text.** Usage rode the terminal exception but what the call said and
+did (assistant text blocks, tool_use names) did not; `_assistant_text_tail`
+now attaches the stream's assistant output as `maro_partial_output`, so
+the blocked step's result and the pause card show the work. (lvi) **The
+paused step reaches the spend ledger.** Run cards read spend from
+`memory/step-costs.jsonl` (`spend_for_loops`), not from the step
+objects; the sequential env-pause early exit and the fan-out/DAG result
+constructor never called `record_step_cost`, so a refused call's paid
+spend vanished from the card. Both record now (the batch path already
+did; the lanes are disjoint, so no member is recorded twice). Recorded,
+not changed: a subprocess kill still classifies `retry_backoff` (design
+question above); the terminal branch's `fatal` means the loop's step
+recovery, not a backend retry, decides what happens after a max-turns
+exhaustion.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

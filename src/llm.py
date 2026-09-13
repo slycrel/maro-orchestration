@@ -2185,6 +2185,7 @@ def _extract_result_object(text: str) -> Optional[dict]:
         return None
     decoder = json.JSONDecoder()
     start = text.find("{")
+    last = None
     while start != -1:
         try:
             data, consumed = decoder.raw_decode(text[start:])
@@ -2192,9 +2193,38 @@ def _extract_result_object(text: str) -> Optional[dict]:
             start = text.find("{", start + 1)
             continue
         if isinstance(data, dict) and data.get("type") == "result":
-            return data
+            # The LAST result object is the terminal one — the same rule
+            # `_parse_stream_json` applies (review round 12, 2026-09-13:
+            # first-wins here vs last-wins there let a capture carrying a
+            # success frame ahead of an auth-error frame complete as done).
+            last = data
         start = text.find("{", start + consumed)
-    return None
+    return last
+
+
+def _assistant_text_tail(stdout: str, limit: int = 4000) -> str:
+    """The assistant's text blocks (and tool_use names) from a stream-json
+    capture, joined, last `limit` chars — the evidence of what a call did
+    before its terminal failure. Never raises past its caller's guard."""
+    parts: List[str] = []
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "assistant":
+            continue
+        for block in ((ev.get("message") or {}).get("content") or []):
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and block.get("text"):
+                parts.append(str(block["text"]))
+            elif block.get("type") == "tool_use" and block.get("name"):
+                parts.append(f"[tool_use: {block['name']}]")
+    return "\n".join(parts)[-limit:]
 
 
 def _terminal_error_text(obj: Optional[dict]) -> str:
@@ -3185,16 +3215,25 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 # outcome builders.
                 if isinstance(_err_obj, dict):
                     from llm_errors import finite_nonneg as _fnn
+                    # The CLI ran to a terminal result of its own: this
+                    # failure is never a failover/retry story (round 12).
+                    _err.maro_terminal_failure = True  # type: ignore[attr-defined]
                     _usage = _err_obj.get("usage")
                     if isinstance(_usage, dict):
                         _malformed = []
-                        if _usage.get("input_tokens") is not None:
-                            _v = _fnn(_usage.get("input_tokens"), int, -1)
-                            _err.fresh_input_tokens = (  # type: ignore[attr-defined]
-                                (0 if _v < 0 else _v)
-                                + _fnn(_usage.get("cache_creation_input_tokens", 0), int, 0))
-                            if _v < 0:
-                                _malformed.append("input_tokens")
+                        _in_raw = _usage.get("input_tokens")
+                        _cc_raw = _usage.get("cache_creation_input_tokens")
+                        if _in_raw is not None or _cc_raw is not None:
+                            # Validated independently, then summed (round
+                            # 12: cache creation was gated on a non-null
+                            # input counter).
+                            _in = _fnn(_in_raw, int, -1) if _in_raw is not None else 0
+                            _cc = _fnn(_cc_raw, int, -1) if _cc_raw is not None else 0
+                            if _in < 0:
+                                _malformed.append("input_tokens"); _in = 0
+                            if _cc < 0:
+                                _malformed.append("cache_creation_input_tokens"); _cc = 0
+                            _err.fresh_input_tokens = _in + _cc  # type: ignore[attr-defined]
                         if _usage.get("output_tokens") is not None:
                             _v = _fnn(_usage.get("output_tokens"), int, -1)
                             _err.fresh_output_tokens = 0 if _v < 0 else _v  # type: ignore[attr-defined]
@@ -3214,6 +3253,17 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         _err.estimated_cost_usd = 0.0 if _v < 0 else _v  # type: ignore[attr-defined]
                         if _v < 0:
                             log.warning("claude terminal total_cost_usd malformed — recorded as 0")
+                    # What the call produced before its terminal failure
+                    # (round 12: usage rode the exception, the assistant
+                    # text and tool activity did not — the blocked step's
+                    # result stayed ""). The kill path attaches the raw
+                    # tail; here the assistant's own text is the evidence.
+                    try:
+                        _tail = _assistant_text_tail(result.stdout)
+                        if _tail:
+                            _err.maro_partial_output = _tail  # type: ignore[attr-defined]
+                    except Exception:
+                        log.debug("terminal partial output not attached", exc_info=True)
                 if _container_auth_owned:
                     # The breaker owns this failure's story: FailoverAdapter
                     # must neither trip the process-wide backend circuit

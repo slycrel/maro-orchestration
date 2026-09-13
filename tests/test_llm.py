@@ -3702,3 +3702,125 @@ def test_a_terminal_failure_after_work_keeps_its_usage():
     assert _blocked_outcome_from_exc(wrapper)["tokens_in"] == 37
     # control: a pre-launch refusal carries no usage
     assert kill_evidence(RuntimeError("refused before launch")) == ("", 0, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Review round 12 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+def _r12_frame(subtype, **extra):
+    d = {"type": "result", "subtype": subtype, "is_error": subtype != "success",
+         "result": extra.pop("result", "done" if subtype == "success" else "OAuth session expired - Please run /login")}
+    d.update(extra)
+    return json.dumps(d)
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_the_last_result_frame_is_the_terminal_one(rc):
+    # Round 12: `_extract_result_object` kept the FIRST result frame while
+    # `_parse_stream_json` kept the LAST — a capture with a success frame
+    # ahead of an auth-error frame completed as a confident `done`.
+    from llm import _extract_result_object, _parse_stream_json, _terminal_failure
+    success_then_error = _r12_frame("success") + "\n" + _r12_frame("error_during_execution")
+    error_then_success = _r12_frame("error_during_execution") + "\n" + _r12_frame("success")
+    for text in (success_then_error, error_then_success):
+        assert _extract_result_object(text) == _parse_stream_json(text)["result"], "one rule for both readers"
+    assert _terminal_failure(success_then_error) is True
+    assert _terminal_failure(error_then_success) is False
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=success_then_error)):
+        with pytest.raises(RuntimeError, match="OAuth session expired"):
+            a.complete([LLMMessage("user", "build a thing")])
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=error_then_success)):
+        assert a.complete([LLMMessage("user", "build a thing")]).content == "done"
+
+
+def test_a_terminal_execution_failure_never_fails_over():
+    # Round 12: `error_max_turns` and kin became the generic "claude
+    # subprocess failed (rc=1)" text, which the classifier reads as
+    # FAILOVER — the wrapper replayed finished executor work on the next
+    # backend. The CLI ran; its own terminal verdict is the step's.
+    from llm import FailoverAdapter
+    from llm_errors import classify_error, FATAL, AUTH_ACTIONABLE, RETRY_AT
+    maxed = _r12_frame("error_max_turns", result="Reached max turns (20)",
+                       usage={"input_tokens": 37, "output_tokens": 9}, total_cost_usd=0.12)
+    launched = []
+
+    class _Spy:
+        backend = "anthropic"; model_key = "spy"
+        def complete(self, messages, **kw):
+            launched.append(messages); return LLMResponse(content="replayed")
+    primary = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=maxed)):
+        with pytest.raises(RuntimeError, match="Reached max turns") as ei:
+            FailoverAdapter([primary, _Spy()]).complete([LLMMessage("user", "build a thing")])
+    assert launched == [], "a terminal execution failure is never replayed elsewhere"
+    info = classify_error(ei.value)
+    assert info.error_class == FATAL and not info.failover and not info.retryable, info
+    assert getattr(ei.value, "maro_terminal_failure", False) is True
+    # controls: auth text keeps its actionable class (and its one failover);
+    # a stated reset is still a wait; a plain subprocess crash still fails over
+    auth = RuntimeError("claude subprocess failed (rc=1): OAuth session expired - Please run /login")
+    auth.maro_terminal_failure = True
+    assert classify_error(auth).error_class == AUTH_ACTIONABLE
+    reset = RuntimeError("claude subprocess failed (rc=1): You've hit your limit · resets 3pm")
+    reset.maro_terminal_failure = True
+    assert classify_error(reset).error_class == RETRY_AT
+    assert classify_error(RuntimeError("claude subprocess failed (rc=137): killed")).failover is True
+
+
+@pytest.mark.parametrize("usage, want, warned", [
+    ({"input_tokens": None, "cache_creation_input_tokens": 30}, 30, False),
+    ({"cache_creation_input_tokens": 30}, 30, False),
+    ({"input_tokens": "many", "cache_creation_input_tokens": 30}, 30, True),
+    ({"input_tokens": 5, "cache_creation_input_tokens": "lots"}, 5, True),
+    ({"input_tokens": 5, "cache_creation_input_tokens": 30}, 35, False),
+])
+def test_a_null_input_counter_keeps_the_cache_creation_ingest(caplog, usage, want, warned):
+    # Round 12: cache creation was read only when input_tokens was non-null,
+    # so a terminal frame with a null/absent input counter lost its (larger)
+    # uncached ingest entirely.
+    import logging
+    from llm_errors import call_usage_evidence
+    body = _r12_frame("error_during_execution", usage=usage, total_cost_usd=0.12)
+    a = ClaudeSubprocessAdapter()
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=1, stderr="", container_executed=False, stdout=body)):
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")])
+    assert call_usage_evidence(ei.value)["tokens_in"] == want
+    assert ("malformed" in caplog.text) is warned
+
+
+def test_a_terminal_failure_after_work_keeps_the_assistant_text():
+    # Round 12: usage rode the terminal exception; what the call actually
+    # said and did (assistant text, tool_use) did not — the blocked step's
+    # result stayed "" and the pause card had nothing to show.
+    from llm_errors import call_usage_evidence
+    from step_exec import _blocked_outcome_from_exc
+    assistant = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "Listed two messages: invoice, newsletter."},
+        {"type": "tool_use", "name": "imap_read", "input": {}}]}})
+    body = assistant + "\n" + _r12_frame("error_during_execution",
+                                          usage={"input_tokens": 37, "output_tokens": 9}, total_cost_usd=0.12)
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=body)):
+        with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+            a.complete([LLMMessage("user", "build a thing")])
+    ev = call_usage_evidence(ei.value)
+    assert "Listed two messages" in ev["partial"] and "[tool_use: imap_read]" in ev["partial"]
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (37, 9, 0.12)
+    out = _blocked_outcome_from_exc(ei.value)
+    assert "Listed two messages" in out["result"] and out["tokens_in"] == 37, out
+    # control: a frame with no assistant events attaches nothing
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False,
+            stdout=_r12_frame("error_during_execution"))):
+        with pytest.raises(RuntimeError) as ei2:
+            a.complete([LLMMessage("user", "build a thing")])
+    assert call_usage_evidence(ei2.value)["partial"] == ""

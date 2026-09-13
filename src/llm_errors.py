@@ -264,6 +264,19 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
         # the user_action always surfaces so it can't be silently absorbed.
         return _mk(AUTH_ACTIONABLE, failover=True)
 
+    # The CLI RAN and reported a terminal execution failure of its own
+    # (error_max_turns and kin — auth/billing/limit shapes were classified
+    # above). The binary is fine and the work is partly done: neither a
+    # retry nor a failover may replay it on another backend (review round
+    # 12, 2026-09-13: the generic "subprocess failed" text below routed it
+    # to FAILOVER and the wrapper re-ran the finished work elsewhere). The
+    # step is blocked; the loop's own recovery decides what to do next.
+    if getattr(exc, "maro_terminal_failure", False):
+        if "limit" in msg and "resets" in msg:
+            # A stated reset is a wait, not a replay — same rule as below.
+            return _mk(RETRY_AT, retryable=True)
+        return _mk(FATAL)
+
     # Subprocess lane: binary missing / crashed / wall-or-liveness kill.
     # The kill (adapter_timeout) is the #1 live failure class on this box;
     # the documented mitigation is the API lane → failover.

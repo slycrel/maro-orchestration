@@ -384,6 +384,25 @@ def _run_parallel_path(
     _fanout_stuck_reason = None
     for _i, (_step_text, _oc) in enumerate(zip(_fanout_step_texts, _fanout_outcomes), 1):
         _st = _oc.get("status", "blocked")
+        # Ledger parity (round 12): the batch path records every member;
+        # the fan-out / DAG lanes never did, so run cards omitted their
+        # spend — a refusal's included.
+        try:
+            from metrics import record_step_cost
+            record_step_cost(
+                step_text=_step_text,
+                tokens_in=_oc.get("tokens_in", 0),
+                tokens_out=_oc.get("tokens_out", 0),
+                status=_st,
+                goal=ctx.goal,
+                model=getattr(ctx.adapter, "model_key", ""),
+                elapsed_ms=0,
+                cache_read_tokens=_oc.get("cache_read_tokens", 0) or 0,
+                loop_id=getattr(ctx, "loop_id", "") or "",
+                provider_cost_usd=float(_oc.get("provider_cost_usd", 0.0) or 0.0),
+            )
+        except Exception as _cost_exc:
+            log.debug("fan-out record_step_cost failed (non-critical): %s", _cost_exc)
         _fanout_step_outcomes.append(step_from_decompose(
             _step_text, _i,
             status=_st,

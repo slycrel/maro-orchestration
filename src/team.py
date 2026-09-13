@@ -98,6 +98,7 @@ class TeamResult:
     tokens_out: int = 0
     provider_cost_usd: float = 0.0  # the ticket call's billed cost (round 10)
     error_class: str = ""           # llm_errors class of an adapter failure (round 11)
+    cache_read_tokens: int = 0      # subset of tokens_in served from cache (round 12)
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +286,7 @@ def create_team_worker(
             tokens_out=_ev["tokens_out"],
             provider_cost_usd=_ev["cost"],
             error_class=_ecls,
+            cache_read_tokens=_ev["cache_read"],
         )
 
     if resp.tool_calls:
@@ -298,6 +300,7 @@ def create_team_worker(
                 tokens_in=resp.input_tokens,
                 tokens_out=resp.output_tokens,
                 provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
+                cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0),
             )
         elif tc.name == "flag_blocked":
             return TeamResult(
@@ -309,6 +312,7 @@ def create_team_worker(
                 tokens_in=resp.input_tokens,
                 tokens_out=resp.output_tokens,
                 provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
+                cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0),
             )
 
     # Fallback: treat content as result
@@ -321,6 +325,7 @@ def create_team_worker(
             tokens_in=resp.input_tokens,
             tokens_out=resp.output_tokens,
                 provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
+                cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0),
         )
 
     return TeamResult(
@@ -332,6 +337,7 @@ def create_team_worker(
         tokens_in=resp.input_tokens,
         tokens_out=resp.output_tokens,
         provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
+        cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0),
     )
 
 

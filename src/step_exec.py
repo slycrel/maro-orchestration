@@ -1362,7 +1362,8 @@ def _schema_to_tool(schema: Any):
 
 def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[str] = None,
                               tokens_in: int = 0, tokens_out: int = 0,
-                              provider_cost_usd: float = 0.0) -> Dict[str, Any]:
+                              provider_cost_usd: float = 0.0,
+                              cache_read_tokens: int = 0) -> Dict[str, Any]:
     """The blocked outcome an adapter exception becomes — ONE implementation
     for both adapter calls in execute_step (the initial call and the
     tool_search re-call; review round 2, 2026-09-13: the re-call's handler
@@ -1400,6 +1401,8 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[st
         }
         if provider_cost_usd:
             _blocked["provider_cost_usd"] = float(provider_cost_usd)
+        if cache_read_tokens:
+            _blocked["cache_read_tokens"] = int(cache_read_tokens)
         # A token-runaway kill is the one failure whose whole point is that
         # it consumed a lot. Recording it as a zero-token step would hide
         # the spend from run totals, cost reports and skill telemetry —
@@ -1416,8 +1419,8 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[st
             _blocked["tokens_in"] = int(tokens_in or 0) + _fresh + _ev["cache_read"]
             _blocked["tokens_out"] = int(tokens_out or 0) + _ev["tokens_out"]
             _blocked["provider_cost_usd"] = float(provider_cost_usd or 0.0) + _fresh_cost
-            if _ev["cache_read"]:
-                _blocked["cache_read_tokens"] = _ev["cache_read"]
+            if _ev["cache_read"] or cache_read_tokens:
+                _blocked["cache_read_tokens"] = int(cache_read_tokens or 0) + _ev["cache_read"]
         return _blocked
     except Exception:
         return {
@@ -1941,6 +1944,7 @@ def execute_step(
                     # tokens dropped).
                     _first_in = int(getattr(resp, "input_tokens", 0) or 0)
                     _first_out = int(getattr(resp, "output_tokens", 0) or 0)
+                    _first_cache = int(getattr(resp, "cache_read_tokens", 0) or 0)
                     # agentic: same worker executor step re-called with expanded tools
                     resp = adapter.complete(
                         [
@@ -1966,7 +1970,9 @@ def execute_step(
                     try:
                         import dataclasses as _dc
                         resp = _dc.replace(resp, input_tokens=resp.input_tokens + _first_in,
-                                           output_tokens=resp.output_tokens + _first_out)
+                                           output_tokens=resp.output_tokens + _first_out,
+                                           cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0)
+                                           + _first_cache)  # round 12: cache attribution folds too
                     except Exception:
                         log.debug("step %d tool_search: could not fold first-call usage", step_num)
                     _executor_session_id = (
@@ -2009,7 +2015,8 @@ def execute_step(
                         _rerun_exc,
                         tokens_in=int(getattr(resp, "input_tokens", 0) or 0),
                         tokens_out=int(getattr(resp, "output_tokens", 0) or 0),
-                        provider_cost_usd=_provider_cost_usd))
+                        provider_cost_usd=_provider_cost_usd,
+                        cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0)))
             else:
                 log.debug("step %d tool_search: no matches for %r", step_num, _ts_query)
 
@@ -2227,7 +2234,8 @@ def execute_step(
                     _tw_exc,
                     tokens_in=int(getattr(resp, "input_tokens", 0) or 0),
                     tokens_out=int(getattr(resp, "output_tokens", 0) or 0),
-                    provider_cost_usd=_provider_cost_usd))
+                    provider_cost_usd=_provider_cost_usd,
+                    cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0)))
             # The specialist's status is the step's status: a blocked ticket
             # is not a done step (round 9 — the parent stamped `done`
             # unconditionally, so a nested refusal read as successful work).
@@ -2236,6 +2244,7 @@ def execute_step(
             # the parent call's tokens reached the budgets and the report).
             _tw_in = int(getattr(_tw_res, "tokens_in", 0) or 0)
             _tw_out = int(getattr(_tw_res, "tokens_out", 0) or 0)
+            _tw_cache = int(getattr(_tw_res, "cache_read_tokens", 0) or 0)
             _provider_cost_usd += safe_float(getattr(_tw_res, "provider_cost_usd", 0.0))
             _tok += _tw_in + _tw_out
             log.info("step %d %s (create_team_worker) role=%r tokens=%d elapsed=%.1fs",
@@ -2247,7 +2256,7 @@ def execute_step(
                 "summary": f"Team worker [{_tw_role}]: {_tw_task[:60]}",
                 "tokens_in": resp.input_tokens + _tw_in,
                 "tokens_out": resp.output_tokens + _tw_out,
-                "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
+                "cache_read_tokens": int(getattr(resp, "cache_read_tokens", 0) or 0) + _tw_cache,
             }
             if _tw_blocked:
                 _outcome["stuck_reason"] = (f"team worker [{_tw_role}] blocked: "

@@ -1351,3 +1351,144 @@ class TestReviewRound11:
         assert (outcome["tokens_in"], outcome["tokens_out"]) == (144, 12)
         assert outcome["provider_cost_usd"] == pytest.approx(0.13)
         assert outcome.get("error_class") == "retry_backoff"
+
+
+class TestReviewRound12:
+    """Round 12 (2026-09-13): cache attribution across combined calls, and
+    the spend ledger the run cards read."""
+
+    def test_the_recall_folds_the_first_calls_cache_reads(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import tool_search
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", input_tokens=70, output_tokens=3, cache_read_tokens=50,
+                                       tool_calls=[ToolCall(name="tool_search", arguments={"query": "mail"})])
+                return LLMResponse(content="the inbox has two messages", input_tokens=40, output_tokens=6,
+                                   cache_read_tokens=20)
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [{"name": "imap_read", "description": "d",
+                                                     "input_schema": {"type": "object", "properties": {}}}])
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                               adapter=_Adapter(), tools=[_deferred_stub("imap_read")], project_dir=str(tmp_path))
+        assert outcome["status"] == "done"
+        assert (outcome["tokens_in"], outcome["tokens_out"], outcome["cache_read_tokens"]) == (110, 9, 70), outcome
+
+    def test_a_refused_recall_keeps_the_first_calls_cache_reads(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import tool_search
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step
+        exc = RuntimeError("claude subprocess timed out: liveness stall")
+        exc.fresh_input_tokens = 37; exc.fresh_output_tokens = 9
+        exc.fresh_cache_read_tokens = 100; exc.estimated_cost_usd = 0.12
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", input_tokens=70, output_tokens=3, cache_read_tokens=50,
+                                       cost_usd=0.01,
+                                       tool_calls=[ToolCall(name="tool_search", arguments={"query": "mail"})])
+                raise exc
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [{"name": "imap_read", "description": "d",
+                                                     "input_schema": {"type": "object", "properties": {}}}])
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                               adapter=_Adapter(), tools=[_deferred_stub("imap_read")], project_dir=str(tmp_path))
+        assert outcome["status"] == "blocked"
+        assert (outcome["tokens_in"], outcome["tokens_out"], outcome["cache_read_tokens"]) == (207, 12, 150), outcome
+        assert outcome["provider_cost_usd"] == pytest.approx(0.13)
+
+    def test_a_specialists_cache_reads_reach_the_parent_step(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step
+        from team import create_team_worker
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; container_capable = True; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", input_tokens=70, output_tokens=3, cache_read_tokens=50,
+                                       tool_calls=[ToolCall(name="create_team_worker",
+                                                            arguments={"role": "research", "task": "inspect inbox"})])
+                return _delivered()
+        def _delivered():
+            return LLMResponse(content="", input_tokens=60, output_tokens=8, cache_read_tokens=40,
+                               tool_calls=[ToolCall(name="deliver_result", arguments={"result": "two messages"})])
+        class _Worker:
+            model_key = "t"; backend = "subprocess"; container_capable = True
+            def complete(self, messages, **kwargs):
+                return _delivered()
+        res = create_team_worker("research", "inspect inbox", adapter=_Worker())
+        assert res.status == "done" and res.cache_read_tokens == 40
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                               adapter=_Adapter(), tools=[], project_dir=str(tmp_path))
+        assert outcome["status"] == "done", outcome
+        assert (outcome["tokens_in"], outcome["tokens_out"], outcome["cache_read_tokens"]) == (130, 11, 90), outcome
+        # blocked twin: the evidence's cache reads ride the TeamResult too
+        exc = RuntimeError("claude subprocess timed out: liveness stall")
+        exc.fresh_input_tokens = 37; exc.fresh_cache_read_tokens = 100
+        class _Raising(_Worker):
+            def complete(self, messages, **kwargs):
+                raise exc
+        res = create_team_worker("research", "inspect inbox", adapter=_Raising())
+        assert res.status == "blocked" and (res.tokens_in, res.cache_read_tokens) == (137, 100)
+
+    def _ledger_rows(self):
+        from orch_items import memory_dir
+        path = memory_dir() / "step-costs.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    def test_a_sequential_pause_reaches_the_spend_ledger(self, monkeypatch, tmp_path):
+        # Round 12: the env-pause early exit kept the step's record but
+        # skipped record_step_cost — run cards (spend_for_loops) read the
+        # ledger, so the refused call's paid spend vanished from the card.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        fake = tmp_path / "claude"; fake.write_text("#!/bin/sh\nexit 0\n"); fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+        import runs, loop_planning, loop_execute
+        from agent_loop import run_agent_loop
+        from metrics import spend_for_loops
+        monkeypatch.setattr(loop_planning, "_decompose", lambda *a, **k: ["list the newest five", "count"])
+        monkeypatch.setattr(loop_planning, "_shape_steps", lambda steps, **k: list(steps))
+        monkeypatch.setattr(loop_execute, "_execute_step", lambda **kw: {
+            "status": "blocked", "error_class": "container_auth",
+            "stuck_reason": "LLM call failed (container_auth): re-seed", "result": "",
+            "tokens_in": 137, "tokens_out": 9, "cache_read_tokens": 100, "provider_cost_usd": 0.12})
+        rd = runs.create_run_dir("cauth0012", prompt="read the inbox")
+        with runs.scoped_run_dir(rd):
+            result = run_agent_loop("read the inbox", dry_run=False, max_steps=3, handle_id="cauth0012")
+        assert result.status == "interrupted"
+        rows = [r for r in self._ledger_rows() if r.get("loop_id") == result.loop_id]
+        assert len(rows) == 1, rows
+        assert rows[0]["status"] == "blocked" and rows[0]["tokens_in"] == 137 and rows[0]["cache_read_tokens"] == 100
+        assert rows[0]["cost_usd"] == pytest.approx(0.12) and rows[0]["cost_source"] == "provider"
+        assert spend_for_loops([result.loop_id]) == pytest.approx(0.12)
+
+    @pytest.mark.parametrize("use_dag", [False, True])
+    def test_fanout_and_dag_members_reach_the_spend_ledger(self, monkeypatch, use_dag):
+        # Round 12: the batch path recorded every member; fan-out/DAG
+        # recorded none, so those runs' cards showed zero spend.
+        from metrics import spend_for_loops
+        h = TestContainerAuthPauseOnParallelPaths()
+        done = dict(h._DONE, tokens_in=20, tokens_out=4, provider_cost_usd=0.03)
+        rich = dict(h._AUTH, tokens_in=137, tokens_out=9, cache_read_tokens=100, provider_cost_usd=0.12)
+        ctx, res = h._fanout(monkeypatch, [done, rich], use_dag=use_dag)
+        assert res.status == "interrupted"
+        rows = [r for r in self._ledger_rows() if r.get("loop_id") == "loop-t"]
+        assert [(r["status"], r["tokens_in"]) for r in rows] == [("done", 20), ("blocked", 137)], rows
+        assert rows[1]["cache_read_tokens"] == 100
+        assert spend_for_loops(["loop-t"]) == pytest.approx(0.15)

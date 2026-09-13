@@ -1402,6 +1402,25 @@ def _execute_main_loop(
                 ))
             except Exception as _rec_exc:
                 log.warning("paused step %d not recorded: %s", item_index, _rec_exc)
+            # Ledger parity (round 12): run cards read spend from
+            # step-costs.jsonl, not from the step objects — this early exit
+            # skipped the blocked path's record_step_cost.
+            try:
+                from metrics import record_step_cost
+                record_step_cost(
+                    step_text=step_text,
+                    tokens_in=outcome.get("tokens_in", 0),
+                    tokens_out=outcome.get("tokens_out", 0),
+                    status="blocked",
+                    goal=ctx.goal,
+                    model=getattr(ctx.adapter, "model_key", ""),
+                    elapsed_ms=step_elapsed,
+                    cache_read_tokens=outcome.get("cache_read_tokens", 0),
+                    loop_id=getattr(ctx, "loop_id", "") or "",
+                    provider_cost_usd=float(outcome.get("provider_cost_usd", 0.0) or 0.0),
+                )
+            except Exception as _cost_exc:
+                log.debug("paused-step record_step_cost failed (non-critical): %s", _cost_exc)
             log.warning("environmental pause (%s): %s", _env_pause, stuck_reason)
             if verbose:
                 # Never fatal (review round 5): a closed stderr here escaped
