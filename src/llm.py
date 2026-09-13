@@ -2461,9 +2461,44 @@ def _rate_limited_failure(stdout: str) -> bool:
         _subtype = str(obj.get("subtype") or "").lower()
         return bool("hit your limit" in _tl or "rate limit" in _tl or "rate_limit" in _tl
                     or "rate_limit" in _subtype)
-    combined = (stdout or "").lower()
-    return bool(_parse_stream_json(stdout)["rate_limited"]
-                or "hit your limit" in combined or "rate limit" in combined)
+    if _parse_stream_json(stdout)["rate_limited"]:
+        return True
+    # The phrase backup is for the CLI's PLAIN-TEXT error surface only
+    # (round 18, 2026-09-13): a capture holding any JSON at all is a
+    # stream whose structured signals decide — an indented example
+    # or a diagnostic array mentioning a rate limit was buying another
+    # executor launch for work that had already been done.
+    return _plain_text_capture(stdout) and _rate_limit_phrase(stdout)
+
+
+def _plain_text_capture(stdout: str) -> bool:
+    """Is this capture the CLI's plain-text surface (no JSON object in it
+    at all), the only shape whose free text may be read as a signal?"""
+    return "{" not in (stdout or "")
+
+
+def _rate_limit_phrase(text: str) -> bool:
+    low = (text or "").lower()
+    return "hit your limit" in low or "rate limit" in low
+
+
+def _failure_detail(stdout: str, obj: Optional[dict], limit: int) -> str:
+    """The bounded human-readable detail of a failed capture, for the
+    exception MESSAGE (which the classifier text-matches): a terminal
+    object's own error text; a text-less terminal object names itself
+    (round 17); only a capture with no terminal object shows its raw
+    head — and only when it is plain text (round 18: an assistant
+    message quoting an OAuth line ahead of a rate-limit terminal made
+    the exhaustion error a host login story, tripping the healthy host
+    circuit and losing the no-tokens pause)."""
+    text = _terminal_error_text(obj)
+    if text:
+        return text[:limit]
+    if isinstance(obj, dict):
+        return f"terminal {str(obj.get('subtype') or 'error')[:60]} result without error text"
+    if _plain_text_capture(stdout):
+        return (stdout or "").strip()[:limit] or "(no output)"
+    return "stream capture without a terminal result"
 
 
 def _stringify_tool_result(content) -> str:
@@ -3326,6 +3361,15 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         _terr = _subprocess_timeout_error("claude", _texc, _timeout)
                         _add_call_evidence(_terr, _prior, _prior["partial"])
                         raise _terr
+                    except Exception as _lexc:
+                        # Any other way the attempt dies — a probe-ordered
+                        # runaway kill (TokenRunawayError / BudgetRunawayError
+                        # keep their own class and evidence), a launch
+                        # failure — still owes the replaced attempts'
+                        # evidence (round 18). Added once, here.
+                        self._rate_limit_wait = _wait
+                        _add_call_evidence(_lexc, _prior, _prior["partial"])
+                        raise
                     if (_extract_success_result(result.stdout) is not None
                             or (result.returncode == 0 and not _terminal_failure(result.stdout))):
                         # Payload-first, like the initial call (rounds 7–8):
@@ -3354,17 +3398,25 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     self._rate_limit_wait = _wait  # persist longer wait for next call
                 if not _retry_success and _still_rate_limited:
                     if result.returncode != 0:
+                        # The message comes from the terminal object, not
+                        # the raw capture (round 18): quoted diagnostics
+                        # ahead of the terminal must not classify it.
+                        _rl_obj = _extract_result_object(result.stdout)
                         if _capped_out:
                             _rl_err = RuntimeError(
                                 f"claude rate-limited; bailed after {_total_slept}s of backoff "
                                 f"(total cap {_RATE_LIMIT_TOTAL_CAP}s) — retry later: "
-                                f"{result.stdout[:200]}"
+                                f"{_failure_detail(result.stdout, _rl_obj, 200)}"
                             )
                         else:
                             _rl_err = RuntimeError(
                                 f"claude rate-limited after {_RATE_LIMIT_MAX_RETRIES} retries: "
-                                f"{result.stdout[:200]}"
+                                f"{_failure_detail(result.stdout, _rl_obj, 200)}"
                             )
+                        if isinstance(_rl_obj, dict):
+                            # The CLI ran to a terminal result: never a
+                            # failover/replay story (round 12's marker).
+                            _rl_err.maro_terminal_failure = True  # type: ignore[attr-defined]
                         # Every attempt's spend rides the exhaustion error
                         # too (round 17): the last capture's, then the
                         # replaced ones'.
@@ -3392,18 +3444,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 # in · Please run /login"). Surface that instead of raw JSON.
                 _err_obj = _extract_result_object(result.stdout)
                 _err_text = _terminal_error_text(_err_obj)
-                if _err_text:
-                    detail = _err_text[:300]
-                elif isinstance(_err_obj, dict):
-                    # A terminal object without error text names ITSELF
-                    # (round 17): the raw capture behind it is diagnostics
-                    # and quoted examples, and the classifier text-matches
-                    # this detail — a quoted OAuth line made a max-turns
-                    # failure a HOST login story (auth_actionable).
-                    detail = (f"terminal {str(_err_obj.get('subtype') or 'error')[:60]} "
-                              "result without error text")
-                else:
-                    detail = result.stdout.strip()[:300] or "(no output)"
+                detail = _failure_detail(result.stdout, _err_obj, 300)
                 # A CONTAINERIZED call dying on a login/auth failure means the
                 # auth volume's OAuth session is dead (host creds are separate
                 # by design) — trip the container auth breaker so subsequent

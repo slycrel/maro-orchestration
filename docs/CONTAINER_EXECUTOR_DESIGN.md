@@ -806,6 +806,41 @@ Pinned with a 100/20/$0.50 first attempt against each ending
 142/29/5 on success; 100/20/$0.50 on the kill and on the refusal;
 150/30/$0.75 on exhaustion).
 
+*Review round 18 (2026-09-13, codex skeptic + QA, whole chunk): one
+HIGH each on the two remaining raw-capture readers, one shared MED on
+the retry launch; all fixed.* (lxxiv) **The rate-limit phrase backup
+reads the plain-text surface only.** After the structured readers
+rejected a capture, `_rate_limited_failure` searched the WHOLE capture
+for "hit your limit"/"rate limit": an indented example carrying
+`"reason": "rate limit"` or a diagnostic array quoting the limit
+message authorised another executor launch for work already done. The
+backup now applies only to a capture holding no JSON object at all
+(`_plain_text_capture`) — the CLI's plain-text error surface, the one
+shape whose free text is a signal; a stream decides by its structured
+signals. Pinned: both quoted shapes (one launch) against the plain-text
+limit error (retry) and the column-0 rate_limit_event. (lxxv) **The
+exhaustion errors' message comes from the terminal object.** Both
+rate-limit exhaustion constructors interpolated the raw capture head
+into their message, which the classifier text-matches: an assistant
+message quoting an OAuth line ahead of a rate-limit terminal made the
+exhaustion `auth_actionable` — the healthy HOST circuit tripped and the
+outcome lost its `no-tokens` pause (the total-cap twin too).
+`_failure_detail(stdout, obj, limit)` is now the one bounded detail
+for every failure message: the terminal object's error text; a
+text-less object names itself; a raw head only when the capture is
+plain text; otherwise "stream capture without a terminal result". Both
+exhaustion errors use it and carry the terminal-failure marker.
+Pinned through `FailoverAdapter` for both endings: `retry_at`, the
+no-tokens pause, host circuit clear, spend of every attempt. (lxxvi)
+**Every exception leaving a retry launch carries the replaced
+attempts' evidence.** The retry caught only `TimeoutExpired`; a
+probe-ordered runaway kill (`TokenRunawayError`, `BudgetRunawayError`)
+or a launch failure escaped with its own evidence and without
+`_prior`. One boundary now: timeouts convert then add, every other
+exception adds and re-raises with its class and evidence intact.
+Pinned for both brakes (300100/20/$1.75 and 100/20/$0.50, both
+attempts' text in order, class preserved).
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

@@ -4468,3 +4468,97 @@ def test_every_rate_limited_attempt_rides_the_exhaustion_error(monkeypatch, tmp_
     launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(1, _R17_LIMITED_2), max_retries=1)
     assert launches == 2 and "rate-limited after 1 retries" in str(exc)
     assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (150, 30, pytest.approx(0.75))
+
+
+# ---------------------------------------------------------------------------
+# Review round 18 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+def test_a_quoted_rate_limit_phrase_is_not_a_plain_text_limit_error(monkeypatch, tmp_path):
+    # Round 18: after the structured readers rejected a capture, the
+    # phrase backup searched the WHOLE capture — an indented example with
+    # `"reason": "rate limit"` or a diagnostic array saying "hit your
+    # limit" bought another executor launch for work already done. The
+    # phrase backup is for the CLI's plain-text surface only.
+    from llm import _plain_text_capture, _rate_limited_failure
+    _r16_container_lane(monkeypatch, tmp_path)
+    indented = "  " + json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                                  "result": "example", "reason": "rate limit"})
+    array = "[\n" + json.dumps({"note": "Example message: You have hit your limit"}) + "\n]"
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+    for capture in (indented, array):
+        assert _plain_text_capture(capture) is False and _rate_limited_failure(capture) is False
+        with patch("llm._run_subprocess_safe", return_value=_r17_result(1, capture)) as run:
+            with pytest.raises(RuntimeError, match="claude subprocess failed"):
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 1, "quoted diagnostics are not grounds for another launch"
+    # positive controls: the CLI's plain-text limit error, and the structured event
+    plain = "You've hit your limit · resets 3pm"
+    assert _plain_text_capture(plain) is True and _rate_limited_failure(plain) is True
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, plain)) as run:
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 2
+    event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+    assert _rate_limited_failure(event) is True
+
+
+@pytest.mark.parametrize("ending", ["retries", "cap"])
+def test_rate_limit_exhaustion_ignores_quoted_auth(monkeypatch, tmp_path, ending):
+    # Round 18: both exhaustion errors interpolated the raw capture head,
+    # so an assistant message quoting an OAuth line ahead of a rate-limit
+    # terminal classified `auth_actionable` — the healthy host circuit
+    # tripped and the outcome lost its no-tokens pause.
+    from llm import FailoverAdapter
+    from llm_errors import call_usage_evidence, classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for, PAUSE_ERR_NO_TOKENS
+    _r16_container_lane(monkeypatch, tmp_path)
+    quoted = _r17_assistant("Example only: " + _R16_OAUTH)
+    capture = quoted + "\n" + _R17_LIMITED
+    inner = ClaudeSubprocessAdapter()
+    if ending == "retries":
+        inner._rate_limit_max_retries = 1
+        launches = 2
+    else:
+        inner._rate_limit_max_retries = 3
+        inner._rate_limit_wait = 601  # the first sleep would pass the 600 s total cap
+        launches = 1
+    wrapper = FailoverAdapter([inner])
+    import llm as _llm
+    _llm._BACKEND_CIRCUIT.clear()
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, capture)) as run:
+        with pytest.raises(Exception) as ei:
+            wrapper.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == launches
+    info = classify_error(ei.value, backend="subprocess")
+    assert info.error_class == "retry_at", info
+    assert _R16_OAUTH not in str(ei.value) and "hit your limit" in str(ei.value)
+    out = _blocked_outcome_from_exc(ei.value)
+    assert environmental_pause_for(out) == PAUSE_ERR_NO_TOKENS
+    assert _llm._circuit_open("subprocess") is None, "a rate-limit exhaustion never trips the host circuit"
+    ev = call_usage_evidence(ei.value)
+    assert ev["tokens_in"] == 100 * launches and ev["cost"] == pytest.approx(0.5 * launches)
+
+
+@pytest.mark.parametrize("brake", ["token", "budget"])
+def test_paid_retry_evidence_survives_a_runaway_kill(monkeypatch, tmp_path, brake):
+    # Round 18: the retry launch caught only TimeoutExpired; a probe-ordered
+    # runaway kill on the retry escaped with its own evidence and without
+    # the replaced attempt's paid work and text.
+    from llm_errors import BudgetRunawayError, TokenRunawayError, call_usage_evidence, classify_error
+    if brake == "token":
+        exc = TokenRunawayError(300000, 250000, estimated_cost_usd=1.25)
+        expect = (300100, 20, 1.75)
+    else:
+        exc = BudgetRunawayError(3.0, 2.0)
+        expect = (100, 20, 0.5)
+    exc.maro_partial_output = "SECOND ATTEMPT WORK"
+    launches, err, ev = _r17_two_attempts(monkeypatch, tmp_path, exc)
+    assert launches == 2 and err is exc
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (expect[0], expect[1], pytest.approx(expect[2]))
+    assert "Attempt one read the inbox." in ev["partial"] and "SECOND ATTEMPT WORK" in ev["partial"]
+    assert ev["partial"].index("Attempt one") < ev["partial"].index("SECOND ATTEMPT")
+    assert classify_error(err, backend="subprocess").error_class == (
+        "token_runaway" if brake == "token" else "budget_runaway")
