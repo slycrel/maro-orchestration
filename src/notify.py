@@ -147,24 +147,50 @@ def hook_configured(event_type: str) -> bool:
         return False
 
 
-def emit(event_type: str, payload: dict, *, run_dir: Optional[str] = None) -> bool:
+def emit(event_type: str, payload: dict, *, run_dir: Optional[str] = None,
+         _journaled: bool = False) -> bool:
     """Fire a notification event. Returns True if the hook command ran cleanly.
 
-    Always appends to events.jsonl (best-effort). Runs notify.command only when
-    configured AND event_type is in notify.events. Never raises.
+    Always appends to events.jsonl (best-effort; `_journaled=True` says the
+    caller already wrote that row — `tell` does). Runs notify.command only
+    when configured AND event_type is in notify.events. Never raises.
     """
     try:
-        return _emit(event_type, payload or {}, run_dir=run_dir)
+        return _emit(event_type, payload or {}, run_dir=run_dir, journaled=_journaled)
     except Exception:
         log.debug("notify.emit(%s) failed", event_type, exc_info=True)
         return False
 
 
-def _emit(event_type: str, payload: dict, *, run_dir: Optional[str]) -> bool:
+def tell(event_type: str, payload: dict, *, run_dir: Optional[str] = None) -> bool:
+    """Fire a notification event and return whether its OWED channel
+    acknowledged it: the hook ran cleanly when one is configured for the
+    event, else the journal row was written (`emit` reports only the hook,
+    and reports False for "no hook" — review 2026-09-13 r15: a journal
+    write that failed with no hook configured was recorded as the story
+    told). The finalize and the repair sweeps stamp `final_notified_at`
+    on this word alone. Never raises."""
+    try:
+        journal_ok = _journal(event_type, payload or {})
+    except Exception:
+        journal_ok = False
+    try:
+        hook_ok = emit(event_type, payload or {}, run_dir=run_dir, _journaled=True)
+    except Exception:
+        hook_ok = False
+    try:
+        owed = hook_configured(event_type)
+    except Exception:
+        owed = True
+    return bool(hook_ok) if owed else bool(journal_ok)
+
+
+def _journal(event_type: str, payload: dict) -> bool:
+    """The structured event row for polling substrates — always, even
+    with no hook. Returns the writer's word (False on a torn row or any
+    failure)."""
     handle_id = str(payload.get("handle_id", ""))
     status = str(payload.get("status", ""))
-
-    # 1) Structured event for polling substrates — always, even with no hook.
     try:
         from context_budget import clip as _cb_clip
         from observe import write_event
@@ -185,14 +211,24 @@ def _emit(event_type: str, payload: dict, *, run_dir: Optional[str]) -> bool:
                 + (" answer_changed"
                    if payload.get("answer_changed") else "")
                 + f"; {payload.get('goal_verdict_summary', '')}", 300)
-        write_event(
+        return bool(write_event(
             event_type,
             goal=str(payload.get("goal", payload.get("reason", "")))[:200],
             status=status,
             detail=_detail,
-        )
+        ))
     except Exception:
-        pass
+        return False
+
+
+def _emit(event_type: str, payload: dict, *, run_dir: Optional[str],
+          journaled: bool = False) -> bool:
+    handle_id = str(payload.get("handle_id", ""))
+    status = str(payload.get("status", ""))
+
+    # 1) Structured event for polling substrates — always, even with no hook.
+    if not journaled:
+        _journal(event_type, payload)
 
     # 1b) Durable escalation-class file — attempted unconditionally,
     # independent of whether a notify.command lane is configured or whether

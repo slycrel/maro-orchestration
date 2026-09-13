@@ -723,6 +723,12 @@ def reconcile_kept_write(existing: dict, kept: dict) -> dict:
             stamp = (kvp.get("resolved_at") if isinstance(kvp, dict) and kvp.get("resolved_at")
                      else datetime.now(timezone.utc).isoformat())
             out["verdict_pending"] = {**dvp, "resolved_at": stamp}
+        if not existing.get("final_notified_at") and not existing.get("story_owed_at"):
+            # the finalize whose write failed may not have told its story
+            # either (the close and the emit follow the failed write); the
+            # untold sweep selects this record — review r15: the drain
+            # resolved the marker and no sweep could select the run again
+            out["story_owed_at"] = datetime.now(timezone.utc).isoformat()
     return out
 
 
@@ -740,6 +746,30 @@ def _refresh_run_surfaces(handle_id: str, run_dir: Path, *, by: str) -> Optional
     except Exception:
         log.debug("%s: surface refresh failed for %s", by, handle_id, exc_info=True)
         return None
+
+
+def _story_payload(handle_id: str, run_dir: Path, meta: Optional[dict], *, by: str) -> dict:
+    """The payload a repair tells the run's story with: the card REBUILT
+    from the record (`_refresh_run_surfaces`), or — when the rebuild
+    fails — the record's own verdict fields re-read AFTER the repair's
+    write (review r14/r15: a saved card may predate the verdict; an
+    id-only fallback acknowledged an empty story)."""
+    card = _refresh_run_surfaces(handle_id, run_dir, by=by)
+    if isinstance(card, dict):
+        payload = dict(card)
+    else:
+        fresh = None
+        try:
+            fresh = _read_metadata(run_dir)
+        except Exception:
+            fresh = None
+        rec = fresh if isinstance(fresh, dict) else (meta if isinstance(meta, dict) else {})
+        payload = {"handle_id": handle_id, "status": str(rec.get("status") or ""),
+                   "goal": str(rec.get("prompt") or "")[:300],
+                   "goal_achieved": rec.get("goal_achieved"),
+                   "goal_verdict_source": rec.get("goal_verdict_source")}
+    payload.setdefault("handle_id", handle_id)
+    return payload
 
 
 def _drain_pending(pending: dict) -> tuple:
@@ -977,6 +1007,12 @@ def sweep_untold_finalizes(
     from runs import runs_root, stamp_run_metadata_for
 
     def _untold(meta: dict) -> bool:
+        vp = meta.get("verdict_pending")
+        if isinstance(vp, dict) and not vp.get("resolved_at"):
+            # an ACTIVE marker is the verdict sweep's: its story is told
+            # on resolution (review r15: telling the pending card first
+            # acknowledged it, and the resolved verdict was then never told)
+            return False
         return bool(meta.get("ended_at")
                     and (meta.get("finalized_at") or meta.get("story_owed_at"))
                     and not meta.get("final_notified_at"))
@@ -1006,7 +1042,7 @@ def sweep_untold_finalizes(
         return {"status": "unavailable", "told": 0, "error": acquired.error}
     told = considered = attempted = 0
     try:
-        from notify import emit, hook_configured
+        from notify import tell
         now = time.time()
         for run_dir in candidates:
             if attempted >= max(1, int(limit)):
@@ -1028,16 +1064,7 @@ def sweep_untold_finalizes(
                     _pid = 0
                 if _pid > 0 and _pid_alive(_pid):
                     continue  # its finalize is still telling it
-            card = _refresh_run_surfaces(handle_id, run_dir, by="untold-finalize sweep")
-            if isinstance(card, dict):
-                payload = dict(card)
-            else:
-                # the record's own verdict, not a card that may predate it
-                payload = {"handle_id": handle_id, "status": str(meta.get("status") or ""),
-                           "goal": str(meta.get("prompt") or "")[:300],
-                           "goal_achieved": meta.get("goal_achieved"),
-                           "goal_verdict_source": meta.get("goal_verdict_source")}
-            payload.setdefault("handle_id", handle_id)
+            payload = _story_payload(handle_id, run_dir, meta, by="untold-finalize sweep")
             vp = meta.get("verdict_pending")
             vp = vp if isinstance(vp, dict) else {}
             reached = bool(vp.get("notified_early")
@@ -1045,15 +1072,14 @@ def sweep_untold_finalizes(
             kind = "run_verdict" if reached else "run_completed"
             attempted += 1
             try:
-                delivered = emit(kind, payload, run_dir=str(run_dir))
-                owed = bool(not delivered and hook_configured(kind))
+                owed = not tell(kind, payload, run_dir=str(run_dir))
             except Exception:
-                # an emit that raises told nobody — owed, whatever the hook
-                log.debug("untold-finalize sweep: emit raised for %s", handle_id, exc_info=True)
+                # a telling that raises told nobody — owed, whatever the channel
+                log.debug("untold-finalize sweep: tell raised for %s", handle_id, exc_info=True)
                 owed = True
             if owed:
-                log.warning("untold-finalize sweep: configured notify hook did not "
-                            "deliver %s for %s — still owed", kind, handle_id)
+                log.warning("untold-finalize sweep: the owed channel did not "
+                            "acknowledge %s for %s — still owed", kind, handle_id)
                 stamp_run_metadata_for(handle_id, {
                     "final_notify_attempted_at": datetime.now(timezone.utc).isoformat()})
                 continue
@@ -1199,37 +1225,31 @@ def sweep_verdict_orphans(
                 # not just the ledger). Routed exactly like handle's
                 # finalize: answer already reached the user → run_verdict;
                 # otherwise the full run_completed.
-                card = None
-                try:
-                    from run_curation import refresh_run_card_classification
-                    from loop_report import write_reports_for_run_dir
-                    card = refresh_run_card_classification(
-                        handle_id, run_dir=run_dir)
-                    write_reports_for_run_dir(run_dir)
-                except Exception:
-                    log.debug("verdict-orphan sweep: surface refresh failed "
-                              "for %s", handle_id, exc_info=True)
                 if not notify:
+                    _refresh_run_surfaces(handle_id, run_dir, by="verdict-orphan sweep")
                     return
                 try:
-                    from notify import emit, hook_configured
+                    from notify import tell
                     reached = bool(
                         vp.get("notified_early")
                         and (not vp.get("hook_configured")
                              or vp.get("hook_delivered")))
-                    payload = dict(card or {"handle_id": handle_id})
-                    payload.setdefault("handle_id", handle_id)
+                    # the rebuilt card, or the record as resolved just now
+                    # (review r15: an id-only fallback acknowledged an
+                    # empty story)
+                    payload = _story_payload(handle_id, run_dir, meta,
+                                             by="verdict-orphan sweep")
                     kind = "run_verdict" if reached else "run_completed"
-                    delivered = emit(kind, payload, run_dir=str(run_dir))
-                    if delivered or not hook_configured(kind):
+                    if tell(kind, payload, run_dir=str(run_dir)):
                         # recorded like the finalize's own telling, so the
                         # untold-finalize sweep does not repeat it (r13)
                         stamp_run_metadata_for(handle_id, {
                             "final_notified_at": datetime.now(timezone.utc).isoformat(),
                             "final_notified_by": "verdict_orphan_sweep"})
                     else:
-                        log.warning("verdict-orphan sweep: configured notify hook did "
-                                    "not deliver %s for %s — still owed", kind, handle_id)
+                        log.warning("verdict-orphan sweep: the owed channel did not "
+                                    "acknowledge %s for %s — still owed (story_owed_at "
+                                    "selects it for the untold sweep)", kind, handle_id)
                 except Exception:
                     log.debug("verdict-orphan sweep: owed notify failed for "
                               "%s", handle_id, exc_info=True)

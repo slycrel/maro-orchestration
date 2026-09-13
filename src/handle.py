@@ -1137,7 +1137,7 @@ def handle(
                 # above (before close_run, so the tripwire kept its
                 # authority), and the re-curated card carries the verdict.
                 try:
-                    from notify import emit as _notify_emit
+                    from notify import tell as _notify_emit
                     from runs import run_dir as _run_dir_notify
                     # The follow-up is only owed when the early notify
                     # actually reached the user: a CONFIGURED hook that
@@ -1182,21 +1182,19 @@ def handle(
                             _card or {"handle_id": _hid, "status": _status},
                             run_dir=str(_run_dir_notify(_hid)),
                         )
-                    # The story was TOLD when the hook ran cleanly, or when
-                    # there is no hook owed for this event (the journal
-                    # row is the whole channel then); a CONFIGURED hook
-                    # that failed leaves it owed — the untold-finalize
-                    # sweep retries it (review r13: an attempt is not an
-                    # acknowledgment). Recorded so a repair sweep does not
-                    # tell it again; `finalized_at` is the final CLOSE,
-                    # which precedes this emit — not delivery evidence
-                    # (review r12). A record that fails to stamp errs
-                    # toward a repeated notify, never a missing one.
-                    try:
-                        from notify import hook_configured as _hook_for
-                        _told = bool(_delivered) or not _hook_for(_kind)
-                    except Exception:
-                        _told = bool(_delivered)
+                    # The story was TOLD when its owed channel acknowledged
+                    # it (`notify.tell`: the hook ran cleanly when one is
+                    # configured for the event, else the journal row was
+                    # written — review r15: "no hook" is not "delivered");
+                    # a channel that failed leaves it owed — the
+                    # untold-finalize sweep retries it (review r13: an
+                    # attempt is not an acknowledgment). Recorded so a
+                    # repair sweep does not tell it again; `finalized_at`
+                    # is the final CLOSE, which precedes this emit — not
+                    # delivery evidence (review r12). A record that fails
+                    # to stamp errs toward a repeated notify, never a
+                    # missing one.
+                    _told = bool(_delivered)
                     if _told:
                         try:
                             from runs import stamp_run_metadata_for as _srm_told
@@ -1205,7 +1203,7 @@ def handle(
                         except Exception:
                             pass
                     else:
-                        log.warning("configured notify hook did not deliver %s for %s; "
+                        log.warning("the owed notify channel did not acknowledge %s for %s; "
                                     "the untold-finalize sweep retries it", _kind, _hid)
                 except Exception:
                     pass

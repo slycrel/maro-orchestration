@@ -6667,8 +6667,25 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   30 s hook timeout caps a tick at ~150 s) and the order is
   never-attempted first then oldest attempt (`final_notify_attempted_at`
   stamped per failure), so a failing row does not shadow the rows
-  behind it; an emit that raises is owed whatever the hook.
-  Direction recorded: a
+  behind it; an emit that raises is owed whatever the hook. Round 15:
+  the story is acknowledged by its CHANNEL — new `notify.tell` (the
+  journal row's own result when no hook is owed for the event, the
+  hook's clean exit when one is; `emit` keeps its hook-only contract
+  and a `_journaled` flag so `tell` writes the row once) replaces
+  `emit`+`hook_configured` at the finalize, the verdict sweep's
+  epilogue and the untold sweep (a failed journal write with no hook
+  had been recorded as told); the drain's finalize obligation writes
+  `story_owed_at` when the snapshot has no `final_notified_at` (its
+  resolution had left a story no sweep could select); one
+  `_story_payload` (rebuilt card, else the record re-read AFTER the
+  repair's write, so the orphan branch carries its new source) serves
+  both sweeps (the verdict sweep's fallback had been id-only, and it
+  acknowledged that); the untold sweep skips an ACTIVE marker — that
+  run is the verdict sweep's, told on resolution (telling the pending
+  card first acknowledged it, and the resolved verdict was then never
+  told; a ledger that never recovers keeps that story waiting on the
+  verdict, the never-clear-the-flag-first direction). Direction
+  recorded: a
   settlement that fails in the run AND at the finalize is kept for the
   sweep's retry in the same process; only a process death loses it, and
   then the sweep reverts even an adopted retry — the retry's adoption
