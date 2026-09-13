@@ -3988,6 +3988,27 @@ class TestEnvironmentalRefusalStopsDispatch:
             total_tokens_out=0, elapsed_ms=1, stuck_reason="env", pause_reason="container-auth-expired"))
         result = run_director("read the inbox", dry_run=True, skip_if_simple=True)
         assert result.status == "interrupted" and result.pause_reason == "container-auth-expired"
+        # Round 4: this branch is Telegram's whole reply — it must say so.
+        assert result.report.startswith("⏸ Directive paused (container-auth-expired)")
+        assert "env" in result.report and "did not finish" in result.report
+
+    def test_a_lost_director_log_is_warned_not_silent(self, monkeypatch, tmp_path, caplog):
+        from workers import WorkerResult
+        import director as _director_mod
+        import file_lock
+        _setup(monkeypatch, tmp_path)
+        monkeypatch.setattr(_director_mod, "dispatch_worker",
+                            lambda worker_type, task, *, context="", **kw: WorkerResult(
+                                worker_type=worker_type, ticket=task, status="blocked", result="",
+                                stuck_reason="LLM call failed (container_auth): re-seed",
+                                blocked_origin="adapter", error_class="container_auth"))
+        monkeypatch.setattr(file_lock, "atomic_write",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+        with caplog.at_level("WARNING"):
+            result = run_director("research and build a report", dry_run=True)
+        assert result.log_path is None and result.pause_reason == "container-auth-expired"
+        assert any("director log NOT written" in r.message and "disk full" in r.message
+                   for r in caplog.records)
 
     def test_a_plain_block_still_runs_the_full_directive(self, monkeypatch, tmp_path):
         from workers import WorkerResult

@@ -1842,6 +1842,13 @@ def execute_step(
                     # forces a second opaque rotation on the following step.
                     if executor_session is not None:
                         executor_session.clear()
+                    # The first call's usage is part of this step's spend
+                    # whatever the re-call does (review round 4: a successful
+                    # re-call replaced `resp`, and every outcome constructor
+                    # below reads tokens from `resp` alone — cost summed,
+                    # tokens dropped).
+                    _first_in = int(getattr(resp, "input_tokens", 0) or 0)
+                    _first_out = int(getattr(resp, "output_tokens", 0) or 0)
                     # agentic: same worker executor step re-called with expanded tools
                     resp = adapter.complete(
                         [
@@ -1864,6 +1871,12 @@ def execute_step(
                     )
                     _provider_cost_usd += safe_float(
                         getattr(resp, "cost_usd", 0.0))
+                    try:
+                        import dataclasses as _dc
+                        resp = _dc.replace(resp, input_tokens=resp.input_tokens + _first_in,
+                                           output_tokens=resp.output_tokens + _first_out)
+                    except Exception:
+                        log.debug("step %d tool_search: could not fold first-call usage", step_num)
                     _executor_session_id = (
                         str(getattr(resp, "session_id", "") or "")
                         or _executor_session_id

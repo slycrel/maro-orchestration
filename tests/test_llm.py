@@ -2529,6 +2529,39 @@ class TestContainerExecutorWrap:
                 a.complete([LLMMessage("user", "build a thing")], executor=True)
         assert getattr(ei.value, "container_auth_owned", False) is True
 
+    @pytest.mark.parametrize("mode, expect_class", [("require", "container_auth"), ("on", None)])
+    def test_first_casualty_under_require_carries_the_container_class(self, monkeypatch, tmp_path,
+                                                                       mode, expect_class):
+        # Review round 4: the CLI auth failure that TRIPS the breaker raised a
+        # text-classified RuntimeError — the first casualty got the host
+        # /login remedy and no typed pause; only the next executor call
+        # (resolver → ContainerAuthExpired) paused. Under `require` the
+        # first casualty carries the class; under `on` the lane degrades to
+        # the host by design and the step stays an ordinary block.
+        import container_exec as ce
+        import notify
+        from llm_errors import classify_error
+        from stop_verdicts import pause_reason_for_error_class
+        ce.reset_container_caches()
+        breaker = tmp_path / "breaker.json"
+        monkeypatch.setattr(ce, "_auth_breaker_path", lambda: breaker)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: mode if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe",
+                   return_value=self._mock_auth_failure(container_executed=True)):
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert getattr(ei.value, "container_auth_owned", False) is True
+        info = classify_error(ei.value, backend="subprocess")
+        if expect_class:
+            assert info.error_class == expect_class and info.failover is False
+            assert pause_reason_for_error_class(info.error_class) == "container-auth-expired"
+            assert "maro-claude-auth" in info.user_action
+        else:
+            assert info.error_class != "container_auth"
+
     def test_failover_stands_down_for_container_owned_auth_error(self, monkeypatch):
         # One container auth death must not trip the process-wide subprocess
         # circuit (healthy HOST calls would reroute to the next, paid,

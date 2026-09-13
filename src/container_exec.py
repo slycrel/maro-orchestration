@@ -973,7 +973,8 @@ def _reseed_probe(tripped_at: float) -> Tuple[bool, str]:
     # string — still shape only, still no credential bytes on the host.
     ok, info = _credentials_expiry_probe()
     if not ok:
-        return False, str(info.get("detail") or "credentials probe failed")[:160]
+        from context_budget import clip as _clip
+        return False, _clip(str(info.get("detail") or "credentials probe failed"), 160)
     mtime = float(info["mtime"])
     has_refresh = bool(info["has_refresh"])
     if not has_refresh:
@@ -1264,6 +1265,7 @@ def refresh_auth_liveness(*, max_age_s: float = _AUTH_LIVENESS_TTL_S,
 def auth_liveness_verdict(state: Optional[dict], *, now: Optional[float] = None,
                           warn_days: float = AUTH_EXPIRY_WARN_DAYS) -> Tuple[str, str]:
     """('ok' | 'warn' | 'expired' | 'unknown', detail). Pure; no I/O."""
+    from context_budget import clip as _clip
     now = time.time() if now is None else now
     state = _valid_liveness_record(state, now=now)
     if not state:
@@ -1275,7 +1277,7 @@ def auth_liveness_verdict(state: Optional[dict], *, now: Optional[float] = None,
             from datetime import datetime, timezone
             seen = datetime.fromtimestamp(float(good["checked_at"]), tz=timezone.utc).strftime("%Y-%m-%d %H:%MZ")
             return level, (f"{detail} [last good sample {seen}; latest probe failed: "
-                           f"{str(state.get('detail') or '')[:80]}]")
+                           f"{_clip(str(state.get('detail') or ''), 80)}]")
         return "unknown", str(state.get("detail") or "expiry probe failed")
     if not _liveness_age_ok(state, _AUTH_LIVENESS_STALE_S, now=now):
         return "unknown", "liveness record is stale (heartbeat has not refreshed it in 48 h)"

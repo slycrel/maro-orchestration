@@ -67,7 +67,7 @@ _add("subprocess", """
  llm.py:_run_subprocess_safe
  heartbeat.py:_is_interactive_session_active
  build_loop_runner.py:_worker_session_already_active
- container_exec.py:_reseed_probe worktree.py:_sanitize_untrusted_git""")
+ container_exec.py:_credentials_expiry_probe worktree.py:_sanitize_untrusted_git""")
 _add("stream", """
  llm.py:_parse_stream_json llm.py:_stream_events llm.py:_is_plain_missing_session_error
  orch_bridges.py:_tail_lines orch_bridges.py:_extract_session_result_from_text

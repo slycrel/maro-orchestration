@@ -110,6 +110,19 @@ def _run_in_step_worktree(step_label: str, run_fn):
 
 
 
+
+def _say(msg: str) -> None:
+    """Progress output that can never be fatal (review round 4, 2026-09-13:
+    a closed stderr raised BrokenPipeError out of a worker, replacing its
+    refusal — and the pause — with "execution error", and out of the batch
+    coordinator before the pause was stamped). Presentation never stands
+    between an outcome and its consequences."""
+    try:
+        print(msg, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
 def _environmental_pause(outcome) -> str:
     """The typed pause a blocked outcome calls for (stop_verdicts seam)."""
     try:
@@ -153,7 +166,7 @@ def _run_parallel_batch(
     iteration += len(_batch_steps)
     _batch_start = time.monotonic()
     if ctx.verbose:
-        print(f"[maro] parallel batch: {len(_batch_steps)} steps at level", file=sys.stderr, flush=True)
+        _say(f"[maro] parallel batch: {len(_batch_steps)} steps at level")
 
     # §6 injection seam: this batch is one delivery boundary — drain pending
     # contributions once; every step in the batch sees the same rendering.
@@ -249,21 +262,23 @@ def _run_parallel_batch(
             record_step_decisions(ctx, str(step_idx), _batch_oc, loop_shared_ctx)
             record_step_world_facts(ctx, str(step_idx), _batch_oc)
             if ctx.verbose:
-                print(f"[maro] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}", file=sys.stderr, flush=True)
+                _say(f"[maro] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}")
             _bi_inject = _batch_oc.get("inject_steps", [])
             if _bi_inject and isinstance(_bi_inject, list):
                 _batch_injected.extend(
                     str(s).strip() for s in _bi_inject if str(s).strip()
                 )
         elif _b_status == "blocked":
-            if ctx.verbose:
-                print(f"[maro] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}", file=sys.stderr, flush=True)
             # Environmental refusal (§13e): stamp the typed pause here; the
             # caller ends the loop `interrupted` when it sees it (review
             # 2026-09-13 — the batch path only logged blocked members).
+            # Stamp BEFORE the progress print (round 4: presentation must
+            # not stand between the outcome and its pause).
             _env = _environmental_pause(_batch_oc)
             if _env and hasattr(ctx, "stamp_pause"):
                 ctx.stamp_pause(_env)
+            if ctx.verbose:
+                _say(f"[maro] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}")
 
     # Inject collected steps from batch
     if _batch_injected:
@@ -285,8 +300,7 @@ def _run_parallel_batch(
                  len(_capped_inject))
         if ctx.verbose:
             for _s in _capped_inject:
-                print(f"[maro] injected step (from parallel batch): {_s[:80]}",
-                      file=sys.stderr, flush=True)
+                _say(f"[maro] injected step (from parallel batch): {_s[:80]}",)
 
     # Log batch cost
     try:
@@ -326,12 +340,9 @@ def _run_parallel_path(
     _fanout_incremental, _fanout_ancestry = _drain_pending_context(ctx)
     if use_dag:
         if ctx.verbose:
-            print(
-                f"[maro] dag: running {len(clean_steps)} steps with dep-aware scheduling "
-                f"(max_workers={parallel_fan_out}, levels={len(levels)}, "
-                f"parallel_levels={len(parallel_levels)})",
-                file=sys.stderr, flush=True,
-            )
+            _say(f"[maro] dag: running {len(clean_steps)} steps with dep-aware scheduling "
+                 f"(max_workers={parallel_fan_out}, levels={len(levels)}, "
+                 f"parallel_levels={len(parallel_levels)})")
         _fanout_outcomes = _run_steps_dag(
             goal=ctx.goal,
             steps=clean_steps,
@@ -348,7 +359,7 @@ def _run_parallel_path(
         _fanout_step_texts = clean_steps
     else:
         if ctx.verbose:
-            print(f"[maro] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})", file=sys.stderr, flush=True)
+            _say(f"[maro] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})")
         _fanout_outcomes = _run_steps_parallel(
             goal=ctx.goal,
             steps=steps,
@@ -534,9 +545,11 @@ def _run_steps_parallel(
                     pass  # security module optional; never block legitimate parallel work
 
         if verbose:
-            status_label = outcome.get("status", "?")
-            summary = outcome.get("summary", "")[:80]
-            print(f"[maro] parallel step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
+            # Presentation last, and never fatal: a closed stderr
+            # (BrokenPipeError) must not replace the outcome — or the halt —
+            # with "parallel execution error" (review round 4).
+            _say(f"[maro] parallel step {step_idx} {outcome.get('status', '?')}: "
+                 f"{outcome.get('summary', '')[:80]}")
         return step_idx, outcome
 
     n_workers = min(max_workers, len(steps))
@@ -586,6 +599,22 @@ def _run_steps_parallel(
                         "tokens_out": 0,
                     }
                     log.warning("parallel step %d timed out after %ds", i + 1, _fanout_timeout)
+
+    # Round 4: the pool's exit waited for the workers still running past
+    # the deadline; their REAL outcomes (spend, and the environmental
+    # refusal that set the halt) replace the synthetic timeout rows instead
+    # of being discarded — the operator was told "timeout" when the process
+    # had since learned the actual cause.
+    for f, i in futures.items():
+        if not f.done() or f.cancelled():
+            continue
+        try:
+            idx, outcome = f.result(timeout=0)
+        except Exception:
+            continue
+        _row = outcomes_by_idx.get(idx) or {}
+        if str(_row.get("stuck_reason", "")).startswith("parallel fan-out timeout"):
+            outcomes_by_idx[idx] = outcome
 
     # Fill any missing indices (shouldn't happen, but defensive)
     for i in range(len(steps)):
@@ -685,10 +714,6 @@ def _run_steps_dag(
             shared_ctx=shared_ctx,
             incremental_context=incremental_context,
         ))
-        if verbose:
-            status_label = outcome.get("status", "?")
-            summary = outcome.get("summary", "")[:80]
-            print(f"[maro] dag step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
         # Set the halt HERE, in the worker (review round 3: the coordinator
         # only learns of the refusal after it consumes the future, and a
         # pool thread picks its next already-submitted root before that).
@@ -700,6 +725,12 @@ def _run_steps_dag(
                             "submitted-but-unstarted steps will not run", step_idx, _env)
         with results_lock:
             results[step_idx] = outcome
+        if verbose:
+            # Presentation AFTER the commit, never fatal (round 4: a closed
+            # stderr replaced the refusal with an execution error and the
+            # DAG carried on).
+            _say(f"[maro] dag step {step_idx} {outcome.get('status', '?')}: "
+                 f"{outcome.get('summary', '')[:80]}")
         return step_idx, outcome
 
     active: Dict[Any, int] = {}  # Future → step_idx

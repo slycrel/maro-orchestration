@@ -579,6 +579,35 @@ class TestToolSearchRecallRefusal:
         assert outcome["tokens_in"] == 7 + extra_in and outcome["tokens_out"] == 3
         assert outcome.get("provider_cost_usd") == pytest.approx(0.01 + extra_cost)
 
+    def test_a_successful_recall_keeps_the_first_calls_usage(self, monkeypatch, tmp_path):
+        # Round 4: the re-call replaced `resp`; cost summed, tokens dropped.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import tool_search
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", input_tokens=7, output_tokens=3, cost_usd=0.01,
+                                       tool_calls=[ToolCall(name="tool_search", arguments={"query": "mail"})])
+                return LLMResponse(content="", input_tokens=11, output_tokens=5, cost_usd=0.02,
+                                   tool_calls=[ToolCall(name="complete_step",
+                                                        arguments={"result": "five newest listed", "summary": "ok"})])
+
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [{"name": "imap_read", "description": "d",
+                                                     "input_schema": {"type": "object", "properties": {}}}])
+        adapter = _Adapter()
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
+                               completed_context=[], adapter=adapter, tools=[],
+                               project_dir=str(tmp_path))
+        assert adapter.calls == 2 and outcome["status"] == "done", outcome
+        assert (outcome["tokens_in"], outcome["tokens_out"]) == (18, 8)
+        assert outcome.get("provider_cost_usd") == pytest.approx(0.03)
+
     def test_a_plain_recall_failure_still_falls_through(self, monkeypatch, tmp_path):
         # Negative control: a non-environmental re-call failure keeps the
         # old behaviour (log, fall through to the first response).
@@ -672,6 +701,69 @@ class TestSchedulersStopOnEnvironmentalPause:
         assert executed == [1]
         assert len(out) == 3 and out[0]["error_class"] == "container_auth"
         assert all(o["stuck_reason"].startswith("not started") for o in out[1:])
+
+    def test_fanout_refusal_after_the_deadline_keeps_its_outcome(self, monkeypatch):
+        # Round 4: the timeout handler wrote synthetic rows and the real
+        # outcomes that landed afterwards (with the halt) were discarded —
+        # the operator was told "timeout" instead of the actual cause.
+        import time as _t
+        import loop_parallel
+        monkeypatch.setenv("MARO_STEP_TIMEOUT", "1")
+        executed = []
+        def slow(**kw):
+            executed.append(kw["step_num"])
+            _t.sleep(1.3)
+            return dict(self._AUTH, tokens_in=7)
+        monkeypatch.setattr(loop_parallel, "_execute_step", slow)
+        monkeypatch.setattr(loop_parallel, "_run_in_step_worktree", lambda label, fn: fn())
+        out = loop_parallel._run_steps_parallel(goal="g", steps=["a", "b"], adapter=None,
+                                                ancestry_context="", tools=[], verbose=False, max_workers=1)
+        assert executed == [1]
+        assert out[0]["error_class"] == "container_auth" and out[0]["tokens_in"] == 7
+        assert out[1]["stuck_reason"].startswith("not started"), out[1]
+
+    @pytest.mark.parametrize("scheduler", ["fanout", "dag"])
+    def test_environmental_pause_survives_a_broken_progress_stream(self, monkeypatch, scheduler):
+        # Round 4: verbose printing ran BEFORE the halt/commit; a closed
+        # stderr (BrokenPipeError) replaced the refusal with an execution
+        # error and the DAG carried on.
+        import io, sys
+        import loop_parallel
+        executed = self._arm(monkeypatch, self._AUTH)
+        class _Broken(io.TextIOBase):
+            def write(self, s):
+                raise BrokenPipeError("stderr closed")
+            def flush(self):
+                raise BrokenPipeError("stderr closed")
+        monkeypatch.setattr(sys, "stderr", _Broken())
+        if scheduler == "dag":
+            out = loop_parallel._run_steps_dag(goal="g", steps=["a", "b", "c"],
+                                               deps={1: set(), 2: set(), 3: set()}, adapter=None,
+                                               ancestry_context="", tools=[], verbose=True, max_workers=1)
+        else:
+            out = loop_parallel._run_steps_parallel(goal="g", steps=["a", "b", "c"], adapter=None,
+                                                    ancestry_context="", tools=[], verbose=True, max_workers=1)
+        assert executed == [1]
+        assert out[0]["error_class"] == "container_auth"
+        assert all(o["stuck_reason"].startswith("not started") for o in out[1:])
+
+    def test_batch_stamps_the_pause_even_when_the_print_fails(self, monkeypatch):
+        import io, sys
+        import loop_parallel
+        from loop_parallel import _run_parallel_batch
+        from stop_verdicts import PAUSE_ERR_CONTAINER_AUTH
+        monkeypatch.setattr(loop_parallel, "_run_steps_parallel", lambda **kw: [self._AUTH])
+        ctx = TestContainerAuthPauseOnParallelPaths()._ctx()
+        ctx.verbose = True
+        class _Broken(io.TextIOBase):
+            def write(self, s):
+                raise BrokenPipeError("stderr closed")
+        monkeypatch.setattr(sys, "stderr", _Broken())
+        _run_parallel_batch(ctx, "lead", [], step_outcomes=[], completed_context=[],
+                            remaining_steps=[], remaining_indices=[], loop_shared_ctx={},
+                            resolve_tools_fn=lambda: [], parallel_fan_out=2, proj_artifact_dir="",
+                            iteration=0, step_idx=0, batch_item_indices=None)
+        assert ctx.pause_reason == PAUSE_ERR_CONTAINER_AUTH
 
     def test_fanout_control_a_plain_block_runs_everything(self, monkeypatch):
         import loop_parallel

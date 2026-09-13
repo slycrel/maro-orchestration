@@ -3072,6 +3072,19 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     # /login alert on top of the breaker's precise one
                     # (review 2026-08-13).
                     _err.container_auth_owned = True  # type: ignore[attr-defined]
+                    # Under `require` this FIRST casualty is the same story
+                    # the resolver tells every later call (ContainerAuthExpired
+                    # → typed pause): without the class marker it classified
+                    # by text as a HOST login failure — wrong remedy, no pause
+                    # — and only the next executor call paused (review round
+                    # 4, 2026-09-13). Under `on` the lane degrades to the host
+                    # by design, so the failure stays an ordinary blocked step.
+                    try:
+                        from container_exec import container_mode as _cmode
+                        if _cmode() == "require":
+                            _err.maro_error_class = "container_auth"  # type: ignore[attr-defined]
+                    except Exception:
+                        log.debug("container mode lookup failed at the auth trip site", exc_info=True)
                 raise _err
 
         # Translate the fully-captured stream-json output into the canonical

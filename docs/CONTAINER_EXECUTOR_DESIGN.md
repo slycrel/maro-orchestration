@@ -319,6 +319,39 @@ verbatim — no compile call spent on refused work); the log carries
 serializers and `summary()` carry the pause; skip-director forwards the
 loop's.
 
+*Review round 4 (2026-09-13, codex skeptic + QA, whole chunk) found one
+HIGH the earlier rounds' fixtures could not see and four carry-through
+gaps; fixed before landing.* (xi) **The first casualty.** Every test so far
+began with the breaker already tripped. The CLI auth failure that *trips*
+it (llm.py's subprocess site) raised a `RuntimeError` marked
+`container_auth_owned` but not classed — text classification called it a
+HOST login failure: wrong remedy, no pause, and only the *next* executor
+call (resolver → `ContainerAuthExpired`) paused. Under `require` that
+error now carries `maro_error_class = "container_auth"` too, so the monthly
+expiry's first run pauses typed; under `on` the lane degrades to the host
+by design and the step stays an ordinary block (both pinned through the
+real subprocess adapter with a faked CLI auth result). (xii) A fan-out
+worker that finished *after* the deadline had its real outcome — spend, and
+the refusal that set the halt — discarded behind the synthetic timeout row;
+the pool's exit waits for those workers, so their outcomes now replace the
+rows. (xiii) Progress printing ran *before* the halt/commit in the DAG
+worker and before the stamp in the batch coordinator; a closed stderr
+(`BrokenPipeError`) replaced a refusal with "execution error" and the DAG
+carried on. Every progress line in loop_parallel goes through one
+never-fatal `_say`, and commit/stamp precede presentation. (xiv) A
+*successful* tool_search re-call replaced `resp`, so every outcome
+constructor read only the second call's tokens (cost was summed, tokens
+dropped); the first call's usage is folded into the replacement response.
+(xv) The skip-director branch — Telegram's whole reply — said "[no output]"
+for a paused loop; it now uses the same deterministic pause renderer as the
+full director path, and a director log that fails to persist is a logged
+warning naming the director id, not a silent `None`. Also from this round:
+CI's repo tripwires (destructive-rewrite triage manifest, truncation
+discipline) had been red since the chunk's first commit while the targeted
+local suites were green — the new credentials reader is now triaged in the
+manifest (the old `_reseed_probe` line-framer retired) and the three bare
+`[:N]` cuts on rationale strings use `context_budget.clip`.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

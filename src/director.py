@@ -370,6 +370,16 @@ def run_director(
             elapsed = int((time.monotonic() - started_at) * 1000)
             done_steps = [s for s in loop_result.steps if s.status == "done"]
             report = "\n\n".join(s.result for s in done_steps if s.result) or "[no output]"
+            _skip_pause = str(getattr(loop_result, "pause_reason", "") or "")
+            if _skip_pause:
+                # Round 4: this branch is Telegram's whole reply
+                # (skip_if_simple=True there) and said "[no output]" for a
+                # paused loop. Same deterministic renderer as the full path.
+                _undone = sum(1 for s in loop_result.steps if s.status != "done")
+                report = _pause_report(
+                    _skip_pause, loop_result.stuck_reason or "",
+                    f"{_undone} step(s) did not finish",
+                    [s.result for s in done_steps if s.result])
             log.info("director_skip_done id=%s loop_status=%s steps=%d elapsed=%dms",
                      director_id, loop_result.status, len(done_steps), elapsed)
             return DirectorResult(
@@ -630,15 +640,11 @@ def run_director(
         # work): the pause, the refusal's own remedy text, what was not
         # dispatched, and any finished worker output verbatim.
         _refused = next((r for r in reversed(worker_results) if r.status == "blocked"), None)
-        _done_out = [f"**{r.worker_type} (done)**\n{r.result}" for r in worker_results
-                     if r.status == "done" and r.result]
-        report = (
-            f"⏸ Directive paused ({director_pause_reason}): "
-            f"{(_refused.stuck_reason if _refused else '') or 'the environment refused the worker'}. "
-            f"{max(len(tickets) - len(worker_results), 0)} of {len(tickets)} ticket(s) not dispatched; "
-            f"re-run the directive once the environment is restored."
-            + ("\n\n" + "\n\n".join(_done_out) if _done_out else "")
-        )
+        report = _pause_report(
+            director_pause_reason, (_refused.stuck_reason if _refused else "") or "",
+            f"{max(len(tickets) - len(worker_results), 0)} of {len(tickets)} ticket(s) not dispatched",
+            [f"**{r.worker_type} (done)**\n{r.result}" for r in worker_results
+             if r.status == "done" and r.result])
         _log("paused — deterministic report, no compile call")
     else:
         _log("compiling final report...")
@@ -752,6 +758,18 @@ def run_director(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _pause_report(pause_reason: str, remedy: str, undone: str, done_outputs: List[str]) -> str:
+    """The deterministic report of a paused directive — Telegram's whole
+    reply and the CLI's `report` field (rounds 3–4): the typed pause, the
+    refusal's own remedy text, what did not run, and finished output
+    verbatim. No model call: compiling refused work spends a call to say
+    less than this."""
+    head = (f"⏸ Directive paused ({pause_reason}): "
+            f"{remedy or 'the environment refused the work'}. "
+            f"{undone}; re-run the directive once the environment is restored.")
+    return head + ("\n\n" + "\n\n".join(done_outputs) if done_outputs else "")
+
 
 def _worker_environmental_pause(result: WorkerResult) -> str:
     """The typed pause a blocked worker result calls for — the loop's own
@@ -1125,7 +1143,7 @@ def _write_director_log(
                                        and _delegation_gap_row(r)),
                     # Round 3: a blocked worker's own diagnosis, durable.
                     "error_class": getattr(r, "error_class", "") or "",
-                    "stuck_reason": (r.stuck_reason or "")[:200],
+                    "stuck_reason": _clip(r.stuck_reason or "", 200),
                     "tokens_in": r.tokens_in,
                     "tokens_out": r.tokens_out,
                 }
@@ -1139,7 +1157,12 @@ def _write_director_log(
             return relative_display_path(path)
         except Exception:
             return str(path)
-    except Exception:
+    except Exception as exc:
+        # Round 4: the durable diagnosis (pause_reason, per-worker
+        # error_class) was promised; losing it silently is a record that
+        # lies by omission. The caller's log_path=None is the visible sign.
+        log.warning("director log NOT written for %s (%s: %s)",
+                    director_id, type(exc).__name__, exc)
         return None
 
 
