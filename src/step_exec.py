@@ -1338,7 +1338,7 @@ def _persist_tool_transcript(tool_events: List[dict], project_dir: str, step_num
 # Step execution
 # ---------------------------------------------------------------------------
 
-def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: str = "",
+def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[str] = None,
                               tokens_in: int = 0, tokens_out: int = 0,
                               provider_cost_usd: float = 0.0) -> Dict[str, Any]:
     """The blocked outcome an adapter exception becomes — ONE implementation
@@ -1347,7 +1347,14 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: str = "",
     sits outside the initial call's `except`, so a re-raise there escaped
     execute_step). Carries the structured error class instead of
     stringifying it away (BACKEND_RESILIENCE_DESIGN §2) and any spend the
-    step already incurred. Never raises."""
+    step already incurred (a runaway kill's own ingest is ADDED to that —
+    round 3: replacing it undercounted the re-call). Never raises."""
+    if partial_result is None:
+        # A killed subprocess's partial output (llm.py attaches it on
+        # timeout/runaway kills) is the only record of what the step did
+        # before dying — the tail, not "", becomes the blocked result.
+        _p = str(getattr(exc, "maro_partial_output", "") or "")
+        partial_result = f"[partial output before kill]\n{_p[-2000:]}" if _p else ""
     try:
         from llm_errors import classify_error, is_actionable
         _einfo = classify_error(exc)
@@ -1372,15 +1379,15 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: str = "",
         # exactly the accounting the brake exists to protect.
         _fresh = getattr(exc, "fresh_input_tokens", None)
         if _fresh is not None:
-            _blocked["tokens_in"] = int(_fresh)
-            _blocked["provider_cost_usd"] = float(
+            _blocked["tokens_in"] = int(tokens_in or 0) + int(_fresh)
+            _blocked["provider_cost_usd"] = float(provider_cost_usd or 0.0) + float(
                 getattr(exc, "estimated_cost_usd", 0.0) or 0.0)
         return _blocked
     except Exception:
         return {
             "status": "blocked",
             "stuck_reason": f"LLM call failed: {exc}",
-            "result": partial_result,
+            "result": partial_result or "",
             "tokens_in": int(tokens_in or 0),
             "tokens_out": int(tokens_out or 0),
         }
@@ -1870,30 +1877,30 @@ def execute_step(
                     tc = resp.tool_calls[0] if resp.tool_calls else tc
                     log.debug("step %d tool_search re-call done: tool=%r", step_num, _tool_name_used)
                 except Exception as _rerun_exc:
-                    # Runaway kills must not be absorbed into "fall through and
-                    # carry on": the nested call already ingested past the
-                    # ceiling, and swallowing the typed error here means the
-                    # no-retry policy downstream never sees it.
-                    from llm_errors import TokenRunawayError as _TRE
-                    if isinstance(_rerun_exc, _TRE):
-                        raise
-                    # Same for an environmental refusal (dead backend, dead
-                    # container session — review 2026-09-13): swallowing it
-                    # here blamed the tool name and the run churned. This
-                    # handler is OUTSIDE the initial call's `except` (round 2:
-                    # a re-raise escaped execute_step — uncaught on the
-                    # sequential driver, stringified by the fan-out pool), so
-                    # the typed blocked outcome is built right here, keeping
-                    # the first call's spend on the step's books.
+                    # A TERMINAL failure of the re-call — a runaway kill
+                    # (token brake, cost circuit) or an environmental refusal
+                    # (dead backend, dead container session) — must not be
+                    # absorbed into "fall through and carry on": the typed
+                    # no-retry policy downstream would never see it and the
+                    # run churned blaming the tool name (review 2026-09-13).
+                    # This handler is OUTSIDE the initial call's `except`, so
+                    # a re-raise escaped execute_step (round 2: uncaught on
+                    # the sequential driver, stringified by the fan-out pool;
+                    # round 3: the token-brake re-raise did the same). Every
+                    # terminal class becomes the same typed blocked outcome
+                    # the initial call would have produced, with the first
+                    # call's spend kept on the step's books.
                     try:
-                        from llm_errors import classify_error as _cls
+                        from llm_errors import (classify_error as _cls,
+                                                TOKEN_RUNAWAY as _TOK, BUDGET_RUNAWAY as _BUD)
                         from stop_verdicts import pause_reason_for_error_class as _prf
-                        _rerun_env = bool(_prf(_cls(_rerun_exc).error_class))
+                        _rerun_cls = str(_cls(_rerun_exc).error_class or "")
+                        _rerun_terminal = _rerun_cls in (_TOK, _BUD) or bool(_prf(_rerun_cls))
                     except Exception:
-                        _rerun_env = False
-                    if _rerun_env:
-                        log.warning("step %d tool_search re-call refused by the environment: %s",
-                                    step_num, _rerun_exc)
+                        _rerun_terminal = False
+                    if _rerun_terminal:
+                        log.warning("step %d tool_search re-call ended the step (%s): %s",
+                                    step_num, _rerun_cls, _rerun_exc)
                         return _stamp_flavor(_blocked_outcome_from_exc(
                             _rerun_exc,
                             tokens_in=int(getattr(resp, "input_tokens", 0) or 0),

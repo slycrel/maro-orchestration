@@ -519,6 +519,7 @@ def _cmd_director(args: argparse.Namespace) -> int:
             "tokens_out": result.tokens_out,
             "elapsed_ms": result.elapsed_ms,
             "log_path": result.log_path,
+            "pause_reason": getattr(result, "pause_reason", "") or "",
         }, indent=2))
     else:
         print(result.summary())

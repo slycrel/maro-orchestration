@@ -3932,6 +3932,62 @@ class TestEnvironmentalRefusalStopsDispatch:
         assert len(result.tickets) >= 1 and len(calls) == 1
         assert result.status == "stuck" and result.pause_reason == "container-auth-expired"
         assert len(result.worker_results) == 1 and result.worker_results[0].error_class == "container_auth"
+        # Round 3: the pause reaches every output surface — the report
+        # (Telegram's whole reply), summary(), and the durable log.
+        assert result.report.startswith("⏸ Directive paused (container-auth-expired)")
+        assert "re-seed the volume" in result.report
+        assert f"{len(result.tickets) - 1} of {len(result.tickets)} ticket(s) not dispatched" in result.report
+        assert "pause_reason=container-auth-expired" in result.summary()
+        import json as _json
+        assert result.log_path, "director log must be written"
+        logs = list(tmp_path.rglob(f"director-{result.director_id}-log.json"))
+        assert len(logs) == 1, logs
+        payload = _json.loads(logs[0].read_text(encoding="utf-8"))
+        assert payload["pause_reason"] == "container-auth-expired"
+        assert payload["worker_results"][0]["error_class"] == "container_auth"
+        assert "re-seed" in payload["worker_results"][0]["stuck_reason"]
+
+    def test_a_refused_revision_also_pauses(self, monkeypatch, tmp_path):
+        from workers import WorkerResult
+        import director as _director_mod
+        from director import ReviewDecision
+        _setup(monkeypatch, tmp_path)
+        calls = []
+        def _dispatch(worker_type, task, *, context="", **kw):
+            calls.append(task)
+            if len(calls) == 1:
+                return WorkerResult(worker_type=worker_type, ticket=task, status="done", result="draft")
+            return WorkerResult(worker_type=worker_type, ticket=task, status="blocked", result="",
+                                stuck_reason="LLM call failed (container_auth): re-seed the volume",
+                                blocked_origin="adapter", error_class="container_auth")
+        monkeypatch.setattr(_director_mod, "dispatch_worker", _dispatch)
+        reviews = []
+        def _review(**kw):
+            reviews.append(1)
+            return ReviewDecision(accepted=False, reason="thin", revision_request="more"), (0, 0)
+        monkeypatch.setattr(_director_mod, "_review_worker_output", _review)
+        # non-dry-run path (the revision branch is gated on it); planning is
+        # stubbed so no adapter call happens outside the dispatch spy
+        from director import Ticket
+        monkeypatch.setattr(_director_mod, "_produce_spec",
+                            lambda directive, adapter, dry_run, _log: (
+                                "spec", [Ticket(ticket_id="t1", worker_type="research", task="find it")], (0, 0)))
+        monkeypatch.setattr(_director_mod, "_challenge_spec", lambda *a, **k: ("spec", (0, 0)), raising=False)
+        result = run_director("research and build a report", dry_run=False, adapter=object())
+        assert len(calls) == 2 and len(reviews) == 1, (calls, reviews)
+        assert result.pause_reason == "container-auth-expired" and result.report.startswith("⏸")
+
+    def test_skip_director_carries_the_loop_pause(self, monkeypatch, tmp_path):
+        import director as _director_mod
+        from loop_types import LoopResult
+        _setup(monkeypatch, tmp_path)
+        import agent_loop
+        monkeypatch.setattr(_director_mod, "_is_simple_directive", lambda d: True)
+        monkeypatch.setattr(agent_loop, "run_agent_loop", lambda *a, **k: LoopResult(
+            loop_id="l", project="", goal="g", status="interrupted", steps=[], total_tokens_in=0,
+            total_tokens_out=0, elapsed_ms=1, stuck_reason="env", pause_reason="container-auth-expired"))
+        result = run_director("read the inbox", dry_run=True, skip_if_simple=True)
+        assert result.status == "interrupted" and result.pause_reason == "container-auth-expired"
 
     def test_a_plain_block_still_runs_the_full_directive(self, monkeypatch, tmp_path):
         from workers import WorkerResult

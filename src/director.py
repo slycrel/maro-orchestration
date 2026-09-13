@@ -128,6 +128,8 @@ class DirectorResult:
             f"tickets={len(self.tickets)} workers_done={done}/{len(self.worker_results)}",
             f"tokens={self.tokens_in}in+{self.tokens_out}out elapsed_ms={self.elapsed_ms}",
         ]
+        if self.pause_reason:
+            lines.append(f"pause_reason={self.pause_reason}")
         if self.log_path:
             lines.append(f"log={self.log_path}")
         return "\n".join(lines)
@@ -384,6 +386,7 @@ def run_director(
                 tokens_in=loop_result.total_tokens_in,
                 tokens_out=loop_result.total_tokens_out,
                 elapsed_ms=elapsed,
+                pause_reason=str(getattr(loop_result, "pause_reason", "") or ""),
             )
         except Exception as exc:
             log.warning("director_skip failed, falling back to full Director: %s", exc)
@@ -619,10 +622,29 @@ def run_director(
             break
 
     # Phase 3: Compile final report
-    _log("compiling final report...")
-    report, compile_tokens = _compile_report(directive, spec, worker_results, adapter, dry_run)
-    total_tokens_in += compile_tokens[0]
-    total_tokens_out += compile_tokens[1]
+    if director_pause_reason:
+        # Round 3: the pause lived only on the returned object — the
+        # report (Telegram's whole reply), the durable log and the CLI JSON
+        # all described "blocked work" with no remedy. A paused directive
+        # gets a DETERMINISTIC report (no compile call spent on refused
+        # work): the pause, the refusal's own remedy text, what was not
+        # dispatched, and any finished worker output verbatim.
+        _refused = next((r for r in reversed(worker_results) if r.status == "blocked"), None)
+        _done_out = [f"**{r.worker_type} (done)**\n{r.result}" for r in worker_results
+                     if r.status == "done" and r.result]
+        report = (
+            f"⏸ Directive paused ({director_pause_reason}): "
+            f"{(_refused.stuck_reason if _refused else '') or 'the environment refused the worker'}. "
+            f"{max(len(tickets) - len(worker_results), 0)} of {len(tickets)} ticket(s) not dispatched; "
+            f"re-run the directive once the environment is restored."
+            + ("\n\n" + "\n\n".join(_done_out) if _done_out else "")
+        )
+        _log("paused — deterministic report, no compile call")
+    else:
+        _log("compiling final report...")
+        report, compile_tokens = _compile_report(directive, spec, worker_results, adapter, dry_run)
+        total_tokens_in += compile_tokens[0]
+        total_tokens_out += compile_tokens[1]
 
     # MH subagent-edge candidates (#6 + #13) — candidate-grade evidence
     # (the #7 contradiction-candidate convention), advisory only, never
@@ -699,6 +721,7 @@ def run_director(
         status=status,
         elapsed_ms=elapsed,
         worker_slice=worker_slice_enabled,
+        pause_reason=director_pause_reason,
     )
 
     result = DirectorResult(
@@ -1050,6 +1073,7 @@ def _write_director_log(
     status: str,
     elapsed_ms: int,
     worker_slice: bool = False,
+    pause_reason: str = "",
 ) -> Optional[str]:
     try:
         try:
@@ -1079,6 +1103,7 @@ def _write_director_log(
             "spec": spec,
             "status": status,
             "elapsed_ms": elapsed_ms,
+            "pause_reason": pause_reason,  # typed environmental pause that stopped dispatch ("" otherwise)
             "worker_slice": worker_slice,  # A/B experiment: memory.worker_slice active for this run?
             "tickets": [
                 {"ticket_id": t.ticket_id, "worker_type": t.worker_type, "task": t.task}
@@ -1098,6 +1123,9 @@ def _write_director_log(
                     # (attribution.delegation_gap; False for done workers).
                     "delegation_gap": (r.status == "blocked"
                                        and _delegation_gap_row(r)),
+                    # Round 3: a blocked worker's own diagnosis, durable.
+                    "error_class": getattr(r, "error_class", "") or "",
+                    "stuck_reason": (r.stuck_reason or "")[:200],
                     "tokens_in": r.tokens_in,
                     "tokens_out": r.tokens_out,
                 }
@@ -2122,6 +2150,7 @@ def main(argv=None):
             "tokens_in": result.tokens_in,
             "tokens_out": result.tokens_out,
             "elapsed_ms": result.elapsed_ms,
+            "pause_reason": result.pause_reason,
         }, indent=2))
     else:
         print(result.summary())

@@ -689,6 +689,15 @@ def _run_steps_dag(
             status_label = outcome.get("status", "?")
             summary = outcome.get("summary", "")[:80]
             print(f"[maro] dag step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
+        # Set the halt HERE, in the worker (review round 3: the coordinator
+        # only learns of the refusal after it consumes the future, and a
+        # pool thread picks its next already-submitted root before that).
+        if not _halt["reason"]:
+            _env = _environmental_pause(outcome)
+            if _env:
+                _halt["reason"] = _env
+                log.warning("dag step %d refused by the environment (%s) — "
+                            "submitted-but-unstarted steps will not run", step_idx, _env)
         with results_lock:
             results[step_idx] = outcome
         return step_idx, outcome
@@ -733,25 +742,25 @@ def _run_steps_dag(
 
             completed_idx = active.pop(_completed_f)
             try:
+                if _completed_f.cancelled():
+                    raise RuntimeError("cancelled")
                 _completed_f.result(timeout=30)
             except Exception as exc:
                 with results_lock:
                     results[completed_idx] = {
                         "status": "blocked",
-                        "stuck_reason": f"dag execution error: {exc}",
+                        "stuck_reason": (f"not started — environmental pause: {_halt['reason']}"
+                                         if _halt["reason"] and _completed_f.cancelled()
+                                         else f"dag execution error: {exc}"),
                         "result": "", "tokens_in": 0, "tokens_out": 0,
                     }
 
-            if not _halt["reason"]:
-                with results_lock:
-                    _done_outcome = results.get(completed_idx) or {}
-                _env = _environmental_pause(_done_outcome)
-                if _env:
-                    _halt["reason"] = _env
-                    log.warning(
-                        "dag step %d refused by the environment (%s) — no further "
-                        "steps submitted, %d in flight drain", completed_idx, _env, len(active))
             if _halt["reason"]:
+                # Set by the worker above; nothing further is released or
+                # submitted. Already-submitted tasks return not-started
+                # outcomes on entry; running peers drain.
+                for _g in list(active):
+                    _g.cancel()
                 continue
 
             # Unblock tasks whose only remaining dep was the just-completed one

@@ -543,6 +543,42 @@ class TestToolSearchRecallRefusal:
         assert (outcome["tokens_in"], outcome["tokens_out"]) == (7, 3)
         assert outcome.get("provider_cost_usd") == pytest.approx(0.01)
 
+    @pytest.mark.parametrize("make_exc, expect_class, extra_in, extra_cost", [
+        (lambda: __import__("llm_errors").TokenRunawayError(100000, 50000, estimated_cost_usd=1.25),
+         "token_runaway", 100000, 1.25),
+        (lambda: __import__("llm_errors").BudgetRunawayError(9.0, 6.0), "budget_runaway", 0, 0.0),
+    ])
+    def test_a_runaway_recall_is_the_same_typed_outcome(self, monkeypatch, tmp_path,
+                                                        make_exc, expect_class, extra_in, extra_cost):
+        # Round 3: the token-brake re-raise sat in the same outside-the-
+        # handler position and escaped; the cost circuit fell through and
+        # lost its class. Both are terminal: same builder, spend summed.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import tool_search
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", input_tokens=7, output_tokens=3, cost_usd=0.01,
+                                       tool_calls=[ToolCall(name="tool_search", arguments={"query": "mail"})])
+                raise make_exc()
+
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [{"name": "imap_read", "description": "d",
+                                                     "input_schema": {"type": "object", "properties": {}}}])
+        adapter = _Adapter()
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
+                               completed_context=[], adapter=adapter, tools=[],
+                               project_dir=str(tmp_path))
+        assert adapter.calls == 2 and outcome["status"] == "blocked"
+        assert outcome["error_class"] == expect_class, outcome
+        assert outcome["tokens_in"] == 7 + extra_in and outcome["tokens_out"] == 3
+        assert outcome.get("provider_cost_usd") == pytest.approx(0.01 + extra_cost)
+
     def test_a_plain_recall_failure_still_falls_through(self, monkeypatch, tmp_path):
         # Negative control: a non-environmental re-call failure keeps the
         # old behaviour (log, fall through to the first response).
@@ -599,6 +635,27 @@ class TestSchedulersStopOnEnvironmentalPause:
         assert executed == [1]
         assert out[0]["error_class"] == "container_auth"
         assert all(o["status"] == "blocked" and o["stuck_reason"].startswith("not started") for o in out[1:])
+
+    def test_dag_queued_roots_stop_before_the_coordinator_wakes(self, monkeypatch):
+        # Round 3: three independent roots, one worker — the pool thread
+        # picks root 2 before the coordinator consumes root 1's future, so
+        # the halt must be set IN the worker.
+        import loop_parallel
+        executed = self._arm(monkeypatch, self._AUTH)
+        out = loop_parallel._run_steps_dag(goal="g", steps=["a", "b", "c", "d"],
+                                           deps={1: set(), 2: set(), 3: set(), 4: {1, 2, 3}}, adapter=None,
+                                           ancestry_context="", tools=[], verbose=False, max_workers=1)
+        assert executed == [1]
+        assert len(out) == 4 and out[0]["error_class"] == "container_auth"
+        assert all(o["stuck_reason"].startswith("not started") for o in out[1:])
+
+    def test_dag_queued_roots_control_all_run_on_a_plain_block(self, monkeypatch):
+        import loop_parallel
+        executed = self._arm(monkeypatch, self._PLAIN)
+        loop_parallel._run_steps_dag(goal="g", steps=["a", "b", "c", "d"],
+                                     deps={1: set(), 2: set(), 3: set(), 4: {1, 2, 3}}, adapter=None,
+                                     ancestry_context="", tools=[], verbose=False, max_workers=1)
+        assert sorted(executed) == [1, 2, 3, 4]
 
     def test_dag_control_a_plain_block_still_releases(self, monkeypatch):
         import loop_parallel

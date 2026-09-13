@@ -294,6 +294,31 @@ the structured `error_class` on `WorkerResult` and stops dispatch (no
 review, no revision, no further tickets) on an environmental refusal,
 returning `DirectorResult.pause_reason`.
 
+*Review round 3 (2026-09-13, codex skeptic + QA, whole chunk) found one HIGH
+in the round-2 fixes and two carry-through gaps; fixed before landing.*
+(viii) The DAG worker *checked* the halt flag but never *set* it — only the
+coordinator did, after consuming the future — so with more ready roots than
+workers a pool thread picked the next queued root before the coordinator
+woke (probe: three independent roots, one worker, adapter calls `[1, 2, 3]`).
+The DAG worker now sets the flag the moment it holds an environmental
+outcome, exactly as fan-out does, and the coordinator cancels what is still
+pending; pinned with the queued-roots shape plus its plain-block control.
+(ix) The tool_search re-call's `TokenRunawayError` re-raise sat in the same
+outside-the-handler position the round-2 fix had just closed for
+environmental errors, and `BudgetRunawayError` fell through losing its
+class. Every *terminal* class (token brake, cost circuit, environmental)
+now goes through the one outcome builder, whose runaway accounting ADDS the
+kill's ingest to the first call's spend instead of replacing it. (x) The
+director's pause lived only on the returned object: the report (Telegram's
+entire reply), `summary()`, the durable director log and both CLI JSON
+twins said "stuck" with no remedy, and the skip-director branch dropped the
+loop's pause. A paused directive now gets a deterministic report (pause,
+the refusal's own remedy text, tickets not dispatched, finished output
+verbatim — no compile call spent on refused work); the log carries
+`pause_reason` plus each blocked worker's `error_class`/`stuck_reason`; the
+serializers and `summary()` carry the pause; skip-director forwards the
+loop's.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to
