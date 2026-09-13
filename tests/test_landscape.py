@@ -3666,3 +3666,233 @@ def test_r22_the_owner_replacement_survives_an_in_flight_drain(monkeypatch, tmp_
     assert audit_repair.drain_kept_writes()["retried"] == 1
     assert _meta(hid)["story_owed_by"] == "repair"
     assert _meta(hid)["verdict_pending"]["resolved_at"]
+
+
+def _r23_competing_write(monkeypatch, hid, fields):
+    import runs
+    real_stamp = runs.stamp_run_metadata_for
+    real_revise = runs.revise_run_metadata_for
+    assert real_stamp(hid, {"pid": _dead_pid()}) is not None
+    injected = []
+
+    def wrap(real):
+        def write(h, value):
+            if h == hid and not injected:
+                injected.append(True)
+                assert real_stamp(h, fields) is not None
+            return real(h, value)
+        return write
+
+    # review r23: both seams put the owner in the same window on either tree.
+    monkeypatch.setattr(runs, "stamp_run_metadata_for", wrap(real_stamp))
+    monkeypatch.setattr(runs, "revise_run_metadata_for", wrap(real_revise))
+    return injected
+
+
+def test_r23_the_transition_sweep_declines_a_settled_snapshot(monkeypatch, tmp_path):
+    import audit_repair
+    import handle as handle_mod
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {})
+    hid, t = TestTheFinalizeIsOneObligation()._aged_transition(GOAL_QUARTERLY, "A.")
+    owner = {"project": t["to"], "project_binding": "escalated",
+             "project_transition": {**t, "settled_at": "owner-time", "outcome": "adopted"}}
+    injected = _r23_competing_write(monkeypatch, hid, owner)
+    result = audit_repair.sweep_transition_orphans(grace_s=0)
+    assert injected
+    assert _meta(hid)["project_transition"]["outcome"] == "adopted"
+    assert _meta(hid)["project"] == t["to"]
+    assert result["stamped"] == 0
+
+
+def test_r23_the_verdict_sweep_declines_a_resolved_marker(monkeypatch, tmp_path):
+    import audit_repair
+    import notify
+    _setup(monkeypatch, tmp_path)
+    vp = {"since": "2020-01-01T00:00:00+00:00"}
+    hid = _finished_run(GOAL_QUARTERLY, extra={"verdict_pending": vp,
+                        "goal_verdict_source": "closure", "pid": _dead_pid()})
+    told = []
+    monkeypatch.setattr(notify, "tell", lambda *a, **kw: told.append(a) or True)
+    injected = _r23_competing_write(monkeypatch, hid, {
+        "verdict_pending": {**vp, "resolved_at": "owner-time", "resolved_by": "owner"}})
+    result = audit_repair.sweep_verdict_orphans(grace_s=0)
+    assert injected
+    assert _meta(hid)["verdict_pending"]["resolved_by"] == "owner"
+    assert result["stamped"] == 0
+    assert not told
+
+
+def test_r23_the_orphan_stamp_declines_a_judged_verdict(monkeypatch, tmp_path):
+    import audit_repair
+    import notify
+    _setup(monkeypatch, tmp_path)
+    hid = _finished_run(GOAL_QUARTERLY, extra={
+        "verdict_pending": {"since": "2020-01-01T00:00:00+00:00"}, "pid": _dead_pid()})
+    told = []
+    monkeypatch.setattr(notify, "tell", lambda *a, **kw: told.append(a) or True)
+    injected = _r23_competing_write(monkeypatch, hid, {
+        "goal_verdict_source": "closure", "goal_achieved": True})
+    result = audit_repair.sweep_verdict_orphans(grace_s=0)
+    assert injected
+    assert _meta(hid)["goal_verdict_source"] == "closure"
+    assert _meta(hid)["goal_achieved"] is True
+    assert result["stamped"] == 0
+    assert not told
+
+
+def test_r23_the_dead_run_sweep_declines_a_finished_run(monkeypatch, tmp_path):
+    import audit_repair
+    _setup(monkeypatch, tmp_path)
+    hid = _finished_run(GOAL_QUARTERLY, finished=False, extra={"pid": _dead_pid()})
+    injected = _r23_competing_write(monkeypatch, hid, {"ended_at": "owner-time", "status": "done"})
+    result = audit_repair.sweep_dead_runs(grace_s=0)
+    assert injected
+    assert _meta(hid)["status"] == "done"
+    assert _meta(hid)["ended_at"] == "owner-time"
+    assert result["stamped"] == 0
+
+
+def test_r23_the_untold_sweep_tells_the_record_when_curation_cannot_read_it(monkeypatch, tmp_path):
+    from pathlib import Path
+    import runs
+    import run_curation
+    import audit_repair
+    import notify
+    _setup(monkeypatch, tmp_path)
+    hid = _finished_run(GOAL_QUARTERLY, extra={
+        "goal_achieved": False, "goal_verdict_source": "closure", "pid": _dead_pid(),
+        "finalized_at": "2020-01-01T00:00:00+00:00",
+        "story_owed_at": "2020-01-01T00:00:00+00:00", "story_owed_by": "repair"})
+    metadata = runs.run_dir(hid) / "metadata.json"
+    real_read = Path.read_text
+
+    def unreadable(path, *a, **kw):
+        if path == metadata:
+            raise OSError("curation read unavailable")
+        return real_read(path, *a, **kw)
+
+    def wrap(reader):
+        def read(rd):
+            # review r23: only curation loses the read; repair retains its record.
+            with monkeypatch.context() as scoped:
+                scoped.setattr(Path, "read_text", unreadable)
+                return reader(rd)
+        return read
+
+    for name in ("_read_meta", "_read_meta_strict"):
+        if hasattr(run_curation, name):
+            monkeypatch.setattr(run_curation, name, wrap(getattr(run_curation, name)))
+    told = []
+    monkeypatch.setattr(notify, "tell", lambda kind, payload, **kw: told.append(payload) or True)
+    result = audit_repair.sweep_untold_finalizes(grace_s=0)
+    assert told
+    assert told[0]["goal_achieved"] is False
+    assert told[0]["goal_verdict_source"] == "closure"
+    assert result["told"] == 1
+
+
+def test_r23_the_owner_publication_waits_for_the_drains_removal(monkeypatch, tmp_path):
+    import threading
+    import runs
+    import notify
+    import observe
+    import audit_repair
+    import handle as handle_mod
+    from orch_items import projects_root
+    _setup(monkeypatch, tmp_path)
+    (projects_root() / "board-reports").mkdir(parents=True)
+    _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+    monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+    monkeypatch.setattr(notify, "tell", lambda *a, **kw: True)
+    real_revise = runs.revise_run_metadata_for
+    real_stamp = runs.stamp_run_metadata
+    real_close = runs.close_run
+    real_finalize = runs.finalize_run
+    owner_in_close = threading.Event()
+    release = threading.Event()
+    in_compare = threading.Event()
+    proceed = threading.Event()
+    owner_finalizing = threading.Event()
+
+    class PausedRegistry(dict):
+        def get(self, key, default=None):
+            if threading.current_thread() is drain:
+                in_compare.set()
+                assert proceed.wait(10)
+            return super().get(key, default)
+
+    monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", PausedRegistry())
+    ids, results, drains = [], [], []
+
+    def refusing_stamp(fields):
+        # review r22: let the transition start so its failed settlement is published.
+        if (threading.current_thread() is owner
+                and (fields.get("project_transition") or {}).get("settled_at")):
+            return None
+        return real_stamp(fields)
+
+    def interleaved_revise(hid, fn):
+        if threading.current_thread() is owner:
+            return None
+        return real_revise(hid, fn)
+
+    def refusing_final_close(hid, **kwargs):
+        if threading.current_thread() is owner and "finalized_at" in (kwargs.get("extra") or {}):
+            owner_finalizing.set()
+            return None
+        return real_finalize(hid, **kwargs)
+
+    def blocking_close(hid, **kwargs):
+        if kwargs.get("final") and threading.current_thread() is owner:
+            ids.append(hid)
+            owner_in_close.set()
+            assert release.wait(10)
+        return real_close(hid, **kwargs)
+
+    def run_owner():
+        results.append(_escalating_run(
+            monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward"))))
+
+    monkeypatch.setattr(runs, "stamp_run_metadata", refusing_stamp)
+    monkeypatch.setattr(runs, "revise_run_metadata_for", interleaved_revise)
+    monkeypatch.setattr(runs, "close_run", blocking_close)
+    monkeypatch.setattr(runs, "finalize_run", refusing_final_close)
+    owner = threading.Thread(target=run_owner, daemon=True)
+    drain = threading.Thread(target=lambda: drains.append(audit_repair.drain_kept_writes()), daemon=True)
+    owner.start()
+    try:
+        assert owner_in_close.wait(10)
+        hid = ids[0]
+        settlement = handle_mod._UNSETTLED_TRANSITIONS[hid]
+        assert settlement["project_transition"]["settled_at"]
+        drain.start()
+        assert in_compare.wait(10)
+        release.set()
+        assert owner_finalizing.wait(10)
+        owner.join(1.0)
+        # review r23: publication must wait until compare-and-remove releases the lock.
+        assert handle_mod._UNSETTLED_TRANSITIONS[hid] is settlement
+        assert owner.is_alive()
+        proceed.set()
+        owner.join(10)
+        assert not owner.is_alive()
+        drain.join(10)
+        assert not drain.is_alive()
+    finally:
+        owner_in_close.set()
+        release.set()
+        in_compare.set()
+        proceed.set()
+        owner_finalizing.set()
+        owner.join(10)
+        if drain.ident is not None:
+            drain.join(10)
+    assert results and drains
+    assert not _meta(hid).get("finalized_at")
+    # review r22: finalize also carries the settlement it captured before close.
+    replacement = {**settlement, "_finalize": True, "_by": "owner"}
+    assert handle_mod._UNSETTLED_TRANSITIONS.get(hid) == replacement
+    assert audit_repair.drain_kept_writes()["retried"] == 1
+    assert _meta(hid)["story_owed_by"] == "repair"
+    assert _meta(hid)["verdict_pending"]["resolved_at"]

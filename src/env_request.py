@@ -300,7 +300,8 @@ def project_slug(project: str) -> str:
         return slug
     # review r22: normalized spellings must not share layers or grants.
     digest = hashlib.sha1(str(project).encode("utf-8")).hexdigest()[:8]
-    return f"{slug}-{digest}"
+    # review r23: encoded identities must live outside the canonical namespace.
+    return f"{slug}_{digest}"
 
 
 def layer_dir(project: str) -> Path:
@@ -349,6 +350,16 @@ def load_manifest(project: str) -> Dict[str, Any]:
             "apt": [], "pip": [], "npm": [], "grants": [], "updated_at": ""}
 
 
+def _owned_elsewhere(project: str) -> Optional[str]:
+    # review r23: refusing foreign grants must also protect their stored bytes.
+    try:
+        manifest = json.loads((layer_dir(project) / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    recorded = manifest.get("project") if isinstance(manifest, dict) else None
+    return recorded if isinstance(recorded, str) and recorded and recorded != project else None
+
+
 def save_manifest(project: str, m: Dict[str, Any]) -> Path:
     d = layer_dir(project)
     d.mkdir(parents=True, exist_ok=True)
@@ -361,6 +372,10 @@ def save_manifest(project: str, m: Dict[str, Any]) -> Path:
 
 def add_grants(project: str, specs: Sequence[str]) -> Dict[str, Any]:
     m = load_manifest(project)
+    other = _owned_elsewhere(project)
+    if other is not None:
+        log.warning("env_request: layer directory belongs to %r", other)
+        return m
     have = list(m.get("grants") or [])
     for s in specs:
         if s and s not in have:
@@ -479,6 +494,10 @@ def build_layer(project: str, verdict: Verdict, *, reason: str = "") -> BuildRes
             browsers.append(b)
             added.append(f"browser:{b}")
     layer = int(m.get("layer") or 0) + 1
+    other = _owned_elsewhere(project)
+    if other is not None:
+        return BuildResult(False, "", layer, [], 0.0,
+                           detail=f"layer directory belongs to {other!r}")
     tag = image_tag(project, layer)
     if not added and m.get("image") and m.get("base") == base and _EXISTS(str(m["image"])):
         return BuildResult(True, str(m["image"]), int(m["layer"]), [], 0.0, detail="cached")

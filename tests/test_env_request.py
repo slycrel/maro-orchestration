@@ -612,3 +612,30 @@ def test_r21_current_project_is_the_recorded_identity(tmp_path, monkeypatch):
     assert env_request.current_project() == " board-reports "
     (rd / "metadata.json").write_text(json.dumps({"project": "   "}))
     assert env_request.current_project() is None
+
+
+def test_r23_encoded_identities_never_alias_canonical_ones():
+    from container_exec import _IMAGE_TAG_RE
+    for project in ["Yahoo Mail!", " board-reports ", "x" * 50, "17"]:
+        encoded = er.project_slug(project)
+        if project == "17":
+            assert encoded == project
+        else:
+            assert encoded != er.project_slug(encoded)
+        assert _IMAGE_TAG_RE.match(er.image_tag(project, 1))
+    assert er.project_slug("weve-used-chrome-on-the") == "weve-used-chrome-on-the"
+
+
+def test_r23_a_foreign_layer_location_is_never_written(ws, fake_build):
+    directory = er.layer_dir("mine")
+    directory.mkdir(parents=True)
+    manifest = directory / "manifest.json"
+    original = json.dumps({"project": "other", "grants": ["apt:own"]})
+    manifest.write_text(original)
+    result = er.build_layer("mine", er.Verdict(allowed={"apt": ["x"]}))
+    assert not result.ok
+    assert result.detail == "layer directory belongs to 'other'"
+    assert not (directory / "Dockerfile").exists()
+    assert not fake_build["calls"]
+    assert er.add_grants("mine", ["apt:x"])["grants"] == []
+    assert manifest.read_text() == original

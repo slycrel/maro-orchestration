@@ -570,7 +570,7 @@ def sweep_dead_runs(
     under the same repair pidfile. Returns counts for the caller's log line.
     """
     from proc_lock import acquire_pidfile
-    from runs import runs_root, stamp_run_metadata_for
+    from runs import runs_root, revise_run_metadata_for
 
     root = runs_root()
     if not root.is_dir():
@@ -618,7 +618,7 @@ def sweep_dead_runs(
     handles: List[str] = []
     try:
         for run_dir, pid in candidates[:limit]:
-            # Re-read under the lock: finalize may have landed since the scan.
+            # Re-read under the repair lock: finalize may have landed since the scan.
             meta = _read_metadata(run_dir)
             if meta is None or meta.get("ended_at"):
                 continue
@@ -627,18 +627,26 @@ def sweep_dead_runs(
             handle_id = str(
                 meta.get("handle_id") or run_dir.name.split("-", 1)[0])
             ended = datetime.now(timezone.utc).isoformat()
-            fields = {
-                "status": "stranded",
-                "ended_at": ended,
-                "stop_verdict": "external-interrupt",
-                "stop_evidence": (
-                    f"owning pid {pid} is gone with no ended_at; stamped by "
-                    f"the dead-run sweep at {ended}"),
-                "dead_run_sweep": {"pid": pid, "stamped_at": ended},
-            }
-            if stamp_run_metadata_for(handle_id, fields) is None:
+            def revise(existing):
+                # review r23: finalize can land while the repair lock is held.
+                if existing.get("ended_at"):
+                    return {}
+                return {
+                    "status": "stranded",
+                    "ended_at": ended,
+                    "stop_verdict": "external-interrupt",
+                    "stop_evidence": (
+                        f"owning pid {pid} is gone with no ended_at; stamped by "
+                        f"the dead-run sweep at {ended}"),
+                    "dead_run_sweep": {"pid": pid, "stamped_at": ended},
+                }
+            written = revise_run_metadata_for(handle_id, revise)
+            if written is None:
                 log.warning("dead-run sweep: stamp failed for %s — retrying "
                             "next sweep", handle_id)
+                continue
+            if not written:
+                log.info("dead-run sweep: %s settled by its owner meanwhile — nothing to repair", handle_id)
                 continue
             stamped += 1
             handles.append(handle_id)
@@ -916,7 +924,7 @@ def sweep_transition_orphans(
     fails is left out of the disk pass. Serialized under the repair
     pidfile."""
     from proc_lock import acquire_pidfile
-    from runs import runs_root, stamp_run_metadata_for
+    from runs import runs_root, revise_run_metadata_for
     from landscape import settle_project_transition
 
     def _transition_only(meta: dict) -> bool:
@@ -974,12 +982,20 @@ def sweep_transition_orphans(
                 age_s = grace_s + 1
             if age_s <= grace_s:
                 continue
-            fields = settle_project_transition(meta, by="transition_orphan_sweep")
-            if not fields:
-                continue
-            if stamp_run_metadata_for(handle_id, fields) is None:
+            def revise(existing):
+                # review r23: a committed owner settlement wins over this scan.
+                if (not _transition_only(existing)
+                        or existing["project_transition"].get("since") != t.get("since")):
+                    return {}
+                return settle_project_transition(existing, by="transition_orphan_sweep")
+
+            fields = revise_run_metadata_for(handle_id, revise)
+            if fields is None:
                 log.warning("transition-orphan sweep: revert write failed for %s "
                             "— retrying next sweep", handle_id)
+                continue
+            if not fields:
+                log.info("transition-orphan sweep: %s settled by its owner meanwhile — nothing to repair", handle_id)
                 continue
             stamped += 1
             _refresh_run_surfaces(handle_id, run_dir, by="transition-orphan sweep")
@@ -1241,7 +1257,7 @@ def sweep_verdict_orphans(
             handle_id = str(
                 meta.get("handle_id") or run_dir.name.split("-", 1)[0])
             from stop_verdicts import VERDICT_SOURCE_PENDING_ORPHANED
-            from runs import stamp_run_metadata_for
+            from runs import stamp_run_metadata_for, revise_run_metadata_for
 
             def _finish(run_dir=run_dir, handle_id=handle_id, vp=vp,
                         meta=meta, notify=True):
@@ -1303,16 +1319,26 @@ def sweep_verdict_orphans(
                 # 2026-09-13 round 6 — resolving the marker alone made the
                 # abandoned retry directory the landscape's destination).
                 from landscape import settle_project_transition as _settle_pt
-                resolved_path = stamp_run_metadata_for(
-                    handle_id, {"verdict_pending": {
-                        **vp,
+                def revise(existing):
+                    # review r23: resolve only the marker still owned by this scan.
+                    current = existing.get("verdict_pending")
+                    if (not isinstance(current, dict) or current.get("resolved_at")
+                            or current.get("since") != vp.get("since")):
+                        return {}
+                    return {"verdict_pending": {
+                        **current,
                         "resolved_at": datetime.now(timezone.utc).isoformat(),
                         "resolved_by": "verdict_orphan_sweep(verdict-present)",
-                    }, **_story_owed(), **_settle_pt(meta, by="verdict_orphan_sweep")})
-                if resolved_path is None:
+                    }, **_story_owed(), **_settle_pt(existing, by="verdict_orphan_sweep")}
+
+                written = revise_run_metadata_for(handle_id, revise)
+                if written is None:
                     log.warning("verdict-orphan sweep: resolve-only write "
                                 "failed for %s — retrying next sweep",
                                 handle_id)
+                    continue
+                if not written:
+                    log.info("verdict-orphan sweep: %s settled by its owner meanwhile — nothing to repair", handle_id)
                     continue
                 stamped += 1
                 _finish(notify=not _told)
@@ -1345,18 +1371,30 @@ def sweep_verdict_orphans(
                             handle_id, loop_id[:8])
                 continue
             from landscape import settle_project_transition as _settle_pt
-            fields = {"verdict_pending": {
-                **vp,
-                "resolved_at": datetime.now(timezone.utc).isoformat(),
-                "resolved_by": "verdict_orphan_sweep",
-            }, "goal_verdict_source": VERDICT_SOURCE_PENDING_ORPHANED,
-                **_story_owed(), **_settle_pt(meta, by="verdict_orphan_sweep")}
-            if stamp_run_metadata_for(handle_id, fields) is None:
+            def revise(existing):
+                # review r23: a judged verdict or resolved marker ends our authority.
+                current = existing.get("verdict_pending")
+                if (not isinstance(current, dict) or current.get("resolved_at")
+                        or current.get("since") != vp.get("since")
+                        or existing.get("goal_verdict_source")):
+                    return {}
+                return {"verdict_pending": {
+                    **current,
+                    "resolved_at": datetime.now(timezone.utc).isoformat(),
+                    "resolved_by": "verdict_orphan_sweep",
+                }, "goal_verdict_source": VERDICT_SOURCE_PENDING_ORPHANED,
+                    **_story_owed(), **_settle_pt(existing, by="verdict_orphan_sweep")}
+
+            written = revise_run_metadata_for(handle_id, revise)
+            if written is None:
                 # Metadata write failed: marker stays ACTIVE, next sweep
                 # retries (the ledger re-stamp is idempotent — same source,
                 # achieved stays None).
                 log.warning("verdict-orphan sweep: metadata resolve failed "
                             "for %s — retrying next sweep", handle_id)
+                continue
+            if not written:
+                log.info("verdict-orphan sweep: %s settled by its owner meanwhile — nothing to repair", handle_id)
                 continue
             stamped += 1
             _finish(notify=not _told)

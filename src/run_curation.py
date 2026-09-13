@@ -131,6 +131,15 @@ def _read_meta(rd: Path) -> dict:
         return {}
 
 
+def _read_meta_strict(rd: Path) -> Optional[dict]:
+    # review r23: unreadable metadata must not erase a card's real verdict.
+    try:
+        meta = json.loads((rd / "metadata.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
 def run_result(handle_id: str, run_dir: Optional[Path] = None) -> Optional[dict]:
     """Uniform result retrieval — the substrate-facing 'what was the answer?'.
 
@@ -1762,8 +1771,12 @@ def refresh_run_card_classification(
     then merge over the existing card so maintenance-only promotion state and
     other extensions survive. Trust-bearing maintenance never re-runs.
     """
-    rd, meta = _resolve_run(handle_id, None, run_dir)
-    if rd is None:
+    rd = run_dir or _run_dir_for(handle_id)
+    if rd is None or not rd.is_dir():
+        return None
+    meta = _read_meta_strict(rd)
+    if meta is None:
+        log.warning("refresh_run_card_classification: metadata unreadable for run %s", rd.name)
         return None
     rebuilt = _build_run_card(handle_id, rd, meta)
     card_path = rd / "run_card.json"

@@ -6831,6 +6831,26 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   image and grant list — a canonical identity keeps its plain slug
   (both live layers unchanged), any other gets `<slug>-<sha1[:8]>`,
   and a manifest recording a different project lends nothing.
+  Round 23 (codex-written): the four disk sweeps (dead-run, transition
+  orphan, and both verdict-orphan branches) decided their repair from a
+  read OUTSIDE the metadata lock and merged it unconditionally — the
+  round-10 locked decision had fixed only the kept-write drain — so an
+  owner's finalize landing in the window (adopted settlement, resolved
+  marker, judged verdict, or `ended_at`) was overwritten by the sweep's
+  stale revert / `pending_orphaned` / `stranded`; every sweep now
+  decides inside `runs.revise_run_metadata_for` from the locked snapshot
+  and declines (not counted, not told) when the owner settled it
+  meanwhile; curation's `_read_meta` swallowed a metadata read failure
+  into `{}`, so a repair's card refresh rebuilt an EMPTY classification
+  over the real card and the untold sweep told `goal_achieved=None`,
+  retiring a real `False/closure` story — the refresh now declines
+  (`_read_meta_strict`, card untouched) and the sweep tells the record;
+  the r22 hashed layer slug was itself canonical (`yahoo-mail-cd6088ca`
+  aliased the identity of that name) — encoded identities now carry an
+  `_` no canonical slug can, and a build or grant into a layer
+  directory whose manifest records another project is refused; the
+  r22 registry lock is now pinned (the owner's publication blocks while
+  the drain holds it).
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the

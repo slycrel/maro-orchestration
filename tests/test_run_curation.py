@@ -2007,3 +2007,20 @@ def test_r21_deliverable_uses_verbatim_project_directory(workspace):
     card = curate_run("h000r21")
     assert (rd / "artifact" / "FINAL_REPORT.md").read_text() == "Recorded project's report"
     assert Path(card["deliverables"][0]["path"]).parent == project_dir(" board-reports ")
+
+
+def test_r23_refresh_declines_an_unreadable_record(workspace, monkeypatch):
+    rd = _finish("r23-card", "Real verdict", "done", achieved=False)
+    runs.stamp_run_metadata_for("r23-card", {"goal_verdict_source": "closure"})
+    assert refresh_run_card_classification("r23-card", run_dir=rd) is not None
+    original = (rd / "run_card.json").read_bytes()
+    real_read = Path.read_text
+
+    def unreadable(path, *a, **kw):
+        if path == rd / "metadata.json":
+            raise OSError("metadata temporarily unavailable")
+        return real_read(path, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    assert refresh_run_card_classification("r23-card", run_dir=rd) is None
+    assert (rd / "run_card.json").read_bytes() == original
