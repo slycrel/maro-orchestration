@@ -2715,8 +2715,12 @@ class TestFinalizationIsNotDelivery:
     def test_a_resume_does_not_manufacture_a_project_from_a_malformed_record(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         import runs
+        import llm
         from handle_queue import handle_task
         from orch_items import project_dir
+        # CI (2026-09-13): a non-dry-run RESUME builds an adapter before the
+        # loop; the runner has no LLM backend, so stub it as the siblings do.
+        monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: object())
         # review r20: padding is part of the operator-bound directory identity.
         assert project_dir(" board-reports ") != project_dir("board-reports")
         seen = {}
