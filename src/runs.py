@@ -1315,11 +1315,13 @@ def record_finalized_without_verdict(handle_id: str, meta: dict, *, status: str)
                 _lid,
                 goal_achieved=None,
                 goal_verdict_source=VERDICT_SOURCE_NEVER_STAMPED,
+                # review r24: eligibility can go stale before the ledger lock.
+                only_unjudged=True,
             )
             # the API reports storage failure as a typed result, not a
             # raise (`write_failed`); `missing` is a valid absence — no
             # row to make honest (review r13)
-            if getattr(res, "status", None) not in ("updated", "missing"):
+            if getattr(res, "status", None) not in ("updated", "missing", "superseded"):
                 ok = False
         except Exception:
             ok = False

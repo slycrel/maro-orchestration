@@ -1774,20 +1774,26 @@ def refresh_run_card_classification(
     rd = run_dir or _run_dir_for(handle_id)
     if rd is None or not rd.is_dir():
         return None
-    meta = _read_meta_strict(rd)
-    if meta is None:
-        log.warning("refresh_run_card_classification: metadata unreadable for run %s", rd.name)
-        return None
-    rebuilt = _build_run_card(handle_id, rd, meta)
     card_path = rd / "run_card.json"
     if not card_path.is_file():
+        meta = _read_meta_strict(rd)
+        if meta is None:
+            log.warning("refresh_run_card_classification: metadata unreadable for run %s", rd.name)
+            return None
+        rebuilt = _build_run_card(handle_id, rd, meta)
         _write_run_card(rd, rebuilt)
         return rebuilt
 
     from file_lock import locked_rmw
-    refreshed = {"card": None}
+    refreshed = {"card": None, "unreadable": False}
 
-    def _merge(old: str) -> str:
+    def _merge(old: str) -> Optional[str]:
+        # review r24: publish the metadata observed under the card lock.
+        meta = _read_meta_strict(rd)
+        if meta is None:
+            refreshed["unreadable"] = True
+            return None
+        rebuilt = _build_run_card(handle_id, rd, meta)
         # Preserve-then-rebuild (adversarial r2, Architect HIGH): the old
         # `except: card = {}` silently DESTROYED an unreadable card twice
         # over — maintenance-owned keys gone from the rewrite, and the torn
@@ -1830,6 +1836,8 @@ def refresh_run_card_classification(
         return json.dumps(card, indent=2)
 
     locked_rmw(card_path, _merge)
+    if refreshed["unreadable"]:
+        log.warning("refresh_run_card_classification: metadata unreadable for run %s", rd.name)
     return refreshed["card"]
 
 

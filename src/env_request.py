@@ -299,7 +299,8 @@ def project_slug(project: str) -> str:
     if not project or project == slug:
         return slug
     # review r22: normalized spellings must not share layers or grants.
-    digest = hashlib.sha1(str(project).encode("utf-8")).hexdigest()[:8]
+    # review r24: 32-bit prefixes collide among ordinary project populations.
+    digest = hashlib.sha1(str(project).encode("utf-8")).hexdigest()[:16]
     # review r23: encoded identities must live outside the canonical namespace.
     return f"{slug}_{digest}"
 

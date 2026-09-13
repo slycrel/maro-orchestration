@@ -266,9 +266,11 @@ class OutcomeVerdictStampResult:
     ``invalid`` (R3-3) means the CALLER's verdict value was malformed
     (non-bool ``goal_achieved``) and the row was deliberately left
     untouched — the smallest honest signal for a refused stamp.
+    ``superseded`` means the row already carries a judged verdict; the
+    placeholder was not written — an honest decline, not a failure.
     """
 
-    status: Literal["updated", "missing", "write_failed", "invalid"]
+    status: Literal["updated", "missing", "write_failed", "invalid", "superseded"]
     attempts: int = 0
     error: str = ""
 
@@ -888,6 +890,7 @@ def stamp_outcome_verdict(
     goal_verdict_source: str,
     goal_verdict_confidence: Optional[float] = None,
     max_attempts: int = 1,
+    only_unjudged: bool = False,
 ) -> OutcomeVerdictStampResult:
     """Atomically stamp a verdict, distinguishing absence from write failure.
 
@@ -936,12 +939,13 @@ def stamp_outcome_verdict(
             goal_verdict_confidence = None
         else:
             goal_verdict_confidence = _conf
+    from stop_verdicts import VERDICT_SOURCE_NEVER_STAMPED, VERDICT_SOURCE_PENDING_ORPHANED
     path = _outcomes_path()
 
     attempts = max(1, int(max_attempts))
     from file_lock import atomic_write, locked_write
     for attempt in range(1, attempts + 1):
-        updated = {"hit": False}
+        updated = {"hit": False, "superseded": False}
 
         def _stamp(old: str) -> str:
             lines = old.splitlines()
@@ -961,6 +965,13 @@ def stamp_outcome_verdict(
             if target_idx is None:
                 return old
             row = json.loads(lines[target_idx])
+            # review r24: a stale repair must not erase a judged exclusion.
+            source = row.get("goal_verdict_source")
+            if (only_unjudged and isinstance(source, str) and source
+                    and source not in {VERDICT_SOURCE_NEVER_STAMPED,
+                                       VERDICT_SOURCE_PENDING_ORPHANED}):
+                updated["superseded"] = True
+                return old
             # Re-stamp honesty (Jeremy decree 2026-08-10: corrections may
             # flip a verdict "but be honest about it and note they were
             # failures at run time"): overwriting an existing judged
@@ -1017,6 +1028,8 @@ def stamp_outcome_verdict(
                     return OutcomeVerdictStampResult(
                         "missing", attempts=attempt)
                 new = _stamp(old)
+                if updated["superseded"]:
+                    return OutcomeVerdictStampResult("superseded", attempts=attempt)
                 if not updated["hit"]:
                     log.debug(
                         "stamp_outcome_verdict: no outcomes row with loop_id=%s",

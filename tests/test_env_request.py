@@ -639,3 +639,14 @@ def test_r23_a_foreign_layer_location_is_never_written(ws, fake_build):
     assert not fake_build["calls"]
     assert er.add_grants("mine", ["apt:x"])["grants"] == []
     assert manifest.read_text() == original
+
+
+def test_r24_encoded_identities_do_not_share_an_eight_hex_prefix(ws):
+    import hashlib
+    from container_exec import _IMAGE_TAG_RE
+    a, b = "x" * 40 + "105880", "x" * 40 + "203539"
+    assert hashlib.sha1(a.encode()).hexdigest()[:8] == hashlib.sha1(b.encode()).hexdigest()[:8]
+    assert er.project_slug(a) != er.project_slug(b)
+    assert er.layer_dir(a) != er.layer_dir(b)
+    assert er.image_tag(a, 1) != er.image_tag(b, 1)
+    assert all(_IMAGE_TAG_RE.match(er.image_tag(p, 1)) for p in (a, b))

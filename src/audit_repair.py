@@ -1355,12 +1355,14 @@ def sweep_verdict_orphans(
                         loop_id,
                         goal_achieved=None,
                         goal_verdict_source=VERDICT_SOURCE_PENDING_ORPHANED,
+                        # review r24: eligibility can go stale before the ledger lock.
+                        only_unjudged=True,
                     )
                     # "missing" is acceptable BY DESIGN: no outcome row
                     # exists (the run died before reflect_and_record), so
                     # there is nothing in the ledger to mislead learning —
                     # the metadata stamp below is the durable record.
-                    ledger_ok = res.status in ("updated", "missing")
+                    ledger_ok = res.status in ("updated", "missing", "superseded")
                 except Exception:
                     ledger_ok = False
             if not ledger_ok:

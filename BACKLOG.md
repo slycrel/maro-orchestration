@@ -6851,6 +6851,26 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   directory whose manifest records another project is refused; the
   r22 registry lock is now pinned (the owner's publication blocks while
   the drain holds it).
+  Round 24 (codex-written): a repair's PLACEHOLDER ledger stamp
+  (`verdict_pending_orphaned` from the orphan sweep,
+  `closure_never_stamped` from the finalized-without-verdict record
+  used by the kept-write drain and `close_run`) ran from an unlocked
+  eligibility read BEFORE the r23 locked metadata decision — an
+  owner's `closure_unverifiable` verdict landing in between kept its
+  boolean but lost its source and its `verdict_excluded` flag (no
+  history, since the placeholder carries no boolean), promoting
+  excluded evidence to FULL learning trust with the resolved marker
+  keeping every later sweep away; `stamp_outcome_verdict` now takes
+  `only_unjudged=True` (decided inside its own lock: a judged source
+  → `superseded`, no write; placeholder-over-placeholder still
+  idempotent) and both placeholder stampers pass it, accepting
+  `superseded` as honest; the card refresh read metadata and rebuilt
+  BEFORE taking the card lock, so a repair's refresh could publish a
+  stale `done-verdict-pending` over the owner's `done-not-achieved` —
+  the read + rebuild now happen inside `locked_rmw`'s critical section;
+  the r23 8-hex identity digest collided among ordinary name
+  populations (the ownership check then refused the second project
+  forever) — 16 hex now, the refusal kept as the collision's fate.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the

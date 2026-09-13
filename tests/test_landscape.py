@@ -3896,3 +3896,67 @@ def test_r23_the_owner_publication_waits_for_the_drains_removal(monkeypatch, tmp
     assert audit_repair.drain_kept_writes()["retried"] == 1
     assert _meta(hid)["story_owed_by"] == "repair"
     assert _meta(hid)["verdict_pending"]["resolved_at"]
+
+
+def _r24_owner_at_ledger_stamp(monkeypatch, hid, loop, vp):
+    import memory_ledger as ml
+    import runs
+    assert runs.stamp_run_metadata_for(hid, {"lane": "agenda", "pid": _dead_pid()}) is not None
+    ml.record_outcome("r24 goal", "done", "summary", loop_id=loop)
+    real_stamp = ml.stamp_outcome_verdict
+    injected = []
+
+    def stamp(lid, **kwargs):
+        # review r24: the ledger precedes metadata revision, so race at its seam.
+        if lid == loop and not injected:
+            injected.append(True)
+            assert real_stamp(lid, goal_achieved=False,
+                              goal_verdict_source="closure_unverifiable").status == "updated"
+            assert runs.stamp_run_metadata_for(hid, {
+                "goal_achieved": False, "goal_verdict_source": "closure_unverifiable",
+                "verdict_pending": {**vp, "resolved_at": "owner-time", "resolved_by": "owner"},
+            }) is not None
+        return real_stamp(lid, **kwargs)
+
+    monkeypatch.setattr(ml, "stamp_outcome_verdict", stamp)
+    return injected
+
+
+def test_r24_the_orphan_stamp_keeps_a_judged_ledger_row(monkeypatch, tmp_path):
+    import audit_repair
+    import memory_ledger as ml
+    import notify
+    _setup(monkeypatch, tmp_path)
+    loop = "r24-orphan"
+    vp = {"since": "2020-01-01T00:00:00+00:00", "loop_id": loop}
+    hid = _finished_run(GOAL_QUARTERLY, extra={
+        "verdict_pending": vp, "loop_ids": [loop], "pid": _dead_pid()})
+    injected = _r24_owner_at_ledger_stamp(monkeypatch, hid, loop, vp)
+    told = []
+    monkeypatch.setattr(notify, "tell", lambda *a, **kw: told.append(a) or True)
+    result = audit_repair.sweep_verdict_orphans(grace_s=0)
+    assert injected
+    row = json.loads(ml._outcomes_path().read_text().splitlines()[-1])
+    assert row["goal_verdict_source"] == "closure_unverifiable"
+    assert row["verdict_excluded"] is True
+    assert ml.verdict_trust(row) == "excluded"
+    assert result["stamped"] == 0
+    assert not told
+
+
+def test_r24_the_drain_keeps_a_judged_ledger_row(monkeypatch, tmp_path):
+    import audit_repair
+    import memory_ledger as ml
+    _setup(monkeypatch, tmp_path)
+    loop = "r24-drain"
+    vp = {"since": "2020-01-01T00:00:00+00:00", "loop_id": loop}
+    hid = _finished_run(GOAL_QUARTERLY, extra={"verdict_pending": vp, "loop_ids": [loop]})
+    injected = _r24_owner_at_ledger_stamp(monkeypatch, hid, loop, vp)
+    pending = {hid: {"_finalize": True}}
+    audit_repair._drain_pending(pending)
+    assert injected
+    row = json.loads(ml._outcomes_path().read_text().splitlines()[-1])
+    assert row["goal_verdict_source"] == "closure_unverifiable"
+    assert row["verdict_excluded"] is True
+    assert ml.verdict_trust(row) == "excluded"
+    assert not pending

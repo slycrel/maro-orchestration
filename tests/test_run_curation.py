@@ -2024,3 +2024,32 @@ def test_r23_refresh_declines_an_unreadable_record(workspace, monkeypatch):
     monkeypatch.setattr(Path, "read_text", unreadable)
     assert refresh_run_card_classification("r23-card", run_dir=rd) is None
     assert (rd / "run_card.json").read_bytes() == original
+
+
+def test_r24_the_refresh_publishes_the_metadata_at_publication(workspace, monkeypatch):
+    import file_lock
+    hid = "r24-card"
+    rd = _finish(hid, "Real verdict", "done")
+    vp = {"since": "2020-01-01T00:00:00+00:00"}
+    runs.stamp_run_metadata_for(hid, {"verdict_pending": vp})
+    assert refresh_run_card_classification(hid, run_dir=rd)["success_class"] == "done-verdict-pending"
+    real_rmw = file_lock.locked_rmw
+    injected = []
+
+    def publish(path, fn, *args, **kwargs):
+        if path == rd / "run_card.json" and not injected:
+            injected.append(True)
+            assert runs.stamp_run_metadata_for(hid, {
+                "verdict_pending": {**vp, "resolved_at": "owner-time"},
+                "goal_achieved": False, "goal_verdict_source": "closure",
+            }) is not None
+        return real_rmw(path, fn, *args, **kwargs)
+
+    monkeypatch.setattr(file_lock, "locked_rmw", publish)
+    card = refresh_run_card_classification(hid, run_dir=rd)
+    assert injected
+    written = json.loads((rd / "run_card.json").read_text())
+    assert written["success_class"] == "done-not-achieved"
+    assert written["goal_achieved"] is False
+    assert "verdict_pending" not in written
+    assert card == written
