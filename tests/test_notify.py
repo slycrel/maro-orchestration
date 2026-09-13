@@ -417,8 +417,8 @@ def test_r19_emit_validates_subscriptions(workspace, monkeypatch, events):
     assert calls == []
 
 
-@pytest.mark.parametrize("timeout_raw", ["invalid", ".nan", ".inf", "0", "-1", "9" * 400],
-                         ids=["invalid", "nan", "inf", "zero", "negative", "overflow"])
+@pytest.mark.parametrize("timeout_raw", ["invalid", ".nan", ".inf", "0", "-1", "9" * 400, "1e20", "1e300"],
+                         ids=["invalid", "nan", "inf", "zero", "negative", "overflow", "oversized", "huge"])
 def test_r19_invalid_timeout_uses_default(workspace, monkeypatch, caplog, timeout_raw):
     import math
     import config
@@ -439,3 +439,13 @@ def test_r19_invalid_timeout_uses_default(workspace, monkeypatch, caplog, timeou
     assert notify_mod.tell("run_completed", {}) is True
     assert calls == [30]
     assert "timeout" in caplog.text
+
+
+def test_r21_oversized_timeout_reaches_a_real_hook(workspace, monkeypatch):
+    import config
+    import observe
+    config._workspace_config_path().write_text(
+        'notify: {command: "true", timeout_seconds: 1e20}\n')
+    config.load_config(reload=True)
+    monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+    assert notify_mod.tell("run_completed", {}) is True

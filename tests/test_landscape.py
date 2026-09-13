@@ -3474,3 +3474,63 @@ class TestEverySenderKeepsTheSameWord:
         monkeypatch.setattr(notify, "tell", lambda kind, payload, **kw: told.append(kind) or True)
         assert sweep_untold_finalizes(grace_s=0)["told"] == 1
         assert told == ["run_completed"], told  # the full answer, not a verdict for an answer never received
+
+
+def test_r21_finalize_keeps_obligation_private_until_close_and_tell(monkeypatch, tmp_path):
+    import threading
+    import runs
+    import notify
+    import observe
+    import audit_repair
+    import handle as handle_mod
+    from orch_items import projects_root
+    _setup(monkeypatch, tmp_path)
+    (projects_root() / "board-reports").mkdir(parents=True)
+    _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+    monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {})
+    monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+    told = []
+    monkeypatch.setattr(notify, "tell", lambda kind, payload, **kw: told.append((kind, payload)) or True)
+    real_revise = runs.revise_run_metadata_for
+    real_close = runs.close_run
+    owner_in_close = threading.Event()
+    release = threading.Event()
+    ids = []
+    results = []
+
+    def refusing_finalize(hid, fn):
+        if threading.current_thread() is owner:
+            return None
+        return real_revise(hid, fn)
+
+    def blocking_close(hid, **kwargs):
+        if kwargs.get("final"):
+            ids.append(hid)
+            owner_in_close.set()
+            assert release.wait(10)
+        return real_close(hid, **kwargs)
+
+    def run_owner():
+        results.append(_escalating_run(
+            monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward"))))
+
+    monkeypatch.setattr(runs, "revise_run_metadata_for", refusing_finalize)
+    monkeypatch.setattr(runs, "close_run", blocking_close)
+    owner = threading.Thread(target=run_owner, daemon=True)
+    owner.start()
+    try:
+        assert owner_in_close.wait(10)
+        hid = ids[0]
+        assert handle_mod._UNSETTLED_TRANSITIONS.get(hid) is None
+        assert audit_repair.drain_kept_writes()["retried"] == 0
+        assert "story_owed_at" not in _meta(hid)
+    finally:
+        release.set()
+        owner.join(10)
+    assert not owner.is_alive()
+    assert results and told
+    assert handle_mod._UNSETTLED_TRANSITIONS.get(hid) == {"_finalize": True, "_by": "owner"}
+    assert audit_repair.drain_kept_writes()["retried"] == 1
+    assert _meta(hid)["story_owed_by"] == "repair"
+    assert _meta(hid)["verdict_pending"]["resolved_at"]
+    assert hid not in handle_mod._UNSETTLED_TRANSITIONS

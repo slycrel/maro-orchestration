@@ -6797,6 +6797,24 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   and positive or 30, warned). Recorded, not changed: an owner whose
   own tell failed waits out the grace (1 h) or its death before the
   sweep retells — duplicate over missing still holds after that.
+  Round 21 (codex-written): a finalize whose obligation write FAILED
+  published the obligation to the process-wide kept-write dict at once
+  — before its own final close and tell — and any other `handle()`
+  starting on another scheduler thread drains on entry, re-labelling
+  it `repair` while the owner was still finalizing (the r20 gate
+  bypassed again: early record retold, a later error close never
+  told); the obligation is now held privately and published in a
+  `finally` when the finalize block exits (close + tell attempted,
+  success or exception); a finite positive timeout above what the
+  subprocess clock can hold (`1e20`) raised OverflowError at launch on
+  every retry — bounded at one day, else 30 with a warning, pinned
+  through a REAL subprocess; curation's deliverable scan
+  `.strip()`ped the recorded project that execution (and, since r20,
+  RESUME) preserves — one `runs.recorded_project(meta)` identity now
+  serves curation, RESUME and the env-request image lookup (the
+  navigator's menu PICK stays normalized: it is an answer, not yet an
+  identity). Recorded, not changed: an obligation held privately is
+  lost with the process (as before — only a death loses it).
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the

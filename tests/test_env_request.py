@@ -572,3 +572,19 @@ def test_hermes_side_knows_the_decision_is_the_orchestrators():
     assert "## Decide an install request" in skill and "answer <handle_id> deny <why>" in skill
     assert "${" not in inbox.split("prompt=")[1].split("hermes -z")[0].replace("${event}", "").replace("${event_file}", "").replace("${inbox}", ""), \
         "no unbound-variable prose in the brain prompt (the 2026-09-07 inbox death)"
+
+
+def test_r21_current_project_is_the_recorded_identity(tmp_path, monkeypatch):
+    # review r21: the recorded project string IS the directory — image
+    # resolution must name the same project the run executes in, never a
+    # trimmed twin of it.
+    import json
+    import runs
+    import env_request
+    rd = tmp_path / "run"
+    rd.mkdir()
+    (rd / "metadata.json").write_text(json.dumps({"project": " board-reports "}))
+    monkeypatch.setattr(runs, "current_run_dir", lambda: rd)
+    assert env_request.current_project() == " board-reports "
+    (rd / "metadata.json").write_text(json.dumps({"project": "   "}))
+    assert env_request.current_project() is None

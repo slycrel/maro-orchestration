@@ -1991,3 +1991,19 @@ def test_locate_deliverables_over_cap_is_recorded(workspace):
     omitted = card["served_artifacts_omitted"]
     assert len(omitted) == 2
     assert all(o["reason"] == "over-cap" for o in omitted)
+
+
+def test_r21_deliverable_uses_verbatim_project_directory(workspace):
+    from orch_items import project_dir
+    rd = create_run_dir(
+        "h000r21", prompt="report for the board", lane="agenda",
+        extra_metadata={"project": " board-reports ", "goal_achieved": True})
+    for slug, body in [(" board-reports ", "Recorded project's report"),
+                       ("board-reports", "Another project's report")]:
+        pdir = project_dir(slug)
+        pdir.mkdir(parents=True)
+        (pdir / "FINAL_REPORT.md").write_text(body)
+    finalize_run("h000r21", status="done")
+    card = curate_run("h000r21")
+    assert (rd / "artifact" / "FINAL_REPORT.md").read_text() == "Recorded project's report"
+    assert Path(card["deliverables"][0]["path"]).parent == project_dir(" board-reports ")

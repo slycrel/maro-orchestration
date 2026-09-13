@@ -1306,3 +1306,12 @@ def test_close_run_finalize_flag_preserves_concurrent_card_write(
         (run_dir("closerun5") / "run_card.json").read_text())
     assert after.get("finalize_failed") is True
     assert after.get("classification_v2") == "landed-mid-close"
+
+
+def test_r21_recorded_project_preserves_directory_identity():
+    import runs
+    assert hasattr(runs, "recorded_project")
+    assert runs.recorded_project({"project": " x "}) == " x "
+    assert runs.recorded_project({"project": "   "}) is None
+    assert runs.recorded_project({"project": 17}) is None
+    assert runs.recorded_project({}) is None

@@ -529,13 +529,12 @@ def current_project() -> Optional[str]:
     """The project of the current run (its metadata), for image resolution
     at docker-run time where no loop context is at hand."""
     try:
-        from runs import current_run_dir
+        from runs import current_run_dir, recorded_project
         rd = current_run_dir()
         if rd is None:
             return None
         meta = json.loads((Path(rd) / "metadata.json").read_text(encoding="utf-8"))
-        p = str(meta.get("project") or "").strip()
-        return p or None
+        return recorded_project(meta)
     except Exception:
         return None
 

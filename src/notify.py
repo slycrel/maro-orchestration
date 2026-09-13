@@ -44,6 +44,8 @@ from typing import Optional, Any
 
 log = logging.getLogger("notify")
 
+_MAX_TIMEOUT_S = 86400.0
+
 # backend_actionable: auth/billing/context failures with a fix the user must
 # apply (BACKEND_RESILIENCE_DESIGN §2) — default-on because a headless box's
 # notify channel is the only surface an away-from-keyboard user actually sees.
@@ -347,8 +349,8 @@ def _emit(event_type: str, payload: dict, *, run_dir: Optional[str],
         timeout = float(timeout_raw if timeout_raw is not None else 30)
     except (TypeError, ValueError, OverflowError):
         timeout = float("nan")
-    # review r20: non-finite and non-positive timeouts cannot run a valid hook.
-    if not math.isfinite(timeout) or timeout <= 0:
+    # review r21: even finite timeouts can overflow the subprocess clock.
+    if not math.isfinite(timeout) or timeout <= 0 or timeout > _MAX_TIMEOUT_S:
         log.warning("invalid notify timeout for %s; using 30 seconds", event_type)
         timeout = 30
 

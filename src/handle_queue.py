@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from ancestry import Origin
+from runs import recorded_project
 from context_budget import clip, VERDICT_PROSE_CAP
 
 log = logging.getLogger("maro.handle")
@@ -180,9 +181,7 @@ def handle_task(
                     # a directory name from it (review r12) — and today's
                     # derivation decides (None)
                     # review r20: RESUME preserves the run's recorded identity verbatim.
-                    project=(_parent_meta.get("project")
-                             if isinstance(_parent_meta.get("project"), str)
-                             and _parent_meta.get("project").strip() else None),
+                    project=recorded_project(_parent_meta),
                 )
             finally:
                 # Drain-batch hygiene the old scoped_run_dir(None) provided:
@@ -419,6 +418,8 @@ def handle_task(
             # navigator makes is orthogonal to where the work lives.
             if _nav_decision is not None:
                 try:
+                    # (the navigator's PICK is normalized — it is a menu
+                    # answer, not yet a recorded identity; review r21)
                     _cand = str((getattr(_nav_decision, "payload", {}) or {})
                                 .get("project") or "").strip()
                     if _cand and "/" not in _cand and "\\" not in _cand \

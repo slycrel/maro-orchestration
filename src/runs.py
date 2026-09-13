@@ -58,6 +58,13 @@ _NOUNS = (
 )
 
 
+def recorded_project(meta: dict) -> Optional[str]:
+    """Return a non-blank project string verbatim: the string IS the directory."""
+    # review r21: trimming an identity can select another project's files.
+    project = meta.get("project")
+    return project if isinstance(project, str) and project.strip() else None
+
+
 def nickname(handle_id: str) -> str:
     """Deterministic 2-word nickname from handle_id.
 

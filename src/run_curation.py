@@ -360,8 +360,9 @@ def _parse_ts(iso: str) -> Optional[float]:
 
 def _project_dir_for(meta: dict) -> Optional[Path]:
     """Resolve the project dir a run wrote into, '' project → None."""
-    slug = str(meta.get("project") or "").strip()
-    if not slug:
+    from runs import recorded_project
+    slug = recorded_project(meta)
+    if slug is None:
         try:
             from agent_loop import _goal_to_slug
             slug = _goal_to_slug(str(meta.get("prompt") or ""))

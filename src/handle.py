@@ -1058,175 +1058,181 @@ def handle(
                 # skips a living owner; a failed read before the write
                 # kept nothing at all); only a death loses it, and the
                 # sweeps then work from disk.
-                _obligation = {k: v for k, v in dict(_UNSETTLED_TRANSITIONS.get(_hid) or {}).items()
-                               if k != "verdict_pending"}
-                _obligation["_finalize"] = True
-                # review r20: the live owner still owes its final close and tell.
-                _obligation["_by"] = "owner"
+                _owed_obligation = None
                 try:
-                    from runs import revise_run_metadata_for as _revise_fin
-                    from audit_repair import reconcile_kept_write as _reconcile_fin
-                    _written = _revise_fin(
-                        _hid, lambda existing: _reconcile_fin(existing, _obligation))
-                except Exception:
-                    _written = None
-                if _written is None:
-                    _UNSETTLED_TRANSITIONS[_hid] = _obligation
-                    log.error("finalize write for %s not recorded; kept for the "
-                              "maintenance retry", _hid)
-                else:
-                    _UNSETTLED_TRANSITIONS.pop(_hid, None)
-                _vp_meta = {}
-                _meta_loop_ids: list = []
-                try:
-                    from runs import run_dir as _run_dir_vp
-                    _meta_all = json.loads(
-                        (_run_dir_vp(_hid) / "metadata.json")
-                        .read_text(encoding="utf-8"))
-                    _meta_loop_ids = [
-                        str(l) for l in (_meta_all.get("loop_ids") or []) if l]
-                    _vp_meta = _meta_all.get("verdict_pending") or {}
-                    if not isinstance(_vp_meta, dict):
-                        _vp_meta = {}
-                except Exception:
-                    _vp_meta = {}
-                _tail_lid = ""
-                try:
-                    _tail_lid = (str(_meta_loop_ids[-1])
-                                 if _meta_loop_ids
-                                 else str(_vp_meta.get("loop_id") or ""))
-                except Exception:
-                    _tail_lid = ""
-                try:
-                    from metrics import tail_cost_scope as _fin_cost_scope
-                except Exception:
-                    from contextlib import nullcontext
-                    _fin_cost_scope = lambda *a, **k: nullcontext()  # noqa: E731
-                # Shared run-dir finalization (slice log, snapshot repo, stamp
-                # status + backend_error, curate run_card, re-render reports).
-                # Returns the run_card, which IS the completion payload.
-                # Curation-scoped: answer synthesis is a real tail LLM call
-                # (review 2026-08-13).
-                with _fin_cost_scope(_tail_lid, "curation"):
-                    _card = _close_run(_hid, status=_status,
-                                       backend_error=_backend_err, final=True)
-                # Actionable backend death: ping the notify channel with the
-                # fix (auth/billing/context) — distinct from run_completed so
-                # substrates can render it as "act now", not "run finished".
-                if _backend_err is not None:
+                    _obligation = {k: v for k, v in dict(_UNSETTLED_TRANSITIONS.get(_hid) or {}).items()
+                                   if k != "verdict_pending"}
+                    _obligation["_finalize"] = True
+                    # review r20: the live owner still owes its final close and tell.
+                    _obligation["_by"] = "owner"
                     try:
-                        from notify import emit as _notify_emit_be
-                        _notify_emit_be("backend_actionable", {
-                            "handle_id": _hid,
-                            "status": _status,
-                            "error_class": _backend_err.error_class,
-                            "backend": _backend_err.backend,
-                            "user_action": _backend_err.user_action,
-                            "summary": _backend_err.user_action,
-                            # Run identity for the relay layer — an alert
-                            # without the original ask can't be tied back to
-                            # the job it interrupted (azure-finch 2026-07-17).
-                            "goal": str((_card or {}).get("goal", ""))[:300],
-                        })
+                        from runs import revise_run_metadata_for as _revise_fin
+                        from audit_repair import reconcile_kept_write as _reconcile_fin
+                        _written = _revise_fin(
+                            _hid, lambda existing: _reconcile_fin(existing, _obligation))
                     except Exception:
-                        pass
-                # Substrate notification: the run_card IS the completion payload
-                # (status, done!=achieved class, result excerpt + path).
-                # Async-tail phase 2: when the answer already went out at
-                # final-step compile (verdict_pending marker, notified_early),
-                # this emit becomes the VERDICT follow-up (run_verdict) —
-                # closure/gate have run by now, the marker was resolved just
-                # above (before close_run, so the tripwire kept its
-                # authority), and the re-curated card carries the verdict.
-                try:
-                    from notify import tell as _notify_emit
-                    from runs import run_dir as _run_dir_notify
-                    # The follow-up is only owed when the early notify
-                    # actually reached the user: a CONFIGURED hook that
-                    # failed to deliver downgrades back to a full
-                    # run_completed — a verdict for an answer the user never
-                    # received is worse than a late answer (review
-                    # 2026-08-13).
-                    from notify import early_reached as _early_reached_fn
-                    _early_reached = _early_reached_fn(_vp_meta)
-                    if _card is None:
-                        # curation failed: the record's own verdict is
-                        # the story, never an id (review r16 — the
-                        # sweeps' fallback, shared)
-                        try:
-                            from audit_repair import _story_payload as _fallback_story
-                            _card = _fallback_story(_hid, _run_dir_notify(_hid), None,
-                                                    by="finalize")
-                        except Exception:
-                            _card = None
-                    if _early_reached:
-                        _payload = dict(_card or {"handle_id": _hid,
-                                                  "status": _status})
-                        # "Revised answer" means a REPLACEMENT LOOP shipped
-                        # after the early notify (gate escalation / closure
-                        # restart) AND its text differs. A bare sha compare
-                        # false-fires when curation.answer_synthesis is ON —
-                        # two stochastic syntheses of the same run word the
-                        # same answer differently (review 2026-08-13).
-                        _final_answer = str(
-                            _payload.get("answer_summary", "") or "")
-                        _final_sha = (hashlib.sha256(
-                            _final_answer.encode("utf-8")).hexdigest()
-                            if _final_answer else "")
-                        _loop_replaced = bool(
-                            _meta_loop_ids
-                            and _vp_meta.get("loop_id")
-                            and _meta_loop_ids[-1] != _vp_meta.get("loop_id"))
-                        _payload["answer_changed"] = bool(
-                            _loop_replaced and _final_sha
-                            and _final_sha != _vp_meta.get("answer_sha", ""))
-                        _kind = "run_verdict"
-                        _delivered = _notify_emit(
-                            _kind, _payload,
-                            run_dir=str(_run_dir_notify(_hid)),
-                        )
+                        _written = None
+                    if _written is None:
+                        _owed_obligation = _obligation
+                        log.error("finalize write for %s not recorded; kept for the "
+                                  "maintenance retry", _hid)
                     else:
-                        _kind = "run_completed"
-                        _delivered = _notify_emit(
-                            _kind,
-                            _card or {"handle_id": _hid, "status": _status},
-                            run_dir=str(_run_dir_notify(_hid)),
-                        )
-                    # The story was TOLD when its owed channel acknowledged
-                    # it (`notify.tell`: the hook ran cleanly when one is
-                    # configured for the event, else the journal row was
-                    # written — review r15: "no hook" is not "delivered");
-                    # a channel that failed leaves it owed — the
-                    # untold-finalize sweep retries it (review r13: an
-                    # attempt is not an acknowledgment). Recorded so a
-                    # repair sweep does not tell it again; `finalized_at`
-                    # is the final CLOSE, which precedes this emit — not
-                    # delivery evidence (review r12). A record that fails
-                    # to stamp errs toward a repeated notify, never a
-                    # missing one.
-                    # ...and never while this run's resolving write is
-                    # still KEPT (`_written is None`): the card told then
-                    # is the pending one, and the resolver — this
-                    # process's drain, or any verdict sweep — tells the
-                    # verdict and records that (review r16: the finalize
-                    # acknowledged "verdict pending" as the final story
-                    # and the repaired verdict was never told).
-                    _told = bool(_delivered) and _written is not None
-                    if _told:
+                        _UNSETTLED_TRANSITIONS.pop(_hid, None)
+                    _vp_meta = {}
+                    _meta_loop_ids: list = []
+                    try:
+                        from runs import run_dir as _run_dir_vp
+                        _meta_all = json.loads(
+                            (_run_dir_vp(_hid) / "metadata.json")
+                            .read_text(encoding="utf-8"))
+                        _meta_loop_ids = [
+                            str(l) for l in (_meta_all.get("loop_ids") or []) if l]
+                        _vp_meta = _meta_all.get("verdict_pending") or {}
+                        if not isinstance(_vp_meta, dict):
+                            _vp_meta = {}
+                    except Exception:
+                        _vp_meta = {}
+                    _tail_lid = ""
+                    try:
+                        _tail_lid = (str(_meta_loop_ids[-1])
+                                     if _meta_loop_ids
+                                     else str(_vp_meta.get("loop_id") or ""))
+                    except Exception:
+                        _tail_lid = ""
+                    try:
+                        from metrics import tail_cost_scope as _fin_cost_scope
+                    except Exception:
+                        from contextlib import nullcontext
+                        _fin_cost_scope = lambda *a, **k: nullcontext()  # noqa: E731
+                    # Shared run-dir finalization (slice log, snapshot repo, stamp
+                    # status + backend_error, curate run_card, re-render reports).
+                    # Returns the run_card, which IS the completion payload.
+                    # Curation-scoped: answer synthesis is a real tail LLM call
+                    # (review 2026-08-13).
+                    with _fin_cost_scope(_tail_lid, "curation"):
+                        _card = _close_run(_hid, status=_status,
+                                           backend_error=_backend_err, final=True)
+                    # Actionable backend death: ping the notify channel with the
+                    # fix (auth/billing/context) — distinct from run_completed so
+                    # substrates can render it as "act now", not "run finished".
+                    if _backend_err is not None:
                         try:
-                            from runs import stamp_run_metadata_for as _srm_told
-                            _srm_told(_hid, {"final_notified_at": datetime.now(
-                                timezone.utc).isoformat()})
+                            from notify import emit as _notify_emit_be
+                            _notify_emit_be("backend_actionable", {
+                                "handle_id": _hid,
+                                "status": _status,
+                                "error_class": _backend_err.error_class,
+                                "backend": _backend_err.backend,
+                                "user_action": _backend_err.user_action,
+                                "summary": _backend_err.user_action,
+                                # Run identity for the relay layer — an alert
+                                # without the original ask can't be tied back to
+                                # the job it interrupted (azure-finch 2026-07-17).
+                                "goal": str((_card or {}).get("goal", ""))[:300],
+                            })
                         except Exception:
                             pass
-                    elif _written is None:
-                        log.warning("finalize for %s told %s over a kept resolution; "
-                                    "the resolver tells the verdict", _hid, _kind)
-                    else:
-                        log.warning("the owed notify channel did not acknowledge %s for %s; "
-                                    "the untold-finalize sweep retries it", _kind, _hid)
-                except Exception:
-                    pass
+                    # Substrate notification: the run_card IS the completion payload
+                    # (status, done!=achieved class, result excerpt + path).
+                    # Async-tail phase 2: when the answer already went out at
+                    # final-step compile (verdict_pending marker, notified_early),
+                    # this emit becomes the VERDICT follow-up (run_verdict) —
+                    # closure/gate have run by now, the marker was resolved just
+                    # above (before close_run, so the tripwire kept its
+                    # authority), and the re-curated card carries the verdict.
+                    try:
+                        from notify import tell as _notify_emit
+                        from runs import run_dir as _run_dir_notify
+                        # The follow-up is only owed when the early notify
+                        # actually reached the user: a CONFIGURED hook that
+                        # failed to deliver downgrades back to a full
+                        # run_completed — a verdict for an answer the user never
+                        # received is worse than a late answer (review
+                        # 2026-08-13).
+                        from notify import early_reached as _early_reached_fn
+                        _early_reached = _early_reached_fn(_vp_meta)
+                        if _card is None:
+                            # curation failed: the record's own verdict is
+                            # the story, never an id (review r16 — the
+                            # sweeps' fallback, shared)
+                            try:
+                                from audit_repair import _story_payload as _fallback_story
+                                _card = _fallback_story(_hid, _run_dir_notify(_hid), None,
+                                                        by="finalize")
+                            except Exception:
+                                _card = None
+                        if _early_reached:
+                            _payload = dict(_card or {"handle_id": _hid,
+                                                      "status": _status})
+                            # "Revised answer" means a REPLACEMENT LOOP shipped
+                            # after the early notify (gate escalation / closure
+                            # restart) AND its text differs. A bare sha compare
+                            # false-fires when curation.answer_synthesis is ON —
+                            # two stochastic syntheses of the same run word the
+                            # same answer differently (review 2026-08-13).
+                            _final_answer = str(
+                                _payload.get("answer_summary", "") or "")
+                            _final_sha = (hashlib.sha256(
+                                _final_answer.encode("utf-8")).hexdigest()
+                                if _final_answer else "")
+                            _loop_replaced = bool(
+                                _meta_loop_ids
+                                and _vp_meta.get("loop_id")
+                                and _meta_loop_ids[-1] != _vp_meta.get("loop_id"))
+                            _payload["answer_changed"] = bool(
+                                _loop_replaced and _final_sha
+                                and _final_sha != _vp_meta.get("answer_sha", ""))
+                            _kind = "run_verdict"
+                            _delivered = _notify_emit(
+                                _kind, _payload,
+                                run_dir=str(_run_dir_notify(_hid)),
+                            )
+                        else:
+                            _kind = "run_completed"
+                            _delivered = _notify_emit(
+                                _kind,
+                                _card or {"handle_id": _hid, "status": _status},
+                                run_dir=str(_run_dir_notify(_hid)),
+                            )
+                        # The story was TOLD when its owed channel acknowledged
+                        # it (`notify.tell`: the hook ran cleanly when one is
+                        # configured for the event, else the journal row was
+                        # written — review r15: "no hook" is not "delivered");
+                        # a channel that failed leaves it owed — the
+                        # untold-finalize sweep retries it (review r13: an
+                        # attempt is not an acknowledgment). Recorded so a
+                        # repair sweep does not tell it again; `finalized_at`
+                        # is the final CLOSE, which precedes this emit — not
+                        # delivery evidence (review r12). A record that fails
+                        # to stamp errs toward a repeated notify, never a
+                        # missing one.
+                        # ...and never while this run's resolving write is
+                        # still KEPT (`_written is None`): the card told then
+                        # is the pending one, and the resolver — this
+                        # process's drain, or any verdict sweep — tells the
+                        # verdict and records that (review r16: the finalize
+                        # acknowledged "verdict pending" as the final story
+                        # and the repaired verdict was never told).
+                        _told = bool(_delivered) and _written is not None
+                        if _told:
+                            try:
+                                from runs import stamp_run_metadata_for as _srm_told
+                                _srm_told(_hid, {"final_notified_at": datetime.now(
+                                    timezone.utc).isoformat()})
+                            except Exception:
+                                pass
+                        elif _written is None:
+                            log.warning("finalize for %s told %s over a kept resolution; "
+                                        "the resolver tells the verdict", _hid, _kind)
+                        else:
+                            log.warning("the owed notify channel did not acknowledge %s for %s; "
+                                        "the untold-finalize sweep retries it", _kind, _hid)
+                    except Exception:
+                        pass
+                finally:
+                    # review r21: repair must wait for the owner's close and tell.
+                    if _owed_obligation is not None:
+                        _UNSETTLED_TRANSITIONS[_hid] = _owed_obligation
                 # Tail cost lane (2026-08-13): the drains' LLM calls (lesson
                 # extraction, crystallization, promotion validation, evolver)
                 # join the loop's cost rows via the same scope.
