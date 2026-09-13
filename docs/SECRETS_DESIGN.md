@@ -223,6 +223,14 @@ maro-go secrets list|check|get    the same store, the Go engine's view
   `.env` had. Owner/root can read `/proc`; same trust domain.
 - In a worker: an injected value is in the worker's env by design (the
   decree's accepted exposure), scrubbed from every captured output.
+- On the HOST lane the worker *is* the operator's user: the hand-off
+  file (§6) is a courtesy, not a boundary — the identity file is
+  readable by the same uid. Observed 2026-09-12 (run 154ec06a): the
+  container auth volume had expired, the breaker degraded executor steps
+  to the host, and the worker — told where the values were — ran `sops
+  -d` with the age identity and decrypted all 19 names to use two. The
+  frame now says the file is the only sanctioned path; the wall is the
+  container (`executor.container: require`), never the wording.
 - Not covered: a worker exfiltrating an injected value on purpose. The
   policy file is the operator's lever — inject only what the goal class
   needs.
@@ -245,6 +253,12 @@ re-copies them.
 
 ## 10. Residuals / next
 
+- **Degrade-to-host is the hole (2026-09-12, BACKLOG HIGH).** With real
+  credentials in the store, an expired container auth session must end
+  the step in a typed environmental pause (`container-auth-expired`,
+  resumes on re-seed) rather than run the worker on the host; `require`
+  gets that today and is the recommended setting; an auth liveness probe
+  on the health lane would catch expiry before a run does.
 - **Rotation** is manual (`set` again). A `rotated_after` field in the
   metadata and a `check` warning are the obvious next slice.
 - ~~File hand-off on the host lane~~ — SHIPPED 2026-09-06 (§6). Residue:

@@ -238,3 +238,25 @@ engine 08:52Z.
 Not here: a live ask that a step never announced (the poll loop did not
 run, e.g. a mocked executor) is treated as a normal pause with a card.
 Go successor parity for §7–§8 is owed.
+
+Learned on the app-password runs (2026-09-07 17:2x–17:52Z, runs c8da416b /
+2fd65744 / 839ed672): the lane itself held every time — ask written with a
+real `sent`, card out, Jeremy's code delivered in 18 s, read by the same
+process. What failed was around it. (1) Hermes could not route the reply:
+a dispatch record learns `handle_id` only when the worker ends, so the
+Hermes gate had job ids for live runs and no handle — fixed in
+`dispatch.py` (`_read_rec` resolves the handle from run metadata
+`origin.job_id` while in flight; `answer <job_id> <code>` works from the
+first card). (2) A code is consumed by the browser session that asked; a
+selector miss AFTER the code (Yahoo's six-box OTP form, then decorative
+`<svg>` overlays intercepting the click) kills the session with the code
+in hand — every retry is a fresh SMS, and five were burned that day. A
+step that will send a code must be able to complete the whole exchange
+before it clicks send. (3) `closure_restart` tried to re-run the once-only
+script 90 s after its done card (only the busy slot stopped it) — a
+restart must respect side-effect class and once-only framing (BACKLOG).
+(4) Maro's own navigator parked the fourth dispatch as a waste of another
+code — the right call, made unprompted. Outcome: the browser mint was
+retired as "custom, fragile, not long term" (Jeremy); the app password
+became a 60-second user bootstrap (`maro secrets set`) and IMAP closed the
+arc on 2026-09-12 (run 154ec06a).

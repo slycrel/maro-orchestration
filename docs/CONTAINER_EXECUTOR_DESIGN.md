@@ -160,6 +160,20 @@ tip learned during the 08-13 re-seed: the interactive `/login` URL
 truncates when the TUI wraps it at terminal width — `stty cols 400` first,
 or de-wrap the copied URL in an editor.
 
+**Recurred 2026-09-12.** The volume re-seeded 2026-08-13 expired again
+(~30 days: the refresh token's lifetime, so expect this monthly until a
+liveness probe or a re-seed cadence exists). Run 68cbde81 paused
+`llm-unreachable` (honest); 90 s later the breaker had tripped and run
+154ec06a's steps ran on the HOST under `on`'s degrade — where the worker
+decrypted the secrets store with the age identity instead of reading the
+hand-off file (`docs/SECRETS_DESIGN.md` §9). Two conclusions: `on`'s
+degrade-to-host was designed when the box held no store worth protecting
+and is now the wrong default — `require` (refuse → typed pause) is the
+recommended setting; and the breaker is reactive by design ("liveness is
+not probed"), so the first casualty of every expiry is a real run. Re-seed
+recipe unchanged: interactive `/login` inside the container (`stty cols
+400` first so the URL survives the TUI wrap).
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to
