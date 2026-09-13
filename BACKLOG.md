@@ -6560,9 +6560,29 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   the verdict sweep only ever saw active markers; the reservation's
   `ensure_project` runs inside the cleanup scope (a partial
   initialisation left `.reserve-*` behind); deletion census: the
-  staging rmtree allow-listed as ephemeral. Direction recorded: a
-  settlement that fails in the run AND at the finalize is reverted by
-  the sweep even when the retry had been adopted — the retry's adoption
+  staging rmtree allow-listed as ephemeral. Round 8: a settlement the
+  finalize could not write is KEPT in `_UNSETTLED_TRANSITIONS` (it was
+  popped before the write, so a store outage at the finalize dropped the
+  intended outcome and the sweep later reverted an adopted retry) and
+  the transition sweep drains the kept settlements first — in-process,
+  under the repair pidfile — before its disk candidates (`retried` in
+  its result; heartbeat sums `stamped + retried`); the transition sweep
+  has NO liveness test (its domain is runs with `ended_at` and no active
+  verdict marker — the handle has finished; the old `os.kill` check
+  skipped the very worker whose heartbeat thread runs the sweep); the
+  heartbeat runs the two sweeps in independent try scopes (the
+  transition sweep was nested under the verdict sweep's, so a verdict
+  sweep raising took it down too); the verdict sweep's pid check
+  catches `OverflowError`/`ValueError` (a pid that cannot exist aborted
+  the whole sweep); `handle_queue`'s RESUME passes the run's recorded
+  `project` to the loop (it passed none, so loop init re-derived the
+  slug from the goal over the landscape binding). Convention recorded:
+  the verdict sweep treats `PermissionError` on `os.kill` as alive and
+  a recycled pid as alive — a recycled pid delays by one sweep, a
+  false-dead would settle under a live worker. Direction recorded: a
+  settlement that fails in the run AND at the finalize is kept for the
+  sweep's retry in the same process; only a process death loses it, and
+  then the sweep reverts even an adopted retry — the retry's adoption
   is durable only when its write is; the original's identity was
   durable before the retry started, and the retry's work stays on disk
   in its own directory. Recorded, not changed: a project deleted

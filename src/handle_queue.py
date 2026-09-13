@@ -169,6 +169,13 @@ def handle_task(
                     measurement_class=str(_origin.get("measurement_class") or ""),
                     handle_id=_parent_handle,
                     admission_wait_s=_wait_s,
+                    # same run, same project: the run's recorded project
+                    # (bound by the landscape, the operator, the navigator
+                    # …) carries through — loop init would otherwise
+                    # re-derive a goal slug and stamp it over the binding
+                    # (review 2026-09-13 round 8); a legacy record with no
+                    # project keeps today's derivation
+                    project=str(_parent_meta.get("project") or "") or None,
                 )
             finally:
                 # Drain-batch hygiene the old scoped_run_dir(None) provided:

@@ -2023,7 +2023,9 @@ class TestTheTransitionHasOneLifecycle:
         # (iii) an ACTIVE marker: the verdict sweep's, not this one's
         marked = _finished_run(GOAL_QUARTERLY + " thrice", "C.", extra={
             **base, "verdict_pending": {"since": "2026-09-13T00:00:00+00:00", "loop_id": "x"}})
-        # (iv) too young, (v) owner alive
+        # (iv) too young, (v) the recorded owner ALIVE — the host process
+        # of a handle that has finished (a long-lived worker); its
+        # liveness is not ownership here (review r8)
         young = _finished_run(GOAL_QUARTERLY + " four", "D.", extra={
             **base, "project_transition": {**active, "since": datetime.now(timezone.utc).isoformat()}})
         alive = _finished_run(GOAL_QUARTERLY + " five", "E.", extra=dict(base))
@@ -2033,14 +2035,14 @@ class TestTheTransitionHasOneLifecycle:
         for hid in (no_marker, resolved, marked, young, alive):
             assert landscape.run_settled(_meta(hid)) is False
         res = sweep_transition_orphans(grace_s=60)
-        assert res == {"status": "completed", "stamped": 2, "considered": 4}, res
-        for hid in (no_marker, resolved):
+        assert res == {"status": "completed", "stamped": 3, "considered": 4, "retried": 0}, res
+        for hid in (no_marker, resolved, alive):
             m = _meta(hid)
             assert (m["project"], m["project_binding"]) == ("board-reports", "landscape")
             assert m["project_transition"]["outcome"] == "reverted"
             assert m["project_transition"]["settled_by"] == "transition_orphan_sweep"
             assert landscape.run_settled(m) is True
-        for hid in (marked, young, alive):
+        for hid in (marked, young):
             m = _meta(hid)
             assert m["project"] == "board-reports-escalated" and "settled_at" not in m["project_transition"]
         # the sweep runs where the verdict sweep runs
@@ -2071,3 +2073,140 @@ class TestTheTransitionHasOneLifecycle:
         assert "NEXT.md" in written and "DECISIONS.md" in written
         assert sorted(p.name for p in root.iterdir()) == before
         assert not [p for p in root.iterdir() if p.name.startswith(".reserve-")]
+
+
+class TestRecoveryOutlivesTheHandle:
+    """Review round 8 (2026-09-13): a settlement the finalize could not
+    write is kept and drained by the sweep in the same process; the sweep
+    runs even when the verdict sweep raises; a pid that cannot exist does
+    not abort the verdict sweep; a queued RESUME keeps the run's project."""
+
+    def test_a_settlement_the_finalize_could_not_write_is_kept_and_drained(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        import landscape
+        import handle as handle_mod
+        from audit_repair import sweep_transition_orphans
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        real = runs.stamp_run_metadata
+        real_for = runs.stamp_run_metadata_for
+        refused = []
+
+        def settled(fields):
+            t = fields.get("project_transition")
+            return isinstance(t, dict) and bool(t.get("settled_at"))
+
+        def refusing(fields):
+            if settled(fields):
+                refused.append("run")
+                return None
+            return real(fields)
+
+        def refusing_for(hid, fields):
+            if settled(fields):
+                refused.append("finalize")
+                return None
+            return real_for(hid, fields)
+
+        monkeypatch.setattr(runs, "stamp_run_metadata", refusing)
+        monkeypatch.setattr(runs, "stamp_run_metadata_for", refusing_for)
+        r, projects = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert projects == ["board-reports", "board-reports-escalated"]
+        assert refused == ["run", "run", "finalize"], refused
+        # kept, not dropped — with the INTENDED outcome
+        kept = handle_mod._UNSETTLED_TRANSITIONS.get(r.handle_id)
+        assert kept and kept["project_transition"]["outcome"] == "adopted"
+        assert (kept["project"], kept["project_binding"]) == ("board-reports-escalated", "escalated")
+        meta = _meta(r.handle_id)
+        assert "settled_at" not in meta["project_transition"] and landscape.run_settled(meta) is False
+        # the store comes back; the sweep in this process writes the kept
+        # settlement first, even with nothing aged on disk and the owner alive
+        monkeypatch.setattr(runs, "stamp_run_metadata_for", real_for)
+        res = sweep_transition_orphans(grace_s=10 ** 9)
+        assert res["status"] == "completed" and res["retried"] == 1 and res["stamped"] == 0, res
+        assert r.handle_id not in handle_mod._UNSETTLED_TRANSITIONS
+        meta = _meta(r.handle_id)
+        assert (meta["project"], meta["project_binding"]) == ("board-reports-escalated", "escalated")
+        assert meta["project_transition"]["outcome"] == "adopted" and meta["project_transition"]["settled_at"]
+        # the only thing still open is the verdict marker the same failed
+        # write carried — the verdict sweep's, once the owner is dead
+        vp = meta.get("verdict_pending")
+        assert isinstance(vp, dict) and not vp.get("resolved_at")
+        assert landscape.run_settled({**meta, "verdict_pending": {**vp, "resolved_at": "x"}}) is True
+        # a second sweep has nothing to retry
+        assert sweep_transition_orphans(grace_s=10 ** 9)["retried"] == 0
+
+    def test_the_transition_sweep_runs_when_the_verdict_sweep_raises(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import audit_repair
+        import heartbeat as hb
+        calls = []
+
+        def boom(**kw):
+            raise OverflowError("Python int too large to convert to C int")
+
+        monkeypatch.setattr(audit_repair, "sweep_verdict_orphans", boom)
+        monkeypatch.setattr(audit_repair, "sweep_transition_orphans",
+                            lambda **kw: calls.append(kw) or {"status": "completed", "stamped": 1, "retried": 2,
+                                                              "considered": 1})
+        result = hb.stranded_state_sweep()
+        assert calls and calls[0].get("limit") == 5
+        assert result.get("transition_orphans_settled") == 3
+        assert "verdict_orphans_stamped" not in result
+
+    def test_a_pid_that_cannot_exist_does_not_abort_the_verdict_sweep(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        import notify
+        from audit_repair import sweep_verdict_orphans
+        monkeypatch.setattr(notify, "emit", lambda *a, **kw: True)
+        marker = {"since": "2026-09-13T00:00:00+00:00", "loop_id": "lr-1", "notified_early": True}
+        absurd = _finished_run(GOAL_QUARTERLY, "A.", extra={"loop_ids": ["lr-1"], "verdict_pending": dict(marker),
+                                                             "goal_verdict_source": "closure", "goal_achieved": True})
+        dead = _finished_run(GOAL_QUARTERLY + " again", "B.", extra={"loop_ids": ["lr-2"], "verdict_pending": dict(marker),
+                                                                      "goal_verdict_source": "closure", "goal_achieved": True})
+        runs.stamp_run_metadata_for(absurd, {"pid": 2 ** 80})
+        runs.stamp_run_metadata_for(dead, {"pid": _dead_pid()})
+        res = sweep_verdict_orphans(grace_s=0)
+        assert res["status"] == "completed" and res["stamped"] == 2, res
+        for hid in (absurd, dead):
+            assert _meta(hid)["verdict_pending"]["resolved_at"]
+
+    def test_a_queued_resume_keeps_the_runs_project(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        from handle_queue import handle_task
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        # a landscape-bound run paused for an operator's answer
+        rd = runs.create_run_dir("parenthd01", prompt=GOAL_FOLLOW_UP)
+        runs.stamp_run_metadata_for("parenthd01", {"status": "interrupted", "pause_reason": "operator_question",
+                                                   "project": "board-reports", "project_binding": "landscape"})
+        seen = {}
+
+        class _R:
+            loop_id = "resumeloop1"
+            status = "done"
+
+        def _fake_loop(goal, **kwargs):
+            seen.update(kwargs)
+            return _R()
+
+        task = {"job_id": "task-test-cont", "lane": "agenda", "source": "loop_continuation",
+                "reason": "CONTINUATION of: finish the mission", "continuation_depth": 1,
+                "origin": {"parent_handle_id": "parenthd01", "source": "operator_answer"}}
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_loop):
+            handle_task(task, dry_run=True)
+        assert seen.get("handle_id") == "parenthd01"
+        assert seen.get("project") == "board-reports", seen.get("project")
+        meta = _meta("parenthd01")
+        assert (meta["project"], meta["project_binding"]) == ("board-reports", "landscape")
+        # a legacy record with no project keeps today's derivation (None → loop init decides)
+        runs.create_run_dir("parenthd02", prompt=GOAL_FOLLOW_UP)
+        runs.stamp_run_metadata_for("parenthd02", {"status": "interrupted", "pause_reason": "budget_exhausted"})
+        seen.clear()
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_loop):
+            handle_task({**task, "origin": {"parent_handle_id": "parenthd02", "source": "task_store"}}, dry_run=True)
+        assert seen.get("handle_id") == "parenthd02" and seen.get("project") is None

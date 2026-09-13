@@ -1049,7 +1049,8 @@ def handle(
                     # record goes in the SAME write as the marker's
                     # resolution: "verdict resolved" must imply "transition
                     # settled" for every reader (review 2026-09-13 round 7)
-                    _fin_fields: dict = dict(_UNSETTLED_TRANSITIONS.pop(_hid, None) or {})
+                    _pending_pt = _UNSETTLED_TRANSITIONS.get(_hid) if _hid else None
+                    _fin_fields: dict = dict(_pending_pt or {})
                     if _vp_meta and not _vp_meta.get("resolved_at"):
                         _resolved = dict(_vp_meta)
                         _resolved["resolved_at"] = datetime.now(
@@ -1057,10 +1058,17 @@ def handle(
                         _fin_fields["verdict_pending"] = _resolved
                     if _fin_fields:
                         from runs import stamp_run_metadata_for as _srm_resolve
-                        if _srm_resolve(_hid, _fin_fields) is None and "project_transition" in _fin_fields:
-                            log.error("project transition settlement for %s not recorded at the "
-                                      "finalize either; the transition-orphan sweep will revert "
-                                      "to the delivered project", _hid)
+                        if _srm_resolve(_hid, _fin_fields) is None:
+                            if _pending_pt:
+                                # KEPT, not dropped: the transition-orphan
+                                # sweep drains it from this process with the
+                                # intended outcome once the store is back
+                                # (review r8); only a death loses it, and
+                                # the sweep then reverts from disk
+                                log.error("project transition settlement for %s not recorded at "
+                                          "the finalize either; kept for the maintenance retry", _hid)
+                        elif _pending_pt:
+                            _UNSETTLED_TRANSITIONS.pop(_hid, None)
                 except Exception:
                     _vp_meta = {}
                 _tail_lid = ""

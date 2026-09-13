@@ -672,19 +672,40 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _pending_settlements() -> Optional[dict]:
+    """The settlements a run in THIS process could not write (the run's two
+    attempts, then its finalize): `handle._UNSETTLED_TRANSITIONS`, keyed by
+    handle id — only when `handle` is loaded here (a process that never
+    handled a run has nothing pending; importing it to find out would be
+    wrong)."""
+    import sys
+    mod = sys.modules.get("handle")
+    pending = getattr(mod, "_UNSETTLED_TRANSITIONS", None) if mod is not None else None
+    return pending if isinstance(pending, dict) else None
+
+
 def sweep_transition_orphans(
     *, grace_s: float = _ORPHAN_GRACE_S, limit: int = 20,
 ) -> dict:
-    """Revert crash-orphaned project transitions whose verdict marker is
-    NOT active (resolved, or never written — `notify.verdict_followup`
-    off): the verdict sweep only sees active markers, and a run left
-    with an active `project_transition` past its end is otherwise held
-    out of the landscape forever and points every metadata reader at an
-    undelivered retry workspace (review 2026-09-13 round 7). Same
-    corroboration as the verdict sweep: the transition aged past
-    `grace_s` AND the recorded owner pid dead. The revert is
-    `landscape.settle_project_transition` (the delivered project restored
-    in the same write). Serialized under the repair pidfile."""
+    """Settle project transitions the run's own lifecycle could not.
+
+    Two sources, in order. (1) In-process: settlements kept in
+    `handle._UNSETTLED_TRANSITIONS` because both the run's writes and its
+    finalize's failed — written now with their INTENDED outcome (an
+    adopted retry stays adopted) and dropped only once written (review
+    2026-09-13 round 8: the finalize used to drop the entry before its
+    write, and a long-lived worker whose handle had finished kept every
+    later sweep away by being alive). (2) On disk: runs with `ended_at`,
+    an ACTIVE `project_transition` and a verdict marker that is NOT active
+    (resolved, or never written — `notify.verdict_followup` off); an
+    active marker belongs to the verdict sweep, which reverts the
+    transition itself. In this domain the handle has FINISHED — `ended_at`
+    without an active marker is the finalize's close — so the recorded pid
+    is the host process, not the handle: no liveness test, only the grace
+    (a settlement in flight from the finalize is already on disk or in
+    (1)). The revert is `landscape.settle_project_transition` (the
+    delivered project restored in the same write). Serialized under the
+    repair pidfile."""
     from proc_lock import acquire_pidfile
     from runs import runs_root, stamp_run_metadata_for
     from landscape import settle_project_transition
@@ -692,32 +713,45 @@ def sweep_transition_orphans(
     def _transition_only(meta: dict) -> bool:
         vp = meta.get("verdict_pending")
         if isinstance(vp, dict) and not vp.get("resolved_at"):
-            return False  # the verdict sweep owns it (and reverts the transition too)
+            return False
         t = meta.get("project_transition")
         return isinstance(t, dict) and not t.get("settled_at")
 
+    pending = _pending_settlements() or {}
     root = runs_root()
-    if not root.is_dir():
-        return {"status": "completed", "stamped": 0, "considered": 0}
     candidates = []
-    for run_dir in root.iterdir():
-        if not run_dir.is_dir():
-            continue
-        meta = _read_metadata(run_dir)
-        if meta is None or not meta.get("ended_at") or not _transition_only(meta):
-            continue
-        candidates.append(run_dir)
-    if not candidates:
-        return {"status": "completed", "stamped": 0, "considered": 0}
+    if root.is_dir():
+        for run_dir in root.iterdir():
+            if not run_dir.is_dir():
+                continue
+            meta = _read_metadata(run_dir)
+            if meta is None or not meta.get("ended_at") or not _transition_only(meta):
+                continue
+            candidates.append(run_dir)
+    if not candidates and not pending:
+        return {"status": "completed", "stamped": 0, "considered": 0, "retried": 0}
     acquired = acquire_pidfile(
         _REPAIR_LOCK, payload={"command": "transition-orphan-sweep"})
     if acquired.status == "busy":
-        return {"status": "busy", "stamped": 0}
+        return {"status": "busy", "stamped": 0, "retried": 0}
     if acquired.status == "unavailable":
-        return {"status": "unavailable", "stamped": 0,
+        return {"status": "unavailable", "stamped": 0, "retried": 0,
                 "error": acquired.error}
-    stamped = considered = 0
+    stamped = considered = retried = 0
     try:
+        for hid in list(pending.keys()):
+            fields = pending.get(hid)
+            if not isinstance(fields, dict) or not fields:
+                pending.pop(hid, None)
+                continue
+            if stamp_run_metadata_for(str(hid), fields) is None:
+                log.warning("transition sweep: kept settlement for %s still not "
+                            "writable — retrying next sweep", hid)
+                continue
+            pending.pop(hid, None)
+            retried += 1
+            log.info("transition sweep: kept settlement for %s written (%s)",
+                     hid, (fields.get("project_transition") or {}).get("outcome"))
         now = time.time()
         for run_dir in candidates:
             if stamped >= max(1, int(limit)):
@@ -736,18 +770,6 @@ def sweep_transition_orphans(
                 age_s = grace_s + 1
             if age_s <= grace_s:
                 continue
-            try:
-                _pid = int(meta.get("pid") or 0)
-            except (TypeError, ValueError):
-                _pid = 0
-            if _pid > 0:
-                try:
-                    os.kill(_pid, 0)
-                    continue  # owning process is alive — let it settle
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    continue  # exists, not ours — alive
             fields = settle_project_transition(meta, by="transition_orphan_sweep")
             if not fields:
                 continue
@@ -766,7 +788,8 @@ def sweep_transition_orphans(
                           "for %s", handle_id, exc_info=True)
             log.info("transition-orphan sweep: %s reverted %s → %s (aged %.0fs)",
                      handle_id, t.get("to"), fields.get("project"), age_s)
-        return {"status": "completed", "stamped": stamped, "considered": considered}
+        return {"status": "completed", "stamped": stamped, "considered": considered,
+                "retried": retried}
     finally:
         try:
             acquired.handle.close()
@@ -862,6 +885,9 @@ def sweep_verdict_orphans(
                     pass  # dead — genuinely orphaned
                 except PermissionError:
                     pass  # exists but not ours — a recycled pid; proceed
+                except (OverflowError, ValueError):
+                    pass  # not a pid that can exist — dead (review r8: one
+                    #       malformed record aborted the whole sweep)
                 except OSError:
                     pass
             scanned += 1
