@@ -1371,8 +1371,11 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[st
     stringifying it away (BACKEND_RESILIENCE_DESIGN §2) and any spend the
     step already incurred (a runaway kill's own ingest is ADDED to that —
     round 3: replacing it undercounted the re-call). Never raises."""
-    from llm_errors import kill_evidence
-    _partial, _fresh, _fresh_cost = kill_evidence(exc)
+    try:
+        from llm_errors import kill_evidence
+        _partial, _fresh, _fresh_cost = kill_evidence(exc)
+    except Exception:  # documented never-raises; the class still wins over the accounting
+        _partial, _fresh, _fresh_cost = "", 0, 0.0
     if partial_result is None:
         # A killed subprocess's partial output (llm.py attaches it on
         # timeout/runaway kills) is the only record of what the step did
@@ -1400,7 +1403,9 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[st
         # it consumed a lot. Recording it as a zero-token step would hide
         # the spend from run totals, cost reports and skill telemetry —
         # exactly the accounting the brake exists to protect.
-        if getattr(exc, "fresh_input_tokens", None) is not None:
+        # `_fresh` is read through the failover wrapper's cause chain
+        # (round 9), so the attribute may live on the cause, not on `exc`.
+        if _fresh or getattr(exc, "fresh_input_tokens", None) is not None:
             _blocked["tokens_in"] = int(tokens_in or 0) + _fresh
             _blocked["provider_cost_usd"] = float(provider_cost_usd or 0.0) + _fresh_cost
         return _blocked
@@ -1836,6 +1841,35 @@ def execute_step(
     _outcome: Dict[str, Any]
     _tool_name_used: Optional[str] = None
 
+    def _no_tool_call_outcome(_r) -> Dict[str, Any]:
+        """The outcome of a response with no tool call — ONE implementation
+        for the initial call and the tool_search re-call."""
+        _n = len(_r.content) if _r.content else 0
+        _t = int(getattr(_r, "input_tokens", 0) or 0) + int(getattr(_r, "output_tokens", 0) or 0)
+        if _r.content and len(_r.content) > 20:
+            # No tool call — treat content as result (some models don't always call tools)
+            log.info("step %d DONE (content fallback, %d chars) tokens=%d elapsed=%.1fs",
+                     step_num, _n, _t, time.monotonic() - _step_t0)
+            return {
+                "status": "done",
+                "result": _r.content,
+                "summary": step_text,
+                "tokens_in": _r.input_tokens,
+                "tokens_out": _r.output_tokens,
+                "cache_read_tokens": getattr(_r, "cache_read_tokens", 0),
+            }
+        log.warning("step %d BLOCKED (no tool call, content=%d chars) tokens=%d elapsed=%.1fs content=%r",
+                    step_num, _n, _t, time.monotonic() - _step_t0, (_r.content or "")[:120])
+        return {
+            "status": "blocked",
+            "stuck_reason": "LLM did not call a tool and produced no useful content",
+            "result": _r.content,
+            "tokens_in": _r.input_tokens,
+            "tokens_out": _r.output_tokens,
+            "cache_read_tokens": getattr(_r, "cache_read_tokens", 0),
+        }
+
+    _recall_prose = False
     if resp.tool_calls:
         tc = resp.tool_calls[0]
         _tool_name_used = tc.name
@@ -1848,8 +1882,23 @@ def execute_step(
             log.debug("step %d tool_search query=%r", step_num, _ts_query)
             _resolved_schemas: List[dict] = []
             try:
-                from tool_search import resolve_deferred_tools, format_tool_search_result
+                from tool_search import resolve_deferred_tools, format_tool_search_result, _tool_field
                 _resolved_schemas = resolve_deferred_tools(_ts_query)
+                # The caller's tool list IS this step's permission context
+                # (role + deny patterns were applied when it was built); the
+                # resolver has no such context and answers from the whole
+                # registry (review round 9, 2026-09-13: a denied deferred
+                # tool came back advertised and callable, and the admitted
+                # one was duplicated beside its stub). Only the stubs the
+                # caller admitted may expand, each REPLACING its stub.
+                _admitted = {str(_tool_field(_t, "name") or "") for _t in _active_tools}
+                _dropped = [str(_s.get("name")) for _s in _resolved_schemas
+                            if not isinstance(_s, dict) or str(_s.get("name") or "") not in _admitted]
+                _resolved_schemas = [_s for _s in _resolved_schemas
+                                     if isinstance(_s, dict) and str(_s.get("name") or "") in _admitted]
+                if _dropped:
+                    log.warning("step %d tool_search: %d match(es) outside this step's tool list dropped: %s",
+                                step_num, len(_dropped), ", ".join(_dropped)[:200])
             except Exception as _ts_exc:
                 log.warning("step %d tool_search failed: %s", step_num, _ts_exc)
             _expanded_tools = None
@@ -1859,7 +1908,10 @@ def execute_step(
                 # schema is a resolution failure (fall through), not a
                 # failure of the invoked call.
                 try:
-                    _expanded_tools = _active_tools + [_schema_to_tool(_s) for _s in _resolved_schemas]
+                    _expanded_names = {str(_s.get("name")) for _s in _resolved_schemas}
+                    _expanded_tools = ([_t for _t in _active_tools
+                                        if str(_tool_field(_t, "name") or "") not in _expanded_names]
+                                       + [_schema_to_tool(_s) for _s in _resolved_schemas])
                     _ts_result_block = format_tool_search_result(_resolved_schemas)
                 except Exception as _ts_exc:
                     _expanded_tools = None
@@ -1919,6 +1971,12 @@ def execute_step(
                     _tok = resp.input_tokens + resp.output_tokens
                     _tool_name_used = resp.tool_calls[0].name if resp.tool_calls else None
                     tc = resp.tool_calls[0] if resp.tool_calls else tc
+                    # A prose-only re-call is the step's answer, judged the
+                    # way the initial call's prose would be (review round 9,
+                    # 2026-09-13: it kept the FIRST response's tool_search
+                    # call and ended "unrecognised tool: tool_search" with
+                    # an empty result — completed output lost, false blame).
+                    _recall_prose = not resp.tool_calls
                     log.debug("step %d tool_search re-call done: tool=%r", step_num, _tool_name_used)
                 except Exception as _rerun_exc:
                     # The INVOKED re-call failed. This handler is OUTSIDE the
@@ -1946,7 +2004,9 @@ def execute_step(
             else:
                 log.debug("step %d tool_search: no matches for %r", step_num, _ts_query)
 
-        if tc.name == "complete_step":
+        if _recall_prose:
+            _outcome = _no_tool_call_outcome(resp)
+        elif tc.name == "complete_step":
             _confidence = tc.arguments.get("confidence", "") or ""
             _result_text = tc.arguments.get("result", resp.content)
             if not isinstance(_result_text, str):
@@ -2127,6 +2187,7 @@ def execute_step(
                     persona=_tw_persona,
                     adapter=adapter,
                     shared_ctx=shared_ctx,
+                    cwd=_call_kwargs.get("cwd"),
                 )
                 _tw_result_text = format_team_result_for_injection(_tw_res)
                 # Write result into shared_ctx so subsequent workers in this loop don't re-fetch
@@ -2144,18 +2205,38 @@ def execute_step(
                     _tw_ctx.add(_tw_res.result)
                     shared_ctx[_sm_key] = _tw_ctx.render()
             except Exception as _tw_exc:
-                _tw_result_text = f"[team-worker failed: {_tw_exc}]"
-                log.warning("step %d create_team_worker failed role=%r: %s", step_num, _tw_role, _tw_exc)
-            log.info("step %d DONE (create_team_worker) role=%r tokens=%d elapsed=%.1fs",
-                     step_num, _tw_role, _tok, time.monotonic() - _step_t0)
+                # create_team_worker absorbs ordinary failures into a blocked
+                # TeamResult; what ESCAPES it is a policy signal (a token-
+                # runaway kill, a typed environmental refusal — review round
+                # 9, 2026-09-13: both were stringified here into a DONE step,
+                # so a nested container-auth refusal never reached the pause
+                # seam). Same typed blocked outcome the step's own adapter
+                # call would have produced, with the parent's spend.
+                log.warning("step %d create_team_worker ended the step role=%r: %s",
+                            step_num, _tw_role, _tw_exc)
+                return _stamp_flavor(_blocked_outcome_from_exc(
+                    _tw_exc,
+                    tokens_in=int(getattr(resp, "input_tokens", 0) or 0),
+                    tokens_out=int(getattr(resp, "output_tokens", 0) or 0),
+                    provider_cost_usd=_provider_cost_usd))
+            # The specialist's status is the step's status: a blocked ticket
+            # is not a done step (round 9 — the parent stamped `done`
+            # unconditionally, so a nested refusal read as successful work).
+            _tw_blocked = getattr(_tw_res, "status", "") == "blocked"
+            log.info("step %d %s (create_team_worker) role=%r tokens=%d elapsed=%.1fs",
+                     step_num, "BLOCKED" if _tw_blocked else "DONE", _tw_role, _tok,
+                     time.monotonic() - _step_t0)
             _outcome = {
-                "status": "done",
+                "status": "blocked" if _tw_blocked else "done",
                 "result": _tw_result_text,
                 "summary": f"Team worker [{_tw_role}]: {_tw_task[:60]}",
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
                 "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
             }
+            if _tw_blocked:
+                _outcome["stuck_reason"] = (f"team worker [{_tw_role}] blocked: "
+                                           f"{getattr(_tw_res, 'stuck_reason', '') or 'no reason given'}")
         elif tc.name == "schedule_run":
             _sched_goal = tc.arguments.get("goal", "")
             _sched_when = tc.arguments.get("when", "in 1 hour")
@@ -2295,30 +2376,8 @@ def execute_step(
                     "tokens_out": resp.output_tokens,
                     "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
                 }
-    elif resp.content and len(resp.content) > 20:
-        # No tool call — treat content as result (some models don't always call tools)
-        log.info("step %d DONE (content fallback, %d chars) tokens=%d elapsed=%.1fs",
-                 step_num, _content_len, _tok, time.monotonic() - _step_t0)
-        _outcome = {
-            "status": "done",
-            "result": resp.content,
-            "summary": step_text,
-            "tokens_in": resp.input_tokens,
-            "tokens_out": resp.output_tokens,
-            "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
-        }
     else:
-        log.warning("step %d BLOCKED (no tool call, content=%d chars) tokens=%d elapsed=%.1fs content=%r",
-                    step_num, _content_len, _tok, time.monotonic() - _step_t0,
-                    (resp.content or "")[:120])
-        _outcome = {
-            "status": "blocked",
-            "stuck_reason": "LLM did not call a tool and produced no useful content",
-            "result": resp.content,
-            "tokens_in": resp.input_tokens,
-            "tokens_out": resp.output_tokens,
-            "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
-        }
+        _outcome = _no_tool_call_outcome(resp)
 
     # Byte-level record cross-reference (BACKLOG #0 rung-4 unification): when
     # record-mode captured this call, carry the record path on the outcome so

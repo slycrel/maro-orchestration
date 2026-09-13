@@ -333,3 +333,25 @@ def test_backend_error_keeps_its_structured_classification():
     assert "oauth token expired" in str(wrapped)          # text that WOULD misclassify
     got = classify_error(wrapped, backend="subprocess")
     assert got is info and got.error_class == CONTAINER_AUTH and got.failover is False
+
+
+@pytest.mark.parametrize("fresh, cost", [
+    (float("inf"), 0), (1e400, float("nan")), (-7, -1), ("many", None), (None, "x"), (float("inf"), float("-inf")),
+])
+def test_kill_evidence_is_total_finite_and_nonnegative(fresh, cost):
+    # Round 9: int(inf) raised OverflowError past the blocked builder's
+    # guard; NaN reached cost records; a negative subtracted from totals.
+    from llm_errors import kill_evidence
+    e = RuntimeError("killed")
+    e.maro_partial_output = "abc"; e.fresh_input_tokens = fresh; e.estimated_cost_usd = cost
+    assert kill_evidence(e) == ("[partial output before kill]\nabc", 0, 0.0)
+
+
+def test_kill_evidence_reads_through_the_failover_wrapper():
+    from llm_errors import kill_evidence
+    cause = RuntimeError("killed")
+    cause.maro_partial_output = "abc"; cause.fresh_input_tokens = 7; cause.estimated_cost_usd = 0.5
+    wrapper = RuntimeError("wrapped")
+    wrapper.__cause__ = cause
+    assert kill_evidence(wrapper) == ("[partial output before kill]\nabc", 7, 0.5)
+    assert kill_evidence(RuntimeError("bare")) == ("", 0, 0.0)

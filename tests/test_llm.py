@@ -3569,3 +3569,50 @@ class TestExplicitBackendAlwaysWrapped:
         adapter = build_adapter(api_key="sk-ant-test")
         assert isinstance(adapter, FailoverAdapter)
         assert not isinstance(adapter._adapters[0], FailoverAdapter)
+
+
+@pytest.mark.parametrize("flag", ["true", "false", None, 1, "TRUE"])
+def test_a_malformed_terminal_error_flag_never_reads_as_success(flag):
+    # Round 9: `is_error: "true"` on a zero exit carried an explicit
+    # auth-error envelope past the failure path as ordinary content.
+    from llm import _terminal_failure, _extract_success_result
+    err = {"type": "result", "subtype": "error_during_execution", "is_error": flag,
+           "result": "OAuth session expired - Please run /login"}
+    assert _terminal_failure(json.dumps(err)) is True
+    odd = {"type": "result", "subtype": "success", "is_error": flag, "result": "done"}
+    assert _terminal_failure(json.dumps(odd)) is True
+    assert _extract_success_result(json.dumps(odd)) is None
+
+
+def test_terminal_failure_controls():
+    from llm import _terminal_failure, _extract_success_result
+    ok = {"type": "result", "subtype": "success", "is_error": False, "result": "done"}
+    assert _terminal_failure(json.dumps(ok)) is False and _extract_success_result(json.dumps(ok)) == ok
+    absent = {"type": "result", "subtype": "success", "result": "done"}
+    assert _terminal_failure(json.dumps(absent)) is False and _extract_success_result(json.dumps(absent)) == absent
+    # an error subtype is a failure even with the flag clear
+    assert _terminal_failure(json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": False})) is True
+    assert _terminal_failure("not json at all") is False
+
+
+def test_a_terminal_failure_after_work_keeps_its_usage():
+    # Round 9: an auth failure AFTER work was recorded as zero tokens and
+    # zero spend; the terminal object's usage now rides the exception.
+    from llm_errors import kill_evidence
+    from step_exec import _blocked_outcome_from_exc
+    body = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+            "result": "OAuth session expired - Please run /login",
+            "usage": {"input_tokens": 37, "output_tokens": 9}, "total_cost_usd": 0.12}
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=0, stderr="", container_executed=False, stdout=json.dumps(body))):
+        with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+            a.complete([LLMMessage("user", "build a thing")])
+    assert kill_evidence(ei.value) == ("", 37, 0.12)
+    out = _blocked_outcome_from_exc(ei.value, tokens_in=3)
+    assert out["tokens_in"] == 40 and out["provider_cost_usd"] == pytest.approx(0.12), out
+    # through the failover wrapper (raised `from` the adapter's error)
+    wrapper = RuntimeError("wrapped"); wrapper.__cause__ = ei.value
+    assert _blocked_outcome_from_exc(wrapper)["tokens_in"] == 37
+    # control: a pre-launch refusal carries no usage
+    assert kill_evidence(RuntimeError("refused before launch")) == ("", 0, 0.0)

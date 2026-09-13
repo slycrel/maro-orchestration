@@ -469,6 +469,47 @@ arc. (b) "a failed narration is acknowledged forever" — the accepted
 trade documented at the narration site (write-then-narrate; a lost line
 leaves the snapshot showing SILENT); an outbox is not this chunk.
 
+*Review round 9 (2026-09-13, codex skeptic + QA, whole chunk) found two
+HIGHs on lanes the chunk had never touched plus four carry-through gaps;
+all fixed. One finding is a live design question, recorded not
+changed.* (xxxv) **Expansion is permission-scoped.** The tool_search
+re-call resolved schemas from the whole registry under a default
+`PermissionContext`, so a deferred tool the caller's role or deny list
+had excluded came back advertised and callable, and the admitted one was
+duplicated beside its stub. The caller's tool list IS the step's
+permission context: only stubs in it may expand, each replacing its
+stub. (xxxvi) **A prose-only re-call is the step's answer** — it kept the
+FIRST response's tool_search call and ended "unrecognised tool" with an
+empty result; one `_no_tool_call_outcome` now serves both calls.
+(xxxvii) **The budget breakers run after the pause seam.** A refusal (or
+an operator ask) on the final step at the token/cost boundary broke out
+`done` before either the typed pause or the step record; the
+finished-plan carve-out is for a DONE final step only, and no longer
+skips that step's own bookkeeping. (xxxviii) **The team-worker lane is an
+executor lane.** `create_team_worker` had neither the container-contract
+guard nor `executor=True` (under `require` a specialist's ticket ran on
+the HOST session), and the parent stamped `done` over any nested
+outcome — a nested typed refusal was stringified past the pause seam.
+Policy signals now propagate to the same typed blocked outcome; a
+blocked ticket is a blocked step. (xxxix) **Malformed terminal flags fail
+closed:** `is_error: "true"`/null/1 and any `error_*` subtype take the
+failure path; the success extractor requires the literal false or the
+field absent. (xl) **Evidence is total and travels.** `kill_evidence`
+rejects inf/NaN/negative accounting to zero (int(inf) had raised past
+the blocked builder's guard), reads through the failover wrapper's cause
+chain, and a terminal failure AFTER work now carries the terminal
+object's usage and cost onto the exception, so the blocked step records
+the spend instead of zero. *Recorded, not changed:*
+`_subprocess_timeout_error` renders the kill reason into text but not
+as the `maro_kill_reason` attribute the classifier keys on, so every
+converted kill classifies `retry_backoff` (retry ladder → blocked step →
+split recovery) rather than the `failover` the classifier's comment
+intends (→ chain exhausted under `require` → `llm-unreachable` pause).
+That has been the live behaviour since the wrapper landed and is
+arguably the right one for a stalled worker (a stall is not an
+environmental outage); flipping it is a §13e-adjacent call, logged in
+BACKLOG for Jeremy.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

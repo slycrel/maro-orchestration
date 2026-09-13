@@ -579,7 +579,7 @@ class TestToolSearchRecallRefusal:
                                                      "input_schema": {"type": "object", "properties": {}}}])
         adapter = _Adapter()
         outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
-                               completed_context=[], adapter=adapter, tools=[],
+                               completed_context=[], adapter=adapter, tools=[_deferred_stub("imap_read")],
                                project_dir=str(tmp_path))
         assert adapter.calls == 2
         assert outcome["status"] == "blocked" and outcome["error_class"] == "container_auth", outcome
@@ -616,7 +616,7 @@ class TestToolSearchRecallRefusal:
                                                      "input_schema": {"type": "object", "properties": {}}}])
         adapter = _Adapter()
         outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
-                               completed_context=[], adapter=adapter, tools=[],
+                               completed_context=[], adapter=adapter, tools=[_deferred_stub("imap_read")],
                                project_dir=str(tmp_path))
         assert adapter.calls == 2 and outcome["status"] == "blocked"
         assert outcome["error_class"] == expect_class, outcome
@@ -646,7 +646,7 @@ class TestToolSearchRecallRefusal:
                                                      "input_schema": {"type": "object", "properties": {}}}])
         adapter = _Adapter()
         outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
-                               completed_context=[], adapter=adapter, tools=[],
+                               completed_context=[], adapter=adapter, tools=[_deferred_stub("imap_read")],
                                project_dir=str(tmp_path))
         assert adapter.calls == 2 and outcome["status"] == "done", outcome
         assert (outcome["tokens_in"], outcome["tokens_out"]) == (18, 8)
@@ -675,7 +675,7 @@ class TestToolSearchRecallRefusal:
                                                      "input_schema": {"type": "object", "properties": {}}}])
         adapter = _Adapter()
         outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
-                               completed_context=[], adapter=adapter, tools=[],
+                               completed_context=[], adapter=adapter, tools=[_deferred_stub("imap_read")],
                                project_dir=str(tmp_path))
         assert adapter.calls == 2 and outcome["status"] == "blocked"
         assert outcome.get("error_class") != "container_auth"
@@ -711,7 +711,8 @@ class TestToolSearchRecallRefusal:
         adapter = _Adapter()
         outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
                                completed_context=[], adapter=adapter,
-                               tools=[LLMTool(name="complete_step", description="c", parameters={"type": "object", "properties": {}})],
+                               tools=[LLMTool(name="complete_step", description="c", parameters={"type": "object", "properties": {}}),
+                                      _deferred_stub("imap_read"), _deferred_stub("old_shape")],
                                project_dir=str(tmp_path))
         assert adapter.calls == 2 and outcome["status"] == "done", outcome
         assert ("imap_read", "d", {"folder": {"type": "string"}}) in seen["tools"]
@@ -720,7 +721,7 @@ class TestToolSearchRecallRefusal:
         monkeypatch.setattr(tool_search, "resolve_deferred_tools", lambda query, *a, **k: [{"description": "nameless"}])
         adapter = _Adapter()
         outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
-                               completed_context=[], adapter=adapter, tools=[], project_dir=str(tmp_path))
+                               completed_context=[], adapter=adapter, tools=[_deferred_stub("imap_read")], project_dir=str(tmp_path))
         assert adapter.calls == 1 and outcome["status"] == "blocked"
 
     def test_the_first_call_advertises_tool_search_for_a_deferred_llmtool(self, monkeypatch, tmp_path):
@@ -788,7 +789,7 @@ class TestToolSearchRecallRefusal:
                                                      "parameters": {"type": "object", "properties": {}}}])
         adapter = _Adapter()
         outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
-                               completed_context=[], adapter=adapter, tools=[], project_dir=str(tmp_path))
+                               completed_context=[], adapter=adapter, tools=[_deferred_stub("imap_read")], project_dir=str(tmp_path))
         assert adapter.calls == 2 and outcome["status"] == "blocked"
         assert "timed out" in outcome["stuck_reason"] and "unrecognised tool" not in outcome["stuck_reason"]
         assert "partial work already performed" in outcome["result"]
@@ -996,3 +997,215 @@ class TestParallelPausePersists:
         assert meta.get("pause_reason") == PAUSE_ERR_CONTAINER_AUTH
         # the continuation lane's strict-affirmative resume test (handle_queue)
         assert meta.get("pause_reason") and not meta.get("goal_verdict_source")
+
+
+def _deferred_stub(name):
+    """A deferred stub the caller ADMITS — the round-9 permission contract:
+    only stubs in the step's own tool list may expand."""
+    from llm import LLMTool
+    return LLMTool(name=name, description=f"[deferred] {name}",
+                   parameters={"type": "object", "properties": {}})
+
+
+class TestReviewRound9:
+    """Round 9 (2026-09-13): permission-scoped expansion, prose re-call,
+    budget boundary after the pause seam, the team-worker lane."""
+
+    def _run(self, monkeypatch, tmp_path, handle, worker, **loop_kwargs):
+        import json as _json
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        fake = tmp_path / "claude"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+        import runs, loop_planning, loop_execute
+        from agent_loop import run_agent_loop
+        monkeypatch.setattr(loop_planning, "_decompose", lambda *a, **k: ["count the inbox"])
+        monkeypatch.setattr(loop_planning, "_shape_steps", lambda steps, **k: list(steps))
+        monkeypatch.setattr(loop_execute, "_execute_step", worker)
+        rd = runs.create_run_dir(handle, prompt="read the inbox")
+        with runs.scoped_run_dir(rd):
+            result = run_agent_loop("read the inbox", dry_run=False, max_steps=3,
+                                    handle_id=handle, **loop_kwargs)
+        meta = _json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+        return result, meta
+
+    def test_the_recall_expands_only_admitted_stubs_and_replaces_them(self, monkeypatch, tmp_path):
+        # The resolver answers from the whole registry with a default
+        # PermissionContext; the caller's tool list is the step's real
+        # permission context. A denied deferred tool must not come back
+        # advertised, and the admitted one replaces its stub (no duplicate).
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import tool_search
+        from llm import LLMResponse, LLMTool, ToolCall
+        from step_exec import execute_step
+        seen = {}
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                seen[self.calls] = [(t.name, sorted((t.parameters or {}).get("properties", {})))
+                                    for t in kwargs["tools"]]
+                if self.calls == 1:
+                    return LLMResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": ""})])
+                return LLMResponse(content="", tool_calls=[ToolCall(name="complete_step",
+                                                                    arguments={"result": "r", "summary": "ok"})])
+
+        def _full(n):
+            return {"name": n, "description": "d",
+                    "parameters": {"type": "object", "properties": {"folder": {"type": "string"}}}}
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [_full("imap_read"), _full("denied_fixture"), {"garbage": 1}])
+        done = LLMTool(name="complete_step", description="c", parameters={"type": "object", "properties": {}})
+        adapter = _Adapter()
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                               adapter=adapter, tools=[_deferred_stub("imap_read"), done], project_dir=str(tmp_path))
+        assert adapter.calls == 2 and outcome["status"] == "done", outcome
+        names2 = [n for n, _ in seen[2]]
+        assert "denied_fixture" not in names2, names2
+        assert names2.count("imap_read") == 1 and ("imap_read", ["folder"]) in seen[2], seen[2]
+        assert names2.count("tool_search") == 1 and names2.count("complete_step") == 1, names2
+        # control: nothing admitted → nothing expands → no second launch
+        seen.clear(); adapter2 = _Adapter()
+        outcome2 = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                                adapter=adapter2, tools=[done], project_dir=str(tmp_path))
+        assert adapter2.calls == 1 and outcome2["status"] == "blocked", outcome2
+
+    def test_a_prose_only_recall_is_the_steps_result(self, monkeypatch, tmp_path):
+        # The re-call answered in prose; the old code kept the FIRST
+        # response's tool_search call and ended "unrecognised tool".
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import tool_search
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [{"name": "imap_read", "description": "d",
+                                                     "parameters": {"type": "object", "properties": {}}}])
+
+        def _adapter(second_content):
+            class _A:
+                model_key = "t"; backend = "subprocess"; calls = 0
+                def complete(self, messages, **kwargs):
+                    self.calls += 1
+                    if self.calls == 1:
+                        return LLMResponse(content="", input_tokens=7, output_tokens=3,
+                                           tool_calls=[ToolCall(name="tool_search", arguments={"query": "imap"})])
+                    return LLMResponse(content=second_content, input_tokens=5, output_tokens=2, tool_calls=[])
+            return _A()
+
+        a = _adapter("Completed the requested inbox inspection.")
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                               adapter=a, tools=[_deferred_stub("imap_read")], project_dir=str(tmp_path))
+        assert a.calls == 2 and outcome["status"] == "done", outcome
+        assert outcome["result"] == "Completed the requested inbox inspection."
+        assert (outcome["tokens_in"], outcome["tokens_out"]) == (12, 5)
+        # control: empty prose is the ordinary no-tool block, never blamed on tool_search
+        b = _adapter("")
+        out2 = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                            adapter=b, tools=[_deferred_stub("imap_read")], project_dir=str(tmp_path))
+        assert out2["status"] == "blocked" and "tool_search" not in out2["stuck_reason"], out2
+
+    @pytest.mark.parametrize("kind", ["token", "cost"])
+    def test_a_final_step_refusal_at_the_budget_boundary_still_pauses(self, monkeypatch, tmp_path, kind):
+        from stop_verdicts import PAUSE_ERR_CONTAINER_AUTH
+        def _worker(**kwargs):
+            return {"status": "blocked", "error_class": "container_auth",
+                    "stuck_reason": "LLM call failed (container_auth): re-seed",
+                    "user_action": "re-seed the maro-claude-auth volume",
+                    "result": "[partial output before kill]\nlisted two",
+                    "tokens_in": 7, "tokens_out": 3, "provider_cost_usd": 1.0}
+        kw = {"token_budget": 10} if kind == "token" else {"cost_budget": 0.5}
+        result, meta = self._run(monkeypatch, tmp_path, f"budg{kind[:4]}1", _worker, **kw)
+        assert result.status == "interrupted", result.status
+        assert result.pause_reason == PAUSE_ERR_CONTAINER_AUTH
+        assert meta.get("pause_reason") == PAUSE_ERR_CONTAINER_AUTH
+        assert len(result.steps) == 1 and result.steps[0].status == "blocked"
+
+    def test_a_done_final_step_at_the_budget_boundary_keeps_its_record(self, monkeypatch, tmp_path):
+        # The finished-plan carve-out: done stays done AND the step is
+        # recorded (the old `break` skipped the normal append too).
+        def _worker(**kwargs):
+            return {"status": "done", "result": "inbox has 12 messages", "summary": "counted",
+                    "tokens_in": 7, "tokens_out": 3}
+        result, meta = self._run(monkeypatch, tmp_path, "budgdone1", _worker, token_budget=10)
+        assert result.status == "done", (result.status, result.stuck_reason)
+        assert not result.pause_reason
+        assert len(result.steps) == 1 and result.steps[0].status == "done"
+
+    def test_a_nested_team_refusal_pauses_the_parent(self, monkeypatch, tmp_path):
+        # The specialist lane ran without executor=True and stringified a
+        # typed refusal into a DONE parent step.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        from llm import LLMResponse, ToolCall
+        from container_exec import ContainerAuthExpired
+        from step_exec import execute_step
+        from stop_verdicts import environmental_pause_for, PAUSE_ERR_CONTAINER_AUTH
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; container_capable = True
+            def __init__(self, nested):
+                self.nested = nested; self.calls = 0; self.kwargs = []
+            def complete(self, messages, **kwargs):
+                self.calls += 1; self.kwargs.append(kwargs)
+                if self.calls == 1:
+                    return LLMResponse(content="", input_tokens=7, output_tokens=3,
+                                       tool_calls=[ToolCall(name="create_team_worker",
+                                                            arguments={"role": "research", "task": "inspect inbox"})])
+                return self.nested()
+
+        def _refuse():
+            raise ContainerAuthExpired("executor.container=require but the auth volume's session is expired")
+        a = _Adapter(_refuse)
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                               adapter=a, tools=[], project_dir=str(tmp_path))
+        assert a.calls == 2
+        assert outcome["status"] == "blocked" and outcome.get("error_class") == "container_auth", outcome
+        assert environmental_pause_for(outcome) == PAUSE_ERR_CONTAINER_AUTH
+        assert a.kwargs[1].get("executor") is True, a.kwargs[1]
+        assert (outcome["tokens_in"], outcome["tokens_out"]) == (7, 3)
+        # control: a delivered ticket is a done step
+        b = _Adapter(lambda: LLMResponse(content="", input_tokens=1, output_tokens=1,
+                                         tool_calls=[ToolCall(name="deliver_result", arguments={"result": "12 messages"})]))
+        out2 = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                            adapter=b, tools=[], project_dir=str(tmp_path))
+        assert out2["status"] == "done" and "12 messages" in out2["result"], out2
+        # an ordinary blocked ticket is a blocked step, not a done one
+        c = _Adapter(lambda: LLMResponse(content="", input_tokens=1, output_tokens=1,
+                                         tool_calls=[ToolCall(name="flag_blocked", arguments={"reason": "no data", "partial": ""})]))
+        out3 = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                            adapter=c, tools=[], project_dir=str(tmp_path))
+        assert out3["status"] == "blocked" and "no data" in out3["stuck_reason"], out3
+
+    def test_the_team_lane_honours_require(self, monkeypatch, tmp_path):
+        # The parent step's own guard refuses an incapable adapter before
+        # any specialist is asked for; the team lane needs the SAME guard
+        # for the case where it is reached directly.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import container_exec
+        from team import create_team_worker
+        monkeypatch.setattr(container_exec, "container_mode", lambda: "require")
+
+        class _Adapter:
+            model_key = "t"; backend = "anthropic"; container_capable = False; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                raise AssertionError("host launch of the specialist ticket")
+        a = _Adapter()
+        res = create_team_worker("research", "inspect inbox", adapter=a)
+        assert a.calls == 0
+        assert res.status == "blocked" and "require" in res.stuck_reason, res
+        # control: off → the ticket runs (and this stub adapter's refusal is an ordinary block)
+        monkeypatch.setattr(container_exec, "container_mode", lambda: "off")
+        res2 = create_team_worker("research", "inspect inbox", adapter=a)
+        assert a.calls == 1 and res2.status == "blocked" and "require" not in res2.stuck_reason
+
+    def test_evidence_beyond_finite_bounds_keeps_the_class(self):
+        from container_exec import ContainerAuthExpired
+        from step_exec import _blocked_outcome_from_exc
+        e = ContainerAuthExpired("expired")
+        e.fresh_input_tokens = float("inf"); e.estimated_cost_usd = float("nan")
+        out = _blocked_outcome_from_exc(e, tokens_in=2)
+        assert out["error_class"] == "container_auth" and out["tokens_in"] == 2, out
+        assert out.get("provider_cost_usd", 0.0) == 0.0

@@ -165,6 +165,19 @@ def _build_persona(role: str, persona_override: Optional[str]) -> str:
     return _GENERIC_PERSONA_TEMPLATE.format(role=role)
 
 
+def _is_policy_signal(exc: BaseException) -> bool:
+    """A typed environmental refusal (container-auth expiry, provider down,
+    credits gone) must reach the parent step's pause seam, not be
+    stringified into a blocked TeamResult the parent reported as DONE
+    (review round 9, 2026-09-13). Never raises."""
+    try:
+        from llm_errors import classify_error
+        from stop_verdicts import pause_reason_for_error_class
+        return bool(pause_reason_for_error_class(str(classify_error(exc).error_class or "")))
+    except Exception:
+        return False
+
+
 def create_team_worker(
     role: str,
     task: str,
@@ -173,6 +186,7 @@ def create_team_worker(
     adapter=None,
     dry_run: bool = False,
     shared_ctx: Optional[Dict[str, Any]] = None,
+    cwd: Optional[str] = None,
 ) -> TeamResult:
     """Spin up a specialist worker with the given role and task.
 
@@ -218,6 +232,12 @@ def create_team_worker(
                 _shared_block = "\n\nRelevant context from prior steps:\n" + "\n".join(_entries)
         user_msg = f"Ticket: {task}{_shared_block}\n\nComplete this ticket. Call deliver_result when done."
 
+        # Executor-lane container contract — the same guard as the step_exec
+        # and workers seams (review round 9, 2026-09-13: this lane had
+        # neither the guard nor `executor=True`, so under `require` a
+        # specialist's ticket ran against the HOST session).
+        from container_exec import enforce_backend_container_contract
+        enforce_backend_container_contract(adapter, executor=True)
         # agentic: team worker executes its ticket (real work) and reports via deliver_result/flag_blocked
         resp = adapter.complete(
             [
@@ -229,13 +249,15 @@ def create_team_worker(
             max_tokens=2048,
             temperature=0.3,
             purpose="team-worker",  # EDGE 6: agentic seam, was unlabeled in call records
+            executor=True,  # specialist ticket = agentic executor lane (container when on)
+            cwd=cwd,
         )
     except Exception as exc:
         # A token-runaway kill is a policy signal, not a worker-level failure:
         # converting it to a generic blocked TeamResult hides it from the
         # no-retry handling that exists to stop the ingest being replayed.
         from llm_errors import TokenRunawayError as _TRE
-        if isinstance(exc, _TRE):
+        if isinstance(exc, _TRE) or _is_policy_signal(exc):
             raise
         log.warning("team.create_worker failed role=%r: %s", role, exc)
         return TeamResult(

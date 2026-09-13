@@ -205,7 +205,7 @@ def test_execute_step_accumulates_tool_search_cost_and_rotates_session(
         total_steps=1,
         completed_context=[],
         adapter=adapter,
-        tools=[],
+        tools=[_deferred_stub("demo_tool")],
         project_dir=str(tmp_path),
         executor_session=state,
         session_context_key="charter",
@@ -1928,3 +1928,11 @@ class TestFalsePremiseAndBonusContract:
         p = self._prompt()
         assert "actually SAW" in p
         assert "never speculation" in p
+
+
+def _deferred_stub(name):
+    """A deferred stub the caller ADMITS — the round-9 permission contract:
+    only stubs in the step's own tool list may expand."""
+    from llm import LLMTool
+    return LLMTool(name=name, description=f"[deferred] {name}",
+                   parameters={"type": "object", "properties": {}})

@@ -2224,7 +2224,18 @@ def _terminal_failure(stdout: str) -> bool:
     this it became an empty ordinary response, past the breaker and the
     classifier."""
     obj = _extract_result_object(stdout)
-    return isinstance(obj, dict) and obj.get("is_error") is True
+    if not isinstance(obj, dict):
+        return False
+    _flag = obj.get("is_error", False)
+    if _flag is True:
+        return True
+    if not isinstance(_flag, bool):
+        # A malformed status field ("true", null, 1) is a protocol failure,
+        # never a confident success (review round 9, 2026-09-13: the string
+        # "true" carried an explicit auth-error envelope past the failure
+        # path as ordinary response content, and the step ended `done`).
+        return True
+    return str(obj.get("subtype") or "").startswith("error")
 
 
 def _rate_limited_failure(stdout: str) -> bool:
@@ -2390,7 +2401,7 @@ def _extract_success_result(text: str) -> Optional[dict]:
     if (
         data is not None
         and data.get("subtype") == "success"
-        and not data.get("is_error", False)
+        and data.get("is_error", False) is False  # absent or the literal false; "false"/null are malformed
         and "result" in data
     ):
         return data
@@ -3142,6 +3153,20 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         log.debug("container auth-breaker note failed", exc_info=True)
                 _err = RuntimeError(
                     f"claude subprocess failed (rc={result.returncode}): {detail}")
+                # The failed call's own spend rides on the exception so the
+                # blocked outcome can record it (review round 9, 2026-09-13:
+                # an auth failure AFTER work — tool activity, usage and cost
+                # in the terminal object — was recorded as zero work and
+                # zero spend). Same channel the runaway kill uses; the
+                # outcome builders ADD it to the step's accounting.
+                try:
+                    if isinstance(_err_obj, dict) and isinstance(_err_obj.get("usage"), dict):
+                        _usage = _err_obj["usage"]
+                        if _usage.get("input_tokens") is not None:
+                            _err.fresh_input_tokens = int(_usage.get("input_tokens") or 0)  # type: ignore[attr-defined]
+                            _err.estimated_cost_usd = float(_err_obj.get("total_cost_usd") or 0.0)  # type: ignore[attr-defined]
+                except Exception:
+                    log.debug("terminal usage not attached to the failure", exc_info=True)
                 if _container_auth_owned:
                     # The breaker owns this failure's story: FailoverAdapter
                     # must neither trip the process-wide backend circuit

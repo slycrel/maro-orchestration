@@ -191,8 +191,11 @@ def inject_tool_search_if_needed(schemas: List[Any]) -> List[Any]:
     tool_search was never advertised on the first call and the repaired
     re-call was unreachable through the intended contract).
     """
+    def _props(s):
+        _p = _tool_field(s, "parameters")
+        return _p.get("properties") if isinstance(_p, dict) else None
     has_deferred = any(
-        not (_tool_field(s, "parameters") or {}).get("properties")
+        not _props(s)
         and "[deferred]" in str(_tool_field(s, "description") or "")
         for s in schemas
     )

@@ -1201,118 +1201,6 @@ def _execute_main_loop(
                  _step_model or "unknown",
                  step_elapsed, iteration, max_iterations)
 
-        # Phase 33: token budget — abort gracefully if exceeded.
-        # Only a run with work LEFT gets demoted: the breaker exists to stop
-        # FURTHER spend, and when the plan is fully consumed there is none —
-        # run 692bd96f (2026-07-11) finished all steps + passed closure, then
-        # the cost stop after the final step stamped it stuck/failed.
-        if token_budget is not None and (total_tokens_in + total_tokens_out) >= token_budget:
-            # Dollars ride along: tokens are the misleading unit (cache reads
-            # bill at ~0.1x, so tokens_in overstates real cost 3-4x) — an
-            # unanswered pause must explain itself in the unit that matters.
-            _budget_note = (
-                f"token_budget={token_budget} exceeded "
-                f"({total_tokens_in + total_tokens_out} total tokens, "
-                f"~${total_cost_usd:.4f} est. spend after step {step_idx})"
-            )
-            if remaining_steps:
-                _bl = _ladder_decision("token")
-                if _bl == "extend":
-                    _ladder_extend("token", _budget_note)
-                    # No break: the raised cap governs from the next check on.
-                elif _bl == "pause":
-                    loop_status = "interrupted"
-                    stuck_reason = (f"budget extension ladder exhausted "
-                                    f"(2 extensions granted): {_budget_note}")
-                    _ladder_pause(_budget_note)
-                    if verbose:
-                        print(f"[maro] paused (budget-decision): {_budget_note}",
-                              file=sys.stderr, flush=True)
-                    break
-                else:
-                    loop_status = "stuck"
-                    stuck_reason = _budget_note
-                    ctx.stamp_stop("out-of-budget", _budget_note)
-                    if verbose:
-                        print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
-                    break
-            else:
-                log.warning("budget exceeded on final step (run kept done): %s",
-                            _budget_note)
-                if verbose:
-                    print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
-                break
-
-        # Cost budget — early warn at the gate's warn line, hard stop at
-        # budget + 20% slush. Truthiness (not `is not None`): 0 means
-        # uncapped, same as the budget.per_run_usd convention — and 0.0 must
-        # never reach the division.
-        if cost_budget and _total_cost > 0:
-            _cost_pct = _total_cost / cost_budget * 100
-            _slush = cost_budget * 0.2
-            if _total_cost >= cost_budget + _slush:
-                _budget_note = (
-                    f"cost_budget=${cost_budget:.2f} + slush=${_slush:.2f} exceeded "
-                    f"(${_total_cost:.4f} total after step {step_idx})"
-                )
-                # Same finished-plan carve-out as the token breaker above.
-                if remaining_steps:
-                    _bl = _ladder_decision("cost")
-                    if _bl == "extend":
-                        _ladder_extend("cost", _budget_note)
-                        # No break: the raised cap governs from the next
-                        # check on (and the runaway meter was re-armed).
-                    elif _bl == "pause":
-                        loop_status = "interrupted"
-                        stuck_reason = (f"budget extension ladder exhausted "
-                                        f"(2 extensions granted): {_budget_note}")
-                        _ladder_pause(_budget_note)
-                        if verbose:
-                            print(f"[maro] paused (budget-decision): {_budget_note}",
-                                  file=sys.stderr, flush=True)
-                        break
-                    else:
-                        loop_status = "stuck"
-                        stuck_reason = _budget_note
-                        ctx.stamp_stop("out-of-budget", _budget_note)
-                        log.warning("cost hard stop: %s", stuck_reason)
-                        if verbose:
-                            print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
-                        break
-                else:
-                    log.warning("cost budget exceeded on final step "
-                                "(run kept done): %s", _budget_note)
-                    if verbose:
-                        print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
-                    break
-            else:
-                # Warn line: the gate's data-driven threshold when set (None
-                # means the gate never ran — fall back to the legacy 80%;
-                # 0.0 is the explicit budget.warn_usd: 0 opt-out).
-                _warn_at = getattr(ctx, "cost_warn_usd", None)
-                if _warn_at is None:
-                    _warn_at = cost_budget * 0.8
-                if _warn_at and _total_cost >= _warn_at and not ctx.cost_warned:
-                    log.warning("cost past typical territory: $%.4f >= warn "
-                                "$%.2f (budget $%.2f, %.0f%%)",
-                                _total_cost, _warn_at, cost_budget, _cost_pct)
-                    ctx.cost_warned = True
-                    # Delivery-lane advisory in EFFORT language — dollars are
-                    # the internal unit, the user hears effort (2026-07-17
-                    # spend-UX decree). Non-blocking; never derails the step.
-                    if getattr(ctx, "channel", None) is not None:
-                        try:
-                            ctx.channel.emit(
-                                "effort_note",
-                                text=("Still working — this run has gone "
-                                      "deeper than most past successful runs "
-                                      "(top ~10% by effort). There's headroom "
-                                      "left, and the runaway breaker is armed "
-                                      "if it stops converging."),
-                            )
-                        except Exception:
-                            log.debug("effort_note emit failed", exc_info=True)
-
         # Runaway cost circuit tripped MID-step (BACKLOG #23e): the adapter
         # seam refused a call because run spend crossed multiplier x
         # cost_budget. Stop here — retrying or continuing to the next step
@@ -1524,6 +1412,127 @@ def _execute_main_loop(
                 except Exception:
                     pass
             break
+
+        # Budget breakers run AFTER the environmental/operator classification
+        # above (review round 9, 2026-09-13: a refusal or an operator ask on
+        # the final step at the budget boundary broke out `done` before the
+        # pause seam and the step record). The finished-plan carve-out is
+        # for a DONE final step only — a blocked one still has work left.
+        # (An env-request retry re-queues its step with `continue` above,
+        # so its check lands after the retried step instead — one deferred
+        # check, never a skipped one.)
+        # Phase 33: token budget — abort gracefully if exceeded.
+        # Only a run with work LEFT gets demoted: the breaker exists to stop
+        # FURTHER spend, and when the plan is fully consumed there is none —
+        # run 692bd96f (2026-07-11) finished all steps + passed closure, then
+        # the cost stop after the final step stamped it stuck/failed.
+        if token_budget is not None and (total_tokens_in + total_tokens_out) >= token_budget:
+            # Dollars ride along: tokens are the misleading unit (cache reads
+            # bill at ~0.1x, so tokens_in overstates real cost 3-4x) — an
+            # unanswered pause must explain itself in the unit that matters.
+            _budget_note = (
+                f"token_budget={token_budget} exceeded "
+                f"({total_tokens_in + total_tokens_out} total tokens, "
+                f"~${total_cost_usd:.4f} est. spend after step {step_idx})"
+            )
+            if remaining_steps or outcome.get("status") != "done":
+                _bl = _ladder_decision("token")
+                if _bl == "extend":
+                    _ladder_extend("token", _budget_note)
+                    # No break: the raised cap governs from the next check on.
+                elif _bl == "pause":
+                    loop_status = "interrupted"
+                    stuck_reason = (f"budget extension ladder exhausted "
+                                    f"(2 extensions granted): {_budget_note}")
+                    _ladder_pause(_budget_note)
+                    if verbose:
+                        print(f"[maro] paused (budget-decision): {_budget_note}",
+                              file=sys.stderr, flush=True)
+                    break
+                else:
+                    loop_status = "stuck"
+                    stuck_reason = _budget_note
+                    ctx.stamp_stop("out-of-budget", _budget_note)
+                    if verbose:
+                        print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+                    break
+            else:
+                # No break: the plan is consumed and this step is done, so
+                # the normal bookkeeping below (its step record, ledger
+                # mark) runs and the loop ends on its own.
+                log.warning("budget exceeded on final step (run kept done): %s",
+                            _budget_note)
+                if verbose:
+                    print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+
+        # Cost budget — early warn at the gate's warn line, hard stop at
+        # budget + 20% slush. Truthiness (not `is not None`): 0 means
+        # uncapped, same as the budget.per_run_usd convention — and 0.0 must
+        # never reach the division.
+        if cost_budget and _total_cost > 0:
+            _cost_pct = _total_cost / cost_budget * 100
+            _slush = cost_budget * 0.2
+            if _total_cost >= cost_budget + _slush:
+                _budget_note = (
+                    f"cost_budget=${cost_budget:.2f} + slush=${_slush:.2f} exceeded "
+                    f"(${_total_cost:.4f} total after step {step_idx})"
+                )
+                # Same finished-plan carve-out as the token breaker above.
+                if remaining_steps or outcome.get("status") != "done":
+                    _bl = _ladder_decision("cost")
+                    if _bl == "extend":
+                        _ladder_extend("cost", _budget_note)
+                        # No break: the raised cap governs from the next
+                        # check on (and the runaway meter was re-armed).
+                    elif _bl == "pause":
+                        loop_status = "interrupted"
+                        stuck_reason = (f"budget extension ladder exhausted "
+                                        f"(2 extensions granted): {_budget_note}")
+                        _ladder_pause(_budget_note)
+                        if verbose:
+                            print(f"[maro] paused (budget-decision): {_budget_note}",
+                                  file=sys.stderr, flush=True)
+                        break
+                    else:
+                        loop_status = "stuck"
+                        stuck_reason = _budget_note
+                        ctx.stamp_stop("out-of-budget", _budget_note)
+                        log.warning("cost hard stop: %s", stuck_reason)
+                        if verbose:
+                            print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+                        break
+                else:
+                    log.warning("cost budget exceeded on final step "
+                                "(run kept done): %s", _budget_note)
+                    if verbose:
+                        print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+            else:
+                # Warn line: the gate's data-driven threshold when set (None
+                # means the gate never ran — fall back to the legacy 80%;
+                # 0.0 is the explicit budget.warn_usd: 0 opt-out).
+                _warn_at = getattr(ctx, "cost_warn_usd", None)
+                if _warn_at is None:
+                    _warn_at = cost_budget * 0.8
+                if _warn_at and _total_cost >= _warn_at and not ctx.cost_warned:
+                    log.warning("cost past typical territory: $%.4f >= warn "
+                                "$%.2f (budget $%.2f, %.0f%%)",
+                                _total_cost, _warn_at, cost_budget, _cost_pct)
+                    ctx.cost_warned = True
+                    # Delivery-lane advisory in EFFORT language — dollars are
+                    # the internal unit, the user hears effort (2026-07-17
+                    # spend-UX decree). Non-blocking; never derails the step.
+                    if getattr(ctx, "channel", None) is not None:
+                        try:
+                            ctx.channel.emit(
+                                "effort_note",
+                                text=("Still working — this run has gone "
+                                      "deeper than most past successful runs "
+                                      "(top ~10% by effort). There's headroom "
+                                      "left, and the runaway breaker is armed "
+                                      "if it stops converging."),
+                            )
+                        except Exception:
+                            log.debug("effort_note emit failed", exc_info=True)
 
         step_status = outcome["status"]
         # One record per executed step, plus the step_exec-side demotions.
