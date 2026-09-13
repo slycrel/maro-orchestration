@@ -856,6 +856,15 @@ def _execute_main_loop(
             # contributor — otherwise the next single step would report a
             # gap measured from before the batch ran.
             _prev_step_ended_monotonic = time.monotonic()
+            if ctx.pause_reason:
+                # A batch member hit an environmental refusal (the batch
+                # helper stamped the typed pause): end the loop the same way
+                # the sequential path does — interrupted, resumable — instead
+                # of scheduling the next step against the same dead lane.
+                loop_status = "interrupted"
+                stuck_reason = f"environmental pause: {ctx.pause_reason}"
+                log.warning("environmental pause (%s) in parallel batch", ctx.pause_reason)
+                break
             continue  # Skip the single-step execution below
 
         iteration += 1
@@ -1332,15 +1341,8 @@ def _execute_main_loop(
         # the follow-up as a same-identity RESUME once the environment heals.
         # Killswitch `pause.environmental` (docs/DEFAULTS.md) restores the
         # old churn-to-stuck behavior.
-        _env_pause = ""
-        try:
-            from config import get as _cfg_get
-            if _cfg_get("pause.environmental", True):
-                from stop_verdicts import pause_reason_for_error_class
-                _env_pause = pause_reason_for_error_class(
-                    outcome.get("error_class") or "")
-        except Exception:
-            _env_pause = ""
+        from stop_verdicts import environmental_pause_for as _env_pause_for
+        _env_pause = _env_pause_for(outcome)
         # Operator question (operator_ask, decision 1d1ad8b0): the worker
         # wrote the ask file in the run scratch. Same typed pause as the
         # pre-run clarity gate (`awaiting-clarification`), so the

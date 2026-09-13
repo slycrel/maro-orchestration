@@ -109,6 +109,16 @@ def _run_in_step_worktree(step_label: str, run_fn):
     return outcome
 
 
+
+def _environmental_pause(outcome) -> str:
+    """The typed pause a blocked outcome calls for (stop_verdicts seam)."""
+    try:
+        from stop_verdicts import environmental_pause_for
+        return environmental_pause_for(outcome)
+    except Exception:
+        return ""
+
+
 def _run_parallel_batch(
     ctx: LoopContext,
     step_text: str,
@@ -248,6 +258,12 @@ def _run_parallel_batch(
         elif _b_status == "blocked":
             if ctx.verbose:
                 print(f"[maro] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}", file=sys.stderr, flush=True)
+            # Environmental refusal (§13e): stamp the typed pause here; the
+            # caller ends the loop `interrupted` when it sees it (review
+            # 2026-09-13 — the batch path only logged blocked members).
+            _env = _environmental_pause(_batch_oc)
+            if _env and hasattr(ctx, "stamp_pause"):
+                ctx.stamp_pause(_env)
 
     # Inject collected steps from batch
     if _batch_injected:
@@ -381,8 +397,20 @@ def _run_parallel_path(
         _fanout_tokens_in += _oc.get("tokens_in", 0)
         _fanout_tokens_out += _oc.get("tokens_out", 0)
         if _st == "blocked":
-            _fanout_loop_status = "stuck"
-            _fanout_stuck_reason = _oc.get("stuck_reason", f"step {_i} blocked")
+            _env = _environmental_pause(_oc)
+            if _env:
+                # §13e: the environment stopped this step (dead backend, dead
+                # container session) — the run pauses typed and resumable,
+                # it is not `stuck` (review 2026-09-13). Peers already
+                # running finish on their own; nothing further is scheduled
+                # because the fan-out returns here.
+                if hasattr(ctx, "stamp_pause"):
+                    ctx.stamp_pause(_env)
+                _fanout_loop_status = "interrupted"
+                _fanout_stuck_reason = _oc.get("stuck_reason") or f"environmental pause: {_env}"
+            elif _fanout_loop_status != "interrupted":
+                _fanout_loop_status = "stuck"
+                _fanout_stuck_reason = _oc.get("stuck_reason", f"step {_i} blocked")
         if ctx.step_callback is not None:
             try:
                 ctx.step_callback(_i, _step_text, _oc.get("result", "")[:120], _st)
@@ -399,6 +427,7 @@ def _run_parallel_path(
         total_tokens_out=_fanout_tokens_out,
         elapsed_ms=elapsed,
         stuck_reason=_fanout_stuck_reason,
+        pause_reason=str(getattr(ctx, "pause_reason", "") or ""),
     )
 
 

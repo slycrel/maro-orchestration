@@ -318,3 +318,18 @@ def test_container_auth_marker_is_a_type_marker_not_a_string_match():
     # Plain text mentioning the class name does not qualify.
     info = classify_error(RuntimeError("container_auth something"))
     assert info.error_class != CONTAINER_AUTH
+
+
+def test_backend_error_keeps_its_structured_classification():
+    # Review 2026-09-13: FailoverAdapter wraps an actionable failure in
+    # BackendError; re-classifying the wrapper's TEXT lost the class (the
+    # container_auth refusal came back as auth_actionable/failover). The
+    # wrapper's own ErrorInfo is the classification.
+    from llm_errors import BackendError, ErrorInfo
+    info = ErrorInfo(error_class=CONTAINER_AUTH, backend="subprocess", retryable=False,
+                     failover=False, user_action="re-seed the maro-claude-auth volume",
+                     detail="container auth breaker tripped (oauth token expired)")
+    wrapped = BackendError(info)
+    assert "oauth token expired" in str(wrapped)          # text that WOULD misclassify
+    got = classify_error(wrapped, backend="subprocess")
+    assert got is info and got.error_class == CONTAINER_AUTH and got.failover is False

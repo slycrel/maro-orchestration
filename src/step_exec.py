@@ -1862,6 +1862,18 @@ def execute_step(
                     from llm_errors import TokenRunawayError as _TRE
                     if isinstance(_rerun_exc, _TRE):
                         raise
+                    # Same for an environmental refusal (dead backend, dead
+                    # container session — review 2026-09-13): the outer
+                    # handler classifies it into the typed pause; swallowing
+                    # it here blamed the tool name and the run churned.
+                    try:
+                        from llm_errors import classify_error as _cls
+                        from stop_verdicts import pause_reason_for_error_class as _prf
+                        if _prf(_cls(_rerun_exc).error_class):
+                            raise _rerun_exc
+                    except Exception as _reraise:
+                        if _reraise is _rerun_exc:
+                            raise
                     log.warning("step %d tool_search re-call failed: %s", step_num, _rerun_exc)
                     # Fall through to original response handling
             else:

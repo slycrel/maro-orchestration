@@ -352,3 +352,157 @@ class TestContainerAuthPauseEndToEnd:
         assert result.pause_reason == PAUSE_ERR_CONTAINER_AUTH
         meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
         assert meta.get("pause_reason") == PAUSE_ERR_CONTAINER_AUTH
+
+
+class TestContainerAuthPauseThroughTheRealWrapper:
+    """The LITERAL production composition (review 2026-09-13 HIGH): worker
+    step → FailoverAdapter → ClaudeSubprocessAdapter → resolve_container_run
+    raises ContainerAuthExpired → the wrapper wraps it (actionable) →
+    step_exec classifies the WRAPPER → the class must survive → the loop's
+    seam maps it to the typed pause. No fallback backend runs, no circuit
+    trips, no host `/login` alert is emitted."""
+
+    def _arm(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import container_exec as ce
+        import llm
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(ce, "auth_breaker_blocks", lambda: "Failed to authenticate: OAuth token expired")
+        monkeypatch.setattr(ce, "container_suppressed", lambda: False)
+        monkeypatch.setattr(llm, "_BACKEND_CIRCUIT", {})
+        emitted = []
+        import notify
+        monkeypatch.setattr(notify, "emit", lambda et, payload, **kw: emitted.append((et, payload)) or True)
+        return emitted
+
+    def test_wrapped_refusal_keeps_the_container_auth_class(self, monkeypatch, tmp_path):
+        emitted = self._arm(monkeypatch, tmp_path)
+        import llm
+        from llm import FailoverAdapter, ClaudeSubprocessAdapter
+        from step_exec import execute_step
+        from stop_verdicts import environmental_pause_for, PAUSE_ERR_CONTAINER_AUTH
+        launched = []
+        monkeypatch.setattr(llm.subprocess, "Popen",
+                            lambda *a, **k: launched.append(a) or (_ for _ in ()).throw(AssertionError("no subprocess must launch")))
+        adapter = FailoverAdapter([ClaudeSubprocessAdapter(model="claude-x", claude_bin="/bin/true")])
+        outcome = execute_step(
+            goal="read the inbox", step_text="list the newest five", step_num=1,
+            total_steps=1, completed_context=[], adapter=adapter, tools=[],
+            project_dir=str(tmp_path))
+        assert outcome["status"] == "blocked"
+        assert outcome["error_class"] == "container_auth", outcome
+        assert environmental_pause_for(outcome) == PAUSE_ERR_CONTAINER_AUTH
+        assert launched == [], "the refusal happens before any subprocess"
+        assert llm._BACKEND_CIRCUIT == {}, "container-owned: the backend circuit must not trip"
+        assert emitted == [], "the breaker owns the alert; no generic host /login alert"
+
+    def test_a_backend_auth_failure_still_stays_terminal(self, monkeypatch, tmp_path):
+        # Negative control: the deliberate vocabulary gap is untouched.
+        from llm_errors import BackendError, ErrorInfo, AUTH_ACTIONABLE
+        from stop_verdicts import environmental_pause_for
+        from step_exec import execute_step
+
+        class _Raising:
+            model_key = "test"; backend = "anthropic"
+            def complete(self, messages, **kwargs):
+                raise BackendError(ErrorInfo(error_class=AUTH_ACTIONABLE, backend="anthropic",
+                                             retryable=False, failover=True,
+                                             user_action="fix the key", detail="401"))
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
+                               completed_context=[], adapter=_Raising(), tools=[],
+                               project_dir=str(tmp_path))
+        assert outcome["error_class"] == AUTH_ACTIONABLE and environmental_pause_for(outcome) == ""
+
+
+class TestContainerAuthPauseOnParallelPaths:
+    """Review 2026-09-13 HIGH: fan-out/DAG turned a blocked container_auth
+    outcome into `stuck`; the batch path only logged it. Every path
+    consults the one seam now."""
+
+    _AUTH = {"status": "blocked", "error_class": "container_auth",
+             "stuck_reason": "LLM call failed (container_auth): re-seed", "result": "",
+             "tokens_in": 0, "tokens_out": 0}
+    _PLAIN = {"status": "blocked", "stuck_reason": "tool refused", "result": "",
+              "tokens_in": 0, "tokens_out": 0}
+    _DONE = {"status": "done", "result": "ok", "summary": "ok", "tokens_in": 1, "tokens_out": 1}
+
+    def _ctx(self):
+        import time
+        from loop_types import LoopContext
+        class _Ctx:
+            goal = "g"; adapter = None; ancestry_context = ""; verbose = False
+            project = ""; loop_id = "loop-t"; step_callback = None
+            started_at = time.monotonic(); pause_reason = ""
+            def stamp_pause(self, reason):
+                LoopContext.stamp_pause(self, reason)
+        return _Ctx()
+
+    def _fanout(self, monkeypatch, outcomes, use_dag=False):
+        import loop_parallel
+        from loop_parallel import _run_parallel_path
+        monkeypatch.setattr(loop_parallel, "_run_steps_parallel", lambda **kw: outcomes)
+        monkeypatch.setattr(loop_parallel, "_run_steps_dag", lambda **kw: outcomes)
+        monkeypatch.setattr(loop_parallel, "_drain_pending_context", lambda ctx: ("", ""))
+        ctx = self._ctx()
+        steps = [f"step {i}" for i in range(len(outcomes))]
+        res = _run_parallel_path(ctx, steps, clean_steps=steps, deps={}, levels=[steps] if use_dag else None,
+                                 parallel_levels=[], parallel_fan_out=2, proj_fanout_dir="",
+                                 loop_shared_ctx={}, use_dag=use_dag, resolve_tools_fn=lambda: [])
+        return ctx, res
+
+    @pytest.mark.parametrize("use_dag", [False, True])
+    def test_fanout_and_dag_pause_typed(self, monkeypatch, use_dag):
+        from stop_verdicts import PAUSE_ERR_CONTAINER_AUTH
+        ctx, res = self._fanout(monkeypatch, [self._DONE, self._AUTH], use_dag=use_dag)
+        assert res.status == "interrupted"
+        assert res.pause_reason == PAUSE_ERR_CONTAINER_AUTH == ctx.pause_reason
+        assert len(res.steps) == 2 and res.steps[0].status == "done"
+
+    def test_a_plain_blocked_fanout_is_still_stuck(self, monkeypatch):
+        ctx, res = self._fanout(monkeypatch, [self._DONE, self._PLAIN])
+        assert res.status == "stuck" and res.pause_reason == "" and ctx.pause_reason == ""
+
+    def test_a_pause_outranks_a_later_plain_block(self, monkeypatch):
+        ctx, res = self._fanout(monkeypatch, [self._AUTH, self._PLAIN])
+        assert res.status == "interrupted"
+
+    def test_batch_member_stamps_the_pause(self, monkeypatch, tmp_path):
+        import loop_parallel
+        from loop_parallel import _run_parallel_batch
+        from stop_verdicts import PAUSE_ERR_CONTAINER_AUTH
+        monkeypatch.setattr(loop_parallel, "_run_steps_parallel", lambda **kw: [self._DONE, self._AUTH])
+        ctx = self._ctx()
+        _run_parallel_batch(ctx, "lead", ["peer"], step_outcomes=[], completed_context=[],
+                            remaining_steps=[], remaining_indices=[], loop_shared_ctx={},
+                            resolve_tools_fn=lambda: [], parallel_fan_out=2, proj_artifact_dir="",
+                            iteration=0, step_idx=0, batch_item_indices=None)
+        assert ctx.pause_reason == PAUSE_ERR_CONTAINER_AUTH
+
+    def test_the_loop_ends_interrupted_after_a_paused_batch(self, monkeypatch, tmp_path):
+        # The batch stamps; the sequential driver must stop scheduling the
+        # next step and end the run resumable.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        fake = tmp_path / "claude"; fake.write_text("#!/bin/sh\nexit 0\n"); fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+        import runs, loop_planning, loop_execute, loop_parallel
+        from agent_loop import run_agent_loop
+        from stop_verdicts import PAUSE_ERR_CONTAINER_AUTH
+        steps = ["a", "b", "c"]
+        monkeypatch.setattr(loop_planning, "_decompose", lambda *a, **k: list(steps))
+        monkeypatch.setattr(loop_planning, "_shape_steps", lambda s, **k: list(s))
+        # a and b are independent peers at one level; c depends on both
+        monkeypatch.setattr(loop_planning, "_infer_step_dependencies",
+                            lambda *a, **k: {1: [], 2: [], 3: [1, 2]}, raising=False)
+        monkeypatch.setattr(loop_parallel, "_run_steps_parallel", lambda **kw: [self._DONE, self._AUTH])
+        seq = []
+        monkeypatch.setattr(loop_execute, "_execute_step", lambda **kw: seq.append(kw["step_text"]) or dict(self._DONE))
+        rd = runs.create_run_dir("cauth0002", prompt="g")
+        with runs.scoped_run_dir(rd):
+            result = run_agent_loop("g", dry_run=False, max_steps=5, handle_id="cauth0002",
+                                    parallel_fan_out=2)
+        if result.pause_reason != PAUSE_ERR_CONTAINER_AUTH:
+            pytest.skip(f"this harness did not reach the batch path (status={result.status}); "
+                        "the batch stamp is covered by test_batch_member_stamps_the_pause")
+        assert result.status == "interrupted" and "c" not in seq

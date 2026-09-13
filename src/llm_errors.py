@@ -202,6 +202,13 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
     carry retry-looking markers (429 / 402); auth outranks retry because
     401/403 must never burn the ladder.
     """
+    # A BackendError already IS a classification: FailoverAdapter wraps an
+    # actionable failure in one so downstream surfaces render the fix. Re-
+    # classifying its rendered text lost the class (review 2026-09-13: the
+    # container_auth refusal came back as auth_actionable/failover after the
+    # wrap, and the typed pause never fired). Structured info outranks text.
+    if isinstance(exc, BackendError) and isinstance(getattr(exc, "info", None), ErrorInfo):
+        return exc.info
     msg = str(exc).lower()
     exc_type = type(exc).__name__
 

@@ -622,6 +622,22 @@ class TestContainerAuthProbe:
         status, evidence, obs = sh._probe_container_auth({})
         assert status == SILENT and "EXPIRED" in evidence and obs["liveness"] == "expired"
 
+    def test_a_failed_probe_after_a_warning_does_not_read_as_recovered(self, monkeypatch):
+        # Review 2026-09-13: the recorder keeps the last good sample on a
+        # failed probe, so the probe still warns instead of narrating
+        # SUBSYSTEM_RECOVERED on a docker outage.
+        import time
+        import container_exec as ce
+        self._patch(monkeypatch, "require", None)
+        now = time.time()
+        rec = {"checked_at": now, "ok": False, "detail": "credentials expiry probe failed: docker down",
+               "last_good": {"checked_at": now - 3600, "ok": True, "has_refresh": True,
+                             "refresh_expires_at": now + 2 * 86400.0}}
+        monkeypatch.setattr(ce, "auth_liveness_state", lambda now=None: rec)
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == SILENT and obs["liveness"] == "warn"
+        assert "last good sample" in evidence and "docker down" in evidence
+
     def test_session_with_time_left_stays_ok_and_names_the_date(self, monkeypatch):
         self._patch(monkeypatch, "on", None)
         self._liveness(monkeypatch, 20)

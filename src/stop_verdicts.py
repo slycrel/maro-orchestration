@@ -55,6 +55,8 @@ vocabulary is unchanged.
 
 from __future__ import annotations
 
+from typing import Any
+
 OUT_OF_BUDGET = "out-of-budget"
 THESIS_REFUTED = "thesis-refuted"
 NOT_WORTH_IT = "reachable-but-not-worth-it"
@@ -201,6 +203,23 @@ def pause_reason_for_error_class(error_class: str) -> str:
         # require lane refused: the auth volume's session is dead
         "container_auth": PAUSE_ERR_CONTAINER_AUTH,
     }.get(error_class or "", "")
+
+
+def environmental_pause_for(outcome: Any) -> str:
+    """The typed pause a blocked step outcome calls for, or "" — the ONE
+    seam every execution path consults (sequential, parallel batch, fan-out,
+    DAG; review 2026-09-13: the parallel paths turned a container_auth
+    refusal into `stuck`). Honours the `pause.environmental` killswitch.
+    Never raises."""
+    try:
+        if not isinstance(outcome, dict) or outcome.get("status") != "blocked":
+            return ""
+        from config import get as _cfg_get
+        if not _cfg_get("pause.environmental", True):
+            return ""
+        return pause_reason_for_error_class(str(outcome.get("error_class") or ""))
+    except Exception:
+        return ""
 
 
 PAUSE_REASONS_OPERATOR = frozenset((

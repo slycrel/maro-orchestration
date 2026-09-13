@@ -29,7 +29,7 @@ import re
 import subprocess
 import tempfile
 import time
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from config import get
 from process_identity import owner_is_current, pid_alive as process_pid_alive, process_start_token
@@ -427,6 +427,11 @@ class ContainerAuthExpired(ContainerUnavailable):
     `require`-less run to the host and a `require` run would have churned
     blocked-step retries against a session no retry can revive)."""
     maro_error_class = "container_auth"
+    # The breaker owns this failure's story (same flag the subprocess adapter
+    # sets on a container-lane auth failure): FailoverAdapter must neither
+    # trip the process-wide backend circuit (host creds are healthy) nor emit
+    # its generic host `/login` alert on top of the breaker's precise one.
+    container_auth_owned = True
 
 
 def enforce_backend_container_contract(adapter, executor: bool) -> None:
@@ -961,24 +966,16 @@ def _reseed_probe(tripped_at: float) -> Tuple[bool, str]:
     full file). True only for a live-shaped file (refreshToken present —
     the CLI wipes it after a failed refresh) NEWER than the trip; see the
     section comment for why both conditions."""
-    cred_path = f"{AUTH_MOUNT}/.credentials.json"
-    ok, out = _run([
-        "docker", "run", "--rm", *_user_args(),
-        "-e", f"HOME={CONTAINER_HOME}",
-        "--mount", (f"type=volume,source={AUTH_VOLUME},"
-                    f"target={AUTH_MOUNT},readonly"),
-        "--entrypoint", "sh", container_image(),
-        "-c", (f"stat -c %Y {cred_path} && "
-               f"{{ grep -c refreshToken {cred_path} || true; }}"),
-    ], _RESEED_PROBE_TIMEOUT_S)
+    # Shared reader with the liveness recorder (review 2026-09-13): the old
+    # `grep -c refreshToken` counted KEY TEXT, so a wiped session that kept
+    # `"refreshToken": null` or the sibling `refreshTokenExpiresAt` key read
+    # as re-seeded. has_refresh now means the exact field holds a non-empty
+    # string — still shape only, still no credential bytes on the host.
+    ok, info = _credentials_expiry_probe()
     if not ok:
-        return False, f"credentials probe failed: {out[:120]}"
-    try:
-        first, _, rest = out.partition("\n")
-        mtime = float(first.strip())
-        has_refresh = int(rest.strip().splitlines()[0]) > 0
-    except Exception as exc:
-        return False, f"credentials probe unparseable: {exc}"
+        return False, str(info.get("detail") or "credentials probe failed")[:160]
+    mtime = float(info["mtime"])
+    has_refresh = bool(info["has_refresh"])
     if not has_refresh:
         return False, "credentials still wiped (no refresh token) — not re-seeded"
     if mtime <= tripped_at:
@@ -1079,13 +1076,26 @@ def _credentials_expiry_probe() -> Tuple[bool, dict]:
     else. Returns (ok, {"has_refresh", "refresh_expires_at",
     "access_expires_at", "mtime"}) or (False, {"detail": ...})."""
     cred_path = f"{AUTH_MOUNT}/.credentials.json"
+    # Inside the container: the exact nested field must be a non-empty
+    # string to count as a refresh token; expiry fields are read as numbers
+    # when they are numbers (or numeric strings) and 0 otherwise — a
+    # malformed file is reported as the four-integer frame with zeros, never
+    # as a traceback carrying file contents. Nothing but the frame prints.
     script = (
-        "import json,os;"
-        f"p={cred_path!r};"
-        "o=json.load(open(p)).get('claudeAiOauth') or {};"
-        "print(int(os.stat(p).st_mtime), int(bool(o.get('refreshToken'))),"
-        " int((o.get('refreshTokenExpiresAt') or 0)//1000),"
-        " int((o.get('expiresAt') or 0)//1000))"
+        "import json,os\n"
+        f"p={cred_path!r}\n"
+        "try:\n"
+        "    d=json.load(open(p)); o=d.get('claudeAiOauth') if isinstance(d,dict) else None\n"
+        "    o=o if isinstance(o,dict) else {}\n"
+        "except Exception:\n"
+        "    o={}\n"
+        "def ms(v):\n"
+        "    try: v=float(v)\n"
+        "    except (TypeError,ValueError): return 0\n"
+        "    return int(v//1000) if v==v and 0<v<1e14 else 0\n"
+        "t=o.get('refreshToken')\n"
+        "print(int(os.stat(p).st_mtime), int(isinstance(t,str) and t.strip()!=''),"
+        " ms(o.get('refreshTokenExpiresAt')), ms(o.get('expiresAt')))\n"
     )
     ok, out = _run([
         "docker", "run", "--rm", *_user_args(),
@@ -1096,9 +1106,19 @@ def _credentials_expiry_probe() -> Tuple[bool, dict]:
     ], _LIVENESS_PROBE_TIMEOUT_S)
     if not ok:
         return False, {"detail": f"credentials expiry probe failed: {out[:120]}"}
+    # Exactly one line of exactly four non-negative integers, the flag in
+    # {0,1}: anything else is not our frame (review 2026-09-13 — a permissive
+    # parse accepted preceding junk and flags like -1/2 as "has refresh").
     try:
-        mtime, has_refresh, refresh_exp, access_exp = (
-            int(x) for x in out.strip().splitlines()[-1].split())
+        lines = [ln for ln in out.strip().splitlines() if ln.strip()]
+        if len(lines) != 1:
+            raise ValueError(f"{len(lines)} lines")
+        parts = lines[0].split()
+        if len(parts) != 4 or not all(re.fullmatch(r"[0-9]{1,12}", x) for x in parts):
+            raise ValueError("not four integers")
+        mtime, has_refresh, refresh_exp, access_exp = (int(x) for x in parts)
+        if has_refresh not in (0, 1):
+            raise ValueError("flag outside {0,1}")
     except Exception as exc:
         return False, {"detail": f"credentials expiry probe unparseable: {exc}"}
     return True, {
@@ -1107,41 +1127,98 @@ def _credentials_expiry_probe() -> Tuple[bool, dict]:
     }
 
 
-def auth_liveness_state() -> Optional[dict]:
-    """The last persisted liveness record, or None. File read only."""
+# A record older than this is no longer evidence about the session; the
+# heartbeat should have replaced it (8 × the 6 h cadence — two days).
+_AUTH_LIVENESS_STALE_S = 48 * 3600.0
+# checked_at further in the future than this is a clock/hand-edit problem,
+# not a fresh record.
+_AUTH_LIVENESS_SKEW_S = 300.0
+_TS_MAX = 1e11   # epoch-seconds sanity bound (year ~5138)
+
+
+def _valid_liveness_record(data: Any, *, now: Optional[float] = None) -> Optional[dict]:
+    """The record if it is one we wrote and can still trust, else None.
+    Validation happens ONCE, here at the file boundary (review 2026-09-13:
+    string booleans, NaN/inf/oversized timestamps and future checked_at all
+    walked into the verdict). Strict types: bool means bool, timestamps are
+    finite numbers inside sane bounds, checked_at is not in the future."""
+    import math
+    now = time.time() if now is None else now
+    if not isinstance(data, dict) or isinstance(data.get("ok"), bool) is False:
+        return None
+    ca = data.get("checked_at")
+    if isinstance(ca, bool) or not isinstance(ca, (int, float)) or not math.isfinite(ca):
+        return None
+    if ca <= 0 or ca > now + _AUTH_LIVENESS_SKEW_S:
+        return None
+    if data["ok"]:
+        hr = data.get("has_refresh")
+        if not isinstance(hr, bool):
+            return None
+        for k in ("refresh_expires_at", "access_expires_at", "mtime"):
+            v = data.get(k, 0)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) \
+                    or v < 0 or v > _TS_MAX:
+                return None
+    lg = data.get("last_good")
+    if lg is not None:
+        lg = _valid_liveness_record(lg, now=now)
+        if lg is None or not lg.get("ok"):
+            data = dict(data); data.pop("last_good", None)
+    return data
+
+
+def auth_liveness_state(*, now: Optional[float] = None) -> Optional[dict]:
+    """The last persisted liveness record, validated, or None. File read
+    only; an unreadable/invalid/future-dated record reads as absent (so it
+    is refreshed, never trusted)."""
     import json
     try:
         data = json.loads(_auth_liveness_path().read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) and data.get("checked_at") else None
     except Exception:
         return None
+    return _valid_liveness_record(data, now=now)
+
+
+def _liveness_age_ok(rec: dict, max_age_s: float, *, now: float) -> bool:
+    age = now - float(rec.get("checked_at", 0.0))
+    return 0 <= age < max_age_s
 
 
 def refresh_auth_liveness(*, max_age_s: float = _AUTH_LIVENESS_TTL_S,
                           force: bool = False) -> Optional[dict]:
     """Heartbeat-cadence refresh of the liveness record. No-op (None) when
     the container lane is off; returns the fresh-enough existing record
-    without touching docker; otherwise probes and persists. Never raises."""
+    without touching docker; otherwise probes and persists. Never raises.
+
+    Serialized on the record's lock (review 2026-09-13: two overlapping
+    heartbeats each launched a docker probe and the slower, older sample
+    could overwrite the newer). The lock is held across the probe (≤ 20 s).
+    A failed probe never erases the last successful sample: it rides along
+    as `last_good` so a docker outage cannot turn an expiry warning into a
+    false "recovered" on the health lane."""
     import json
-    from file_lock import atomic_write
+    from file_lock import locked_write, atomic_write
     try:
         if container_mode() == "off":
             return None
-        prior = auth_liveness_state()
-        if prior is not None and not force:
-            try:
-                if time.time() - float(prior.get("checked_at", 0.0)) < max_age_s:
-                    return prior
-            except (TypeError, ValueError):
-                pass
-        ok, info = _credentials_expiry_probe()
-        record = {"checked_at": time.time(), "ok": ok, **info}
         path = _auth_liveness_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(path, json.dumps(record, sort_keys=True) + "\n")
-        return record
+        with locked_write(path):
+            now = time.time()
+            prior = auth_liveness_state(now=now)
+            if prior is not None and not force and _liveness_age_ok(prior, max_age_s, now=now):
+                return prior
+            ok, info = _credentials_expiry_probe()
+            record: dict = {"checked_at": now, "ok": ok, **info}
+            if not ok and prior is not None:
+                good = prior if prior.get("ok") else prior.get("last_good")
+                if good:
+                    record["last_good"] = {k: v for k, v in good.items() if k != "last_good"}
+            atomic_write(path, json.dumps(record, sort_keys=True) + "\n")
+            return record
     except Exception:
-        log.debug("refresh_auth_liveness failed", exc_info=True)
+        log.warning("container auth liveness refresh failed (record not updated)", exc_info=True)
         return None
 
 
@@ -1149,16 +1226,23 @@ def auth_liveness_verdict(state: Optional[dict], *, now: Optional[float] = None,
                           warn_days: float = AUTH_EXPIRY_WARN_DAYS) -> Tuple[str, str]:
     """('ok' | 'warn' | 'expired' | 'unknown', detail). Pure; no I/O."""
     now = time.time() if now is None else now
+    state = _valid_liveness_record(state, now=now)
     if not state:
         return "unknown", "session expiry not yet probed (heartbeat records it)"
     if not state.get("ok"):
+        good = state.get("last_good")
+        if good:
+            level, detail = auth_liveness_verdict(good, now=now, warn_days=warn_days)
+            from datetime import datetime, timezone
+            seen = datetime.fromtimestamp(float(good["checked_at"]), tz=timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+            return level, (f"{detail} [last good sample {seen}; latest probe failed: "
+                           f"{str(state.get('detail') or '')[:80]}]")
         return "unknown", str(state.get("detail") or "expiry probe failed")
+    if not _liveness_age_ok(state, _AUTH_LIVENESS_STALE_S, now=now):
+        return "unknown", "liveness record is stale (heartbeat has not refreshed it in 48 h)"
     if not state.get("has_refresh"):
         return "expired", "credentials hold no refresh token (session wiped after a failed refresh)"
-    try:
-        exp = float(state.get("refresh_expires_at") or 0.0)
-    except (TypeError, ValueError):
-        exp = 0.0
+    exp = float(state.get("refresh_expires_at") or 0.0)
     if exp <= 0:
         return "unknown", "credentials carry no refreshTokenExpiresAt"
     from datetime import datetime, timezone

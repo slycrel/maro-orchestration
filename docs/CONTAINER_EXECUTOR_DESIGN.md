@@ -229,6 +229,34 @@ other 27 days) or the token is gone. Live on the runtime box: "refresh token
 valid until 2026-10-12 04:21Z (29 d)". Doctor's `--live` login probe is
 unchanged (it spends a token; the record does not).
 
+*Review round 1 (2026-09-13, codex ×4) found the typed pause unwired on
+the literal path and the recorder too trusting; both fixed before landing.*
+(i) The worker's real adapter stack is `FailoverAdapter([ClaudeSubprocess…])`,
+and the wrapper re-raises an actionable failure as `BackendError(info)` —
+re-classifying the *wrapper's text* lost the marker and the refusal came
+back as a generic auth failure. `classify_error` now returns a
+`BackendError`'s own `ErrorInfo` first (the wrapper already decided);
+`test_pause_reasons.py::TestContainerAuthPauseThroughTheRealWrapper` pins the
+literal composition (no subprocess launched, no circuit trip, no host
+`/login` alert). (ii) The fan-out/DAG path turned a blocked `container_auth`
+outcome into `stuck` and the batch path only logged it; every path now
+consults one seam, `stop_verdicts.environmental_pause_for(outcome)`, stamps
+`ctx.pause_reason`, and ends the loop `interrupted` — the sequential driver
+also stops scheduling after a paused batch. (iii) `_reseed_probe` counted
+`refreshToken` key *text* (`grep -c`), so a wiped file keeping
+`"refreshToken": null` read as re-seeded; both the re-seed probe and the
+liveness recorder now share one exact-field reader (a python one-liner in
+the read-only container printing four integers: mtime, refresh-present
+flag, the two expiries; never a traceback that could carry bytes). The host
+parser accepts exactly that frame and nothing else. (iv) The liveness record
+is validated on read (`_valid_liveness_record`: real bools, finite bounded
+timestamps, `checked_at` not in the future) and read as *stale* — verdict
+`unknown`, not `ok` — after 48 h without a refresh; a failed probe keeps the
+prior good sample as `last_good` so a docker outage cannot narrate
+`SUBSYSTEM_RECOVERED` over a live expiry warning; the refresh runs under the
+record's lock so overlapping heartbeats launch one container, and a failed
+persist is a logged warning, not a silent `None`.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to
