@@ -301,6 +301,29 @@ def apply(handle_id: str, origin: Optional[dict], rec: Dict[str, Any]) -> Option
     return out or None
 
 
+def chosen_project(rec: Dict[str, Any]) -> str:
+    """The project of the run the landscape chose (related / rerun): the
+    goal follows that run, so its deliverable lands where the prior work
+    is. "" when the relation is fresh, the chosen run recorded no project,
+    or that project directory no longer exists (a fresh slug is then
+    minted as before). The handle binds the loop's project through this
+    before it falls back to the goal-text shortcuts."""
+    if rec.get("relation") not in ("related", "rerun") or not rec.get("chosen"):
+        return ""
+    try:
+        from runs import resolve_run_dir
+        from orch_items import projects_root
+        rd = resolve_run_dir(str(rec["chosen"]))
+        meta = _read_meta(Path(rd)) if rd else None
+        project = str((meta or {}).get("project") or "").strip()
+        if not project or "/" in project or project in (".", ".."):
+            return ""
+        return project if (projects_root() / project).is_dir() else ""
+    except Exception:
+        log.warning("landscape: chosen run's project unreadable, binding by goal text", exc_info=True)
+        return ""
+
+
 def _prior_plan(rd: Optional[str]) -> List[str]:
     """The steps of the prior run's newest plan manifest, when it left one."""
     if not rd:

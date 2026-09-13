@@ -626,3 +626,113 @@ class TestReviewFixes:
         meta = json.loads((run_dir(r.handle_id) / "metadata.json").read_text())
         assert meta["origin"]["parent_handle_id"] == a and meta["origin"]["related_by"] == "landscape"
         assert not list(tmp_path.rglob("ancestry.json"))
+
+
+# ---------------------------------------------------------------------------
+# project binding (2026-09-13): the landscape's decision binds the loop's
+# project — decree [[feedback_decisions_belong_to_maro]], BACKLOG #65
+# ---------------------------------------------------------------------------
+
+def _agenda_run(monkeypatch, goal, adapter, **kw):
+    """Run `goal` on the AGENDA lane with the loop stubbed; returns
+    (HandleResult, the loop's kwargs)."""
+    from unittest.mock import MagicMock
+    from handle import handle
+    from agent_loop import LoopResult, StepOutcome
+    from director import ClosureVerdict
+    import llm
+    monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: adapter)
+    loop_kwargs = []
+
+    def _fake_run(g, *x, **k):
+        loop_kwargs.append(k)
+        return LoopResult(loop_id="test-bind", project=k.get("project", ""), goal=g, status="done",
+                          stuck_reason=None,
+                          steps=[StepOutcome(index=0, text="step", status="done", result="output", iteration=0)])
+
+    gate = MagicMock()
+    gate.escalate = False
+    gate.contested_claims = []
+    with _no_hosted_free(), \
+         patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+         patch("intent.check_goal_clarity", return_value={"clear": True}), \
+         patch("director.verify_goal_completion",
+               return_value=ClosureVerdict(complete=True, confidence=0.9, gaps=[],
+                                           summary="verified", checks_run=2, checks_passed=2)), \
+         patch("quality_gate.run_quality_gate", return_value=gate):
+        r = handle(goal, force_lane="agenda", dry_run=False, **kw)
+    assert loop_kwargs, "the loop ran"
+    return r, loop_kwargs[0]
+
+
+def _meta(handle_id):
+    from runs import run_dir
+    return json.loads((run_dir(handle_id) / "metadata.json").read_text())
+
+
+class TestTheLandscapeBindsTheProject:
+    def test_a_related_goal_lands_in_the_chosen_runs_project(self, monkeypatch, tmp_path):
+        # BACKLOG #65: the follow-up whose wording names no project must
+        # land where the run it continues did its work — the landscape's
+        # decision, not a string match, binds the project.
+        _setup(monkeypatch, tmp_path)
+        from handle import _default_project_for
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        prior = _finished_run(GOAL_QUARTERLY, "Revenue rose 12% on services.", extra={"project": "board-reports"})
+        assert _default_project_for(GOAL_FOLLOW_UP) != "board-reports", "the fixture's wording mints another slug"
+        r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "the same report, with margins")))
+        assert kw["project"] == "board-reports"
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["chosen"] == prior and meta["origin"]["relation"] == "related"
+        assert (meta["project"], meta["project_binding"]) == ("board-reports", "landscape")
+
+    def test_a_rerun_binds_the_same_way(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        r, kw = _agenda_run(monkeypatch, GOAL_QUARTERLY, _NowAndJudge(_rerun(1, "same ask")))
+        assert kw["project"] == "board-reports" and _meta(r.handle_id)["project_binding"] == "landscape"
+
+    def test_the_operator_project_overrides_the_landscape(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "follows it")),
+                            project="investor-deck")
+        assert kw["project"] == "investor-deck"
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["chosen"] and (meta["project"], meta["project_binding"]) == ("investor-deck", "operator")
+
+    def test_fresh_goals_keep_the_goal_text_derivation_and_say_which_rule(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from handle import _default_project_for
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        # --fresh: no landscape decision → the minted slug, recorded as such
+        r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(), fresh=True)
+        assert kw["project"] == _default_project_for(GOAL_FOLLOW_UP)
+        assert _meta(r.handle_id)["project_binding"] == "minted"
+        # a fresh goal that literally names an existing project: the named shortcut, recorded as such
+        r2, kw2 = _agenda_run(monkeypatch, "Refresh the board-reports index page", _NowAndJudge(), fresh=True)
+        assert kw2["project"] == "board-reports" and _meta(r2.handle_id)["project_binding"] == "named"
+
+    def test_a_chosen_run_whose_project_is_gone_falls_back(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from handle import _default_project_for
+        import landscape
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})  # no dir
+        r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "follows it")))
+        assert kw["project"] == _default_project_for(GOAL_FOLLOW_UP)
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["chosen"] and meta["project_binding"] == "minted"
+        # the unit: fresh, no chosen, no recorded project, a path-shaped project
+        assert landscape.chosen_project({"relation": "fresh"}) == ""
+        assert landscape.chosen_project({"relation": "related", "chosen": ""}) == ""
+        a = _finished_run(GOAL_HAIKU, "leaves", extra={"project": "../escape"})
+        assert landscape.chosen_project({"relation": "related", "chosen": a}) == ""
+        b = _finished_run(GOAL_HAIKU, "leaves")
+        assert landscape.chosen_project({"relation": "related", "chosen": b}) == ""

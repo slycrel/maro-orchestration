@@ -1294,6 +1294,11 @@ def _handle_impl(
     # rides into the request as context. `--after` already named the parent
     # (operator override); `--fresh` and dry runs record a skipped landscape.
     _related_ctx = ""
+    # The project the landscape's decision binds (feature 2 follow-up,
+    # 2026-09-13, decree [[feedback_decisions_belong_to_maro]]): a goal
+    # that follows a prior run lands where that run's work is. "" when
+    # fresh, overridden, or the chosen run's project is gone.
+    _landscape_project = ""
     if not (origin or {}).get("parent_handle_id"):
         try:
             import landscape as _landscape
@@ -1315,6 +1320,7 @@ def _handle_impl(
                 why="" if fresh else ("dry_run" if dry_run else ""))
             origin = _landscape.apply(handle_id, origin, _land)
             _related_ctx = _landscape.related_context(_land)
+            _landscape_project = _landscape.chosen_project(_land)
             log.info("landscape: %s (%s) %d candidate(s) of %d scanned%s",
                      _land.get("relation"), _land.get("rule"),
                      len(_land.get("candidates") or []), _land.get("scanned", 0),
@@ -2060,12 +2066,29 @@ def _handle_impl(
         # must inherit prior decisions/artifact paths without an embedding or
         # another LLM call.  Stamp it before recall so the next run can join
         # this one even though metadata was opened before lane classification.
-        _agenda_project = project or _default_project_for(message)
+        # Project identity, by precedence (2026-09-13): the operator's
+        # explicit project (an override, never the design); the project of
+        # the run the LANDSCAPE chose (Maro's own decision from the run
+        # history — the deliverable lands where the prior work is); an
+        # existing project literally named in the goal (the string
+        # shortcut the landscape is meant to retire — kept as the fallback
+        # for fresh goals because the lexical judge still misses
+        # continuations whose wording shares no tokens, BACKLOG #65 (3));
+        # else the minted slug. The rule that bound it is recorded so the
+        # shortcut's share can be measured before it is removed.
+        if project:
+            _agenda_project, _project_binding = project, "operator"
+        elif _landscape_project:
+            _agenda_project, _project_binding = _landscape_project, "landscape"
+        else:
+            _agenda_project = _default_project_for(message)
+            _project_binding = "named" if _match_existing_project(message) else "minted"
         try:
             from runs import stamp_run_metadata as _stamp_project_metadata
-            _stamp_project_metadata({"project": _agenda_project})
+            _stamp_project_metadata({"project": _agenda_project, "project_binding": _project_binding})
         except Exception:
             pass
+        log.info("project binding: %s (%s)", _agenda_project, _project_binding)
 
         # pipeline: prefix — user specifies explicit steps as "step1 | step2 | step3".
         # Bypasses LLM decomposition entirely; runs the given steps in order.
@@ -2364,7 +2387,7 @@ def _handle_impl(
                     # Scopes any proxy-interpretation decision to this project
                     # (blank domain would inject it into every project's
                     # recall — chunk-3 review finding).
-                    decision_domain=project or _default_project_for(message),
+                    decision_domain=_agenda_project,
                 )
                 # Keep _scope as the scope-view for back-compat with the
                 # existing artifact-write / captain's-log / ab-skip branches
@@ -2374,7 +2397,7 @@ def _handle_impl(
                 # successful scope.md persistence and raw-dump on parse failure.
                 try:
                     import orch_items as _oi
-                    _scope_project = project or _default_project_for(message)
+                    _scope_project = _agenda_project
                     _proj_dir = _oi.projects_root() / _scope_project / "artifacts"
                     _proj_dir.mkdir(parents=True, exist_ok=True)
                 except Exception:
