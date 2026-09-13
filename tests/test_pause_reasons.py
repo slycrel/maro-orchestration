@@ -648,9 +648,10 @@ class TestToolSearchRecallRefusal:
         assert (outcome["tokens_in"], outcome["tokens_out"]) == (18, 8)
         assert outcome.get("provider_cost_usd") == pytest.approx(0.03)
 
-    def test_a_plain_recall_failure_still_falls_through(self, monkeypatch, tmp_path):
-        # Negative control: a non-environmental re-call failure keeps the
-        # old behaviour (log, fall through to the first response).
+    def test_a_plain_recall_failure_is_typed_not_blamed_on_the_tool(self, monkeypatch, tmp_path):
+        # Round 7: "fall through to the first response" could only ever
+        # produce "unrecognised tool: tool_search"; the invoked call's own
+        # failure is the diagnosis, with the first call's spend kept.
         monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         import tool_search
         from llm import LLMResponse, ToolCall
@@ -661,16 +662,93 @@ class TestToolSearchRecallRefusal:
             def complete(self, messages, **kwargs):
                 self.calls += 1
                 if self.calls == 1:
-                    return LLMResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "mail"})])
+                    return LLMResponse(content="", input_tokens=7, output_tokens=3,
+                                       tool_calls=[ToolCall(name="tool_search", arguments={"query": "mail"})])
                 raise RuntimeError("flaky")
 
         monkeypatch.setattr(tool_search, "resolve_deferred_tools",
                             lambda query, *a, **k: [{"name": "imap_read", "description": "d",
                                                      "input_schema": {"type": "object", "properties": {}}}])
+        adapter = _Adapter()
         outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
-                               completed_context=[], adapter=_Adapter(), tools=[],
+                               completed_context=[], adapter=adapter, tools=[],
                                project_dir=str(tmp_path))
+        assert adapter.calls == 2 and outcome["status"] == "blocked"
         assert outcome.get("error_class") != "container_auth"
+        assert "flaky" in outcome["stuck_reason"] and "unrecognised tool" not in outcome["stuck_reason"]
+        assert (outcome["tokens_in"], outcome["tokens_out"]) == (7, 3)
+
+    def test_the_recall_hands_the_adapter_real_tool_objects(self, monkeypatch, tmp_path):
+        # Round 7: raw schema dicts were concatenated onto the LLMTool list;
+        # every real adapter builds its prompt from `t.name`/`t.parameters`,
+        # so EVERY production re-call died of AttributeError.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import tool_search
+        from llm import LLMResponse, LLMTool, ToolCall
+        from step_exec import execute_step
+        seen = {}
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "mail"})])
+                # what the real subprocess/anthropic/openai prompt builders do
+                seen["tools"] = [(t.name, t.description, t.parameters.get("properties", {})) for t in kwargs["tools"]]
+                return LLMResponse(content="", tool_calls=[ToolCall(name="complete_step",
+                                                                    arguments={"result": "r", "summary": "ok"})])
+
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [
+                                {"name": "imap_read", "description": "d",
+                                 "parameters": {"type": "object", "properties": {"folder": {"type": "string"}}}},
+                                {"name": "old_shape", "description": "", "input_schema": {"type": "object", "properties": {}}}])
+        adapter = _Adapter()
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
+                               completed_context=[], adapter=adapter,
+                               tools=[LLMTool(name="complete_step", description="c", parameters={"type": "object", "properties": {}})],
+                               project_dir=str(tmp_path))
+        assert adapter.calls == 2 and outcome["status"] == "done", outcome
+        assert ("imap_read", "d", {"folder": {"type": "string"}}) in seen["tools"]
+        assert ("old_shape", "", {}) in seen["tools"]
+        # a schema without a name is a RESOLUTION failure: no second call
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools", lambda query, *a, **k: [{"description": "nameless"}])
+        adapter = _Adapter()
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
+                               completed_context=[], adapter=adapter, tools=[], project_dir=str(tmp_path))
+        assert adapter.calls == 1 and outcome["status"] == "blocked"
+
+    def test_a_killed_recall_keeps_its_partial_output(self, monkeypatch, tmp_path):
+        # Round 7: the timeout class was outside the round-3 allow-list, so a
+        # killed re-call fell through to "unrecognised tool" and the only
+        # record of what it did before the kill was gone.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import subprocess
+        import tool_search
+        from llm import LLMResponse, ToolCall, _subprocess_timeout_error
+        from step_exec import execute_step
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", input_tokens=7, output_tokens=3,
+                                       tool_calls=[ToolCall(name="tool_search", arguments={"query": "mail"})])
+                raise _subprocess_timeout_error("claude", subprocess.TimeoutExpired(
+                    cmd=["claude"], timeout=600, output="partial work already performed"), 600)
+
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [{"name": "imap_read", "description": "d",
+                                                     "parameters": {"type": "object", "properties": {}}}])
+        adapter = _Adapter()
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
+                               completed_context=[], adapter=adapter, tools=[], project_dir=str(tmp_path))
+        assert adapter.calls == 2 and outcome["status"] == "blocked"
+        assert "timed out" in outcome["stuck_reason"] and "unrecognised tool" not in outcome["stuck_reason"]
+        assert "partial work already performed" in outcome["result"]
+        assert (outcome["tokens_in"], outcome["tokens_out"]) == (7, 3)
 
 
 class TestSchedulersStopOnEnvironmentalPause:

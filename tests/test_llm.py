@@ -2636,6 +2636,70 @@ class TestContainerExecutorWrap:
         assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
         assert ce.auth_breaker_snapshot() is not None
 
+    def test_a_terminal_auth_in_the_errors_array_is_the_container_story(self, monkeypatch, tmp_path):
+        # Review round 7: the CLI's error_during_execution envelope carries
+        # its text in `errors: [...]`, not `result`; the predicate, the
+        # breaker attribution and the display detail read only `result`.
+        import container_exec as ce
+        import notify
+        from llm import _rate_limited_failure, _terminal_error_text
+        from llm_errors import classify_error
+        env = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                          "errors": ["OAuth session expired · Please run /login"]})
+        event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+        assert _terminal_error_text(json.loads(env)) == "OAuth session expired · Please run /login"
+        assert _terminal_error_text({"type": "result", "result": "r", "errors": ["e"]}) == "r"
+        assert _terminal_error_text({"type": "result", "errors": [{"code": 7}]}) == '{"code": 7}'
+        assert _terminal_error_text(None) == "" and _terminal_error_text({"errors": "not-a-list"}) == ""
+        assert _rate_limited_failure(event + "\n" + env) is False
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 3
+        with patch("llm._run_subprocess_safe", side_effect=[
+                limited, MagicMock(returncode=1, stderr="", container_executed=True,
+                                   stdout=event + "\n" + env)]) as run:
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 2
+        assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+        assert ce.auth_breaker_snapshot() is not None
+
+    def test_a_nonzero_success_payload_ends_the_retry(self, monkeypatch, tmp_path):
+        # Review round 7: the retry accepted success on rc==0 only; a non-zero
+        # exit with a complete success result (the supported rc=1 shape)
+        # whose text mentioned a rate limit was replayed and finally
+        # reported as rate-limited.
+        import container_exec as ce
+        import notify
+        from llm import _rate_limited_failure
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        success = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                              "result": "Completed the rate limit configuration change."})
+        assert _rate_limited_failure(success) is False
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 3
+        with patch("llm._run_subprocess_safe", side_effect=[
+                limited, MagicMock(returncode=1, stderr="", container_executed=True, stdout=success),
+                limited]) as run:
+            resp = a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 2
+        assert "Completed the rate limit configuration change." in resp.content
+        assert a._rate_limit_wait == 60, "success resets the backoff"
+
     def test_a_retry_that_times_out_is_not_replayed(self, monkeypatch, tmp_path):
         # Review round 6: TimeoutExpired inside the retry loop `continue`d —
         # a killed executor step (which may have acted) was launched again

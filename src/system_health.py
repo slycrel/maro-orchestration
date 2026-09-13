@@ -640,17 +640,21 @@ def run_health_probes(*, verbose: bool = False,
             if _only is None:
                 snapshot["cycle"] = int(snapshot.get("cycle", 0) or 0) + 1
             _write_snapshot(snapshot)
+
+            # Narrate only after the snapshot recording narrated= persisted:
+            # a failed write must not leave the log claiming the user was
+            # told while the state machine forgot (it would re-narrate
+            # forever). The reverse trade — write succeeds, log append
+            # fails, the line is lost — is accepted: the snapshot still
+            # shows SILENT. STILL UNDER THE LOCK (review round 7): released
+            # first, an older cycle's SILENT could land in the log after a
+            # newer cycle's RECOVERED — the last line the operator reads
+            # contradicting the snapshot, with nothing left to correct it.
+            summary["transitions"] = len(pending_narrations)
+            for decl, status, evidence in pending_narrations:
+                _narrate_transition(decl, status, evidence)
         finally:
             _guard.__exit__(None, None, None)
-
-        # Narrate only after the snapshot recording narrated= persisted:
-        # a failed write must not leave the log claiming the user was told
-        # while the state machine forgot (it would re-narrate forever).
-        # The reverse trade — write succeeds, log append fails, the line
-        # is lost — is accepted: the snapshot still shows SILENT.
-        summary["transitions"] = len(pending_narrations)
-        for decl, status, evidence in pending_narrations:
-            _narrate_transition(decl, status, evidence)
     except Exception as exc:
         logger.debug("health probe cycle failed (non-fatal): %s", exc)
         summary["error"] = str(exc)[:200]

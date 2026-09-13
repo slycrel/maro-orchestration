@@ -682,6 +682,31 @@ class TestContainerAuthProbe:
         assert len(_events(SUBSYSTEM_RECOVERED)) == 1
         assert snap["processes"]["streaky"]["status"] == OK, "untouched entries survive"
 
+    def test_narration_is_delivered_under_the_snapshot_lock(self, monkeypatch, _tmp_health):
+        # Round 7: the lock was released before narration, so an older
+        # cycle's SILENT could land in the log AFTER a newer cycle's
+        # RECOVERED. The narration now happens while the lock is held.
+        import threading
+        from file_lock import locked_write, FileLockTimeout
+        monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "0.2")
+        held_during = []
+        real = sh._narrate_transition
+        def spy(decl, status, evidence):
+            # probe from ANOTHER thread: the lock is reentrant for its holder
+            def contend():
+                try:
+                    with locked_write(_tmp_health, require=True, timeout_s=0.2):
+                        held_during.append(False)
+                except FileLockTimeout:
+                    held_during.append(True)
+            t = threading.Thread(target=contend); t.start(); t.join(5)
+            real(decl, status, evidence)
+        monkeypatch.setattr(sh, "_narrate_transition", spy)
+        monkeypatch.setattr(sh, "DECLARED_PROCESSES", [_decl(_seq_probe([SILENT, OK]))])
+        run_health_probes(); run_health_probes()
+        assert held_during == [True, True], held_during
+        assert sorted(e["event_type"] for e in _events()) == sorted([SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED])
+
     def test_a_busy_lock_skips_the_cycle_even_under_fail_open(self, monkeypatch, _tmp_health):
         # Round 6: the snapshot transaction (read → probe → narrated= → write)
         # used the DEFAULT lock contract, which proceeds UNLOCKED under

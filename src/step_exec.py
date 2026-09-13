@@ -1338,6 +1338,28 @@ def _persist_tool_transcript(tool_events: List[dict], project_dir: str, step_num
 # Step execution
 # ---------------------------------------------------------------------------
 
+def _schema_to_tool(schema: Any):
+    """A resolved deferred-tool schema dict (tool_registry.to_schema: name /
+    description / parameters — tests and older callers say input_schema) as
+    the LLMTool every adapter iterates (`t.name`, `t.parameters`). Review
+    round 7 (2026-09-13): the re-call concatenated raw dicts onto the
+    LLMTool list, so the real adapter raised AttributeError building the
+    prompt and EVERY production tool_search re-call failed — falling
+    through to "unrecognised tool: tool_search"."""
+    from llm import LLMTool
+    if isinstance(schema, LLMTool):
+        return schema
+    if not isinstance(schema, dict) or not schema.get("name"):
+        raise ValueError(f"deferred tool schema without a name: {type(schema).__name__}")
+    params = schema.get("parameters")
+    if not isinstance(params, dict):
+        params = schema.get("input_schema")
+    if not isinstance(params, dict):
+        params = {"type": "object", "properties": {}}
+    return LLMTool(name=str(schema["name"]), description=str(schema.get("description") or ""),
+                   parameters=params)
+
+
 def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[str] = None,
                               tokens_in: int = 0, tokens_out: int = 0,
                               provider_cost_usd: float = 0.0) -> Dict[str, Any]:
@@ -1831,10 +1853,20 @@ def execute_step(
                 _resolved_schemas = resolve_deferred_tools(_ts_query)
             except Exception as _ts_exc:
                 log.warning("step %d tool_search failed: %s", step_num, _ts_exc)
+            _expanded_tools = None
             if _resolved_schemas:
-                # Re-call the LLM with expanded tool list
-                _expanded_tools = _active_tools + _resolved_schemas
-                _ts_result_block = format_tool_search_result(_resolved_schemas)
+                # Re-call the LLM with expanded tool list — as LLMTool
+                # objects (round 7), built BEFORE the call so a malformed
+                # schema is a resolution failure (fall through), not a
+                # failure of the invoked call.
+                try:
+                    _expanded_tools = _active_tools + [_schema_to_tool(_s) for _s in _resolved_schemas]
+                    _ts_result_block = format_tool_search_result(_resolved_schemas)
+                except Exception as _ts_exc:
+                    _expanded_tools = None
+                    log.warning("step %d tool_search: could not build the expanded tool list: %s",
+                                step_num, _ts_exc)
+            if _expanded_tools is not None:
                 try:
                     # A changed tool contract cannot safely resume. Rotate the
                     # segment explicitly and keep the expanded one-off call
@@ -1890,37 +1922,28 @@ def execute_step(
                     tc = resp.tool_calls[0] if resp.tool_calls else tc
                     log.debug("step %d tool_search re-call done: tool=%r", step_num, _tool_name_used)
                 except Exception as _rerun_exc:
-                    # A TERMINAL failure of the re-call — a runaway kill
-                    # (token brake, cost circuit) or an environmental refusal
-                    # (dead backend, dead container session) — must not be
-                    # absorbed into "fall through and carry on": the typed
-                    # no-retry policy downstream would never see it and the
-                    # run churned blaming the tool name (review 2026-09-13).
-                    # This handler is OUTSIDE the initial call's `except`, so
-                    # a re-raise escaped execute_step (round 2: uncaught on
-                    # the sequential driver, stringified by the fan-out pool;
-                    # round 3: the token-brake re-raise did the same). Every
-                    # terminal class becomes the same typed blocked outcome
-                    # the initial call would have produced, with the first
-                    # call's spend kept on the step's books.
-                    try:
-                        from llm_errors import (classify_error as _cls,
-                                                TOKEN_RUNAWAY as _TOK, BUDGET_RUNAWAY as _BUD)
-                        from stop_verdicts import pause_reason_for_error_class as _prf
-                        _rerun_cls = str(_cls(_rerun_exc).error_class or "")
-                        _rerun_terminal = _rerun_cls in (_TOK, _BUD) or bool(_prf(_rerun_cls))
-                    except Exception:
-                        _rerun_terminal = False
-                    if _rerun_terminal:
-                        log.warning("step %d tool_search re-call ended the step (%s): %s",
-                                    step_num, _rerun_cls, _rerun_exc)
-                        return _stamp_flavor(_blocked_outcome_from_exc(
-                            _rerun_exc,
-                            tokens_in=int(getattr(resp, "input_tokens", 0) or 0),
-                            tokens_out=int(getattr(resp, "output_tokens", 0) or 0),
-                            provider_cost_usd=_provider_cost_usd))
-                    log.warning("step %d tool_search re-call failed: %s", step_num, _rerun_exc)
-                    # Fall through to original response handling
+                    # The INVOKED re-call failed. This handler is OUTSIDE the
+                    # initial call's `except`, so a re-raise escaped
+                    # execute_step (round 2: uncaught on the sequential
+                    # driver, stringified by the fan-out pool; round 3: the
+                    # token-brake re-raise did the same). Rounds 2–3 typed
+                    # only an allow-list of terminal classes and let the
+                    # rest "fall through" to the first response — which
+                    # could only ever become "unrecognised tool:
+                    # tool_search": a killed re-call lost its timeout
+                    # diagnosis and its partial output that way (round 7).
+                    # Every failure of the invoked call is now the same
+                    # typed blocked outcome the initial call would have
+                    # produced, with the first call's spend on the books;
+                    # only RESOLUTION failures (no schema, a bad schema)
+                    # fall through above.
+                    log.warning("step %d tool_search re-call ended the step: %s",
+                                step_num, _rerun_exc)
+                    return _stamp_flavor(_blocked_outcome_from_exc(
+                        _rerun_exc,
+                        tokens_in=int(getattr(resp, "input_tokens", 0) or 0),
+                        tokens_out=int(getattr(resp, "output_tokens", 0) or 0),
+                        provider_cost_usd=_provider_cost_usd))
             else:
                 log.debug("step %d tool_search: no matches for %r", step_num, _ts_query)
 

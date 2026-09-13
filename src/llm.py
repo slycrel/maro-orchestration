@@ -2197,6 +2197,25 @@ def _extract_result_object(text: str) -> Optional[dict]:
     return None
 
 
+def _terminal_error_text(obj: Optional[dict]) -> str:
+    """The human-readable text of a terminal CLI error result, from EITHER
+    envelope the CLI emits: `"result": "<text>"` or the
+    `error_during_execution` shape's `"errors": [...]` (review round 7,
+    2026-09-13: the breaker, the display detail and the retry predicate
+    read only `result`, so an auth failure delivered in `errors[]` was
+    invisible to all three). "" when neither carries text."""
+    if not isinstance(obj, dict):
+        return ""
+    text = obj.get("result")
+    if isinstance(text, str) and text.strip():
+        return text
+    errors = obj.get("errors")
+    if isinstance(errors, list):
+        parts = [e if isinstance(e, str) else json.dumps(e) for e in errors if e]
+        return "\n".join(p for p in parts if p)
+    return ""
+
+
 def _rate_limited_failure(stdout: str) -> bool:
     """Is this failed CLI response a rate-limit story (worth a backoff
     retry)? Structured rate_limit_event first, the two phrases as backup —
@@ -2205,14 +2224,21 @@ def _rate_limited_failure(stdout: str) -> bool:
     earlier rejected rate_limit_event and still END in "OAuth session
     expired"; that final failure names the remedy and must reach the
     breaker + class marker, never another backoff cycle."""
+    # Payload first (review round 7): a non-zero exit with a complete
+    # success result is a SUCCESSFUL call (the long-standing rc=1 shape);
+    # its text merely mentioning a rate limit must not replay the step.
+    if _extract_success_result(stdout) is not None:
+        return False
     obj = _extract_result_object(stdout)
-    if obj is not None and obj.get("is_error") and obj.get("result"):
-        try:
-            from container_exec import is_auth_error_text
-            if is_auth_error_text(str(obj["result"])[:4000]):
-                return False
-        except Exception:
-            pass
+    if obj is not None and obj.get("is_error"):
+        _terminal = _terminal_error_text(obj)
+        if _terminal:
+            try:
+                from container_exec import is_auth_error_text
+                if is_auth_error_text(_terminal[:4000]):
+                    return False
+            except Exception:
+                pass
     combined = (stdout or "").lower()
     return bool(_parse_stream_json(stdout)["rate_limited"]
                 or "hit your limit" in combined or "rate limit" in combined)
@@ -3014,7 +3040,10 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         # exhaustion the stale rate-limit text as the cause.
                         self._rate_limit_wait = _wait
                         raise _subprocess_timeout_error("claude", _texc, _timeout)
-                    if result.returncode == 0:
+                    if result.returncode == 0 or _extract_success_result(result.stdout) is not None:
+                        # Payload-first, like the initial call (round 7): a
+                        # non-zero exit with a complete success result IS
+                        # success — checked before any rate-limit reading.
                         _retry_success = True
                         break
                     # Check if still rate-limited — the entry's own predicate.
@@ -3066,8 +3095,9 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 # and the human-readable message in "result" (e.g. "Not logged
                 # in · Please run /login"). Surface that instead of raw JSON.
                 _err_obj = _extract_result_object(result.stdout)
-                if _err_obj is not None and _err_obj.get("result"):
-                    detail = str(_err_obj["result"])[:300]
+                _err_text = _terminal_error_text(_err_obj)
+                if _err_text:
+                    detail = _err_text[:300]
                 else:
                     detail = result.stdout.strip()[:300] or "(no output)"
                 # A CONTAINERIZED call dying on a login/auth failure means the
@@ -3089,8 +3119,8 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         # Structured CLI error text is CLI-authored → safe to
                         # search in full; the raw-stdout fallback stays
                         # shallower to bound false-positive surface.
-                        if _err_obj is not None and _err_obj.get("result"):
-                            _breaker_text = str(_err_obj["result"])[:4000]
+                        if _err_text:
+                            _breaker_text = _err_text[:4000]
                         else:
                             _breaker_text = result.stdout.strip()[:2000]
                         note_container_failure(_breaker_text)

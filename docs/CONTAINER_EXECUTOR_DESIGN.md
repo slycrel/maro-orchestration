@@ -413,6 +413,32 @@ ESTABLISHED" named as such (the breaker row is reactive: clear right up to
 the first casualty, so a known-expired session showed four green rows).
 Closes the round-4 residual.
 
+*Review round 7 (2026-09-13, codex skeptic + QA, whole chunk) found two
+HIGHs — one of them older than the chunk — and three carry-through gaps;
+fixed before landing.* (xxvi) **The tool_search re-call never worked in
+production.** It concatenated the resolver's raw schema dicts onto the
+`LLMTool` list; every real adapter builds its prompt from `t.name` /
+`t.parameters`, so the invoked re-call died of `AttributeError` and fell
+through to "unrecognised tool: tool_search" — since Phase 41, on every
+lane. Schemas are now converted at the boundary (`_schema_to_tool`,
+accepting `parameters` and the older `input_schema`); a nameless schema
+is a *resolution* failure (no second call). (xxvii) **Every failure of
+the invoked re-call is typed.** Rounds 2–3's allow-list let a killed
+re-call (timeout class) fall through, losing its diagnosis and partial
+output; the invoked call's exception now always becomes the shared
+blocked outcome with the first call's spend. (xxviii) **Both error
+envelopes.** The CLI's `error_during_execution` result carries its text in
+`errors: [...]`; the retry predicate, the breaker attribution and the
+display detail read only `result` — `_terminal_error_text` serves all
+three. (xxix) **Payload first on the retry.** A non-zero exit with a
+complete success result (the supported rc=1 shape) whose text mentioned a
+rate limit was replayed and finally reported as rate-limited; the retry
+accepts a success payload before any rate-limit reading, like the initial
+call. (xxx) **Narration under the lock.** The health cycle released its
+lock before appending the captain's-log line, so an older cycle's SILENT
+could land after a newer cycle's RECOVERED with nothing left to correct
+it; the narration now runs while the lock is held.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to
