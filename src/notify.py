@@ -39,7 +39,7 @@ import json
 import logging
 import os
 import subprocess
-from typing import Optional
+from typing import Optional, Any
 
 log = logging.getLogger("notify")
 
@@ -89,14 +89,6 @@ ESCALATION_FILE_EVENTS = {"escalation", "backend_actionable", "stranded_run",
                           "operator_question", "operator_question_expired"}
 
 
-def _config_get(key: str, default):
-    try:
-        from config import get as _get
-        return _get(key, default)
-    except Exception:
-        return default
-
-
 def escalations_path():
     """Path to the durable escalation-class event log (output/escalations.jsonl).
 
@@ -132,35 +124,69 @@ def _write_escalation_file(event_type: str, payload: dict) -> None:
     locked_append(escalations_path(), json.dumps(entry, default=str))
 
 
+def _read(merged: dict, key: str, default):
+    """`config.get`'s dotted walk over ONE snapshot's mapping (review r19:
+    the policy reads every `notify.*` key from the same published load, so
+    the section and its faults can never come from different loads)."""
+    node = merged
+    for part in key.split("."):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return default
+    return node
+
+
+def _policy(event_type: str) -> tuple[Optional[bool], str, Any]:
+    """Validate one snapshot's hook obligation, command, and raw timeout.
+
+    A null, blank, or False command explicitly disables the hook; command:
+    false is an operator's deliberate off switch. Other non-strings are unknown.
+    Returns (owed, command, timeout_seconds as configured — unconverted).
+    """
+    from config import snapshot
+    merged, faults = snapshot()
+    # review r19: obligation and execution must use the same validation rules,
+    # read from ONE snapshot (r18's separate get/load_faults reads could pair a
+    # faulted section with a clean publish landing between them).
+    if faults:
+        return None, "", None
+    section = _read(merged, "notify", None)
+    if section is None:
+        return False, "", None
+    if not isinstance(section, dict):
+        return None, "", None
+    command = _read(merged, "notify.command", None)
+    if command is None or command is False:
+        return False, "", None
+    if not isinstance(command, str):
+        return None, "", None
+    command = command.strip()
+    if not command:
+        return False, "", None
+    events = _read(merged, "notify.events", DEFAULT_EVENTS)
+    if events is None or events == "" or events == []:
+        events = DEFAULT_EVENTS
+    if isinstance(events, str) or not isinstance(events, (list, tuple, set, frozenset)):
+        return None, "", None
+    if not all(isinstance(e, str) for e in events):
+        return None, "", None
+    timeout = _read(merged, "notify.timeout_seconds", 30)
+    return event_type in events, command, timeout
+
+
 def hook_owed(event_type: str) -> Optional[bool]:
     """Whether a notify.command lane is owed `event_type`: True when one
     is configured AND subscribes to it, False when there is confirmed no
-    such lane, None when that cannot be known — the config could not be
-    read, or `notify.events` is not a list of names (review 2026-09-13
-    r16: both had read as "no hook owed", and a journal row then
-    acknowledged a story the configured recipient never got)."""
+    such lane (absent, or an explicit `command: false`/empty), None when
+    that cannot be known — the config could not be read, the `notify`
+    section or its `command` is not the right shape, or `notify.events`
+    is not a list of names (review 2026-09-13 r16–r19: each of those had
+    read as "no hook owed", and a journal row then acknowledged a story
+    the configured recipient never got). One snapshot decides: the
+    section and its faults come from the same published load (r19)."""
     try:
-        from config import get as _get, load_faults
-        section = _get("notify", None)
-        # review r17: the loader's defaults do not prove no hook is owed.
-        if load_faults():
-            return None
-        # review r18: a malformed override does not prove the hook is absent.
-        if section is None:
-            return False
-        if not isinstance(section, dict):
-            return None
-        command = str(section.get("command", "") or "").strip()
-        if not command:
-            return False
-        events = section.get("events", DEFAULT_EVENTS)
-        if events is None or events == "" or events == []:
-            events = DEFAULT_EVENTS
-        if isinstance(events, str) or not isinstance(events, (list, tuple, set, frozenset)):
-            return None
-        if not all(isinstance(e, str) for e in events):
-            return None
-        return event_type in events
+        return _policy(event_type)[0]
     except Exception:
         return None
 
@@ -309,21 +335,19 @@ def _emit(event_type: str, payload: dict, *, run_dir: Optional[str],
         except Exception:
             log.warning("escalation file write failed for %s", event_type, exc_info=True)
 
-    # review r18: an unreadable override must never send to an inherited recipient.
-    from config import load_config, load_faults
-    load_config()
-    if load_faults():
-        log.warning("notify configuration unreadable for %s; hook skipped", event_type)
+    # 2) The hook command, if the validated policy subscribes to this event.
+    owed, command, timeout_raw = _policy(event_type)
+    if owed is None:
+        log.warning("notify configuration unknown for %s; hook skipped", event_type)
         return False
-
-    # 2) The hook command, if the substrate registered one.
-    command = str(_config_get("notify.command", "") or "").strip()
-    if not command:
+    if owed is False:
         return False
-    events = _config_get("notify.events", DEFAULT_EVENTS) or DEFAULT_EVENTS
-    if event_type not in events:
-        return False
-    timeout = float(_config_get("notify.timeout_seconds", 30))
+    try:
+        timeout = float(timeout_raw if timeout_raw is not None else 30)
+    except (TypeError, ValueError):
+        # review r19: a malformed timeout must not discard a valid hook.
+        log.warning("invalid notify timeout for %s; using 30 seconds", event_type)
+        timeout = 30
 
     env = dict(os.environ)
     env["MARO_EVENT_TYPE"] = event_type

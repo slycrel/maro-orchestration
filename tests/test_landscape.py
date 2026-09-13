@@ -3296,24 +3296,16 @@ class TestEverySenderKeepsTheSameWord:
         import notify
         import observe
         monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
-        real_get = config_mod.get
         cfg = {}
 
-        def get(k, d=None):
-            if k == "notify" and cfg:
-                command = cfg.get("notify.command")
-                if isinstance(command, Exception):
-                    raise command
-                return {key.removeprefix("notify."): value
-                        for key, value in cfg.items()}
-            if k in cfg:
-                v = cfg[k]
-                if isinstance(v, Exception):
-                    raise v
-                return v
-            return real_get(k, d)
+        def snapshot(**kwargs):
+            command = cfg.get("notify.command")
+            if isinstance(command, Exception):
+                raise command
+            return {"notify": {key.removeprefix("notify."): value
+                               for key, value in cfg.items()}}, []
 
-        monkeypatch.setattr(config_mod, "get", get)
+        monkeypatch.setattr(config_mod, "snapshot", snapshot)
         payload = {"handle_id": "x", "status": "done"}
         cfg["notify.command"] = OSError("config unreadable")
         assert notify.hook_owed("run_completed") is None and notify.hook_configured("run_completed") is False

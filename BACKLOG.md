@@ -6759,6 +6759,24 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   re-read on every `get` (no backoff); `hook_owed` and `_emit` load at
   different instants (a file changing between them is a new snapshot);
   other `config.get` callers still silently default on a fault.
+  Round 19 (codex-written): `hook_owed` still read the section and the
+  fault list in two calls — a clean publish landing between them (no
+  file changed) paired a faulted "no section" with an empty fault list
+  and retired the story; config now exposes `snapshot()` (merged +
+  faults from ONE published load) and notify derives one `_policy`
+  (owed, command, section) from it for BOTH `hook_owed` and `_emit`; a
+  malformed `command` member (`[]`, `{}`, `0`, `17`, `true`) had read
+  as "confirmed no hook" — now unknown (explicit off = null, blank, or
+  `false`); `_emit` ran the hook on raw membership against an
+  unvalidated `events` (a string matched by substring, a mapping by
+  key, a mixed list by its valid member) and its clean run made `tell`
+  True where `hook_owed` said None — execution now needs the policy's
+  True; a non-numeric `timeout_seconds` no longer drops a valid hook
+  (default 30, warned); the r18 concurrency test now asserts that the
+  second loader is blocked. Recorded, not changed: `hook_owed` in
+  `tell` and `_policy` in `_emit` are still two snapshots (a file
+  changing between them is a new publish, by design); `command: false`
+  is a deliberate off switch, not a fault.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the

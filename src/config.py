@@ -195,32 +195,45 @@ def load_config(*, reload: bool = False) -> dict:
     an operator's config edit without needing a restart). Pass reload=True
     to force a re-read regardless.
     """
-    global _config_cache
     with _config_lock:
-        user_path = _user_config_path()
-        workspace_path = _workspace_config_path()
-        cache_key = (str(user_path), str(workspace_path), _mtime(user_path), _mtime(workspace_path))
+        return _load_config_locked(reload=reload)[0]
 
-        if (_config_cache is not None and not reload
-                and _config_cache[1] == cache_key and not _config_cache[2]):
-            return _config_cache[0]
 
-        faults: list[str] = []
-        user = _load_yaml(user_path, faults)
-        workspace = _load_yaml(workspace_path, faults)
+def snapshot(*, reload: bool = False) -> tuple[dict, list[str]]:
+    """Return merged config and its load faults from the same published load."""
+    # review r19: separate reads can pair faulted data with a clean publish.
+    with _config_lock:
+        merged, _, faults = _load_config_locked(reload=reload)
+        return merged, list(faults)
 
-        # Shallow merge: workspace keys override user keys.
-        # Nested dicts are merged one level deep (e.g. model.default_tier).
-        merged = dict(user)
-        for k, v in workspace.items():
-            if isinstance(v, dict) and isinstance(merged.get(k), dict):
-                merged[k] = {**merged[k], **v}
-            else:
-                merged[k] = v
 
-        # review r17: retry faults even when a repaired file keeps its mtime.
-        _config_cache = (merged, cache_key, tuple(faults))
-        return merged
+def _load_config_locked(*, reload: bool) -> tuple[dict, tuple, tuple[str, ...]]:
+    """Load or reuse the published snapshot while the caller holds the lock."""
+    global _config_cache
+    user_path = _user_config_path()
+    workspace_path = _workspace_config_path()
+    cache_key = (str(user_path), str(workspace_path), _mtime(user_path), _mtime(workspace_path))
+
+    if (_config_cache is not None and not reload
+            and _config_cache[1] == cache_key and not _config_cache[2]):
+        return _config_cache
+
+    faults: list[str] = []
+    user = _load_yaml(user_path, faults)
+    workspace = _load_yaml(workspace_path, faults)
+
+    # Shallow merge: workspace keys override user keys.
+    # Nested dicts are merged one level deep (e.g. model.default_tier).
+    merged = dict(user)
+    for k, v in workspace.items():
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
+            merged[k] = {**merged[k], **v}
+        else:
+            merged[k] = v
+
+    # review r17: retry faults even when a repaired file keeps its mtime.
+    _config_cache = (merged, cache_key, tuple(faults))
+    return _config_cache
 
 
 def get(key: str, default: Any = None) -> Any:

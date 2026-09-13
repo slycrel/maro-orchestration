@@ -5710,11 +5710,9 @@ class TestVerdictFollowup:
         # user would get a verdict for an answer they never received. The
         # finalize re-sends the full run_completed instead.
         import config as config_mod
-        _real_get = config_mod.get
         monkeypatch.setattr(
-            config_mod, "get",
-            lambda k, d=None: ({"command": "some-notify-cmd"} if k == "notify"
-                               else _real_get(k, d)))
+            config_mod, "snapshot",
+            lambda **kw: ({"notify": {"command": "some-notify-cmd"}}, []))
         events = []
         self._drive(monkeypatch, tmp_path, events, emit_returns=False)
         names = [e for e, _ in events]

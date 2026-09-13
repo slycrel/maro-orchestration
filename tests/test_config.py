@@ -603,7 +603,7 @@ def test_r18_concurrent_fault_cannot_poison_cache(monkeypatch, tmp_path):
         b.start()
         assert b_started.wait(5)
         # review r18: old loads interleave; serialized loads must wait for A.
-        b_done.wait(0.5)
+        assert not b_done.wait(0.5)
     finally:
         resume_a.set()
         a.join(5)

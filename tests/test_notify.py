@@ -31,13 +31,11 @@ def workspace(tmp_path, monkeypatch):
 
 
 def _configure_notify(monkeypatch, command, events=None, timeout=30):
-    values = {"notify.command": command, "notify.timeout_seconds": timeout}
+    import config
+    section = {"command": command, "timeout_seconds": timeout}
     if events is not None:
-        values["notify.events"] = events
-    monkeypatch.setattr(
-        notify_mod, "_config_get",
-        lambda key, default: values.get(key, default),
-    )
+        section["events"] = events
+    monkeypatch.setattr(config, "snapshot", lambda **kw: ({"notify": section}, []))
 
 
 # --- notify.emit ------------------------------------------------------------
@@ -324,3 +322,114 @@ def test_r18_summary_only_answer_reaches_journal(workspace, monkeypatch):
         "verdict_pending": True, "answer_summary": "Revenue rose 12%.",
     }) is True
     assert rows[0][1]["detail"].endswith("; Revenue rose 12%.")
+
+
+def test_r19_policy_keeps_faults_with_its_snapshot(workspace, monkeypatch):
+    import config
+    user = config._user_config_path()
+    user.parent.mkdir(parents=True, exist_ok=True)
+    user.write_text("notify: {command: some-hook}\n")
+    ws = config._workspace_config_path()
+    ws.write_text("{}\n")
+    monkeypatch.setattr(config, "_config_cache", None)
+    real_read = Path.read_text
+    real_get = config.get
+    broken = True
+
+    def read(path, *args, **kwargs):
+        # review r19: both failed reads make the old section absent.
+        if broken and path in (user, ws):
+            raise OSError("transient config read failure")
+        return real_read(path, *args, **kwargs)
+
+    def repair():
+        nonlocal broken
+        broken = False
+        config.load_config(reload=True)
+
+    def get(key, default=None):
+        value = real_get(key, default)
+        if key == "notify":
+            repair()  # a clean publish between the old section/fault reads
+        return value
+
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(config, "get", get)
+    assert notify_mod.hook_owed("run_completed") is None
+    repair()  # the snapshot reader does not call the old get seam
+    assert notify_mod.hook_owed("run_completed") is True
+
+
+@pytest.mark.parametrize("command", ["[]", "{}", "0", "17", "true"])
+def test_r19_malformed_command_stays_owed(workspace, monkeypatch, command):
+    import config
+    import observe
+    user = config._user_config_path()
+    user.parent.mkdir(parents=True, exist_ok=True)
+    user.write_text("notify: {command: user-hook}\n")
+    ws = config._workspace_config_path()
+    ws.write_text(f"notify: {{command: {command}}}\n")
+    calls = []
+    monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+    monkeypatch.setattr(notify_mod.subprocess, "run", lambda *a, **kw: calls.append(a))
+    config.load_config(reload=True)
+    assert config.load_faults() == []
+    assert notify_mod.hook_owed("run_completed") is None
+    assert notify_mod.tell("run_completed", {}) is False
+    assert calls == []
+    for disabled in ('false', '""', 'null', '"   "'):
+        ws.write_text(f"notify: {{command: {disabled}}}\n")
+        config.load_config(reload=True)
+        assert notify_mod.hook_owed("run_completed") is False
+        assert notify_mod.tell("run_completed", {}) is True
+    assert calls == []
+
+
+@pytest.mark.parametrize("events", ["run_completed_extra", "{run_completed: false}",
+                                    "[run_completed, 17]"])
+def test_r19_emit_validates_subscriptions(workspace, monkeypatch, events):
+    import config
+    import observe
+    from types import SimpleNamespace
+    ws = config._workspace_config_path()
+    calls = []
+    monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(notify_mod.subprocess, "run", run)
+    ws.write_text(f"notify: {{command: some-hook, events: {events}}}\n")
+    config.load_config(reload=True)
+    assert notify_mod.hook_owed("run_completed") is None
+    assert notify_mod.tell("run_completed", {}) is False
+    assert calls == []
+    ws.write_text("notify: {command: some-hook, events: [run_completed]}\n")
+    config.load_config(reload=True)
+    assert notify_mod.tell("run_completed", {}) is True
+    assert calls == ["some-hook"]
+    calls.clear()
+    ws.write_text("notify: {command: some-hook, events: [run_verdict]}\n")
+    config.load_config(reload=True)
+    assert notify_mod.hook_owed("run_completed") is False
+    assert notify_mod.tell("run_completed", {}) is True
+    assert calls == []
+
+
+def test_r19_invalid_timeout_uses_default(workspace, monkeypatch, caplog):
+    import config
+    from types import SimpleNamespace
+    config._workspace_config_path().write_text(
+        "notify: {command: some-hook, timeout_seconds: invalid}\n")
+    config.load_config(reload=True)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(kwargs["timeout"])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(notify_mod.subprocess, "run", run)
+    assert notify_mod.tell("run_completed", {}) is True
+    assert calls == [30]
+    assert "timeout" in caplog.text
