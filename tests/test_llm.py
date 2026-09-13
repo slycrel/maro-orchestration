@@ -4116,3 +4116,198 @@ def test_malformed_tool_result_text_and_model_usage_keep_the_answer(caplog):
     assert resp.cost_usd == 0.0
     assert [e["name"] for e in resp.tool_events] == ["Read"] and "the file" in resp.tool_events[0]["output"]
     assert "modelUsage" in caplog.text and "total_cost_usd" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Review round 16 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+_R16_AUTH = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                        "errors": ["OAuth session expired - Please run /login"],
+                        "usage": {"input_tokens": 37, "output_tokens": 9}, "total_cost_usd": 0.12})
+_R16_OK = _R15_NESTED_OK
+_R16_OAUTH = "OAuth session expired - Please run /login"
+
+
+def _r16_container_lane(monkeypatch, tmp_path):
+    """The real container-executed failure seam: `require` mode, docker
+    fine, an isolated breaker file, notifications swallowed, no sleeps."""
+    import container_exec as ce
+    import notify
+    ce.reset_container_caches()
+    monkeypatch.setattr(ce, "_auth_breaker_path", lambda: tmp_path / "breaker.json")
+    monkeypatch.setattr(ce, "_auth_notify_path", lambda: tmp_path / "notified.json")
+    monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+    monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+    monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    return ce
+
+
+def _r16_blocked_story(monkeypatch, tmp_path, stdout, rc=1):
+    """Run a container-executed capture through the real adapter; the
+    failure must be the container-auth story end to end: the class
+    marker, the breaker trip, the typed pause — and ONE launch."""
+    from llm_errors import classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for, PAUSE_ERR_CONTAINER_AUTH
+    ce = _r16_container_lane(monkeypatch, tmp_path)
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 3
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=True, stdout=stdout)) as run:
+        with pytest.raises(RuntimeError, match="claude subprocess failed") as ei:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1, "a terminal auth failure is never replayed"
+    assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+    snap = ce.auth_breaker_snapshot()
+    assert snap is not None and _R16_OAUTH in snap["reason"], snap
+    out = _blocked_outcome_from_exc(ei.value)
+    assert out["status"] == "blocked" and environmental_pause_for(out) == PAUSE_ERR_CONTAINER_AUTH
+    return ei.value, out
+
+
+def _r16_success_story(stdout, rc=0):
+    # The mirror runs after a blocked story tripped the (isolated) breaker
+    # in the same test: clear it — `require` would otherwise refuse at
+    # resolve time before the capture is ever read.
+    import container_exec as ce
+    ce.clear_auth_breaker("round-16 mirror control")
+    ce.reset_container_caches()
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=True, stdout=stdout)):
+        return a.complete([LLMMessage("user", "build a thing")], executor=True)
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_a_complete_array_document_cannot_override_the_terminal_frame(monkeypatch, tmp_path, rc):
+    # Round 16: the framer started documents only at `{`, so a complete
+    # top-level ARRAY was skipped line by line and a column-0 object inside
+    # it was promoted to an event — an auth failure followed by a
+    # diagnostic array of examples returned the example as the answer.
+    from llm import _extract_result_object, _iter_stream_documents, _parse_stream_json
+    capture = _R16_AUTH + "\n[\n" + _R16_OK + "\n]"
+    assert json.loads(capture.split("\n", 1)[1])[0]["subtype"] == "success", "fixture: a valid array"
+    assert [d["subtype"] for d in _iter_stream_documents(capture)] == ["error_during_execution"]
+    assert _extract_result_object(capture)["subtype"] == "error_during_execution"
+    assert _parse_stream_json(capture)["result"]["subtype"] == "error_during_execution"
+    _r16_blocked_story(monkeypatch, tmp_path, capture, rc=rc)
+    # mirror: an array of error examples after the real success is data
+    mirror = _R16_OK + "\n[\n  " + _R15_NESTED_ERR + ",\n" + _R15_NESTED_ERR + "\n]"
+    assert _extract_result_object(mirror)["subtype"] == "success"
+    assert _r16_success_story(mirror, rc=rc).content == "diagnostic example: finished"
+    # a lone array is no event at all; a torn array still shields its lines
+    assert list(_iter_stream_documents("[\n" + _R16_OK + "\n]")) == []
+    assert _extract_result_object("[\n" + _R16_OK + "\n]") is None
+
+
+@pytest.mark.parametrize("sep", [" ", " ", "", "\x0c", "\x1c", "\r"])
+def test_a_unicode_separator_is_not_a_transport_newline(monkeypatch, tmp_path, sep):
+    # Round 16: `splitlines()` breaks on U+2028 and friends, so a brace
+    # after one INSIDE a diagnostic line became "column 0" — the protocol
+    # frames on LF alone (the repo's JSONL rule; see gc_memory/interrupt).
+    from llm import _extract_result_object, _iter_stream_documents, _parse_stream_json
+    capture = _R16_AUTH + "\ndiagnostic: " + sep + _R16_OK
+    assert [d["subtype"] for d in _iter_stream_documents(capture)] == ["error_during_execution"]
+    assert _parse_stream_json(capture)["result"]["subtype"] == "error_during_execution"
+    _r16_blocked_story(monkeypatch, tmp_path, capture)
+    # positive control: the same two documents on real transport lines
+    plain = _R16_AUTH + "\n" + _R16_OK
+    assert [d["subtype"] for d in _iter_stream_documents(plain)] == ["error_during_execution", "success"]
+    assert _extract_result_object(plain)["subtype"] == "success"
+    # CRLF transport still frames (the CR is line-trailing whitespace)
+    crlf = _R16_AUTH + "\r\n" + _R16_OK + "\r\n"
+    assert [d["subtype"] for d in _iter_stream_documents(crlf)] == ["error_during_execution", "success"]
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_a_document_with_trailing_prose_is_not_an_event(monkeypatch, tmp_path, rc):
+    # Round 16: `raw_decode` stops at the closing brace, so a line that
+    # quoted a result object and went on in prose ("... not a JSON
+    # document") framed as the terminal event. A document must end its
+    # transport line; a quoted one is consumed, never yielded.
+    from llm import _extract_result_object, _iter_stream_documents, _parse_stream_json
+    capture = _R16_AUTH + "\n" + _R16_OK + " not a JSON document"
+    assert [d["subtype"] for d in _iter_stream_documents(capture)] == ["error_during_execution"]
+    assert _parse_stream_json(capture)["result"]["subtype"] == "error_during_execution"
+    _r16_blocked_story(monkeypatch, tmp_path, capture, rc=rc)
+    # mirror: a quoted error document after the real success
+    mirror = _R16_OK + "\n" + _R15_NESTED_ERR + " is the shape the CLI prints on expiry"
+    assert _extract_result_object(mirror)["subtype"] == "success"
+    assert _r16_success_story(mirror, rc=rc).content == "diagnostic example: finished"
+    # trailing whitespace after a document is not prose
+    assert _extract_result_object(_R16_OK + "   \t\n")["subtype"] == "success"
+    # a quoted multi-line document shields its column-0 inner lines
+    quoted = ('{\n  "type": "result",\n  "subtype": "error_during_execution",\n  "is_error": true,\n'
+              '  "errors": [\n' + _R16_OK + '\n  ]\n} was the capture\n' + _R16_AUTH)
+    assert [d["subtype"] for d in _iter_stream_documents(quoted)] == ["error_during_execution"]
+    assert _extract_result_object(quoted)["errors"] == [_R16_OAUTH]
+
+
+def test_leading_whitespace_is_read_as_written(monkeypatch, tmp_path):
+    # Round 16: `.strip()` moved an indented first line to column 0 — the
+    # capture is framed as written; only leading blank transport lines
+    # are (naturally) skipped.
+    from llm import _extract_result_object, _iter_stream_documents
+    capture = "   " + _R16_OK + "\n" + _R16_AUTH
+    assert [d["subtype"] for d in _iter_stream_documents(capture)] == ["error_during_execution"]
+    _r16_blocked_story(monkeypatch, tmp_path, capture)
+    assert _extract_result_object("\n\n" + _R16_OK + "\n")["subtype"] == "success"
+    assert _r16_success_story("\n\n" + _R16_OK + "\n").content == "diagnostic example: finished"
+
+
+def test_an_auth_failure_behind_a_long_diagnostic_still_pauses(monkeypatch, tmp_path):
+    # Round 16: the two auth checks read the DISPLAY rendering's first
+    # 4000 chars, so an explicit OAuth failure after a long diagnostic in
+    # `errors[]` classified as fatal — or, with "rate limit" in the
+    # diagnostic, bought another subprocess launch.
+    from llm import _rate_limited_failure, _terminal_auth_field, _terminal_error_fields
+    long_diag = "diagnostic: " + "x" * 4100 + " (the request hit a rate limit upstream)"
+    env = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                      "errors": [long_diag, _R16_OAUTH]})
+    obj = json.loads(env)
+    assert _terminal_error_fields(obj) == [long_diag, _R16_OAUTH]
+    assert _terminal_auth_field(obj) == _R16_OAUTH
+    assert _rate_limited_failure(env) is False
+    exc, out = _r16_blocked_story(monkeypatch, tmp_path, env)
+    assert _R16_OAUTH in str(exc) or "diagnostic" in str(exc)  # the display detail is bounded, not the class
+
+
+def test_an_auth_failure_in_errors_survives_a_nonempty_result(monkeypatch, tmp_path):
+    # Round 16: `_terminal_error_text` prefers `result` for DISPLAY; that
+    # preference must not decide classification — partial-work text in
+    # `result` hid the OAuth failure carried in `errors[]`.
+    from llm import _rate_limited_failure, _terminal_auth_field, _terminal_error_text
+    env = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                      "result": "Read two messages before the rate limit hit.",
+                      "errors": [_R16_OAUTH]})
+    obj = json.loads(env)
+    assert _terminal_error_text(obj) == "Read two messages before the rate limit hit."  # display, unchanged
+    assert _terminal_auth_field(obj) == _R16_OAUTH
+    assert _rate_limited_failure(env) is False
+    exc, out = _r16_blocked_story(monkeypatch, tmp_path, env)
+    assert "Read two messages" in str(exc)
+
+
+def test_a_long_non_auth_diagnostic_is_not_an_auth_story(monkeypatch, tmp_path):
+    # Negative control for the two tests above: the same long diagnostic
+    # WITHOUT an auth field is what it says — a rate-limit retry, then a
+    # non-auth failure; the breaker stays clear.
+    from llm import _rate_limited_failure, _terminal_auth_field
+    from llm_errors import classify_error
+    long_diag = "diagnostic: " + "x" * 4100 + " (the request hit a rate limit upstream)"
+    env = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                      "result": "partial work", "errors": [long_diag]})
+    assert _terminal_auth_field(json.loads(env)) is None
+    assert _rate_limited_failure(env) is True
+    ce = _r16_container_lane(monkeypatch, tmp_path)
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=True, stdout=env)) as run:
+        with pytest.raises(RuntimeError) as ei:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 2, "a genuine rate-limit story still gets its backoff retry"
+    assert classify_error(ei.value, backend="subprocess").error_class != "container_auth"
+    assert ce.auth_breaker_snapshot() is None

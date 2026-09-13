@@ -2192,33 +2192,44 @@ def _bounded_int(s: str) -> Any:
 
 def _iter_stream_documents(text: str) -> Iterator[dict]:
     """The top-level JSON documents of a claude CLI capture — the ONE event
-    boundary every reader shares (review rounds 12–15, 2026-09-13).
+    boundary every reader shares (review rounds 12–16, 2026-09-13).
 
-    A document starts where a line begins with `{` at column 0: a
-    stream-json NDJSON event and a pretty-printed `--output-format json`
-    object alike. Everything the decoder consumes from there belongs to
-    that document, so nested objects — pretty or compact, on their own
-    line or not — are data, never events. Text before a brace on the same
-    line is not a protocol event; indented lines are never top-level;
-    lines that do not decode (plain text, a torn trailing line) are
-    skipped. Malformed integers decode as +inf (see `_bounded_int`).
+    A document starts where a transport line (LF-delimited — the protocol's
+    own boundary, never `splitlines()`' Unicode separators) begins with `{`
+    or `[` at column 0, and it must END its line: a decoded value followed
+    by anything but whitespace on the same line is prose that quoted JSON,
+    consumed but never an event. Everything the decoder consumes from a
+    start belongs to that document, so nested objects — pretty or compact,
+    on their own line or not, inside an object or an array — are data,
+    never events. Only object documents are yielded. Text before a bracket
+    on the same line is not a protocol event; indented lines are never
+    top-level (the capture is read as written, no whitespace
+    normalization); lines that do not decode (plain text, a torn trailing
+    line) are skipped. Malformed integers decode as +inf (see
+    `_bounded_int`).
     """
-    text = (text or "").strip()
+    text = text or ""
     # Constructed here, not at module level: the destructive-rewrite and
     # silent-drop scanners census a decoder they can see bound in scope.
     decoder = json.JSONDecoder(parse_int=_bounded_int)
+    n = len(text)
     pos = 0
     skip_until = 0
-    for line in text.splitlines(keepends=True):
+    while pos < n:
         start = pos
-        pos += len(line)
-        if start < skip_until or not line.startswith("{"):
+        nl = text.find("\n", start)
+        pos = n if nl < 0 else nl + 1
+        if start < skip_until or text[start] not in "{[":
             continue
         try:
             data, end = decoder.raw_decode(text, start)  # `end` is absolute
         except ValueError:  # JSONDecodeError and any other decode failure
             continue
         skip_until = end
+        tail_nl = text.find("\n", end)
+        tail = text[end:n if tail_nl < 0 else tail_nl]
+        if tail.strip():
+            continue  # a value with prose after it on its line is not an event
         if isinstance(data, dict):
             yield data
 
@@ -2286,6 +2297,46 @@ def _terminal_error_text(obj: Optional[dict]) -> str:
     return ""
 
 
+def _terminal_error_fields(obj: Optional[dict]) -> List[str]:
+    """EVERY text field of a terminal CLI error result — `result` AND each
+    `errors[]` entry — for CLASSIFICATION (review round 16, 2026-09-13:
+    `_terminal_error_text` is the display rendering, one envelope or the
+    other, and the two auth checks read its first 4000 chars; an explicit
+    OAuth failure behind a nonempty partial-work `result` or a long
+    diagnostic in `errors[0]` was classified fatal/retryable and the
+    breaker never learned). Fields are unbounded here — CLI-authored,
+    matched by substring — and bounded only where they are displayed."""
+    if not isinstance(obj, dict):
+        return []
+    fields: List[str] = []
+    text = obj.get("result")
+    if isinstance(text, str) and text.strip():
+        fields.append(text)
+    errors = obj.get("errors")
+    if isinstance(errors, list):
+        for e in errors:
+            if not e:
+                continue
+            part = e if isinstance(e, str) else json.dumps(e, default=str)
+            if part.strip():
+                fields.append(part)
+    return fields
+
+
+def _terminal_auth_field(obj: Optional[dict]) -> Optional[str]:
+    """The first terminal error field naming an auth failure (see
+    `container_exec.is_auth_error_text`), or None: the ONE auth reading the
+    retry predicate, the breaker note and the class marker share."""
+    try:
+        from container_exec import is_auth_error_text
+    except Exception:
+        return None
+    for field in _terminal_error_fields(obj):
+        if is_auth_error_text(field):
+            return field
+    return None
+
+
 def _terminal_failure(stdout: str) -> bool:
     """Did the CLI's terminal result object say `is_error: true`? The payload
     is ground truth in BOTH directions (review round 8, 2026-09-13): a
@@ -2336,15 +2387,11 @@ def _rate_limited_failure(stdout: str) -> bool:
         # an `error_max_turns` behind a rejected rate_limit_event bought a
         # replay of an executor call that had already done its work). It
         # is a rate-limit story only if the failure itself says so.
-        _terminal = _terminal_error_text(obj)
-        if _terminal:
-            try:
-                from container_exec import is_auth_error_text
-                if is_auth_error_text(_terminal[:4000]):
-                    return False
-            except Exception:
-                pass
-        _tl = (_terminal or "").lower()
+        # Every text field, in full (round 16): an auth failure behind a
+        # partial-work `result` or a long diagnostic decides here too.
+        if _terminal_auth_field(obj) is not None:
+            return False
+        _tl = "\n".join(_terminal_error_fields(obj)).lower()
         _subtype = str(obj.get("subtype") or "").lower()
         return bool("hit your limit" in _tl or "rate limit" in _tl or "rate_limit" in _tl
                     or "rate_limit" in _subtype)
@@ -3262,11 +3309,18 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         # The breaker searches DEEPER than the 300-char
                         # display detail (skeptic review 2026-08-13: an auth
                         # message past byte 300 silently missed the trip).
-                        # Structured CLI error text is CLI-authored → safe to
-                        # search in full; the raw-stdout fallback stays
-                        # shallower to bound false-positive surface.
-                        if _err_text:
-                            _breaker_text = _err_text[:4000]
+                        # Structured CLI error text is CLI-authored → every
+                        # field, in full, and the auth-naming field itself
+                        # is the breaker's reason (round 16: the display
+                        # rendering's first 4000 chars hid an auth failure
+                        # behind a partial `result` or a long diagnostic);
+                        # the raw-stdout fallback stays shallower to bound
+                        # false-positive surface.
+                        _auth_field = _terminal_auth_field(_err_obj)
+                        if _auth_field is not None:
+                            _breaker_text = _auth_field
+                        elif _err_text:
+                            _breaker_text = _err_text
                         else:
                             _breaker_text = result.stdout.strip()[:2000]
                         note_container_failure(_breaker_text)

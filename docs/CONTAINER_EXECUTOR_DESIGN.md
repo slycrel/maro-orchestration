@@ -719,6 +719,46 @@ the silent-drop census now counts (`decoder.raw_decode` registered as a
 parse call; REVIEWED entry); the destructive-rewrite scanner classifies
 none of the four as a RISK site any more, so the manifest lists none.
 
+*Review round 16 (2026-09-13, codex skeptic + QA, whole chunk): two
+HIGHs on the round-15 framer's boundary rule, one HIGH on auth
+classification, one MED; all fixed.* (lxix) **The framer consumes every
+top-level document, frames on the transport newline, and requires a
+document to end its line.** Three ways a diagnostic could still be
+promoted to the terminal event: a complete top-level ARRAY was skipped
+line by line (only `{` started a document), so a column-0 success
+object inside it framed as an event and outranked the real auth-error
+frame; `splitlines()` breaks on U+2028/U+2029/U+0085/form-feed, so a
+brace after one of those INSIDE a diagnostic line was "column 0"; and
+`raw_decode` stops at the closing brace, so a line that quoted a result
+object and went on in prose framed. Now a document starts at `{` OR `[`
+on an LF-delimited line (the repo's JSONL rule — `split("\n")`, never
+`splitlines()`), is consumed whole whatever it contains, and is an event
+only if nothing but whitespace follows it on its line; arrays and quoted
+documents are consumed, never yielded; the capture is read as written
+(no `.strip()` moving an indented first line to column 0). Pinned
+through the real adapter on the container lane (breaker trip, class
+marker, typed pause, ONE launch) for the array, six separators, the
+trailing-prose and the leading-indent shapes, each with a mirror control
+(the error shape after a real success stays data) and LF/CRLF positive
+controls. The accepted residual stands: a column-0 compact object inside
+a TORN document still frames. (lxx) **Auth classification reads every
+terminal error field, in full.** `_terminal_error_text` is the display
+rendering — `result` if present, else `errors[]` joined — and the retry
+predicate and the breaker both matched auth text against its first 4000
+chars: an explicit OAuth failure behind a nonempty partial-work `result`,
+or behind a long diagnostic in `errors[0]`, classified `fatal` (no
+breaker, no typed pause) — or, with "rate limit" in the diagnostic,
+bought another subprocess launch. `_terminal_error_fields` lists every
+field (unbounded; CLI-authored, substring-matched) and
+`_terminal_auth_field` is the one auth reading the predicate, the
+breaker note (the auth-naming field IS the recorded reason) and the
+class marker share; the display detail stays bounded and unchanged.
+Pinned: auth after a 4100-char diagnostic, auth beside a nonempty
+result (both: one launch, `container_auth`, breaker reason names OAuth,
+`container-auth-expired`), and the negative control — the same long
+diagnostic without an auth field is a rate-limit retry then a non-auth
+failure with the breaker clear.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to
