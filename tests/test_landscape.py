@@ -2759,7 +2759,7 @@ class TestTheStoryIsItsOwnObligation:
         from audit_repair import sweep_untold_finalizes, sweep_verdict_orphans
         emitted = []
         monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: emitted.append((kind, payload.get("handle_id"))) or True)
-        monkeypatch.setattr(notify, "hook_configured", lambda kind: False)
+        monkeypatch.setattr(notify, "hook_owed", lambda kind: False)
         now = datetime.now(timezone.utc)
         old = (now - timedelta(hours=2)).isoformat()
         resolved = {"since": old, "loop_id": "lr-1", "notified_early": True, "resolved_at": old}
@@ -2812,7 +2812,7 @@ class TestTheStoryIsItsOwnObligation:
         _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
         # a CONFIGURED hook that fails: the attempt is not the story
         monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: False)
-        monkeypatch.setattr(notify, "hook_configured", lambda kind: True)
+        monkeypatch.setattr(notify, "hook_owed", lambda kind: True)
         r, _ = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
         meta = _meta(r.handle_id)
         assert meta["finalized_at"] and meta["verdict_pending"]["resolved_at"]
@@ -2831,7 +2831,7 @@ class TestTheStoryIsItsOwnObligation:
         (projects_root() / "board-reports").mkdir(parents=True)
         _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
         monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: False)
-        monkeypatch.setattr(notify, "hook_configured", lambda kind: False)
+        monkeypatch.setattr(notify, "hook_owed", lambda kind: False)
         r2, _ = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
         assert _meta(r2.handle_id)["final_notified_at"]
 
@@ -2896,7 +2896,7 @@ class TestTheRecoveryTellsTheTrueStory:
         from audit_repair import sweep_untold_finalizes
         emitted = []
         monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: emitted.append((kind, dict(payload))) or True)
-        monkeypatch.setattr(notify, "hook_configured", lambda kind: False)
+        monkeypatch.setattr(notify, "hook_owed", lambda kind: False)
         old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
         resolved = {"since": old, "loop_id": "lr-1", "notified_early": True, "resolved_at": old}
         # the process died between the final close and the curation: the
@@ -2962,7 +2962,7 @@ class TestTheRecoveryTellsTheTrueStory:
             return False
 
         monkeypatch.setattr(notify, "emit", failing)
-        monkeypatch.setattr(notify, "hook_configured", lambda kind: True)
+        monkeypatch.setattr(notify, "hook_owed", lambda kind: True)
         assert sweep_verdict_orphans(grace_s=0)["stamped"] == 3
         for hid in (judged, unjudged, dies):
             m = _meta(hid)
@@ -3000,7 +3000,7 @@ class TestTheRecoveryTellsTheTrueStory:
         assert _pid_alive(2 ** 80) is False and _pid_alive(-1) is False
         emitted = []
         monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: emitted.append(payload.get("handle_id")) or True)
-        monkeypatch.setattr(notify, "hook_configured", lambda kind: False)
+        monkeypatch.setattr(notify, "hook_owed", lambda kind: False)
         now = datetime.now(timezone.utc)
         resolved = {"since": "2026-09-13T00:00:00+00:00", "notified_early": False, "resolved_at": "x"}
         # both young under a 4 h grace: the impossible pid sorts first (older)
@@ -3022,7 +3022,7 @@ class TestTheRecoveryTellsTheTrueStory:
         from audit_repair import sweep_untold_finalizes
         attempts = []
         monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: attempts.append(payload.get("handle_id")) or False)
-        monkeypatch.setattr(notify, "hook_configured", lambda kind: True)
+        monkeypatch.setattr(notify, "hook_owed", lambda kind: True)
         base = datetime.now(timezone.utc) - timedelta(hours=3)
         resolved = {"since": "2026-09-13T00:00:00+00:00", "notified_early": False, "resolved_at": "x"}
         ids = []
@@ -3136,13 +3136,13 @@ class TestTheStoryIsAcknowledgedByItsChannel:
         assert notify.tell("run_completed", {"handle_id": "x", "status": "done"}) is False
         monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
         assert notify.tell("run_completed", {"handle_id": "x", "status": "done"}) is True
-        monkeypatch.setattr(notify, "hook_configured", lambda kind: True)
+        monkeypatch.setattr(notify, "hook_owed", lambda kind: True)
         monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: False)
         assert notify.tell("run_completed", {"handle_id": "x"}) is False  # the hook is owed, and failed
         monkeypatch.setattr(observe, "write_event", lambda *a, **kw: False)
         monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: True)
         assert notify.tell("run_completed", {"handle_id": "x"}) is True  # the hook is owed, and delivered
-        monkeypatch.setattr(notify, "hook_configured", lambda kind: False)
+        monkeypatch.setattr(notify, "hook_owed", lambda kind: False)
 
         def torn(*a, **kw):
             raise OSError("journal unwritable")
@@ -3198,3 +3198,174 @@ class TestTheStoryIsAcknowledgedByItsChannel:
         m = _meta(hid)
         assert m["verdict_pending"]["resolved_at"] and m["final_notified_by"] == "verdict_orphan_sweep"
         assert sweep_untold_finalizes(grace_s=0)["told"] == 0 and len(told) == 1
+
+
+class TestEverySenderKeepsTheSameWord:
+    """Review round 16 (2026-09-13): the lifecycle rules hold at EVERY
+    sender — the finalize does not acknowledge a story told over a kept
+    resolution (the resolver tells the verdict); its fallback payload is
+    the record; the early answer records its owed channel's word and the
+    routers read it; the journal row carries a bare story's verdict; an
+    unknowable channel acknowledges nothing."""
+
+    def test_the_finalize_does_not_acknowledge_a_story_told_over_a_kept_resolution(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import os
+        import runs
+        import notify
+        import handle as handle_mod
+        from audit_repair import drain_kept_writes, sweep_untold_finalizes, sweep_verdict_orphans
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        real_for = runs.revise_run_metadata_for
+
+        def refusing_resolution(hid, fn):
+            fields = fn(_meta(hid))
+            vp = fields.get("verdict_pending")
+            if isinstance(vp, dict) and vp.get("resolved_at"):
+                return None
+            return real_for(hid, fn)
+
+        monkeypatch.setattr(runs, "revise_run_metadata_for", refusing_resolution)
+        told = []
+        monkeypatch.setattr(notify, "tell", lambda kind, payload, **kw: told.append((kind, dict(payload))) or True)
+        r, _ = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        meta = _meta(r.handle_id)
+        assert meta["finalized_at"] and not meta["verdict_pending"].get("resolved_at")
+        assert r.handle_id in handle_mod._UNSETTLED_TRANSITIONS
+        # the channel acknowledged the PENDING story; that is not the final one
+        assert told and "final_notified_at" not in meta, meta.get("final_notified_at")
+        n0 = len(told)
+        # (a) this process drains: the resolution carries the owed story, and the
+        #     untold sweep tells it now — the owner is alive, but its finalize is over
+        runs.stamp_run_metadata_for(r.handle_id, {"pid": os.getpid()})
+        monkeypatch.setattr(runs, "revise_run_metadata_for", real_for)
+        assert drain_kept_writes()["retried"] == 1
+        m = _meta(r.handle_id)
+        assert m["verdict_pending"]["resolved_at"] and m["story_owed_at"] and "final_notified_at" not in m
+        assert sweep_untold_finalizes(grace_s=3600) == {"status": "completed", "told": 1, "considered": 1}
+        assert len(told) == n0 + 1 and told[-1][1]["handle_id"] == r.handle_id
+        assert told[-1][1].get("success_class") != "done-verdict-pending" and not told[-1][1].get("verdict_pending")
+        assert _meta(r.handle_id)["final_notified_by"] == "untold_finalize_sweep"
+        assert sweep_verdict_orphans(grace_s=0)["stamped"] == 0 and sweep_untold_finalizes(grace_s=0)["told"] == 0
+        # (b) another process's verdict sweep resolves first: it tells and records
+        _setup(monkeypatch, tmp_path / "two")
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        monkeypatch.setattr(runs, "revise_run_metadata_for", refusing_resolution)
+        told.clear()
+        r2, _ = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        monkeypatch.setattr(runs, "revise_run_metadata_for", real_for)
+        runs.stamp_run_metadata_for(r2.handle_id, {"pid": os.getpid()})
+        assert "final_notified_at" not in _meta(r2.handle_id)
+        n1 = len(told)
+        assert sweep_verdict_orphans(grace_s=10 ** 9)["stamped"] == 1
+        m2 = _meta(r2.handle_id)
+        assert m2["verdict_pending"]["resolved_at"] and m2["final_notified_by"] == "verdict_orphan_sweep"
+        assert len(told) == n1 + 1 and told[-1][1].get("success_class") != "done-verdict-pending"
+        handle_mod._UNSETTLED_TRANSITIONS.pop(r2.handle_id, None)
+
+    def test_the_finalizes_fallback_payload_is_the_record(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import notify
+        import run_curation
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+
+        def boom(*a, **kw):
+            raise OSError("curation unavailable")
+
+        monkeypatch.setattr(run_curation, "curate_run", boom)
+        monkeypatch.setattr(run_curation, "refresh_run_card_classification", boom)
+        told = []
+        monkeypatch.setattr(notify, "tell", lambda kind, payload, **kw: told.append((kind, dict(payload))) or True)
+        r, _ = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        meta = _meta(r.handle_id)
+        assert meta["finalized_at"] and meta["verdict_pending"]["resolved_at"]
+        kind, p = told[-1]
+        assert p["handle_id"] == r.handle_id and p["status"] == meta["status"]
+        assert "goal_achieved" in p and "goal_verdict_source" in p and p["goal"], p
+        assert p["goal_achieved"] == meta.get("goal_achieved") and p["goal_verdict_source"] == meta.get("goal_verdict_source")
+        assert meta["final_notified_at"]
+
+    def test_an_unknowable_channel_acknowledges_nothing(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import config as config_mod
+        import notify
+        import observe
+        monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+        real_get = config_mod.get
+        cfg = {}
+
+        def get(k, d=None):
+            if k in cfg:
+                v = cfg[k]
+                if isinstance(v, Exception):
+                    raise v
+                return v
+            return real_get(k, d)
+
+        monkeypatch.setattr(config_mod, "get", get)
+        payload = {"handle_id": "x", "status": "done"}
+        cfg["notify.command"] = OSError("config unreadable")
+        assert notify.hook_owed("run_completed") is None and notify.hook_configured("run_completed") is False
+        assert notify.tell("run_completed", payload) is False
+        cfg["notify.command"] = "some-hook"
+        cfg["notify.events"] = 17
+        assert notify.hook_owed("run_completed") is None
+        assert notify.tell("run_completed", payload) is False
+        cfg["notify.events"] = "run_completed"
+        assert notify.hook_owed("run_completed") is None
+        cfg["notify.events"] = ["run_completed"]
+        assert notify.hook_owed("run_completed") is True and notify.hook_owed("run_verdict") is False
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: True)
+        assert notify.tell("run_completed", payload) is True
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: False)
+        assert notify.tell("run_completed", payload) is False
+        cfg["notify.command"] = ""
+        assert notify.hook_owed("run_completed") is False
+        assert notify.tell("run_completed", payload) is True  # the journal's word
+        monkeypatch.setattr(observe, "write_event", lambda *a, **kw: False)
+        assert notify.tell("run_completed", payload) is False
+
+    def test_the_journal_row_carries_the_bare_story(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import notify
+        import observe
+        rows = []
+        monkeypatch.setattr(observe, "write_event", lambda kind, **kw: rows.append((kind, kw)) or True)
+        bare = {"handle_id": "abc12345", "status": "done", "goal": "Deliver the report",
+                "goal_achieved": False, "goal_verdict_source": "closure"}
+        assert notify.tell("run_completed", bare) is True
+        assert rows[-1][0] == "run_completed" and rows[-1][1]["status"] == "done"
+        assert rows[-1][1]["detail"] == "[abc12345] goal_achieved=False source=closure", rows[-1]
+        card = {**bare, "result_excerpt": "Revenue rose 12%."}
+        notify.tell("run_completed", card)
+        assert rows[-1][1]["detail"] == "Revenue rose 12%."
+        notify.tell("run_verdict", bare)
+        assert rows[-1][1]["detail"].startswith("[abc12345] goal_achieved=False source=closure")
+
+    def test_a_failed_early_journal_is_not_an_answer_that_reached(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from datetime import datetime, timezone, timedelta
+        import runs
+        import notify
+        from audit_repair import sweep_untold_finalizes
+        early = notify.early_reached
+        assert early({"notified_early": True, "early_told": False, "hook_configured": False, "hook_delivered": False}) is False
+        assert early({"notified_early": True, "early_told": True, "hook_configured": True, "hook_delivered": True}) is True
+        # markers from before the word: reached unless a configured hook failed
+        assert early({"notified_early": True, "hook_configured": True, "hook_delivered": False}) is False
+        assert early({"notified_early": True, "hook_configured": False, "hook_delivered": False}) is True
+        assert early({"notified_early": False, "early_told": True}) is False and early(None) is False
+        old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        hid = _finished_run(GOAL_QUARTERLY, "A.", extra={
+            "verdict_pending": {"since": old, "notified_early": True, "early_told": False, "resolved_at": old},
+            "finalized_at": old, "goal_verdict_source": "closure", "goal_achieved": True})
+        runs.stamp_run_metadata_for(hid, {"pid": _dead_pid()})
+        told = []
+        monkeypatch.setattr(notify, "tell", lambda kind, payload, **kw: told.append(kind) or True)
+        assert sweep_untold_finalizes(grace_s=0)["told"] == 1
+        assert told == ["run_completed"], told  # the full answer, not a verdict for an answer never received

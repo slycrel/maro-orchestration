@@ -5712,6 +5712,33 @@ class TestVerdictFollowup:
         assert names.count("run_completed") == 2
         assert "run_verdict" not in names
 
+    def test_failed_early_journal_downgrades_to_full_completion(
+            self, monkeypatch, tmp_path):
+        # Review 2026-09-13 r16: with NO hook the journal row is the early
+        # answer's whole channel; a row that failed to write is not an
+        # answer that reached anyone, so the finalize re-sends the full
+        # run_completed — never a verdict for an answer never received.
+        import observe
+        rows = {"n": 0}
+
+        def flaky_journal(kind, **kw):
+            rows["n"] += 1
+            return rows["n"] > 1  # the first row (the early answer) is lost
+
+        monkeypatch.setattr(observe, "write_event", flaky_journal)
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events, emit_returns=True)
+        names = [e for e, _ in events]
+        assert names.count("run_completed") == 2
+        assert "run_verdict" not in names
+        import json as _json
+        from runs import run_dir as _run_dir
+        meta = _json.loads(
+            (_run_dir(result.handle_id) / "metadata.json").read_text())
+        vp = meta.get("verdict_pending") or {}
+        assert vp.get("notified_early") is True and vp.get("early_told") is False
+        assert meta.get("final_notified_at")
+
     def test_non_done_terminal_keeps_synchronous_ordering(
             self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))

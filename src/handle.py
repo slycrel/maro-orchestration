@@ -1145,10 +1145,18 @@ def handle(
                     # run_completed — a verdict for an answer the user never
                     # received is worse than a late answer (review
                     # 2026-08-13).
-                    _early_reached = bool(
-                        _vp_meta.get("notified_early")
-                        and (not _vp_meta.get("hook_configured")
-                             or _vp_meta.get("hook_delivered")))
+                    from notify import early_reached as _early_reached_fn
+                    _early_reached = _early_reached_fn(_vp_meta)
+                    if _card is None:
+                        # curation failed: the record's own verdict is
+                        # the story, never an id (review r16 — the
+                        # sweeps' fallback, shared)
+                        try:
+                            from audit_repair import _story_payload as _fallback_story
+                            _card = _fallback_story(_hid, _run_dir_notify(_hid), None,
+                                                    by="finalize")
+                        except Exception:
+                            _card = None
                     if _early_reached:
                         _payload = dict(_card or {"handle_id": _hid,
                                                   "status": _status})
@@ -1194,7 +1202,14 @@ def handle(
                     # delivery evidence (review r12). A record that fails
                     # to stamp errs toward a repeated notify, never a
                     # missing one.
-                    _told = bool(_delivered)
+                    # ...and never while this run's resolving write is
+                    # still KEPT (`_written is None`): the card told then
+                    # is the pending one, and the resolver — this
+                    # process's drain, or any verdict sweep — tells the
+                    # verdict and records that (review r16: the finalize
+                    # acknowledged "verdict pending" as the final story
+                    # and the repaired verdict was never told).
+                    _told = bool(_delivered) and _written is not None
                     if _told:
                         try:
                             from runs import stamp_run_metadata_for as _srm_told
@@ -1202,6 +1217,9 @@ def handle(
                                 timezone.utc).isoformat()})
                         except Exception:
                             pass
+                    elif _written is None:
+                        log.warning("finalize for %s told %s over a kept resolution; "
+                                    "the resolver tells the verdict", _hid, _kind)
                     else:
                         log.warning("the owed notify channel did not acknowledge %s for %s; "
                                     "the untold-finalize sweep retries it", _kind, _hid)
@@ -2964,7 +2982,7 @@ def _handle_impl(
                                                        status="done")
                     _early_answer = str(
                         (_card_early or {}).get("answer_summary", "") or "")
-                    from notify import emit as _notify_early
+                    from notify import tell as _notify_early
                     _delivered = _notify_early(
                         "run_completed",
                         _card_early or {"handle_id": _hid_early,
@@ -2972,16 +2990,20 @@ def _handle_impl(
                                         "verdict_pending": True},
                         run_dir=str(_run_dir_early(_hid_early)),
                     )
-                    # emit() returns True only when the notify HOOK ran
-                    # cleanly; False also means "no hook configured" (the
-                    # event still journals to events.jsonl). Record both
-                    # facts: the finalize downgrades run_verdict back to a
-                    # full run_completed when a CONFIGURED hook failed to
-                    # deliver — otherwise the user's only external message
-                    # would be a verdict for an answer they never received
-                    # (review 2026-08-13, the breaker's at-most-once-
-                    # attempted class again).
+                    # tell() returns the OWED channel's word: the hook
+                    # ran cleanly when one is configured for the event,
+                    # else the journal row was written (review r16: a
+                    # failed journal row with no hook had been recorded
+                    # as an answer that reached the user, and the
+                    # follow-up then carried only the verdict). Recorded
+                    # as `early_told`; the finalize and the repair sweeps
+                    # route run_verdict only when it is True — otherwise
+                    # the full run_completed, so the user's only external
+                    # message is never a verdict for an answer they never
+                    # received (review 2026-08-13). `hook_delivered` /
+                    # `hook_configured` stay for markers' legacy readers.
                     _vp_marker["notified_early"] = True
+                    _vp_marker["early_told"] = bool(_delivered)
                     _vp_marker["hook_delivered"] = bool(_delivered)
                     try:
                         from config import get as _nc_get

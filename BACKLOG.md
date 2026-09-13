@@ -6684,7 +6684,24 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   run is the verdict sweep's, told on resolution (telling the pending
   card first acknowledged it, and the resolved verdict was then never
   told; a ledger that never recovers keeps that story waiting on the
-  verdict, the never-clear-the-flag-first direction). Direction
+  verdict, the never-clear-the-flag-first direction). Round 16: the
+  same word at EVERY sender — the early answer's sender uses `tell`
+  and records `early_told` (a failed journal row with no hook had been
+  recorded as an answer that reached the user, and the follow-up then
+  carried only the verdict); `notify.early_reached(marker)` is the one
+  router for the finalize and both sweeps (legacy markers read the
+  old way); the finalize's fallback payload is `_story_payload` (its
+  id-only substitute acknowledged an empty story); the finalize does
+  NOT stamp `final_notified_at` while its resolving write is kept —
+  the pending card it told is not the final story; the resolver (this
+  process's drain → `story_owed_at`, or any verdict sweep) tells the
+  verdict and records that, and the untold sweep skips its liveness
+  gate for a `story_owed_at` record (a repair wrote it: the owner's
+  finalize is over); the journal row for a bare `run_completed` story
+  carries `[handle] goal_achieved=… source=…`; `notify.hook_owed`
+  returns None when the config cannot be read or `notify.events` is
+  not a list of names, and `tell` then acknowledges nothing but a
+  clean hook run (both had read as "no hook owed"). Direction
   recorded: a
   settlement that fails in the run AND at the finalize is kept for the
   sweep's retry in the same process; only a process death loses it, and

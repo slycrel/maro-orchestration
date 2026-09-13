@@ -132,19 +132,51 @@ def _write_escalation_file(event_type: str, payload: dict) -> None:
     locked_append(escalations_path(), json.dumps(entry, default=str))
 
 
+def hook_owed(event_type: str) -> Optional[bool]:
+    """Whether a notify.command lane is owed `event_type`: True when one
+    is configured AND subscribes to it, False when there is confirmed no
+    such lane, None when that cannot be known — the config could not be
+    read, or `notify.events` is not a list of names (review 2026-09-13
+    r16: both had read as "no hook owed", and a journal row then
+    acknowledged a story the configured recipient never got)."""
+    try:
+        from config import get as _get
+        command = str(_get("notify.command", "") or "").strip()
+        if not command:
+            return False
+        events = _get("notify.events", DEFAULT_EVENTS)
+        if events is None or events == "" or events == []:
+            events = DEFAULT_EVENTS
+        if isinstance(events, str) or not isinstance(events, (list, tuple, set, frozenset)):
+            return None
+        if not all(isinstance(e, str) for e in events):
+            return None
+        return event_type in events
+    except Exception:
+        return None
+
+
 def hook_configured(event_type: str) -> bool:
     """True when a notify.command lane is configured AND it subscribes to
     `event_type` — i.e. a False from `emit` means a configured recipient
     received nothing, not "no channel" (review 2026-09-13 r13: the
-    finalize recorded delivery on either)."""
-    try:
-        command = str(_config_get("notify.command", "") or "").strip()
-        if not command:
-            return False
-        events = _config_get("notify.events", DEFAULT_EVENTS) or DEFAULT_EVENTS
-        return event_type in events
-    except Exception:
+    finalize recorded delivery on either). Unknowable reads as False
+    here; `tell` uses `hook_owed` and treats unknowable as unacknowledged."""
+    return hook_owed(event_type) is True
+
+
+def early_reached(marker: dict) -> bool:
+    """Whether the answer-first notify recorded in a `verdict_pending`
+    marker REACHED the user — the routing fact for the verdict follow-up
+    (`run_verdict` only when it did; else the full `run_completed`).
+    `early_told` is the early sender's owed-channel word (`tell`); a
+    marker from before it (review r16) is read the legacy way: reached
+    unless a configured hook failed."""
+    if not isinstance(marker, dict) or not marker.get("notified_early"):
         return False
+    if "early_told" in marker:
+        return bool(marker.get("early_told"))
+    return bool(not marker.get("hook_configured") or marker.get("hook_delivered"))
 
 
 def emit(event_type: str, payload: dict, *, run_dir: Optional[str] = None,
@@ -179,10 +211,13 @@ def tell(event_type: str, payload: dict, *, run_dir: Optional[str] = None) -> bo
     except Exception:
         hook_ok = False
     try:
-        owed = hook_configured(event_type)
+        owed = hook_owed(event_type)
     except Exception:
-        owed = True
-    return bool(hook_ok) if owed else bool(journal_ok)
+        owed = None
+    # an unknowable channel (unreadable config, malformed subscription)
+    # acknowledges nothing but a clean hook run — the story stays owed
+    # until the configuration can be read (review r16)
+    return bool(journal_ok) if owed is False else bool(hook_ok)
 
 
 def _journal(event_type: str, payload: dict) -> bool:
@@ -198,6 +233,16 @@ def _journal(event_type: str, payload: dict) -> bool:
         # are PIPE_BUF-bounded downstream) — announced, not silent.
         _detail = _cb_clip(str(payload.get("result_excerpt",
                                            payload.get("summary", ""))), 300)
+        if event_type == "run_completed" and not _detail and (
+                "goal_achieved" in payload or payload.get("goal_verdict_source")):
+            # A bare story (no card — the record's own verdict, review
+            # r15) has no excerpt: the row carries the identity and the
+            # verdict, or polling substrates receive only "done"
+            # (review r16).
+            _detail = _cb_clip(
+                f"[{handle_id}] goal_achieved={payload.get('goal_achieved')}"
+                + (f" source={payload.get('goal_verdict_source')}"
+                   if payload.get("goal_verdict_source") else ""), 300)
         if event_type == "run_verdict":
             # The verdict IS this event's content — the generic projection
             # dropped it entirely and polling substrates received an empty

@@ -1042,7 +1042,7 @@ def sweep_untold_finalizes(
         return {"status": "unavailable", "told": 0, "error": acquired.error}
     told = considered = attempted = 0
     try:
-        from notify import tell
+        from notify import tell, early_reached
         now = time.time()
         for run_dir in candidates:
             if attempted >= max(1, int(limit)):
@@ -1057,7 +1057,10 @@ def sweep_untold_finalizes(
                 age_s = now - since.timestamp()
             except (TypeError, ValueError):
                 age_s = grace_s + 1
-            if age_s <= grace_s:
+            if age_s <= grace_s and not meta.get("story_owed_at"):
+                # `story_owed_at` was written by a repair (the drain or
+                # the verdict sweep): the owner's finalize is over — only
+                # a bare `finalized_at` can be a finalize still telling
                 try:
                     _pid = int(meta.get("pid") or 0)
                 except (TypeError, ValueError):
@@ -1067,9 +1070,7 @@ def sweep_untold_finalizes(
             payload = _story_payload(handle_id, run_dir, meta, by="untold-finalize sweep")
             vp = meta.get("verdict_pending")
             vp = vp if isinstance(vp, dict) else {}
-            reached = bool(vp.get("notified_early")
-                           and (not vp.get("hook_configured") or vp.get("hook_delivered")))
-            kind = "run_verdict" if reached else "run_completed"
+            kind = "run_verdict" if early_reached(vp) else "run_completed"
             attempted += 1
             try:
                 owed = not tell(kind, payload, run_dir=str(run_dir))
@@ -1229,11 +1230,8 @@ def sweep_verdict_orphans(
                     _refresh_run_surfaces(handle_id, run_dir, by="verdict-orphan sweep")
                     return
                 try:
-                    from notify import tell
-                    reached = bool(
-                        vp.get("notified_early")
-                        and (not vp.get("hook_configured")
-                             or vp.get("hook_delivered")))
+                    from notify import tell, early_reached
+                    reached = early_reached(vp)
                     # the rebuilt card, or the record as resolved just now
                     # (review r15: an id-only fallback acknowledged an
                     # empty story)
