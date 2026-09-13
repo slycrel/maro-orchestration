@@ -63,6 +63,13 @@ _add("markdown", """
  pack.py:_append_conflicts_note.add_once pack.py:_review_section
  loop_report.py:_parse_reading_queue
  playbook.py:_replace_alarm playbook.py:_expire_text playbook.py:_dedup_text""")
+# 2026-09-13 (landscape review r6): the sibling allocator's `_claim` rewrites
+# the FIRST line of the NEXT.md it staged itself moments earlier (the header
+# names the project; the mission line and everything after are carried
+# verbatim by `split("\n", 1)`); no parse, nothing dropped, the file is the
+# allocator's own staging copy until the rename publishes it.
+_add("markdown", """
+ handle.py:_free_project_name._claim""")
 _add("subprocess", """
  llm.py:_run_subprocess_safe
  heartbeat.py:_is_interactive_session_active

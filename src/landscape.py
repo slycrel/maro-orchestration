@@ -26,6 +26,7 @@ template versioned on the record. Every failure degrades to fresh, recorded.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import logging
 import re
 from pathlib import Path
@@ -53,7 +54,11 @@ PROMPT_VER = 4          # template 3 + `continues` and each candidate's project 
 # revert of a failed retry then abandons (review 2026-09-13 round 5). The
 # run settles when the finalize (or the crash-orphan sweep) resolves the
 # marker; until then it is landscape information the way a running run is:
-# not yet.
+# not yet. The same holds for a run mid-way through a PROJECT TRANSITION
+# (`project_transition` active: an escalation moved `project` to its retry
+# destination and has not yet adopted or reverted it — review round 6: a
+# process killed there left the provisional project as the record, and the
+# sweep's marker resolution would have made it "settled").
 TERMINAL_STATUSES = frozenset({
     "done", "complete", "completed",             # success
     "partial", "restart", "incomplete",           # partial
@@ -152,15 +157,48 @@ def _read_meta(rd: Path) -> Optional[dict]:
     return meta if isinstance(meta, dict) else None
 
 
-def verdict_settled(meta: dict) -> bool:
+def _active(marker: Any, done_key: str) -> bool:
+    return isinstance(marker, dict) and not marker.get(done_key)
+
+
+def run_settled(meta: dict) -> bool:
     """False while a run's `verdict_pending` marker is ACTIVE (a dict with
-    no `resolved_at`): its status is published, its verdict — and with it
-    its project and answer — is not yet final. Any other shape (no marker,
-    a resolved one, a malformed one) is settled: the marker is the ONLY
-    signal of an owed verdict, and a forged or broken one must not hold a
+    no `resolved_at`) — its status is published, its verdict, and with it
+    its project and answer, is not yet final — or while a
+    `project_transition` is ACTIVE (a dict with no `settled_at`): an
+    escalation moved the run's `project` to its retry destination and has
+    not yet adopted or reverted it. Any other shape (no marker, a settled
+    one, a malformed one) is settled: the markers are the ONLY signals of
+    an unfinished record, and a forged or broken one must not hold a
     finished run out of the landscape forever."""
-    vp = (meta or {}).get("verdict_pending")
-    return not (isinstance(vp, dict) and not vp.get("resolved_at"))
+    meta = meta or {}
+    return not (_active(meta.get("verdict_pending"), "resolved_at")
+                or _active(meta.get("project_transition"), "settled_at"))
+
+
+def settle_project_transition(meta: dict, *, by: str) -> Dict[str, Any]:
+    """The metadata fields that REVERT an active `project_transition` — the
+    delivered project/binding pair restored, the transition stamped
+    settled with outcome `reverted` — or {} when none is active. For the
+    recovery paths (the crash-orphan sweep): a process that died between
+    moving the project and delivering the retry never adopted the retry,
+    so the delivered work is where it was before the move (review
+    2026-09-13 round 6). The caller writes these in the SAME write as
+    whatever else settles the run, never after it."""
+    t = (meta or {}).get("project_transition")
+    if not _active(t, "settled_at"):
+        return {}
+    out: Dict[str, Any] = {"project_transition": {
+        **t, "settled_at": datetime.now(timezone.utc).isoformat(),
+        "settled_by": by, "outcome": "reverted"}}
+    if project_name(t.get("from")):
+        out["project"] = project_name(t.get("from"))
+        out["project_binding"] = str(t.get("from_binding") or "")
+    elif isinstance(t.get("from"), str) and t.get("from"):
+        # an operator's path-shaped project is kept as given (round 4)
+        out["project"] = t["from"]
+        out["project_binding"] = str(t.get("from_binding") or "")
+    return out
 
 
 def candidates(goal: str, *, exclude_handle_id: str = "") -> Tuple[List[dict], int, int]:
@@ -203,7 +241,7 @@ def _candidates(goal: str, *, exclude_handle_id: str = "") -> Tuple[List[dict], 
         status = str(meta.get("status") or "").strip().lower()
         if not prompt or status not in TERMINAL_STATUSES or not meta.get("ended_at") or meta.get("dry_run"):
             continue
-        if not verdict_settled(meta):
+        if not run_settled(meta):
             continue
         scanned += 1
         sim = similarity(goal, prompt)

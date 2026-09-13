@@ -809,12 +809,18 @@ def sweep_verdict_orphans(
                 # that and the marker resolution — the verdict is real;
                 # orphan-stamping over it would erase a judged source.
                 # Resolve the marker only, then finish the surfaces + notify.
+                # A crash mid-escalation left the provisional retry project
+                # as the record: the delivered work is the pre-move project,
+                # restored in the SAME write that settles the run (review
+                # 2026-09-13 round 6 — resolving the marker alone made the
+                # abandoned retry directory the landscape's destination).
+                from landscape import settle_project_transition as _settle_pt
                 resolved_path = stamp_run_metadata_for(
                     handle_id, {"verdict_pending": {
                         **vp,
                         "resolved_at": datetime.now(timezone.utc).isoformat(),
                         "resolved_by": "verdict_orphan_sweep(verdict-present)",
-                    }})
+                    }, **_settle_pt(meta, by="verdict_orphan_sweep")})
                 if resolved_path is None:
                     log.warning("verdict-orphan sweep: resolve-only write "
                                 "failed for %s — retrying next sweep",
@@ -850,11 +856,13 @@ def sweep_verdict_orphans(
                             "%s (loop %s) — retrying next sweep",
                             handle_id, loop_id[:8])
                 continue
+            from landscape import settle_project_transition as _settle_pt
             fields = {"verdict_pending": {
                 **vp,
                 "resolved_at": datetime.now(timezone.utc).isoformat(),
                 "resolved_by": "verdict_orphan_sweep",
-            }, "goal_verdict_source": VERDICT_SOURCE_PENDING_ORPHANED}
+            }, "goal_verdict_source": VERDICT_SOURCE_PENDING_ORPHANED,
+                **_settle_pt(meta, by="verdict_orphan_sweep")}
             if stamp_run_metadata_for(handle_id, fields) is None:
                 # Metadata write failed: marker stays ACTIVE, next sweep
                 # retries (the ledger re-stamp is idempotent — same source,

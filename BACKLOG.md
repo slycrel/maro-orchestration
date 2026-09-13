@@ -6526,7 +6526,27 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   unrelated same-opening goal; a mission-less reservation is refused);
   the post-commit diagnostics (`log.info`, the verbose print) cannot
   reach the stage-failed handler, which would have recorded a committed
-  decision as fresh. Recorded, not changed: a project deleted
+  decision as fresh. Round 6: the settled world survives CRASHES and
+  RACES — an escalation records its `project_transition` (from, from
+  binding, to, since) in the SAME write that moves the project, before
+  the retry starts (a retry whose recovery cannot be recorded is not
+  started: the delivered work's identity outranks the quality
+  improvement); adopted/reverted settle it in the pair's write; the
+  crash-orphan sweep REVERTS an active transition in the same write that
+  resolves the marker (`landscape.settle_project_transition`) — a
+  process killed between the move and the retry's delivery had left the
+  provisional retry directory as the record, and resolving the marker
+  alone would have made it "settled"; `run_settled` also holds a run
+  out while a transition is active; a reserved sibling is PUBLISHED
+  COMPLETE — built with its mission under a private `.reserve-*` name
+  inside the projects root and `rename`d into place atomically (the
+  older slug resolver saw the directory between mkdir and the mission
+  write and, reading no mission, handed it to the next unrelated
+  same-opening goal; a populated directory that appeared meanwhile makes
+  the rename fail and the next name is tried; the staging directory is
+  removed when the reservation does not happen); the clarification
+  caller's post-commit diagnostic moved out of the failure handler (the
+  same defect as round 5's, one layer up). Recorded, not changed: a project deleted
   between selection and loop init is recreated empty by
   `ensure_project` (deletion is manual and opt-in here — data-retention
   decree — and the window is seconds); a follow-up arriving in the

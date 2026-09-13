@@ -311,20 +311,30 @@ _PROJECT_SIBLING_CAP = 999
 def _free_project_name(base: str, exclude: "tuple[str, ...]", mission: str) -> str:
     """The first `base-2`, `base-3`… that is not excluded and is FREE, and
     RESERVED for the caller: the directory is created here, exclusively
-    (`mkdir` without exist_ok is the atomic claim — two pending runs that
-    both observed `-2` vacant would otherwise both bind it and the second
-    would inherit the first's work), and the project is initialised with
-    `mission` (the goal, as the loop's own `ensure_project` records it —
-    that call is idempotent over it). A reservation must carry its mission:
-    the older slug resolver (`resolve_project_slug`) treats a generic-slug
-    sibling with NO recorded mission as matching any subject, so an empty
-    reserved directory would be handed to the next unrelated goal that
-    opens the same way (review 2026-09-13 round 5). A dangling symlink
-    counts as taken (`exists()` reports it absent; mkdir would hit the
-    link). Past the cap a random suffix is tried once; if even that is
-    taken the binding fails closed — the excluded or unsafe base is never
-    returned. `base` must be a valid project NAME: suffixing cannot repair
-    a path-shaped identity (review 2026-09-13 rounds 3–4)."""
+    (two pending runs that both observed `-2` vacant would otherwise both
+    bind it and the second would inherit the first's work), and PUBLISHED
+    COMPLETE: the project is initialised with `mission` (the goal, as the
+    loop's own `ensure_project` records it — that call is idempotent over
+    it) under a private temporary name inside the projects root and then
+    `rename`d to its name in one atomic step — no reader ever sees the
+    directory without its mission. The older slug resolver
+    (`resolve_project_slug`) treats a generic-slug sibling with NO recorded
+    mission as matching any subject, so a directory published before its
+    mission — even for a moment — is handed to the next unrelated goal
+    that opens the same way (review 2026-09-13 rounds 5–6). The rename
+    fails when the name was taken meanwhile (a populated directory:
+    ENOTEMPTY; a file or link: ENOTDIR/EEXIST) and the next name is
+    tried; a directory that is EMPTY at that instant is replaced — one
+    that appeared between the free check and the rename is a bare mkdir
+    with no project in it yet. A dangling symlink counts as taken
+    (`exists()` reports it absent). Past the cap a random suffix is tried
+    once; if even that is taken the binding fails closed — the excluded
+    or unsafe base is never returned. `base` must be a valid project
+    NAME: suffixing cannot repair a path-shaped identity (review
+    2026-09-13 rounds 3–4). The private staging directory is the
+    allocator's own and is removed when the reservation does not
+    happen; only a process death leaves one (`.reserve-*`, never a
+    candidate for any resolver)."""
     from landscape import project_name
     if not project_name(base):
         raise ValueError(f"not a project name: {base!r}")
@@ -334,30 +344,46 @@ def _free_project_name(base: str, exclude: "tuple[str, ...]", mission: str) -> s
     root = _oi.projects_root()
     root.mkdir(parents=True, exist_ok=True)
 
-    def _claim(name: str) -> bool:
-        target = root / name
-        if name in exclude or target.is_symlink() or target.exists():
-            return False
-        try:
-            target.mkdir()
-        except FileExistsError:
-            return False
-        # the same mission text loop_init / mission.py record (goal[:80]);
-        # a failure here propagates: a claimed directory without its
-        # mission is the hole above, and the loop's own init would fail
-        # on the same store
-        _oi.ensure_project(name, mission[:80])
-        return True
-
-    for n in range(2, _PROJECT_SIBLING_CAP + 1):
-        cand = f"{base}-{n}"
-        if _claim(cand):
-            return cand
+    import os
+    import shutil
     import uuid
-    cand = f"{base}-{uuid.uuid4().hex[:8]}"
-    if _claim(cand):
-        return cand
-    raise RuntimeError(f"no free project name beside {base!r}")
+    from file_lock import atomic_write
+    # the complete project, built where no resolver looks (the same
+    # mission text loop_init / mission.py record: goal[:80]); a failure
+    # here propagates — the loop's own init would fail on the same store
+    staging = f".reserve-{uuid.uuid4().hex[:12]}"
+    _oi.ensure_project(staging, mission[:80])
+    staged = root / staging
+    published = False
+    try:
+        def _claim(name: str) -> bool:
+            target = root / name
+            if name in exclude or target.is_symlink() or target.exists():
+                return False
+            # the NEXT.md header names the project; the mission line is
+            # what the resolver reads
+            _next = staged / "NEXT.md"
+            _lines = _next.read_text(encoding="utf-8").split("\n", 1)
+            atomic_write(_next, f"# NEXT — {name}\n" + (_lines[1] if len(_lines) > 1 else ""))
+            try:
+                os.rename(staged, target)
+            except OSError:
+                return False
+            return True
+
+        for n in range(2, _PROJECT_SIBLING_CAP + 1):
+            cand = f"{base}-{n}"
+            if _claim(cand):
+                published = True
+                return cand
+        cand = f"{base}-{uuid.uuid4().hex[:8]}"
+        if _claim(cand):
+            published = True
+            return cand
+        raise RuntimeError(f"no free project name beside {base!r}")
+    finally:
+        if not published:
+            shutil.rmtree(staged, ignore_errors=True)
 
 
 def _match_existing_project(message: str, exclude: "tuple[str, ...]" = ()) -> str:
@@ -2083,9 +2109,10 @@ def _handle_impl(
                                 # the reply may name other work ("this is for
                                 # client B") — decide again over the clarified
                                 # goal before anything binds on the first verdict
+                                _re_decided = False
                                 try:
                                     _decide_landscape(message)
-                                    log.info("landscape: re-decided over the clarified goal")
+                                    _re_decided = True
                                 except Exception as _re_exc:
                                     # the first decision was about a goal that
                                     # no longer exists: nothing it derived may
@@ -2104,6 +2131,15 @@ def _handle_impl(
                                             "landscape": {"rule": "judge_unreadable", "relation": "fresh",
                                                           "reason": f"re-decision failed: {str(_re_exc)[:200]}"},
                                             "origin": dict(_origin_as_given or {})})
+                                    except Exception:
+                                        pass
+                                if _re_decided:
+                                    # reporting, outside the failure handler:
+                                    # a diagnostic that raises must not turn a
+                                    # committed re-decision into a fresh
+                                    # record (review r6)
+                                    try:
+                                        log.info("landscape: re-decided over the clarified goal")
                                     except Exception:
                                         pass
                         # Fall through to continue execution
@@ -3740,7 +3776,78 @@ def _handle_impl(
                     if verbose:
                         print(f"[maro:{handle_id}] quality gate: ESCALATE → {_next_tier} ({_gate_verdict.reason})",
                               file=sys.stderr, flush=True)
+                    _esc_ready = False
                     if _action == "escalate" and _next_tier:
+                        _pre_escalation_project = (
+                            project or getattr(loop_result, "project", "") or ""
+                        )
+                        _pre_escalation_binding = _project_binding
+                        _escalated_project = _pre_escalation_project + "-escalated"
+                        # the retry's destination is an automatic project
+                        # transition and carries the binding's constraints:
+                        # never the landscape's context-only project, never
+                        # a path outside the projects root (review r3)
+                        from landscape import project_inside_root as _esc_inside, project_name as _esc_name
+                        _esc_exclude = (_context_only_project,) if _context_only_project else ()
+                        if not _esc_name(_escalated_project):
+                            # a path-shaped project is the OPERATOR's explicit
+                            # choice (handle accepts it as given); the retry
+                            # stays beside it — suffixing cannot make a name of
+                            # a path, and the allocator refuses one (review r4)
+                            log.warning("escalation: %r is not a project name (operator path); kept as given",
+                                        _escalated_project)
+                        elif _escalated_project in _esc_exclude or not _esc_inside(_escalated_project):
+                            _esc_base = _escalated_project
+                            _escalated_project = _free_project_name(_esc_base, _esc_exclude, message)
+                            log.info("escalation: %r steps aside to %r", _esc_base, _escalated_project)
+                        # the run's project changes here (loop init stamps
+                        # it again); the binding provenance must not keep
+                        # claiming the landscape/operator chose a project
+                        # they never saw (review 2026-09-13 round 2)
+                        from runs import stamp_run_metadata as _stamp_esc
+                        def _stamp_project_pair(_proj, _bind, _transition=None):
+                            # the pair and, when given, the transition
+                            # record go in ONE write; True when recorded
+                            _fields = {"project": _proj, "project_binding": _bind}
+                            if _transition is not None:
+                                _fields["project_transition"] = _transition
+                            try:
+                                if _stamp_esc(_fields) is None:
+                                    log.warning("project binding: %s (%s) not recorded in run metadata",
+                                                _proj, _bind)
+                                    return False
+                                return True
+                            except Exception:
+                                log.warning("project binding: %s (%s) not recorded in run metadata",
+                                            _proj, _bind, exc_info=True)
+                                return False
+                        # The transition is DURABLE before the destination
+                        # changes: `from` is the delivered project, restored by
+                        # whoever settles the run if this process dies before
+                        # the retry is adopted or reverted (the crash-orphan
+                        # sweep reverts it; review 2026-09-13 round 6). A
+                        # retry whose recovery cannot be recorded is not
+                        # started — the delivered work's identity outranks
+                        # the quality improvement.
+                        _esc_transition = {
+                            "kind": "escalation",
+                            "from": _pre_escalation_project,
+                            "from_binding": _pre_escalation_binding,
+                            "to": _escalated_project,
+                            "since": datetime.now(timezone.utc).isoformat(),
+                        }
+                        def _settled_transition(_outcome):
+                            return {**_esc_transition, "outcome": _outcome,
+                                    "settled_at": datetime.now(timezone.utc).isoformat()}
+                        _esc_ready = _stamp_project_pair(_escalated_project, "escalated", _esc_transition)
+                        if not _esc_ready:
+                            log.warning("escalation: retry not started — the project transition %r → %r "
+                                        "could not be recorded; the delivered work stands",
+                                        _pre_escalation_project, _escalated_project)
+                            _gate_note += ("\n\n⚠️ Quality gate escalation not started: the run's "
+                                           "project transition could not be recorded — shipping "
+                                           "the original loop's output.")
+                    if _action == "escalate" and _next_tier and _esc_ready:
                         if verbose:
                             print(f"[maro:{handle_id}] re-running with model={_next_tier}",
                                   file=sys.stderr, flush=True)
@@ -3773,43 +3880,6 @@ def _handle_impl(
                         _escalated_adapter = build_adapter(model=_next_tier)
                         _pre_escalation_loop = loop_result
                         _pre_escalation_loop_id = getattr(loop_result, "loop_id", None)
-                        _pre_escalation_project = (
-                            project or getattr(loop_result, "project", "") or ""
-                        )
-                        _pre_escalation_binding = _project_binding
-                        _escalated_project = _pre_escalation_project + "-escalated"
-                        # the retry's destination is an automatic project
-                        # transition and carries the binding's constraints:
-                        # never the landscape's context-only project, never
-                        # a path outside the projects root (review r3)
-                        from landscape import project_inside_root as _esc_inside, project_name as _esc_name
-                        _esc_exclude = (_context_only_project,) if _context_only_project else ()
-                        if not _esc_name(_escalated_project):
-                            # a path-shaped project is the OPERATOR's explicit
-                            # choice (handle accepts it as given); the retry
-                            # stays beside it — suffixing cannot make a name of
-                            # a path, and the allocator refuses one (review r4)
-                            log.warning("escalation: %r is not a project name (operator path); kept as given",
-                                        _escalated_project)
-                        elif _escalated_project in _esc_exclude or not _esc_inside(_escalated_project):
-                            _esc_base = _escalated_project
-                            _escalated_project = _free_project_name(_esc_base, _esc_exclude, message)
-                            log.info("escalation: %r steps aside to %r", _esc_base, _escalated_project)
-                        # the run's project changes here (loop init stamps
-                        # it again); the binding provenance must not keep
-                        # claiming the landscape/operator chose a project
-                        # they never saw (review 2026-09-13 round 2)
-                        from runs import stamp_run_metadata as _stamp_esc
-
-                        def _stamp_project_pair(_proj, _bind):
-                            try:
-                                if _stamp_esc({"project": _proj, "project_binding": _bind}) is None:
-                                    log.warning("project binding: %s (%s) not recorded in run metadata",
-                                                _proj, _bind)
-                            except Exception:
-                                log.warning("project binding: %s (%s) not recorded in run metadata",
-                                            _proj, _bind, exc_info=True)
-                        _stamp_project_pair(_escalated_project, "escalated")
                         # Preserve the normal run contract (measurement
                         # provenance, handle identity, deferred learning,
                         # callback/context, repo fence) while changing only
@@ -3829,7 +3899,8 @@ def _handle_impl(
                         except BaseException:
                             # the retry never delivered: the run's project is
                             # the one holding the delivered work (review r3)
-                            _stamp_project_pair(_pre_escalation_project, _pre_escalation_binding)
+                            _stamp_project_pair(_pre_escalation_project, _pre_escalation_binding,
+                                                _settled_transition("reverted"))
                             raise
                         elapsed = int((time.monotonic() - started_at) * 1000)
                         if getattr(loop_result, "loop_id", ""):
@@ -3854,6 +3925,9 @@ def _handle_impl(
                         if _rerun_shipped:
                             _gate_note = f"\n\n✅ Quality gate escalated to {_next_tier} — re-run complete."
                             _contested_claims = []  # fresh run — don't append stale claims
+                            # the retry IS the delivered work now: the
+                            # transition settles as adopted (review r6)
+                            _stamp_project_pair(_escalated_project, "escalated", _settled_transition("adopted"))
                         else:
                             _dead_reason = (
                                 getattr(loop_result, "stuck_reason", None)
@@ -3867,7 +3941,8 @@ def _handle_impl(
                             # the next continuation (landscape, recall,
                             # curation all read metadata `project`) would
                             # bind to the dead retry's workspace (review r3)
-                            _stamp_project_pair(_pre_escalation_project, _pre_escalation_binding)
+                            _stamp_project_pair(_pre_escalation_project, _pre_escalation_binding,
+                                                _settled_transition("reverted"))
                             # Parent ships → its contested claims still apply;
                             # its closure verdict (stamped before the gate ran)
                             # stays the run's verdict — no post-escalate

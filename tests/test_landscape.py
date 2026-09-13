@@ -1541,11 +1541,11 @@ class TestTheBindingReadsASettledWorld:
         prior = _finished_run(GOAL_QUARTERLY, "Revenue rose.",
                               extra={"project": "board-reports-escalated", "verdict_pending": pending})
         assert landscape.candidates(GOAL_FOLLOW_UP) == ([], 0, 0)
-        assert landscape.verdict_settled({"verdict_pending": pending}) is False
+        assert landscape.run_settled({"verdict_pending": pending}) is False
         # a forged or broken marker cannot hold a finished run out forever
         for shape in ("true", 1, [], {"since": "x", "resolved_at": "2026-09-13T00:01:00+00:00"}):
-            assert landscape.verdict_settled({"verdict_pending": shape}) is True, shape
-        assert landscape.verdict_settled({}) is True
+            assert landscape.run_settled({"verdict_pending": shape}) is True, shape
+        assert landscape.run_settled({}) is True
         # through the handle: a follow-up during the window runs fresh,
         # and never lands in the provisional retry workspace
         r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
@@ -1658,3 +1658,242 @@ class TestTheBindingReadsASettledWorld:
         assert meta["origin"]["parent_handle_id"] == prior
         assert (kw["project"], meta["project"], meta["project_binding"]) == ("board-reports", "board-reports", "landscape")
         assert "## Related prior run" in (kw.get("ancestry_context_extra") or "")
+
+
+def _dead_pid():
+    """A pid that certainly does not exist: spawn-and-reap a child."""
+    import subprocess
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    return proc.pid
+
+
+class TestTheSettledWorldSurvivesCrashesAndRaces:
+    """Review round 6 (2026-09-13): the record settles on the DELIVERED
+    project even when the process dies mid-escalation; a reservation is
+    published complete or not at all; a re-decision's own reporting cannot
+    un-make it."""
+
+    @pytest.mark.parametrize("verdict_source", ["closure", None])
+    def test_a_crash_mid_escalation_settles_on_the_delivered_project(self, monkeypatch, tmp_path, verdict_source):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        import landscape
+        import notify
+        from audit_repair import sweep_verdict_orphans
+        from orch_items import projects_root
+        monkeypatch.setattr(notify, "emit", lambda *a, **kw: True)
+        (projects_root() / "board-reports").mkdir(parents=True)
+        (projects_root() / "board-reports-escalated").mkdir(parents=True)
+        # the process died after the escalation moved the project and
+        # before the retry delivered: the marker is active, the transition
+        # is active, the record says the retry's project
+        extra = {"project": "board-reports-escalated", "project_binding": "escalated",
+                 "loop_ids": ["lr-1"],
+                 "verdict_pending": {"since": "2026-09-13T00:00:00+00:00", "loop_id": "lr-1", "notified_early": True},
+                 "project_transition": {"kind": "escalation", "from": "board-reports", "from_binding": "landscape",
+                                        "to": "board-reports-escalated", "since": "2026-09-13T00:00:01+00:00"}}
+        if verdict_source:
+            extra["goal_verdict_source"] = verdict_source
+            extra["goal_achieved"] = True
+        prior = _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra=extra)
+        runs.stamp_run_metadata_for(prior, {"pid": _dead_pid()})
+        assert landscape.run_settled(_meta(prior)) is False
+        assert landscape.candidates(GOAL_FOLLOW_UP) == ([], 0, 0)
+        res = sweep_verdict_orphans(grace_s=0)
+        assert res["status"] == "completed" and res["stamped"] == 1, res
+        meta = _meta(prior)
+        assert meta["verdict_pending"]["resolved_at"]
+        # the delivered work is where it was before the move — restored in
+        # the same write that settled the run
+        assert (meta["project"], meta["project_binding"]) == ("board-reports", "landscape")
+        t = meta["project_transition"]
+        assert t["outcome"] == "reverted" and t["settled_at"] and t["settled_by"] == "verdict_orphan_sweep"
+        if verdict_source:
+            assert meta["goal_verdict_source"] == "closure" and meta["goal_achieved"] is True
+        assert landscape.run_settled(meta) is True
+        cands, scanned, _ = landscape.candidates(GOAL_FOLLOW_UP)
+        assert scanned == 1 and cands[0]["handle_id"] == prior and cands[0]["project"] == "board-reports"
+        r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert (kw["project"], _meta(r.handle_id)["project_binding"]) == ("board-reports", "landscape")
+        # a resolved marker with the transition still active is not settled either
+        assert landscape.run_settled({"verdict_pending": {"since": "x", "resolved_at": "y"},
+                                      "project_transition": {"from": "a", "to": "a-escalated"}}) is False
+        assert landscape.run_settled({"project_transition": {"from": "a", "to": "b", "settled_at": "z"}}) is True
+        assert landscape.run_settled({"project_transition": "junk"}) is True
+        # settling a transition whose `from` is an operator path keeps the path as given
+        fields = landscape.settle_project_transition(
+            {"project_transition": {"from": "../outside", "from_binding": "operator", "to": "../outside-escalated"}},
+            by="test")
+        assert (fields["project"], fields["project_binding"]) == ("../outside", "operator")
+        assert landscape.settle_project_transition({"project_transition": {"from": "a", "settled_at": "z"}}, by="t") == {}
+
+    def test_the_escalation_records_its_transition_before_moving(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        real = runs.stamp_run_metadata
+        writes = []
+
+        def spy(fields):
+            writes.append(dict(fields))
+            return real(fields)
+
+        monkeypatch.setattr(runs, "stamp_run_metadata", spy)
+        # adopted: the retry delivered
+        r, projects = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert projects == ["board-reports", "board-reports-escalated"]
+        moves = [w for w in writes if w.get("project") == "board-reports-escalated"]
+        # the FIRST write that moves the project carries the active transition
+        assert moves and moves[0]["project_transition"]["from"] == "board-reports"
+        assert moves[0]["project_transition"]["from_binding"] == "landscape"
+        assert "settled_at" not in moves[0]["project_transition"]
+        meta = _meta(r.handle_id)
+        assert (meta["project"], meta["project_binding"]) == ("board-reports-escalated", "escalated")
+        assert meta["project_transition"]["outcome"] == "adopted" and meta["project_transition"]["settled_at"]
+        # reverted: the retry died — the pair and the settled transition in ONE write
+        _setup(monkeypatch, tmp_path / "two")
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        writes.clear()
+        r2, projects2 = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")),
+                                        second_status="stuck")
+        assert projects2 == ["board-reports", "board-reports-escalated"]
+        restore = [w for w in writes if w.get("project") == "board-reports" and "project_transition" in w]
+        assert restore and restore[-1]["project_transition"]["outcome"] == "reverted"
+        meta2 = _meta(r2.handle_id)
+        assert (meta2["project"], meta2["project_binding"]) == ("board-reports", "landscape")
+        assert meta2["project_transition"]["settled_at"]
+        # not recordable: the retry is not started; the delivered work stands
+        _setup(monkeypatch, tmp_path / "three")
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+
+        def refusing(fields):
+            t = fields.get("project_transition")
+            if isinstance(t, dict) and "settled_at" not in t:
+                return None
+            return real(fields)
+
+        monkeypatch.setattr(runs, "stamp_run_metadata", refusing)
+        r3, projects3 = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert projects3 == ["board-reports"], projects3
+        assert r3.status == "done" and "not started" in (r3.result or "")
+        meta3 = _meta(r3.handle_id)
+        assert (meta3["project"], meta3["project_binding"]) == ("board-reports", "landscape")
+        assert "project_transition" not in meta3
+
+    def test_a_reservation_is_published_complete_or_not_at_all(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import os
+        from pathlib import Path
+        import handle as handle_mod
+        import orch_items
+        from loop_artifacts import resolve_project_slug, _recorded_mission
+        from orch_items import projects_root, ensure_project
+        goal_a = "Tell me about the book Systemantics"
+        goal_b = "Tell me about the book Notes on the Synthesis of Form"
+        goal_c = "Tell me about the book Chaos by James Gleick"
+        base = "tell-me-about-the-book"
+        ensure_project(base, goal_a)
+        root = projects_root()
+        real_rename = os.rename
+        seen = []
+
+        def observing_rename(src, dst):
+            # at the instant of publication: the name is still free to every
+            # reader, and what is about to appear already carries its mission
+            src, dst = str(src), str(dst)
+            seen.append((os.path.basename(src), os.path.basename(dst), os.path.exists(dst),
+                         resolve_project_slug(goal_c)))
+            assert (root / os.path.basename(src) / "NEXT.md").read_text(encoding="utf-8").count(f"> {goal_b}") == 1
+            return real_rename(src, dst)
+
+        monkeypatch.setattr(os, "rename", observing_rename)
+        reserved = handle_mod._free_project_name(base, (base,), goal_b)
+        assert reserved == f"{base}-2"
+        assert seen == [(seen[0][0], f"{base}-2", False, f"{base}-2")] and seen[0][0].startswith(".reserve-")
+        assert _recorded_mission(reserved) == goal_b
+        assert (root / reserved / "NEXT.md").read_text(encoding="utf-8").startswith(f"# NEXT — {reserved}\n")
+        assert resolve_project_slug(goal_c) == f"{base}-3"
+        assert not [p for p in root.iterdir() if p.name.startswith(".reserve-")]
+        monkeypatch.setattr(os, "rename", real_rename)
+        # a populated directory that appeared between the free check and the
+        # publication is not replaced: the reservation moves on
+        def racing_rename(src, dst):
+            if os.path.basename(str(dst)) == f"{base}-3" and not os.path.exists(dst):
+                os.mkdir(dst)
+                (Path(dst) / "notes.md").write_text("theirs", encoding="utf-8")
+            return real_rename(src, dst)
+
+        monkeypatch.setattr(os, "rename", racing_rename)
+        third = handle_mod._free_project_name(base, (base,), goal_c)
+        assert third == f"{base}-4" and (root / f"{base}-3" / "notes.md").read_text(encoding="utf-8") == "theirs"
+        assert _recorded_mission(third) == goal_c
+        assert not [p for p in root.iterdir() if p.name.startswith(".reserve-")]
+        monkeypatch.setattr(os, "rename", real_rename)
+        # an initialisation that fails leaves nothing behind and propagates
+        def failing_ensure(slug, mission, priority=0):
+            raise OSError("project store unwritable")
+
+        monkeypatch.setattr(orch_items, "ensure_project", failing_ensure)
+        before = sorted(p.name for p in root.iterdir())
+        with pytest.raises(OSError):
+            handle_mod._free_project_name(base, (base,), "Tell me about the book Gödel, Escher, Bach")
+        assert sorted(p.name for p in root.iterdir()) == before
+
+    def test_a_clarified_re_decision_survives_its_own_diagnostic(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        import handle as handle_mod
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        from orch_items import projects_root
+        import llm
+        (projects_root() / "client-a").mkdir(parents=True)
+        (projects_root() / "client-b").mkdir(parents=True)
+        a = _finished_run("Write the client-a quarterly report", "Client A done.", extra={"project": "client-a"})
+        b = _finished_run("Write the client-b quarterly report", "Client B done.", extra={"project": "client-b"})
+        adapter = _NowAndJudge([
+            json.dumps({"relation": "related", "run": a, "continues": True, "reason": "carries A forward"}),
+            json.dumps({"relation": "related", "run": b, "continues": True, "reason": "carries B forward"})])
+        monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: adapter)
+        real_info = handle_mod.log.info
+        raised = []
+
+        def broken_info(msg, *x, **k):
+            if isinstance(msg, str) and msg.startswith("landscape:"):
+                raised.append(msg)
+                raise BrokenPipeError("stderr closed")
+            return real_info(msg, *x, **k)
+
+        monkeypatch.setattr(handle_mod.log, "info", broken_info)
+        channel = MagicMock()
+        channel.ask.return_value = "This is for the second client, a separate workspace."
+        loop_kwargs = []
+
+        def _fake_run(g, *x, **k):
+            loop_kwargs.append(k)
+            return LoopResult(loop_id="l", project=k.get("project", ""), goal=g, status="done", stuck_reason=None,
+                              steps=[StepOutcome(index=0, text="s", status="done", result="o", iteration=0)])
+
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": False, "question": "Which client?"}), \
+             patch("director.verify_goal_completion",
+                   return_value=ClosureVerdict(complete=True, confidence=0.9, gaps=[],
+                                               summary="verified", checks_run=2, checks_passed=2)), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            r = handle("Write the quarterly report", force_lane="agenda", dry_run=False, channel=channel)
+        assert any(m.startswith("landscape: re-decided") for m in raised), raised
+        meta = _meta(r.handle_id)
+        # the clarified decision — persisted, installed, driving the run
+        assert meta["landscape"]["relation"] == "related" and meta["landscape"]["chosen"] == b
+        assert meta["origin"]["parent_handle_id"] == b
+        assert (loop_kwargs[0]["project"], meta["project"], meta["project_binding"]) == ("client-b", "client-b", "landscape")
