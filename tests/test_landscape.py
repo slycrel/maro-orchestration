@@ -2343,12 +2343,12 @@ class TestTheFinalizeIsOneObligation:
         assert projects == ["board-reports", "board-reports-escalated"]
         # the settlement itself was written in the run; the obligation also
         # records the story it may not get to tell (review r15)
-        assert refused == [["story_owed_at", "verdict_pending"]], refused
+        assert refused == [["story_owed_at", "story_owed_by", "verdict_pending"]], refused
         meta = _meta(r.handle_id)
         assert meta["project_transition"]["outcome"] == "adopted" and meta["project_transition"]["settled_at"]
         assert not meta["verdict_pending"].get("resolved_at") and landscape.run_settled(meta) is False
         kept = handle_mod._UNSETTLED_TRANSITIONS.get(r.handle_id)
-        assert kept == {"_finalize": True}, kept  # the obligation, not a materialised patch
+        assert kept == {"_finalize": True, "_by": "owner"}, kept  # the obligation, not a materialised patch
         monkeypatch.setattr(runs, "revise_run_metadata_for", real_for)
         res = sweep_transition_orphans(grace_s=10 ** 9)
         assert res["retried"] == 1 and res["dropped"] == 0, res
@@ -2420,7 +2420,7 @@ class TestTheObligationNeedsNoRead:
         assert meta["project_transition"]["outcome"] == "adopted" and meta["project_transition"]["settled_at"]
         assert not meta["verdict_pending"].get("resolved_at") and landscape.run_settled(meta) is False
         # the obligation was kept with NOTHING read — no patch to carry
-        assert handle_mod._UNSETTLED_TRANSITIONS.get(r.handle_id) == {"_finalize": True}
+        assert handle_mod._UNSETTLED_TRANSITIONS.get(r.handle_id) == {"_finalize": True, "_by": "owner"}
         monkeypatch.setattr(runs, "revise_run_metadata_for", real)
         res = sweep_transition_orphans(grace_s=10 ** 9)
         assert res["retried"] == 1 and res["dropped"] == 0 and res["stamped"] == 0, res
@@ -2716,6 +2716,9 @@ class TestFinalizationIsNotDelivery:
         _setup(monkeypatch, tmp_path)
         import runs
         from handle_queue import handle_task
+        from orch_items import project_dir
+        # review r20: padding is part of the operator-bound directory identity.
+        assert project_dir(" board-reports ") != project_dir("board-reports")
         seen = {}
 
         class _R:
@@ -2730,14 +2733,14 @@ class TestFinalizationIsNotDelivery:
                 "reason": "CONTINUATION of: finish the mission", "continuation_depth": 1,
                 "origin": {"parent_handle_id": "", "source": "task_store"}}
         for n, (recorded, expected) in enumerate([(17, None), (True, None), (["board-reports"], None),
-                                                   ("   ", None), (" board-reports ", "board-reports")]):
+                                                   ("   ", None), (" board-reports ", " board-reports ")]):
             hid = f"parentbad{n}"
             runs.create_run_dir(hid, prompt=GOAL_FOLLOW_UP)
             runs.stamp_run_metadata_for(hid, {"status": "interrupted", "pause_reason": "budget_exhausted",
-                                              "project": recorded})
+                                              "project": recorded, "project_binding": "operator"})
             seen.clear()
             with patch("agent_loop.run_agent_loop", side_effect=_fake_loop):
-                handle_task({**task, "origin": {"parent_handle_id": hid, "source": "task_store"}}, dry_run=True)
+                handle_task({**task, "origin": {"parent_handle_id": hid, "source": "task_store"}}, dry_run=False)
             assert seen.get("handle_id") == hid
             assert seen.get("project") == expected, (recorded, seen.get("project"))
 
@@ -2749,6 +2752,44 @@ class TestTheStoryIsItsOwnObligation:
     state; delivery is the hook running cleanly or no hook being owed,
     never the attempt; the ledger's typed failure defers the drain; the
     heartbeat runs the untold sweep in its own scope."""
+
+    def test_r20_only_repair_stories_bypass_a_live_owners_grace(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import os
+        import runs
+        import notify
+        from audit_repair import reconcile_kept_write, sweep_untold_finalizes
+        told = []
+        monkeypatch.setattr(notify, "tell", lambda kind, payload, **kw:
+                            told.append(payload["handle_id"]) or True)
+        # review r20: an early close still lets the live owner change its final story.
+        for by in ("owner", "repair", "legacy"):
+            hid = _finished_run(GOAL_QUARTERLY + by, "A.", extra={
+                "pid": os.getpid(), "verdict_pending": {"since": "2026-09-13T00:00:00+00:00"}})
+            runs.revise_run_metadata_for(hid, lambda existing: reconcile_kept_write(
+                existing, {"_finalize": True, "_by": "repair" if by == "legacy" else by}))
+            m = _meta(hid)
+            assert m["ended_at"] and m["story_owed_at"] and m["verdict_pending"]["resolved_at"]
+            if by == "legacy":
+                # A pre-r20 repair has no attribution field.
+                m.pop("story_owed_by", None)
+                (runs.run_dir(hid) / "metadata.json").write_text(json.dumps(m))
+                assert "story_owed_by" not in _meta(hid)
+            result = sweep_untold_finalizes(grace_s=3600)
+            if by == "owner":
+                assert result["told"] == 0
+                assert told == []
+                assert m["story_owed_by"] == "owner"
+                runs.stamp_run_metadata_for(hid, {"pid": _dead_pid()})
+                assert sweep_untold_finalizes(grace_s=3600)["told"] == 1
+            else:
+                assert result["told"] == 1
+                if by == "repair":
+                    assert m["story_owed_by"] == "repair"
+            assert "_by" not in m and "_finalize" not in m
+            assert told == [hid]
+            assert sweep_untold_finalizes(grace_s=3600)["told"] == 0
+            told.clear()
 
     def test_a_finalized_run_with_no_delivery_record_is_told_by_its_sweep(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
@@ -2967,7 +3008,7 @@ class TestTheRecoveryTellsTheTrueStory:
         for hid in (judged, unjudged, dies):
             m = _meta(hid)
             assert m["verdict_pending"]["resolved_at"] and "finalized_at" not in m
-            assert m["story_owed_at"] and "final_notified_at" not in m, m
+            assert m["story_owed_at"] and m["story_owed_by"] == "repair" and "final_notified_at" not in m, m
         assert len(attempts) == 3
         # the verdict sweep is done with them; the hook still failing keeps them owed
         assert sweep_verdict_orphans(grace_s=0)["stamped"] == 0
@@ -3075,12 +3116,12 @@ class TestTheStoryIsAcknowledgedByItsChannel:
             "goal_achieved": True, "final_notified_at": "2026-09-13T00:05:00+00:00"})
         for hid in (owed, told_already):
             runs.stamp_run_metadata_for(hid, {"pid": _dead_pid()})
-        monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {owed: {"_finalize": True},
+        monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {owed: {"_finalize": True, "_by": "owner"},
                                                                     told_already: {"_finalize": True}})
         assert drain_kept_writes()["retried"] == 2
         m = _meta(owed)
         assert m["verdict_pending"]["resolved_at"] and "finalized_at" not in m
-        assert m["story_owed_at"] and "final_notified_at" not in m
+        assert m["story_owed_at"] and m["story_owed_by"] == "repair" and "final_notified_at" not in m
         assert "story_owed_at" not in _meta(told_already)
         # the marker is resolved: not the verdict sweep's; the story is the untold sweep's
         assert sweep_verdict_orphans(grace_s=0)["stamped"] == 0

@@ -707,7 +707,7 @@ def reconcile_kept_write(existing: dict, kept: dict) -> dict:
     read of its own (review r10: a failed read before the finalize's
     write kept nothing). Runs inside `runs.revise_run_metadata_for`, so
     the decision and the publication share one snapshot (review r9/r10)."""
-    out = {k: v for k, v in kept.items() if k not in ("_finalize", "verdict_pending")}
+    out = {k: v for k, v in kept.items() if k not in ("_finalize", "_by", "verdict_pending")}
     t = out.get("project_transition")
     if isinstance(t, dict):
         disk = existing.get("project_transition")
@@ -729,6 +729,8 @@ def reconcile_kept_write(existing: dict, kept: dict) -> dict:
             # untold sweep selects this record — review r15: the drain
             # resolved the marker and no sweep could select the run again
             out["story_owed_at"] = datetime.now(timezone.utc).isoformat()
+            # review r20: only a repair knows the owner has finished finalizing.
+            out["story_owed_by"] = kept.get("_by", "repair")
     return out
 
 
@@ -810,7 +812,7 @@ def _drain_pending(pending: dict) -> tuple:
                                 "failed — retrying next time", hid)
                     continue
         written = revise_run_metadata_for(
-            str(hid), lambda existing, _k=kept: reconcile_kept_write(existing, _k))
+            str(hid), lambda existing, _k=kept: reconcile_kept_write(existing, {**_k, "_by": "repair"}))
         if written is None:
             log.warning("kept-write drain: kept write for %s still not "
                         "readable/writable — retrying next time", hid)
@@ -1057,10 +1059,11 @@ def sweep_untold_finalizes(
                 age_s = now - since.timestamp()
             except (TypeError, ValueError):
                 age_s = grace_s + 1
-            if age_s <= grace_s and not meta.get("story_owed_at"):
-                # `story_owed_at` was written by a repair (the drain or
-                # the verdict sweep): the owner's finalize is over — only
-                # a bare `finalized_at` can be a finalize still telling
+            repaired_story = (meta.get("story_owed_at")
+                              and meta.get("story_owed_by", "repair") == "repair")
+            if age_s <= grace_s and not repaired_story:
+                # review r20: an owner-owed story can still change before final close.
+                # Legacy unattributed stories keep repair's duplicate-over-missing rule.
                 try:
                     _pid = int(meta.get("pid") or 0)
                 except (TypeError, ValueError):
@@ -1260,7 +1263,8 @@ def sweep_verdict_orphans(
                 # sweep selects it by this record; `final_notified_at`
                 # (stamped by the epilogue on delivery) retires it.
                 return {} if told else {
-                    "story_owed_at": datetime.now(timezone.utc).isoformat()}
+                    "story_owed_at": datetime.now(timezone.utc).isoformat(),
+                    "story_owed_by": "repair"}
 
             # Re-read immediately before deciding: a verdict may have landed
             # since the scan's read (narrow but real TOCTOU vs a finishing

@@ -179,7 +179,8 @@ def handle_task(
                     # else is a malformed record — `str()` would manufacture
                     # a directory name from it (review r12) — and today's
                     # derivation decides (None)
-                    project=(_parent_meta.get("project").strip()
+                    # review r20: RESUME preserves the run's recorded identity verbatim.
+                    project=(_parent_meta.get("project")
                              if isinstance(_parent_meta.get("project"), str)
                              and _parent_meta.get("project").strip() else None),
                 )

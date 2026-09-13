@@ -5720,6 +5720,40 @@ class TestVerdictFollowup:
         assert names.count("run_completed") == 2
         assert "run_verdict" not in names
 
+    def test_r20_the_ordinary_finalize_owns_its_story_until_told(
+            self, monkeypatch, tmp_path):
+        # review r20: the ordinary finalize's obligation write stamps
+        # story_owed_at (r15: the owner may not get to tell it) — the
+        # untold sweep must not read that stamp as a finished repair and
+        # retell the record while the LIVE owner is still finalizing (its
+        # final close can still change the story). Only the owner's
+        # death or the grace releases an owner-owed story.
+        import json
+        import os
+        import subprocess
+        import config as config_mod
+        import notify
+        import runs
+        from audit_repair import sweep_untold_finalizes
+        monkeypatch.setattr(
+            config_mod, "snapshot",
+            lambda **kw: ({"notify": {"command": "some-notify-cmd"}}, []))
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events, emit_returns=False)
+        rd = runs.run_dir(result.handle_id)
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta.get("story_owed_at") and meta.get("story_owed_by") == "owner", meta
+        assert "final_notified_at" not in meta  # the hook failed: still owed
+        runs.stamp_run_metadata_for(result.handle_id, {"pid": os.getpid()})
+        told = []
+        monkeypatch.setattr(
+            notify, "tell", lambda kind, payload, **kw: told.append(kind) or True)
+        assert sweep_untold_finalizes(grace_s=3600)["told"] == 0 and told == []
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        runs.stamp_run_metadata_for(result.handle_id, {"pid": dead.pid})
+        assert sweep_untold_finalizes(grace_s=3600)["told"] == 1 and told == ["run_completed"]
+
     def test_failed_early_journal_downgrades_to_full_completion(
             self, monkeypatch, tmp_path):
         # Review 2026-09-13 r16: with NO hook the journal row is the early

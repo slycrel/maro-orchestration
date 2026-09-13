@@ -417,16 +417,22 @@ def test_r19_emit_validates_subscriptions(workspace, monkeypatch, events):
     assert calls == []
 
 
-def test_r19_invalid_timeout_uses_default(workspace, monkeypatch, caplog):
+@pytest.mark.parametrize("timeout_raw", ["invalid", ".nan", ".inf", "0", "-1", "9" * 400],
+                         ids=["invalid", "nan", "inf", "zero", "negative", "overflow"])
+def test_r19_invalid_timeout_uses_default(workspace, monkeypatch, caplog, timeout_raw):
+    import math
     import config
     from types import SimpleNamespace
     config._workspace_config_path().write_text(
-        "notify: {command: some-hook, timeout_seconds: invalid}\n")
+        f"notify: {{command: some-hook, timeout_seconds: {timeout_raw}}}\n")
     config.load_config(reload=True)
     calls = []
 
     def run(command, **kwargs):
-        calls.append(kwargs["timeout"])
+        # review r20: unusable numbers must never reach the hook.
+        t = kwargs["timeout"]
+        assert math.isfinite(t) and t > 0
+        calls.append(t)
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(notify_mod.subprocess, "run", run)

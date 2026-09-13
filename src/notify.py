@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import subprocess
 from typing import Optional, Any
@@ -344,8 +345,10 @@ def _emit(event_type: str, payload: dict, *, run_dir: Optional[str],
         return False
     try:
         timeout = float(timeout_raw if timeout_raw is not None else 30)
-    except (TypeError, ValueError):
-        # review r19: a malformed timeout must not discard a valid hook.
+    except (TypeError, ValueError, OverflowError):
+        timeout = float("nan")
+    # review r20: non-finite and non-positive timeouts cannot run a valid hook.
+    if not math.isfinite(timeout) or timeout <= 0:
         log.warning("invalid notify timeout for %s; using 30 seconds", event_type)
         timeout = 30
 

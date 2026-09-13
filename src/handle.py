@@ -1061,6 +1061,8 @@ def handle(
                 _obligation = {k: v for k, v in dict(_UNSETTLED_TRANSITIONS.get(_hid) or {}).items()
                                if k != "verdict_pending"}
                 _obligation["_finalize"] = True
+                # review r20: the live owner still owes its final close and tell.
+                _obligation["_by"] = "owner"
                 try:
                     from runs import revise_run_metadata_for as _revise_fin
                     from audit_repair import reconcile_kept_write as _reconcile_fin

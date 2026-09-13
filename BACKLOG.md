@@ -6777,6 +6777,26 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   `tell` and `_policy` in `_emit` are still two snapshots (a file
   changing between them is a new publish, by design); `command: false`
   is a deliberate off switch, not a fault.
+  Round 20 (codex-written): the ORDINARY finalize's obligation write
+  stamped `story_owed_at` (r15's "the owner may not get to tell it")
+  and the untold sweep read that stamp as "a repair finished — the
+  owner is done", skipping grace and liveness: it could tell the EARLY
+  record (done) while the live owner was still finalizing, and when
+  the final close then changed the story (a KeyboardInterrupt in the
+  post-answer tail → error) and the owner died before its own tell,
+  the changed story was never told (`final_notified_at` already
+  stood) — the stamp now carries `story_owed_by` (`owner` from the
+  finalize, `repair` from the drain and the verdict sweep; a legacy
+  stamp with no `by` reads as repair) and only a repair's stamp
+  bypasses a live owner's grace; RESUME `.strip()`ped the recorded
+  project so an operator-bound `" board-reports "` resumed into
+  `board-reports` — another directory — with `project_binding` still
+  `operator` (the identity is preserved verbatim; the r12 test pinned
+  the normalization and now pins the two distinct directories); the
+  r19 timeout fallback missed `.nan`/`.inf`/`0`/`-1`/overflow (finite
+  and positive or 30, warned). Recorded, not changed: an owner whose
+  own tell failed waits out the grace (1 h) or its death before the
+  sweep retells — duplicate over missing still holds after that.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the
