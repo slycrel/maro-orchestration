@@ -165,6 +165,21 @@ _INPUT_PATTERNS = (
     "maximum context length", "413",
 )
 
+# A TERMINAL failure (the CLI ran and reported a result object of its own)
+# classifies from that object's error fields, and only by the phrases the
+# CLI/API author — never the bare status codes or single words above,
+# which a partial-work `result` mentions incidentally (review round 20,
+# 2026-09-13: "Read invoice 401 before stopping." ahead of a reset in
+# `errors[]` classified a healthy host as auth-dead and lost the pause).
+_TERMINAL_BILLING_PHRASES = (
+    "credit balance is too low", "insufficient_quota", "requires more credits",
+    "payment required", "quota exceeded",
+)
+_TERMINAL_INPUT_PHRASES = (
+    "prompt is too long", "context_length_exceeded", "request_too_large",
+    "maximum context length",
+)
+
 
 def _action_for(cls: str, backend: str) -> str:
     """Message registry — say exactly what to run (design §2)."""
@@ -239,6 +254,43 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
     if getattr(exc, "maro_error_class", "") == CONTAINER_AUTH:
         return _mk(CONTAINER_AUTH)
 
+    # The CLI RAN and reported a terminal execution failure of its own
+    # (error_max_turns and kin). The binary is fine and the work is partly
+    # done: neither a retry nor a failover may replay it on another backend
+    # (review round 12, 2026-09-13: the generic "subprocess failed" text
+    # routed it to FAILOVER and the wrapper re-ran the finished work
+    # elsewhere). STRUCTURED evidence decides here, ahead of every text
+    # pattern below (round 20: the display message carries the partial-work
+    # `result`, and an incidental "401"/"402"/"413" in it classified a
+    # rate-limited terminal as a host auth/billing/input failure — the
+    # healthy host circuit tripped, another backend replayed the work, the
+    # no-tokens pause was lost). The markers come from the terminal
+    # object's own fields (llm._mark_terminal_failure): the shared
+    # rate-limit reading, the shared auth reading, and the error fields'
+    # text for the authored billing/input phrases only.
+    if getattr(exc, "maro_terminal_failure", False):
+        _ttext = str(getattr(exc, "maro_terminal_text", "") or "").lower()
+        if getattr(exc, "maro_rate_limited", False):
+            # A stated limit is a wait, not a replay.
+            return _mk(RETRY_AT, retryable=True)
+        if getattr(exc, "maro_terminal_auth", False):
+            # The CLI names a dead HOST credential: same remedy as the
+            # text pattern below, decided from the object's fields.
+            return _mk(AUTH_ACTIONABLE, failover=True)
+        if "limit" in _ttext and "resets" in _ttext:
+            return _mk(RETRY_AT, retryable=True)
+        if any(p in _ttext for p in _TERMINAL_BILLING_PHRASES):
+            return _mk(BILLING_ACTIONABLE, failover=True)
+        if any(p in _ttext for p in _TERMINAL_INPUT_PHRASES):
+            return _mk(INPUT_TOO_LARGE)
+        return _mk(FATAL)
+
+    # The CLI ran to a result this adapter could not convert (round 20):
+    # a protocol failure of THIS call — never a replay elsewhere, whatever
+    # its message text happens to match.
+    if getattr(exc, "maro_protocol_failure", False):
+        return _mk(FATAL)
+
     if any(p in msg for p in _INPUT_PATTERNS):
         return _mk(INPUT_TOO_LARGE)
 
@@ -263,21 +315,6 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
         # credential shouldn't kill the run when another backend exists, but
         # the user_action always surfaces so it can't be silently absorbed.
         return _mk(AUTH_ACTIONABLE, failover=True)
-
-    # The CLI RAN and reported a terminal execution failure of its own
-    # (error_max_turns and kin — auth/billing/limit shapes were classified
-    # above). The binary is fine and the work is partly done: neither a
-    # retry nor a failover may replay it on another backend (review round
-    # 12, 2026-09-13: the generic "subprocess failed" text below routed it
-    # to FAILOVER and the wrapper re-ran the finished work elsewhere). The
-    # step is blocked; the loop's own recovery decides what to do next.
-    if getattr(exc, "maro_terminal_failure", False):
-        if getattr(exc, "maro_rate_limited", False) or ("limit" in msg and "resets" in msg):
-            # A stated limit is a wait, not a replay — same rule as below.
-            # The structural marker (round 19) outranks the bounded display
-            # text, which may show a partial-work `result` instead.
-            return _mk(RETRY_AT, retryable=True)
-        return _mk(FATAL)
 
     # Subprocess lane: binary missing / crashed / wall-or-liveness kill.
     # The kill (adapter_timeout) is the #1 live failure class on this box;

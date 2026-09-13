@@ -889,6 +889,53 @@ and the log's worker rows carry them. Pinned through the real
 out 9 / $0.12 → tokens_in 137, cost 0.12, cache 100; success, empty
 and evidence-less controls) and `_write_director_log`.
 
+*Review round 20 (2026-09-13, codex skeptic + QA, whole chunk): one
+shared HIGH on the classifier's precedence, two MEDs (director
+accounting persistence, a conversion-failure boundary); all fixed.*
+(lxxxi) **A terminal failure classifies from its own fields, ahead of
+every text pattern.** The round-19 rate-limit marker sat BELOW the
+classifier's input/billing/auth substring checks, which read the
+display message — and that message shows the partial-work `result`.
+"Read invoice 401 before stopping." ahead of a reset in `errors[]`
+classified `auth_actionable` (the healthy host circuit tripped, a
+capable fallback could replay the work, the no-tokens pause was lost);
+"402"/"billing" made it `billing_actionable`, "413" `input_too_large`.
+One writer (`_mark_terminal_failure`) now stamps every terminal-failure
+exception with the object's structured verdicts — the shared rate-limit
+reading, the shared auth reading (`maro_terminal_auth`), and the error
+fields' text (`maro_terminal_text`) — and `classify_error` decides a
+marked terminal failure FIRST: rate-limited → `retry_at`; CLI-named
+host auth → `auth_actionable`; the authored billing / input phrases
+only (no bare status codes, no single words) → their classes; else
+`fatal`. Residual (accepted, same doctrine as round 16): an assistant's
+partial `result` literally quoting an authored phrase ("credit balance
+is too low") still counts — the fields are read as CLI-authored.
+Pinned through `FailoverAdapter` for 401/402/413/"unauthorized" prose
+(retry_at, no-tokens pause, host circuit closed, spend kept) with
+billing / input / turn-limit / host-auth controls. (lxxxii) **The
+director's worker bill is durable.** `run_director` summed every
+attempt in memory, but a revision REPLACED the draft's row and the log
+held only final rows — a paid draft followed by a refused revision
+persisted as zero worker spend. The log now carries `worker_totals`
+(tokens, cost, cache reads across every attempt) and
+`superseded_attempts` (each replaced draft's status, class and
+accounting); `maro director --format json` carries `cost_usd` and
+`cache_read_tokens`. Pinned through the real `run_director` (a $0.12 /
+100-cache draft, then a zero-cost container-auth refusal → totals 0.12
+/ 100 in the log and the CLI JSON, the final row's own zero intact).
+(lxxxiii) **Converting a successful capture is an evidence-preserving
+boundary.** A wrong-typed `tool` field (`["complete_step"]`) raised out
+of `_parse_tool_call`'s set lookup AFTER paid retries, and the
+exception carried no usage at all — a paid call became a
+zero-accounting blocked step. The field is validated (a non-string
+`tool` is not a call), and any conversion failure now carries the
+final capture's usage plus the replaced attempts' spend, once each,
+with a `maro_protocol_failure` marker the classifier maps to `fatal`
+whatever the message text matches (never a replay: the CLI ran to a
+result). Pinned: the odd terminal converts to content with its usage;
+a forced conversion failure after a paid attempt keeps 137/29/5/$0.62
+and both partials; a replay-shaped message stays `fatal`.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

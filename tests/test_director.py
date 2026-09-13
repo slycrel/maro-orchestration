@@ -4138,3 +4138,57 @@ def test_director_log_and_totals_carry_worker_cost_and_cache(monkeypatch, tmp_pa
     dr = DirectorResult(cost_usd=0.17, cache_read_tokens=103, **_base)
     assert (dr.cost_usd, dr.cache_read_tokens) == (0.17, 103)
     assert (DirectorResult(**_base).cost_usd, DirectorResult(**_base).cache_read_tokens) == (0.0, 0)
+
+
+def test_a_refused_revision_keeps_the_drafts_bill_in_the_durable_log(monkeypatch, tmp_path):
+    # Review round 20: run_director summed every attempt in memory, but a
+    # revision REPLACED the draft's row and the log held only final rows —
+    # a paid draft followed by a refused revision persisted as zero worker
+    # spend. The log now carries the directive's worker totals and the
+    # superseded attempts; the CLI JSON carries the totals too.
+    from workers import WorkerResult
+    import director as _director_mod
+    from director import ReviewDecision, Ticket
+    _setup(monkeypatch, tmp_path)
+    calls = []
+
+    def _dispatch(worker_type, task, *, context="", **kw):
+        calls.append(task)
+        if len(calls) == 1:
+            return WorkerResult(worker_type=worker_type, ticket=task, status="done", result="draft",
+                                tokens_in=137, tokens_out=9, cost_usd=0.12, cache_read_tokens=100)
+        return WorkerResult(worker_type=worker_type, ticket=task, status="blocked", result="",
+                            stuck_reason="LLM call failed (container_auth): re-seed the volume",
+                            blocked_origin="adapter", error_class="container_auth")
+    monkeypatch.setattr(_director_mod, "dispatch_worker", _dispatch)
+    monkeypatch.setattr(_director_mod, "_review_worker_output",
+                        lambda **kw: (ReviewDecision(accepted=False, reason="thin", revision_request="more"), (3, 1)))
+    monkeypatch.setattr(_director_mod, "_produce_spec",
+                        lambda directive, adapter, dry_run, _log: (
+                            "spec", [Ticket(ticket_id="t1", worker_type="research", task="find it")], (0, 0)))
+    monkeypatch.setattr(_director_mod, "_challenge_spec", lambda *a, **k: ("spec", (0, 0)), raising=False)
+    result = run_director("research and build a report", dry_run=False, adapter=object())
+    assert len(calls) == 2 and result.pause_reason == "container-auth-expired"
+    assert result.cost_usd == pytest.approx(0.12) and result.cache_read_tokens == 100
+    assert result.tokens_in == 137 + 3 and result.tokens_out == 9 + 1
+    logs = list(tmp_path.rglob(f"director-{result.director_id}-log.json"))
+    assert len(logs) == 1, logs
+    payload = json.loads(logs[0].read_text(encoding="utf-8"))
+    assert payload["worker_results"][0]["cost_usd"] == 0.0, "the final row is the refusal's own zero"
+    assert payload["worker_totals"] == {"tokens_in": 140, "tokens_out": 10,
+                                        "cost_usd": pytest.approx(0.12), "cache_read_tokens": 100}
+    assert len(payload["superseded_attempts"]) == 1
+    sup = payload["superseded_attempts"][0]
+    assert (sup["status"], sup["tokens_in"], sup["cache_read_tokens"]) == ("done", 137, 100)
+    assert sup["cost_usd"] == pytest.approx(0.12)
+    # the CLI's JSON rendering carries the bill
+    import cli as _cli
+    import io, contextlib
+    monkeypatch.setattr(_director_mod, "run_director", lambda *a, **k: result)
+    buf = io.StringIO()
+    ns = type("NS", (), {"format": "json", "directive": ["x"], "dry_run": False, "project": None,
+                         "verbose": False})()
+    with contextlib.redirect_stdout(buf):
+        _cli._cmd_director(ns)
+    out = json.loads(buf.getvalue())
+    assert out["cost_usd"] == pytest.approx(0.12) and out["cache_read_tokens"] == 100

@@ -2484,6 +2484,21 @@ def _terminal_rate_limited(obj: Optional[dict]) -> bool:
                 or "rate_limit" in _subtype)
 
 
+def _mark_terminal_failure(exc: BaseException, obj: dict) -> None:
+    """Stamp a failure exception with the terminal object's STRUCTURED
+    verdicts — the one place they are written (round 20, 2026-09-13):
+    the classifier read the display message's text patterns ahead of the
+    round-19 rate-limit marker, so a partial-work `result` mentioning
+    "401"/"402"/"413" classified a rate-limited terminal as a host
+    auth/billing/input failure. `maro_terminal_text` is the error fields
+    joined (result + errors[], in full) for the authored-phrase checks;
+    the auth and rate-limit readings are the shared ones."""
+    exc.maro_terminal_failure = True  # type: ignore[attr-defined]
+    exc.maro_rate_limited = _terminal_rate_limited(obj)  # type: ignore[attr-defined]
+    exc.maro_terminal_auth = _terminal_auth_field(obj) is not None  # type: ignore[attr-defined]
+    exc.maro_terminal_text = "\n".join(_terminal_error_fields(obj))  # type: ignore[attr-defined]
+
+
 def _plain_text_capture(stdout: str) -> bool:
     """Is this capture the CLI's plain-text surface — no JSON object OR
     array anywhere in it (round 19: a string-only diagnostic array passed
@@ -2816,6 +2831,11 @@ class _JSONToolPromptMixin:
 
         tool_name = data.get("tool")
         if not tool_name:
+            return None
+        if not isinstance(tool_name, str):
+            # A wrong-typed `tool` (`["complete_step"]`) is not a call
+            # (round 20: it raised out of the set lookup below, and the
+            # paid call became a zero-accounting blocked step).
             return None
 
         # Verify it's a valid tool
@@ -3440,9 +3460,9 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                             # The CLI ran to a terminal result: never a
                             # failover/replay story (round 12's marker);
                             # the limit is stated STRUCTURALLY (round 19),
-                            # not by the bounded display text.
-                            _rl_err.maro_terminal_failure = True  # type: ignore[attr-defined]
-                            _rl_err.maro_rate_limited = _terminal_rate_limited(_rl_obj)  # type: ignore[attr-defined]
+                            # not by the bounded display text (round 20:
+                            # every terminal verdict is).
+                            _mark_terminal_failure(_rl_err, _rl_obj)
                         # Every attempt's spend rides the exhaustion error
                         # too (round 17): the last capture's, then the
                         # replaced ones'.
@@ -3530,11 +3550,11 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 if isinstance(_err_obj, dict):
                     # The CLI ran to a terminal result of its own: this
                     # failure is never a failover/retry story (round 12).
-                    _err.maro_terminal_failure = True  # type: ignore[attr-defined]
                     # A rate-limited terminal failure that reached here
                     # (rc=0, or the retries could not clear it) says so
-                    # structurally (round 19).
-                    _err.maro_rate_limited = _terminal_rate_limited(_err_obj)  # type: ignore[attr-defined]
+                    # structurally (round 19) — as do the auth and
+                    # billing/input verdicts (round 20).
+                    _mark_terminal_failure(_err, _err_obj)
                     # The failed call's own spend and output ride on the
                     # exception so the blocked outcome can record them
                     # (rounds 9 + 12: an auth failure AFTER work was
@@ -3587,8 +3607,21 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 _session_state["turns"] = _session_turns + 1
             else:
                 _session_state.clear()
-        response = self._collect(
-            self._stream_events(result.stdout, tools=tools, rc_payload=_rc_payload))
+        try:
+            response = self._collect(
+                self._stream_events(result.stdout, tools=tools, rc_payload=_rc_payload))
+        except Exception as _cexc:
+            # Converting a SUCCESSFUL capture is an evidence-preserving
+            # boundary too (round 20): a conversion failure after paid
+            # attempts escaped with no usage at all — the final capture's
+            # terminal usage and the replaced attempts' spend ride the
+            # exception once each, and the failure is a protocol story of
+            # this call (never a replay: the CLI ran to a result).
+            _fin = _capture_evidence(result.stdout)
+            _add_call_evidence(_cexc, _fin, _fin["partial"])
+            _add_call_evidence(_cexc, _prior, _prior["partial"])
+            _cexc.maro_protocol_failure = True  # type: ignore[attr-defined]
+            raise
         if any(_prior[_k] for _k in ("fresh_in", "out", "cache_read", "cost")):
             # A success after paid rate-limited attempts accounts for ALL
             # of them (round 17). `input_tokens` is TOTAL input (cache

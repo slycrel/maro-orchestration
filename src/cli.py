@@ -517,6 +517,8 @@ def _cmd_director(args: argparse.Namespace) -> int:
             "report": result.report,
             "tokens_in": result.tokens_in,
             "tokens_out": result.tokens_out,
+            "cost_usd": float(getattr(result, "cost_usd", 0.0) or 0.0),
+            "cache_read_tokens": int(getattr(result, "cache_read_tokens", 0) or 0),
             "elapsed_ms": result.elapsed_ms,
             "log_path": result.log_path,
             "pause_reason": getattr(result, "pause_reason", "") or "",

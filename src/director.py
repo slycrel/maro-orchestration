@@ -37,7 +37,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ancestry import Origin
 
@@ -430,6 +430,7 @@ def run_director(
     total_tokens_in = 0
     total_cost_usd = 0.0
     total_cache_read = 0
+    superseded_results: List[WorkerResult] = []  # drafts a revision replaced (round 20)
     total_tokens_out = 0
 
     # Phase 1: Produce SPEC + tickets
@@ -601,6 +602,9 @@ def run_director(
                     revision_of=ticket.ticket_id,
                 )
                 _draft = result
+                # The draft's row leaves worker_results with the revision;
+                # its accounting stays durable (round 20).
+                superseded_results.append(_draft)
                 result = dispatch_worker(
                     revised_ticket.worker_type,
                     revised_ticket.task,
@@ -759,6 +763,9 @@ def run_director(
         elapsed_ms=elapsed,
         worker_slice=worker_slice_enabled,
         pause_reason=director_pause_reason,
+        worker_totals={"tokens_in": total_tokens_in, "tokens_out": total_tokens_out,
+                       "cost_usd": total_cost_usd, "cache_read_tokens": total_cache_read},
+        superseded_results=superseded_results,
     )
 
     result = DirectorResult(
@@ -1125,6 +1132,8 @@ def _write_director_log(
     elapsed_ms: int,
     worker_slice: bool = False,
     pause_reason: str = "",
+    worker_totals: Optional[Dict[str, Any]] = None,
+    superseded_results: Optional[List[WorkerResult]] = None,
 ) -> Optional[str]:
     try:
         try:
@@ -1186,6 +1195,27 @@ def _write_director_log(
                     "cache_read_tokens": int(getattr(r, "cache_read_tokens", 0) or 0),
                 }
                 for r in worker_results
+            ],
+            # Round 20: the directive's whole worker bill, durable — the
+            # rows above hold only each ticket's FINAL attempt, so a paid
+            # draft replaced by a refused revision left a zero-cost record.
+            "worker_totals": {
+                "tokens_in": int((worker_totals or {}).get("tokens_in", 0) or 0),
+                "tokens_out": int((worker_totals or {}).get("tokens_out", 0) or 0),
+                "cost_usd": float((worker_totals or {}).get("cost_usd", 0.0) or 0.0),
+                "cache_read_tokens": int((worker_totals or {}).get("cache_read_tokens", 0) or 0),
+            },
+            "superseded_attempts": [
+                {
+                    "ticket": _clip(r.ticket or "", 120),
+                    "status": r.status,
+                    "error_class": getattr(r, "error_class", "") or "",
+                    "tokens_in": r.tokens_in,
+                    "tokens_out": r.tokens_out,
+                    "cost_usd": float(getattr(r, "cost_usd", 0.0) or 0.0),
+                    "cache_read_tokens": int(getattr(r, "cache_read_tokens", 0) or 0),
+                }
+                for r in (superseded_results or [])
             ],
         }
         from file_lock import atomic_write

@@ -3763,12 +3763,22 @@ def test_a_terminal_execution_failure_never_fails_over():
     assert getattr(ei.value, "maro_terminal_failure", False) is True
     # controls: auth text keeps its actionable class (and its one failover);
     # a stated reset is still a wait; a plain subprocess crash still fails over
+    # (round 20: the terminal markers are STRUCTURAL — the one production
+    # writer stamps them from the terminal object, and the classifier
+    # reads the object's verdicts, never the display text)
+    from llm import _mark_terminal_failure
     auth = RuntimeError("claude subprocess failed (rc=1): OAuth session expired - Please run /login")
-    auth.maro_terminal_failure = True
+    _mark_terminal_failure(auth, {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                                  "result": "OAuth session expired - Please run /login"})
     assert classify_error(auth).error_class == AUTH_ACTIONABLE
     reset = RuntimeError("claude subprocess failed (rc=1): You've hit your limit · resets 3pm")
-    reset.maro_terminal_failure = True
+    _mark_terminal_failure(reset, {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                                   "result": "You've hit your limit · resets 3pm"})
     assert classify_error(reset).error_class == RETRY_AT
+    # a hand-set marker without the object's verdicts is the safe direction: fatal, no replay
+    bare = RuntimeError("claude subprocess failed (rc=1): OAuth session expired - Please run /login")
+    bare.maro_terminal_failure = True
+    assert classify_error(bare).error_class == FATAL and not classify_error(bare).failover
     assert classify_error(RuntimeError("claude subprocess failed (rc=137): killed")).failover is True
 
 
@@ -4676,3 +4686,103 @@ def test_a_reset_in_errors_behind_a_partial_result_still_pauses(monkeypatch, tmp
         with pytest.raises(RuntimeError) as ei2:
             a.complete([LLMMessage("user", "build a thing")], executor=True)
     assert classify_error(ei2.value, backend="subprocess").error_class == "fatal"
+
+
+# ---------------------------------------------------------------------------
+# Review round 20 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("prose", [
+    "Read invoice 401 before stopping.",
+    "Read billing note 402 first.",
+    "Read ticket 413 before stopping.",
+    "Check the unauthorized-senders list, then stop.",
+])
+def test_incidental_status_words_in_partial_work_do_not_override_the_terminal_verdict(monkeypatch, tmp_path, prose):
+    # Round 20: the classifier matched the display message against the
+    # input/billing/auth text patterns BEFORE the round-19 rate-limit
+    # marker, so a partial-work `result` mentioning "401"/"402"/"413"
+    # classified a rate-limited terminal as a host auth/billing/input
+    # failure — the healthy host circuit tripped, another backend could
+    # replay the work, and the no-tokens pause was lost.
+    import llm as _llm
+    from llm import FailoverAdapter
+    from llm_errors import call_usage_evidence, classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for, PAUSE_ERR_NO_TOKENS
+    _r16_container_lane(monkeypatch, tmp_path)
+    _llm._BACKEND_CIRCUIT.clear()
+    terminal = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                           "result": prose, "errors": ["You've hit your limit · resets 3pm"],
+                           "usage": {"input_tokens": 100, "output_tokens": 20}, "total_cost_usd": 0.5})
+    inner = ClaudeSubprocessAdapter()
+    inner._rate_limit_max_retries = 3
+    inner._rate_limit_wait = 601  # the first sleep would pass the total cap: one launch
+    wrapper = FailoverAdapter([inner])
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, terminal)) as run:
+        with pytest.raises(Exception) as ei:
+            wrapper.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1
+    assert getattr(ei.value, "maro_rate_limited", False) is True
+    assert classify_error(ei.value, backend="subprocess").error_class == "retry_at"
+    assert environmental_pause_for(_blocked_outcome_from_exc(ei.value)) == PAUSE_ERR_NO_TOKENS
+    assert _llm._circuit_open("subprocess") is None, "the healthy host circuit stays closed"
+    ev = call_usage_evidence(ei.value)
+    assert ev["tokens_in"] == 100 and ev["cost"] == pytest.approx(0.5)
+    # controls: the CLI's AUTHORED phrases in the error fields still decide
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+
+    def _classify(obj, container_executed=True):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=1, stderr="", container_executed=container_executed, stdout=json.dumps(obj))):
+            with pytest.raises(RuntimeError) as e2:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        return classify_error(e2.value, backend="subprocess").error_class
+
+    base = {"type": "result", "subtype": "error_during_execution", "is_error": True, "result": prose}
+    assert _classify({**base, "errors": ["Your credit balance is too low to access the API."]}) == "billing_actionable"
+    assert _classify({**base, "errors": ["prompt is too long: 250000 tokens > 200000 maximum"]}) == "input_too_large"
+    assert _classify({**base, "errors": ["ran out of turns"]}) == "fatal"
+    # a dead HOST credential named by the CLI (host lane) is still the host's auth story
+    assert _classify({**base, "errors": [_R16_OAUTH]}, container_executed=False) == "auth_actionable"
+
+
+def test_a_conversion_failure_after_paid_retries_keeps_the_evidence(monkeypatch, tmp_path):
+    # Round 20: prior-attempt evidence was added only AFTER the successful
+    # capture converted; a conversion failure (a wrong-typed `tool` field
+    # raised out of a set lookup) escaped with no usage at all — a paid
+    # call became a zero-accounting blocked step. Two fixes: the field is
+    # validated, and conversion is an evidence-preserving boundary.
+    from llm import LLMTool
+    from llm_errors import classify_error
+    a = ClaudeSubprocessAdapter()
+    tools = [LLMTool(name="complete_step", description="d", parameters={"type": "object", "properties": {}})]
+    assert a._parse_tool_call('{"tool": ["complete_step"], "x": 1}', tools) is None
+    assert a._parse_tool_call('{"tool": {"name": "complete_step"}}', tools) is None
+    assert a._parse_tool_call('{"tool": "complete_step", "x": 1}', tools).name == "complete_step"
+    # the real conversion of such a terminal no longer raises
+    odd = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                      "result": '{"tool": ["complete_step"], "x": 1}',
+                      "usage": {"input_tokens": 37, "output_tokens": 9}, "total_cost_usd": 0.12})
+    _r16_container_lane(monkeypatch, tmp_path)
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(0, odd)):
+        resp = a.complete([LLMMessage("user", "build a thing")], executor=True, tools=tools)
+    assert resp.tool_calls == [] and resp.input_tokens == 37 and resp.cost_usd == pytest.approx(0.12)
+    # the boundary: any conversion failure carries the final capture's usage
+    # AND the replaced attempts', once each, and never becomes a replay
+    boom = TypeError("cannot use 'list' as a set element (unhashable type: 'list')")
+    monkeypatch.setattr(ClaudeSubprocessAdapter, "_collect", lambda self, events: (_ for _ in ()).throw(boom))
+    launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(0, _R17_SUCCESS))
+    assert launches == 2 and exc is boom
+    # fresh input 100 + 37; the 5 cache reads ride separately; $0.50 + $0.12
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cache_read"], ev["cost"]) == (137, 29, 5, pytest.approx(0.62))
+    assert "Attempt one read the inbox." in ev["partial"]
+    assert getattr(exc, "maro_protocol_failure", False) is True
+    assert classify_error(exc, backend="subprocess").error_class == "fatal"
+    # a message that happens to match a replay pattern still never replays
+    boom2 = RuntimeError("claude subprocess failed while converting the result")
+    monkeypatch.setattr(ClaudeSubprocessAdapter, "_collect", lambda self, events: (_ for _ in ()).throw(boom2))
+    launches, exc2, ev2 = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(0, _R17_SUCCESS))
+    assert exc2 is boom2 and ev2["cost"] == pytest.approx(0.62)
+    assert classify_error(exc2, backend="subprocess").error_class == "fatal"
