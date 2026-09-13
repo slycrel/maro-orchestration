@@ -2873,3 +2873,175 @@ class TestTheStoryIsItsOwnObligation:
         result = hb.stranded_state_sweep()
         assert calls and calls[0].get("limit") == 5
         assert result.get("untold_finalizes_told") == 2
+
+
+class TestTheRecoveryTellsTheTrueStory:
+    """Review round 14 (2026-09-13): the untold sweep rebuilds the card
+    from the record before telling it (the final close precedes the
+    curation, so a death between them leaves the answer-first card on
+    disk); a crash-orphan the verdict sweep repaired carries its owed
+    story in the resolution write, so a failed hook there — or a death
+    after resolving — still reaches the untold sweep; an impossible pid
+    is dead at the shared helper; `limit` bounds attempts, in a fair
+    order."""
+
+    def test_the_recovered_story_is_rebuilt_from_the_record_not_the_saved_card(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from datetime import datetime, timezone, timedelta
+        import runs
+        import notify
+        import run_curation
+        from audit_repair import sweep_untold_finalizes
+        emitted = []
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: emitted.append((kind, dict(payload))) or True)
+        monkeypatch.setattr(notify, "hook_configured", lambda kind: False)
+        old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        resolved = {"since": old, "loop_id": "lr-1", "notified_early": True, "resolved_at": old}
+        # the process died between the final close and the curation: the
+        # record carries the judged verdict, the saved card is the early one
+        hid = _finished_run(GOAL_QUARTERLY, "A.", extra={
+            "loop_ids": ["lr-1"], "verdict_pending": dict(resolved), "goal_verdict_source": "closure",
+            "goal_achieved": True, "finalized_at": old})
+        runs.stamp_run_metadata_for(hid, {"pid": _dead_pid()})
+        stale = {"handle_id": hid, "status": "done", "success_class": "done-verdict-pending",
+                 "goal_achieved": None, "verdict_pending": True, "promotion": {"kept": "by maintenance"}}
+        (runs.run_dir(hid) / "run_card.json").write_text(json.dumps(stale), encoding="utf-8")
+        assert sweep_untold_finalizes(grace_s=3600)["told"] == 1
+        kind, payload = emitted[-1]
+        assert kind == "run_verdict" and payload["handle_id"] == hid
+        assert payload["goal_achieved"] is True and payload["success_class"] != "done-verdict-pending", payload
+        assert not payload.get("verdict_pending")
+        saved = json.loads((runs.run_dir(hid) / "run_card.json").read_text(encoding="utf-8"))
+        assert saved["goal_achieved"] is True and saved["promotion"] == {"kept": "by maintenance"}
+        # the rebuild failing: the record's own verdict is the payload, never the stale card
+        hid2 = _finished_run(GOAL_QUARTERLY + " b", "B.", extra={
+            "verdict_pending": dict(resolved), "goal_verdict_source": "closure",
+            "goal_achieved": False, "finalized_at": old})
+        runs.stamp_run_metadata_for(hid2, {"pid": _dead_pid()})
+        (runs.run_dir(hid2) / "run_card.json").write_text(json.dumps({**stale, "handle_id": hid2}), encoding="utf-8")
+
+        def boom(*a, **kw):
+            raise RuntimeError("curation unavailable")
+
+        monkeypatch.setattr(run_curation, "refresh_run_card_classification", boom)
+        assert sweep_untold_finalizes(grace_s=3600)["told"] == 1
+        kind, payload = emitted[-1]
+        assert payload["handle_id"] == hid2 and payload["goal_achieved"] is False
+        assert payload["goal_verdict_source"] == "closure" and "success_class" not in payload
+        assert _meta(hid2)["final_notified_by"] == "untold_finalize_sweep"
+
+    def test_a_repaired_orphans_story_survives_its_hook_failing_or_the_sweep_dying(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from datetime import datetime, timezone, timedelta
+        import runs
+        import notify
+        from audit_repair import sweep_untold_finalizes, sweep_verdict_orphans
+        old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        active = {"since": old, "loop_id": "lr-1", "notified_early": True}
+        # (a) verdict present, early-closed, never finalized, owner dead
+        judged = _finished_run(GOAL_QUARTERLY, "A.", extra={
+            "loop_ids": ["lr-1"], "verdict_pending": dict(active), "goal_verdict_source": "closure",
+            "goal_achieved": True})
+        # (b) no verdict at all: the pending-orphaned branch
+        unjudged = _finished_run(GOAL_QUARTERLY + " b", "B.", extra={
+            "loop_ids": ["lr-2"], "verdict_pending": {**active, "loop_id": "lr-2"}})
+        # (c) the sweep dies after resolving: the epilogue never runs
+        dies = _finished_run(GOAL_QUARTERLY + " c", "C.", extra={
+            "loop_ids": ["lr-3"], "verdict_pending": {**active, "loop_id": "lr-3"}, "goal_verdict_source": "closure",
+            "goal_achieved": True})
+        for hid in (judged, unjudged, dies):
+            runs.stamp_run_metadata_for(hid, {"pid": _dead_pid()})
+        attempts = []
+
+        def failing(kind, payload, **kw):
+            attempts.append((kind, payload.get("handle_id")))
+            if payload.get("handle_id") == dies:
+                raise RuntimeError("the process died here")
+            return False
+
+        monkeypatch.setattr(notify, "emit", failing)
+        monkeypatch.setattr(notify, "hook_configured", lambda kind: True)
+        assert sweep_verdict_orphans(grace_s=0)["stamped"] == 3
+        for hid in (judged, unjudged, dies):
+            m = _meta(hid)
+            assert m["verdict_pending"]["resolved_at"] and "finalized_at" not in m
+            assert m["story_owed_at"] and "final_notified_at" not in m, m
+        assert len(attempts) == 3
+        # the verdict sweep is done with them; the hook still failing keeps them owed
+        assert sweep_verdict_orphans(grace_s=0)["stamped"] == 0
+        assert sweep_untold_finalizes(grace_s=0) == {"status": "completed", "told": 0, "considered": 3}
+        assert len(attempts) == 6
+        # the hook back: told and recorded, once
+        told = []
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: told.append((kind, payload.get("handle_id"))) or True)
+        assert sweep_untold_finalizes(grace_s=0)["told"] == 3
+        assert sorted(told) == sorted([("run_verdict", judged), ("run_verdict", unjudged), ("run_verdict", dies)]), told
+        for hid in (judged, unjudged, dies):
+            assert _meta(hid)["final_notified_by"] == "untold_finalize_sweep"
+        assert sweep_untold_finalizes(grace_s=0)["told"] == 0 and len(told) == 3
+        # a repair whose epilogue DID deliver owes nothing more
+        fine = _finished_run(GOAL_QUARTERLY + " d", "D.", extra={
+            "loop_ids": ["lr-4"], "verdict_pending": {**active, "loop_id": "lr-4"}, "goal_verdict_source": "closure",
+            "goal_achieved": True})
+        runs.stamp_run_metadata_for(fine, {"pid": _dead_pid()})
+        assert sweep_verdict_orphans(grace_s=0)["stamped"] == 1
+        m = _meta(fine)
+        assert m["story_owed_at"] and m["final_notified_by"] == "verdict_orphan_sweep"
+        assert sweep_untold_finalizes(grace_s=0)["told"] == 0
+
+    def test_an_impossible_pid_does_not_abort_the_untold_sweep(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from datetime import datetime, timezone, timedelta
+        import runs
+        import notify
+        from audit_repair import sweep_untold_finalizes, _pid_alive
+        assert _pid_alive(2 ** 80) is False and _pid_alive(-1) is False
+        emitted = []
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: emitted.append(payload.get("handle_id")) or True)
+        monkeypatch.setattr(notify, "hook_configured", lambda kind: False)
+        now = datetime.now(timezone.utc)
+        resolved = {"since": "2026-09-13T00:00:00+00:00", "notified_early": False, "resolved_at": "x"}
+        # both young under a 4 h grace: the impossible pid sorts first (older)
+        absurd = _finished_run(GOAL_QUARTERLY, "A.", extra={
+            "verdict_pending": dict(resolved), "finalized_at": (now - timedelta(hours=3)).isoformat()})
+        healthy = _finished_run(GOAL_QUARTERLY + " b", "B.", extra={
+            "verdict_pending": dict(resolved), "finalized_at": (now - timedelta(hours=2)).isoformat()})
+        runs.stamp_run_metadata_for(absurd, {"pid": 2 ** 80})
+        runs.stamp_run_metadata_for(healthy, {"pid": _dead_pid()})
+        res = sweep_untold_finalizes(grace_s=4 * 3600)
+        assert res == {"status": "completed", "told": 2, "considered": 2}, res
+        assert emitted == [absurd, healthy], emitted
+
+    def test_the_limit_bounds_attempts_and_a_failing_row_does_not_shadow_the_rest(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from datetime import datetime, timezone, timedelta
+        import runs
+        import notify
+        from audit_repair import sweep_untold_finalizes
+        attempts = []
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: attempts.append(payload.get("handle_id")) or False)
+        monkeypatch.setattr(notify, "hook_configured", lambda kind: True)
+        base = datetime.now(timezone.utc) - timedelta(hours=3)
+        resolved = {"since": "2026-09-13T00:00:00+00:00", "notified_early": False, "resolved_at": "x"}
+        ids = []
+        for i in range(12):
+            ids.append(_finished_run(f"{GOAL_QUARTERLY} {i}", "A.", extra={
+                "verdict_pending": dict(resolved), "finalized_at": (base + timedelta(minutes=i)).isoformat()}))
+        res = sweep_untold_finalizes(grace_s=0, limit=5)
+        assert res == {"status": "completed", "told": 0, "considered": 5}, res
+        assert attempts == ids[:5], (attempts, ids)
+        for hid in ids[:5]:
+            assert _meta(hid)["final_notify_attempted_at"] and "final_notified_at" not in _meta(hid)
+        # the next tick reaches the rows behind the failing ones
+        attempts.clear()
+        assert sweep_untold_finalizes(grace_s=0, limit=5)["considered"] == 5
+        assert attempts == ids[5:10], attempts
+        attempts.clear()
+        assert sweep_untold_finalizes(grace_s=0, limit=5)["considered"] == 5
+        assert attempts == ids[10:] + ids[:3], attempts
+        # the hook back: everything owed is told
+        told = []
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: told.append(payload.get("handle_id")) or True)
+        assert sweep_untold_finalizes(grace_s=0, limit=20)["told"] == 12
+        assert sorted(told) == sorted(ids)
+        assert sweep_untold_finalizes(grace_s=0)["told"] == 0

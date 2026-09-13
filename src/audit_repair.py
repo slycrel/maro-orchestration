@@ -660,13 +660,23 @@ def sweep_dead_runs(
 
 def _pid_alive(pid: int) -> bool:
     """True only when `pid` exists AND is ours (a recycled pid owned by
-    another user cannot be the run's process)."""
+    another user cannot be the run's process). A non-positive pid is no
+    run's process either: `os.kill(-1, 0)` signals every process we own
+    and reports "alive" (review r14)."""
     try:
+        if int(pid) <= 0:
+            return False
         os.kill(pid, 0)
         return True
     except ProcessLookupError:
         return False
     except PermissionError:
+        return False
+    except (OverflowError, ValueError):
+        # not a pid that can exist — dead (review r14: the untold sweep
+        # called this over a `pid: 2**80` record and the OverflowError
+        # aborted every later candidate; the verdict sweep's inline check
+        # had caught it since r8 — the helper is the shared boundary)
         return False
     except OSError:
         return False
@@ -716,17 +726,20 @@ def reconcile_kept_write(existing: dict, kept: dict) -> dict:
     return out
 
 
-def _refresh_run_surfaces(handle_id: str, run_dir: Path, *, by: str) -> None:
+def _refresh_run_surfaces(handle_id: str, run_dir: Path, *, by: str) -> Optional[dict]:
     """Best-effort card + reports refresh after a repair write (the saved
     card is derived from metadata and does not follow it by itself —
-    review r11: a drained finalize left `done-verdict-pending` on disk)."""
+    review r11: a drained finalize left `done-verdict-pending` on disk).
+    Returns the rebuilt card, None when the refresh failed."""
     try:
         from run_curation import refresh_run_card_classification
         from loop_report import write_reports_for_run_dir
-        refresh_run_card_classification(handle_id, run_dir=run_dir)
+        card = refresh_run_card_classification(handle_id, run_dir=run_dir)
         write_reports_for_run_dir(run_dir)
+        return card if isinstance(card, dict) else None
     except Exception:
         log.debug("%s: surface refresh failed for %s", by, handle_id, exc_info=True)
+        return None
 
 
 def _drain_pending(pending: dict) -> tuple:
@@ -930,29 +943,46 @@ def sweep_transition_orphans(
 def sweep_untold_finalizes(
     *, grace_s: float = _ORPHAN_GRACE_S, limit: int = 20,
 ) -> dict:
-    """Tell the story of a finalized run whose finalize never recorded
-    telling it. The final close stamps `finalized_at`; the finalize's emit
-    comes AFTER (curation, then the notify) and records `final_notified_at`
+    """Tell the story of a finished run whose telling was never recorded.
+    The final close stamps `finalized_at`; the finalize's emit comes
+    AFTER (curation, then the notify) and records `final_notified_at`
     only when the hook ran cleanly or no hook is owed. A run with the
     first and not the second is untold: the process died between the
     close and the emit, or a configured hook failed — and its verdict
     marker is usually RESOLVED by then, so the verdict sweep never
     revisits it (review 2026-09-13 r13). The obligation is the story,
-    independent of the marker.
+    independent of the marker. A crash-orphan the verdict sweep repaired
+    never had a final close: its resolution write carries `story_owed_at`
+    in the SAME write (review r14: the sweep's own hook failure, or its
+    death after resolving, left a story no sweep would select again) —
+    that record is this sweep's other candidate.
 
     Gates: a live owner pid within the grace is a finalize still in its
     curation — leave it; a dead owner, or an aged one (a record that
     failed to stamp after a clean emit — a repeated story is the accepted
     direction, a missing one is not) is told here. Routed like the
     finalize: the early answer reached the user → `run_verdict`, else the
-    full `run_completed`; the payload is the saved run card. Serialized
-    under the repair pidfile."""
+    full `run_completed`. The payload is the card REBUILT from the
+    record, never the saved card as found: the final close precedes the
+    curation, so a death between them leaves the answer-first card on
+    disk (review r14: the sweep delivered `done-verdict-pending` as the
+    final story over a judged verdict); when the rebuild fails the
+    payload is the record's own verdict fields. `limit` bounds ATTEMPTS
+    (a failed configured hook counts — review r14: an outage of N hooks
+    held the heartbeat and the repair pidfile for N timeouts), and the
+    order is never-attempted first, then the oldest attempt (a failure
+    stamps `final_notify_attempted_at`), so a failing row does not shadow
+    the rows behind it. Serialized under the repair pidfile."""
     from proc_lock import acquire_pidfile
     from runs import runs_root, stamp_run_metadata_for
 
     def _untold(meta: dict) -> bool:
-        return bool(meta.get("ended_at") and meta.get("finalized_at")
+        return bool(meta.get("ended_at")
+                    and (meta.get("finalized_at") or meta.get("story_owed_at"))
                     and not meta.get("final_notified_at"))
+
+    def _since(meta: dict) -> str:
+        return str(meta.get("finalized_at") or meta.get("story_owed_at") or "")
 
     root = runs_root()
     candidates = []
@@ -963,7 +993,9 @@ def sweep_untold_finalizes(
             meta = _read_metadata(run_dir)
             if meta is None or not _untold(meta):
                 continue
-            candidates.append(run_dir)
+            candidates.append((str(meta.get("final_notify_attempted_at") or ""),
+                               _since(meta), run_dir))
+    candidates = [rd for _a, _s, rd in sorted(candidates, key=lambda c: (c[0], c[1]))]
     if not candidates:
         return {"status": "completed", "told": 0, "considered": 0}
     acquired = acquire_pidfile(
@@ -972,12 +1004,12 @@ def sweep_untold_finalizes(
         return {"status": "busy", "told": 0}
     if acquired.status == "unavailable":
         return {"status": "unavailable", "told": 0, "error": acquired.error}
-    told = considered = 0
+    told = considered = attempted = 0
     try:
         from notify import emit, hook_configured
         now = time.time()
         for run_dir in candidates:
-            if told >= max(1, int(limit)):
+            if attempted >= max(1, int(limit)):
                 break
             meta = _read_metadata(run_dir)
             if meta is None or not _untold(meta):
@@ -985,8 +1017,7 @@ def sweep_untold_finalizes(
             considered += 1
             handle_id = str(meta.get("handle_id") or run_dir.name.split("-", 1)[0])
             try:
-                since = datetime.fromisoformat(
-                    str(meta.get("finalized_at", "")).replace("Z", "+00:00"))
+                since = datetime.fromisoformat(_since(meta).replace("Z", "+00:00"))
                 age_s = now - since.timestamp()
             except (TypeError, ValueError):
                 age_s = grace_s + 1
@@ -997,23 +1028,34 @@ def sweep_untold_finalizes(
                     _pid = 0
                 if _pid > 0 and _pid_alive(_pid):
                     continue  # its finalize is still telling it
-            card = None
-            try:
-                card = json.loads((run_dir / "run_card.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                card = None
-            payload = dict(card) if isinstance(card, dict) else {
-                "handle_id": handle_id, "status": str(meta.get("status") or "")}
+            card = _refresh_run_surfaces(handle_id, run_dir, by="untold-finalize sweep")
+            if isinstance(card, dict):
+                payload = dict(card)
+            else:
+                # the record's own verdict, not a card that may predate it
+                payload = {"handle_id": handle_id, "status": str(meta.get("status") or ""),
+                           "goal": str(meta.get("prompt") or "")[:300],
+                           "goal_achieved": meta.get("goal_achieved"),
+                           "goal_verdict_source": meta.get("goal_verdict_source")}
             payload.setdefault("handle_id", handle_id)
             vp = meta.get("verdict_pending")
             vp = vp if isinstance(vp, dict) else {}
             reached = bool(vp.get("notified_early")
                            and (not vp.get("hook_configured") or vp.get("hook_delivered")))
             kind = "run_verdict" if reached else "run_completed"
-            delivered = emit(kind, payload, run_dir=str(run_dir))
-            if not delivered and hook_configured(kind):
+            attempted += 1
+            try:
+                delivered = emit(kind, payload, run_dir=str(run_dir))
+                owed = bool(not delivered and hook_configured(kind))
+            except Exception:
+                # an emit that raises told nobody — owed, whatever the hook
+                log.debug("untold-finalize sweep: emit raised for %s", handle_id, exc_info=True)
+                owed = True
+            if owed:
                 log.warning("untold-finalize sweep: configured notify hook did not "
                             "deliver %s for %s — still owed", kind, handle_id)
+                stamp_run_metadata_for(handle_id, {
+                    "final_notify_attempted_at": datetime.now(timezone.utc).isoformat()})
                 continue
             if stamp_run_metadata_for(handle_id, {
                     "final_notified_at": datetime.now(timezone.utc).isoformat(),
@@ -1192,6 +1234,16 @@ def sweep_verdict_orphans(
                     log.debug("verdict-orphan sweep: owed notify failed for "
                               "%s", handle_id, exc_info=True)
 
+            def _story_owed(told=_told):
+                # The owed story is recorded IN the resolution write (review
+                # r14): a run that never had a final close has no
+                # `finalized_at`, so when the epilogue's hook fails — or
+                # this process dies after resolving — the untold-finalize
+                # sweep selects it by this record; `final_notified_at`
+                # (stamped by the epilogue on delivery) retires it.
+                return {} if told else {
+                    "story_owed_at": datetime.now(timezone.utc).isoformat()}
+
             # Re-read immediately before deciding: a verdict may have landed
             # since the scan's read (narrow but real TOCTOU vs a finishing
             # tail that the pid check raced; review 2026-08-13).
@@ -1212,7 +1264,7 @@ def sweep_verdict_orphans(
                         **vp,
                         "resolved_at": datetime.now(timezone.utc).isoformat(),
                         "resolved_by": "verdict_orphan_sweep(verdict-present)",
-                    }, **_settle_pt(meta, by="verdict_orphan_sweep")})
+                    }, **_story_owed(), **_settle_pt(meta, by="verdict_orphan_sweep")})
                 if resolved_path is None:
                     log.warning("verdict-orphan sweep: resolve-only write "
                                 "failed for %s — retrying next sweep",
@@ -1254,7 +1306,7 @@ def sweep_verdict_orphans(
                 "resolved_at": datetime.now(timezone.utc).isoformat(),
                 "resolved_by": "verdict_orphan_sweep",
             }, "goal_verdict_source": VERDICT_SOURCE_PENDING_ORPHANED,
-                **_settle_pt(meta, by="verdict_orphan_sweep")}
+                **_story_owed(), **_settle_pt(meta, by="verdict_orphan_sweep")}
             if stamp_run_metadata_for(handle_id, fields) is None:
                 # Metadata write failed: marker stays ACTIVE, next sweep
                 # retries (the ledger re-stamp is idempotent — same source,

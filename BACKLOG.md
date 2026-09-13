@@ -6648,7 +6648,27 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   verdict sweep's epilogue record `final_notified_at` only then (a
   configured hook that failed leaves the story owed); the ledger's
   typed `write_failed`/`invalid` results defer the drain (`missing` is
-  a valid absence). Direction recorded: a
+  a valid absence). Round 14: the recovery tells the TRUE story — the
+  untold sweep rebuilds the card from the record before telling it
+  (`_refresh_run_surfaces` now returns the rebuilt card; the final
+  close precedes the curation, so a death between them left the
+  answer-first `done-verdict-pending` card on disk and the sweep
+  delivered it over a judged verdict — and acknowledged it); a rebuild
+  that fails makes the payload the record's own verdict fields, never
+  the saved card; a crash-orphan the verdict sweep repairs carries
+  `story_owed_at` IN its resolution write (both branches, only when
+  not already told), so a failed configured hook in the epilogue — or
+  the sweep dying after resolving — leaves a record the untold sweep
+  selects (`finalized_at` OR `story_owed_at`, no `final_notified_at`;
+  the r13 resolve-then-die residual is closed by this); `_pid_alive`
+  treats OverflowError/ValueError AND a non-positive pid as dead
+  (`os.kill(-1, 0)` signals everything we own and answered "alive");
+  `limit` bounds ATTEMPTS (a failed hook counts; heartbeat's 5 × the
+  30 s hook timeout caps a tick at ~150 s) and the order is
+  never-attempted first then oldest attempt (`final_notify_attempted_at`
+  stamped per failure), so a failing row does not shadow the rows
+  behind it; an emit that raises is owed whatever the hook.
+  Direction recorded: a
   settlement that fails in the run AND at the finalize is kept for the
   sweep's retry in the same process; only a process death loses it, and
   then the sweep reverts even an adopted retry — the retry's adoption
