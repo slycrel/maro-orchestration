@@ -854,6 +854,22 @@ class FailoverAdapter(LLMAdapter):
                         result.call_record = str(_rec_path)
                 except Exception:
                     pass
+                if _failed_hops:
+                    # The hops this walk paid for and moved past ride the
+                    # response (round 21) — folded HERE, after this hop's own
+                    # call record and BEFORE the tail ledger row and the
+                    # runaway meter read it (round 22: the row was written
+                    # first, so the run card understated a permitted
+                    # failover by the failed hop's bill).
+                    try:
+                        _tot, _ = _hops_evidence()
+                        # `input_tokens` is TOTAL input (cache reads included).
+                        result.input_tokens = (getattr(result, "input_tokens", 0) or 0) + _tot["fresh_in"] + _tot["cache_read"]
+                        result.output_tokens = (getattr(result, "output_tokens", 0) or 0) + _tot["out"]
+                        result.cache_read_tokens = (getattr(result, "cache_read_tokens", 0) or 0) + _tot["cache_read"]
+                        result.cost_usd = float(getattr(result, "cost_usd", 0.0) or 0.0) + _tot["cost"]
+                    except Exception:
+                        log.warning("FailoverAdapter: failed hops' spend not folded into the response", exc_info=True)
                 # Tail cost attribution (async-tail visibility, 2026-08-13):
                 # a call completed under an active tail scope writes a
                 # loop-joined cost row — closure/gate/learning/maintenance
@@ -896,16 +912,6 @@ class FailoverAdapter(LLMAdapter):
                             _meter["spent_usd"] += _call_cost
                     except Exception:
                         pass
-                if _failed_hops:
-                    try:
-                        _tot, _ = _hops_evidence()
-                        # `input_tokens` is TOTAL input (cache reads included).
-                        result.input_tokens = (getattr(result, "input_tokens", 0) or 0) + _tot["fresh_in"] + _tot["cache_read"]
-                        result.output_tokens = (getattr(result, "output_tokens", 0) or 0) + _tot["out"]
-                        result.cache_read_tokens = (getattr(result, "cache_read_tokens", 0) or 0) + _tot["cache_read"]
-                        result.cost_usd = float(getattr(result, "cost_usd", 0.0) or 0.0) + _tot["cost"]
-                    except Exception:
-                        log.warning("FailoverAdapter: failed hops' spend not folded into the response", exc_info=True)
                 return result
             except Exception as exc:
                 last_exc = exc
@@ -925,6 +931,9 @@ class FailoverAdapter(LLMAdapter):
                     if isinstance(_partial, bytes):
                         _partial = _partial.decode("utf-8", errors="replace")
                     _reason = getattr(exc, "maro_kill_reason", "") or str(exc)[:200]
+                    # The failed hop's own bill, on its own record (round 22).
+                    from llm_errors import call_usage_evidence as _cue_fail
+                    _fev = _cue_fail(exc)
                     _rec_fail(
                         self._render_for_record(messages),
                         _partial,
@@ -933,6 +942,9 @@ class FailoverAdapter(LLMAdapter):
                         max_tokens_requested=max_tokens,
                         purpose=_purpose,
                         error=f"{type(exc).__name__}: {_reason}",
+                        tokens_in=(_fev["tokens_in"] + _fev["cache_read"]) or None,
+                        tokens_out=_fev["tokens_out"] or None,
+                        cost_usd=_fev["cost"],
                     )
                 except Exception:
                     pass
@@ -2447,12 +2459,18 @@ def _add_call_evidence(exc: BaseException, ev: Dict[str, Any], partial: str = ""
     """ADD one call's validated evidence to the attributes
     `llm_errors.call_usage_evidence` reads; partial text is PREPENDED (an
     earlier attempt's work precedes the final one's)."""
+    # Reads are CHAIN-AWARE (round 22): a FailoverAdapter re-raises an
+    # actionable failure as a BackendError `from` the adapter's exception,
+    # so the target's own evidence may ride its cause — a shallow read
+    # wrote a wrapper attribute that SHADOWED the final hop's counters
+    # and partial text from every later chain-aware reader.
+    from llm_errors import evidence_attr as _ea
     for attr, key in (("fresh_input_tokens", "fresh_in"), ("fresh_output_tokens", "out"),
                       ("fresh_cache_read_tokens", "cache_read"), ("estimated_cost_usd", "cost")):
         if ev.get(key):
-            setattr(exc, attr, (getattr(exc, attr, 0) or 0) + ev[key])
+            setattr(exc, attr, (_ea(exc, attr, 0) or 0) + ev[key])
     if partial:
-        prev = str(getattr(exc, "maro_partial_output", "") or "")
+        prev = str(_ea(exc, "maro_partial_output", "") or "")
         exc.maro_partial_output = f"{partial}\n{prev}" if prev else partial  # type: ignore[attr-defined]
 
 

@@ -979,6 +979,47 @@ omitted the fields `cli._cmd_director` gained in round 20. Both
 fixed; pinned through the real `run_director(skip_if_simple=True)`
 with a paid paused step and both JSON renderers.
 
+*Review round 22 (2026-09-13, codex skeptic + QA, whole chunk): NO
+HIGH from either lens — the loop's first HIGH-free round, and by the
+standing rule its FIXPOINT. Two shared MEDs, both on the round-21
+failover fold; fixed.* (lxxxviii) **Evidence adds are chain-aware.**
+`_add_call_evidence` read the target's counters with a shallow
+`getattr`, but a final hop that arrives as a `BackendError` keeps its
+evidence on its CAUSE (`evidence_attr` reads the chain) — adding the
+earlier hops wrote wrapper attributes that shadowed the final hop's
+own counters and partial text. Reads now go through `evidence_attr`;
+pinned on the unit (a wrapper with its evidence on the cause: 42 / 9
+/ 100 / $0.13, both partials in order) and through nested real
+wrappers. (lxxxix) **The fold precedes the tail ledger row and the
+runaway meter.** The failed hops' spend was folded into the response
+AFTER the tail row (`record_step_cost`) and the meter had read it, so
+a closure/gate call recovered through a permitted failover returned
+the right bill and persisted the fallback's only; the failed hop's
+own call record carried no usage. The fold now runs right after the
+hop's own call record; the failed-call record carries the hop's own
+evidence (tokens_in = fresh + cache, tokens_out, cost). Pinned: one
+tail row of 147 / 11 / 100 / $0.15 under `tail_cost_scope`, two
+distinct call records (137 / 9 / $0.12 with the error; 10 / 2 /
+$0.03), the armed meter estimating the complete call.
+
+**Fixpoint (2026-09-13).** Twenty-two rounds on this chunk; twenty-one
+produced a verified HIGH each, round 22 none. The recurring seam was
+the claude CLI capture reader (rounds 12–18 converged it to ONE framer
+and ONE failure detail), then classification precedence (19–20), then
+the failover wrapper's credential domains and accounting (21–22). The
+accepted residuals are listed in the "RECORDED NOT CHANGED" set the
+review prompts carry: converted kills classify `retry_backoff`;
+continuation-by-context; narrate-after-write; host auth is
+terminal-surfaced, not a pause; a hand-set terminal marker with no
+structural verdict is `fatal`; the scheduler regression mocks the
+worktree wrapper; the phase-3b parallel-step cwd lead; torn and
+over-deep documents are skipped line by line; the breaker's bounded
+raw-text auth search when no terminal object exists; the partial
+`result` field read as CLI-authored; an `on`-mode degrade with the
+host circuit open re-fails once; a success after paid failed hops
+carries their bill but not their partial text; the `_reseed_probe`
+cadence versus the refusal message's wording.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

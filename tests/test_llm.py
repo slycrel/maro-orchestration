@@ -4912,3 +4912,115 @@ def test_a_paid_terminal_failure_then_a_permitted_failover_keeps_all_usage(monke
     r2 = FailoverAdapter([ok]).complete([LLMMessage("user", "plan")])
     assert (r2.input_tokens, r2.output_tokens, r2.cache_read_tokens, r2.cost_usd) == (10, 2, 0, 0.03)
     _llm._BACKEND_CIRCUIT.clear()
+
+
+# ---------------------------------------------------------------------------
+# Review round 22 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+def _r22_billing_capture(partial="FIRST"):
+    return _r17_assistant(partial) + "\n" + json.dumps({
+        "type": "result", "subtype": "error_during_execution", "is_error": True,
+        "result": "", "errors": ["Your credit balance is too low to access the API."],
+        "usage": {"input_tokens": 37, "output_tokens": 9, "cache_read_input_tokens": 100},
+        "total_cost_usd": 0.12})
+
+
+def _r22_dead(backend="anthropic"):
+    dead = MagicMock()
+    dead.backend = backend; dead.model_key = "fb"; dead.container_capable = False
+    boom = RuntimeError("HTTP 402 Payment Required")
+    boom.fresh_input_tokens = 5; boom.estimated_cost_usd = 0.01; boom.maro_partial_output = "FINAL"
+    dead.complete = MagicMock(side_effect=boom)
+    return dead
+
+
+def test_failed_hops_preserve_a_wrapped_final_hops_evidence(monkeypatch):
+    # Round 22: `_add_call_evidence` read the target's counters with a
+    # shallow getattr, but a final hop that arrives as a BackendError keeps
+    # its evidence on its CAUSE — adding the earlier hops wrote wrapper
+    # attributes that shadowed the final hop's own counters and partial
+    # text from every chain-aware reader.
+    import llm as _llm
+    import notify
+    from llm import FailoverAdapter, _add_call_evidence
+    from llm_errors import BackendError, call_usage_evidence, classify_error
+    monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+    # the unit: adding to a wrapper whose evidence rides its cause
+    cause = RuntimeError("inner"); cause.fresh_input_tokens = 5; cause.estimated_cost_usd = 0.01
+    cause.maro_partial_output = "FINAL"
+    wrapped = BackendError(classify_error(RuntimeError("HTTP 402 Payment Required"), backend="anthropic"))
+    wrapped.__cause__ = cause
+    _add_call_evidence(wrapped, {"fresh_in": 37, "out": 9, "cache_read": 100, "cost": 0.12}, "FIRST")
+    ev = call_usage_evidence(wrapped)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cache_read"]) == (42, 9, 100) and ev["cost"] == pytest.approx(0.13)
+    assert "FIRST" in ev["partial"] and "FINAL" in ev["partial"] and ev["partial"].index("FIRST") < ev["partial"].index("FINAL")
+    # the flow: nested real wrappers — the inner wrapper wraps the final hop
+    _llm._BACKEND_CIRCUIT.clear()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=_r22_billing_capture())):
+        with pytest.raises(Exception) as ei:
+            FailoverAdapter([ClaudeSubprocessAdapter(), FailoverAdapter([_r22_dead()])]).complete(
+                [LLMMessage("user", "plan")])
+    assert isinstance(ei.value, BackendError)
+    ev = call_usage_evidence(ei.value)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cache_read"]) == (42, 9, 100) and ev["cost"] == pytest.approx(0.13)
+    assert "FIRST" in ev["partial"] and "FINAL" in ev["partial"]
+    _llm._BACKEND_CIRCUIT.clear()
+
+
+def test_a_paid_failover_tail_ledger_and_call_records_match_the_complete_call(monkeypatch):
+    # Round 22: the tail ledger row and the runaway meter read the response
+    # BEFORE the failed hops' spend was folded in, so a closure/gate call
+    # recovered through a permitted failover returned the right bill and
+    # persisted the fallback's only; the failed hop's own call record
+    # carried no usage at all.
+    import llm as _llm
+    import metrics, notify, runs
+    from llm import FailoverAdapter
+    from metrics import tail_cost_scope
+    monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+    rows, records = [], []
+    monkeypatch.setattr(metrics, "record_step_cost",
+                        lambda step_text, ti, to, status, **kw: rows.append({"step": step_text, "ti": ti, "to": to, **kw}))
+    monkeypatch.setattr(runs, "record_llm_call",
+                        lambda prompt, output, **kw: records.append(kw) or None)
+    fallback = MagicMock()
+    fallback.backend = "anthropic"; fallback.model_key = "fb"; fallback.container_capable = False
+    # (a fresh response per call, as a real adapter returns)
+    fallback.complete = MagicMock(side_effect=lambda *a, **k: LLMResponse(
+        content="fallback completed", input_tokens=10, output_tokens=2, cost_usd=0.03, model="fb-model"))
+    _llm._BACKEND_CIRCUIT.clear()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=_r22_billing_capture())):
+        with tail_cost_scope("tl-22", "closure"):
+            resp = FailoverAdapter([ClaudeSubprocessAdapter(), fallback]).complete(
+                [LLMMessage("user", "judge it")], purpose="closure verdict")
+    assert resp.cost_usd == pytest.approx(0.15)
+    # ONE tail row, carrying the complete call
+    assert len(rows) == 1 and rows[0]["loop_id"] == "tl-22"
+    assert (rows[0]["ti"], rows[0]["to"], rows[0]["cache_read_tokens"]) == (147, 11, 100)
+    assert rows[0]["provider_cost_usd"] == pytest.approx(0.15)
+    # per-hop call records stay distinct, each with its own bill
+    assert len(records) == 2
+    failed, ok = records
+    assert failed["error"].startswith("RuntimeError") and (failed["tokens_in"], failed["tokens_out"]) == (137, 9)
+    assert failed["cost_usd"] == pytest.approx(0.12)
+    assert not ok.get("error") and (ok["tokens_in"], ok["tokens_out"]) == (10, 2) and ok["cost_usd"] == pytest.approx(0.03)
+    # the runaway meter, armed, sees the complete call too
+    _llm._BACKEND_CIRCUIT.clear()
+    rows.clear(); records.clear()
+    import threading
+    meter = {"spent_usd": 0.0, "ceiling_usd": 100.0, "lock": threading.Lock()}
+    seen = []
+    monkeypatch.setattr(metrics, "estimate_cost", lambda ti, to, model="", cache_read_tokens=0: seen.append((ti, to, cache_read_tokens)) or 0.0)
+    fa = FailoverAdapter([ClaudeSubprocessAdapter(), fallback])
+    token = _llm._RUN_COST_METER.set(meter)
+    try:
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=1, stderr="", container_executed=False, stdout=_r22_billing_capture())):
+            fa.complete([LLMMessage("user", "judge it")], purpose="closure verdict")
+    finally:
+        _llm._RUN_COST_METER.reset(token)
+    assert seen and seen[-1] == (147, 11, 100)
+    _llm._BACKEND_CIRCUIT.clear()
