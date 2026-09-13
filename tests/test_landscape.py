@@ -73,8 +73,8 @@ class _Judge:
         return _R()
 
 
-def _related(n, reason="follows it"):
-    return json.dumps({"relation": "related", "run": n, "reason": reason})
+def _related(n, reason="follows it", continues=True):
+    return json.dumps({"relation": "related", "run": n, "continues": continues, "reason": reason})
 
 
 def _rerun(n, reason="same ask"):
@@ -537,7 +537,7 @@ class TestReviewFixes:
     def test_the_third_contract_reads_strictly(self):
         from landscape import parse, PROMPT_VER
         cands = TestParse.CANDS
-        assert PROMPT_VER == 3
+        assert PROMPT_VER == 4
         # the second contract, as recorded, still reads as it did
         assert parse('{"relation":"related","run":1.9,"reason":"x"}', cands, ver=2)[1] == "aaaa0001"
         assert parse('{"relation":"fresh","run":2,"reason":"x"}', cands, ver=2)[0] == "fresh"
@@ -736,3 +736,212 @@ class TestTheLandscapeBindsTheProject:
         assert landscape.chosen_project({"relation": "related", "chosen": a}) == ""
         b = _finished_run(GOAL_HAIKU, "leaves")
         assert landscape.chosen_project({"relation": "related", "chosen": b}) == ""
+
+
+class TestTheJudgeSaysWhetherTheGoalContinuesTheWork:
+    """Review round 1 (2026-09-13): `related` covers a tangent whose answer is
+    useful context — a context relation must not be promoted into a workspace
+    decision. The fourth template shows the judge each candidate's project
+    and asks whether the goal CONTINUES the chosen run's work; only that
+    binds the project."""
+
+    def test_the_fourth_contract_shows_the_project_and_reads_continues_strictly(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from landscape import decide, parse, parse_full, prompt, PROMPT_VER
+        assert PROMPT_VER == 4
+        a = _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        judge = _Judge(_related(1, "carries it forward"))
+        rec = decide(GOAL_FOLLOW_UP, handle_id="x", adapter=judge)
+        text = judge.calls[0][0][-1].content
+        assert "Project: board-reports" in text and '"continues":' in text
+        assert rec["continues"] is True and rec["candidates"][0]["project"] == "board-reports"
+        # the older template neither shows the project nor asks
+        old = prompt(GOAL_FOLLOW_UP, rec["candidates"], ver=3)
+        assert "Project:" not in old and "continues" not in old
+        cands = rec["candidates"]
+        # only the JSON boolean true continues; a string, a number, or silence does not
+        assert parse_full('{"relation":"related","run":1,"continues":true,"reason":"x"}', cands)[3] is True
+        for not_it in ('"true"', '1', 'null', '"yes"'):
+            assert parse_full('{"relation":"related","run":1,"continues":%s,"reason":"x"}' % not_it, cands)[3] is False
+        assert parse_full('{"relation":"related","run":1,"reason":"x"}', cands)[3] is False
+        # a rerun always continues; fresh never; an older template never
+        assert parse_full('{"relation":"rerun","run":1,"reason":"x"}', cands)[3] is True
+        assert parse_full('{"relation":"fresh","continues":true,"reason":"x"}', cands)[3] is False
+        assert parse_full('{"relation":"related","run":1,"continues":true,"reason":"x"}', cands, ver=3)[3] is False
+        # `parse` is unchanged for its callers
+        assert parse('{"relation":"related","run":1,"continues":true,"reason":"x"}', cands) == ("related", a, "x")
+        # a judge that does not say the goal continues records that
+        rec2 = decide(GOAL_FOLLOW_UP, handle_id="x", adapter=_Judge(_related(1, "same method", continues=False)))
+        assert rec2["relation"] == "related" and rec2["chosen"] == a and rec2["continues"] is False
+
+    def test_a_related_run_that_is_only_context_does_not_bind_the_project(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from handle import _default_project_for
+        from orch_items import projects_root
+        (projects_root() / "client-a").mkdir(parents=True)
+        prior = _finished_run(GOAL_QUARTERLY, "Revenue rose 12% on services.", extra={"project": "client-a"})
+        goal = "Use that approach for the client B quarterly revenue report"
+        r, kw = _agenda_run(monkeypatch, goal,
+                            _NowAndJudge(_related(1, "the same method for other work", continues=False)))
+        meta = _meta(r.handle_id)
+        # the relation and its context stand ...
+        assert meta["landscape"]["chosen"] == prior and meta["origin"]["relation"] == "related"
+        assert meta["landscape"]["continues"] is False
+        # ... but the deliverable does not land in client A's project
+        assert kw["project"] == _default_project_for(goal) != "client-a"
+        assert (meta["project"], meta["project_binding"]) == (kw["project"], "minted")
+        # the same judge saying the goal continues the run binds it
+        r2, kw2 = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert kw2["project"] == "client-a" and _meta(r2.handle_id)["project_binding"] == "landscape"
+
+    def test_the_recorded_project_is_a_name_inside_the_projects_root(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import landscape
+        from orch_items import projects_root
+        root = projects_root()
+        root.mkdir(parents=True, exist_ok=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (root / "escape").symlink_to(outside, target_is_directory=True)
+        assert (root / "escape").is_dir(), "the fixture: is_dir() follows the link"
+        (root / "board-reports").mkdir()
+        (root / "17").mkdir()
+
+        def rec(hid, **extra):
+            return {"relation": "related", "chosen": hid, "continues": True, **extra}
+
+        # a symlink out of the root is not a project
+        a = _finished_run(GOAL_HAIKU, "leaves", extra={"project": "escape"})
+        assert landscape.chosen_project(rec(a)) == ""
+        # a recorded non-string is rejected, never coerced into a directory's name
+        for bad in (17, True, ["board-reports"], {"name": "board-reports"}):
+            b = _finished_run(GOAL_HAIKU, "leaves", extra={"project": bad})
+            assert landscape.chosen_project(rec(b)) == "", bad
+            assert landscape.recorded_project(b) == ""
+        assert landscape.project_name("board-reports") == "board-reports"
+        for bad in ("", " ", "a/b", "a\\b", ".", "..", 17, None, ["x"]):
+            assert landscape.project_name(bad) == "", bad
+        # a real directory binds — only when the judge said the goal continues
+        c = _finished_run(GOAL_HAIKU, "leaves", extra={"project": "board-reports"})
+        assert landscape.recorded_project(c) == "board-reports"
+        assert landscape.chosen_project(rec(c)) == "board-reports"
+        assert landscape.chosen_project({"relation": "related", "chosen": c, "continues": False}) == ""
+        assert landscape.chosen_project({"relation": "related", "chosen": c}) == ""  # an older record
+        assert landscape.chosen_project({"relation": "related", "chosen": c, "continues": "true"}) == ""
+        assert landscape.chosen_project({"relation": "rerun", "chosen": c, "continues": True}) == "board-reports"
+
+
+class TestProjectBindingProvenance:
+    def test_the_navigators_pick_is_recorded_as_the_navigators(self, monkeypatch, tmp_path, caplog):
+        # handle_queue passes the navigator's menu pick as `project=`; it is
+        # Maro's decision, not an operator's word, and when the landscape
+        # would bind elsewhere the disagreement is logged so it can be
+        # measured before either is made to outrank the other.
+        _setup(monkeypatch, tmp_path)
+        from orch_items import projects_root
+        (projects_root() / "prior-project").mkdir(parents=True)
+        (projects_root() / "nav-project").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "prior-project"})
+        origin = {"source": "dispatch", "dispatch_navigator": {"move": "extend", "project": "nav-project"}}
+        r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")),
+                            project="nav-project", origin=origin)
+        meta = _meta(r.handle_id)
+        assert kw["project"] == "nav-project"
+        assert (meta["project"], meta["project_binding"]) == ("nav-project", "navigator")
+        assert meta["landscape"]["chosen"] and meta["landscape"]["continues"] is True
+        assert any("nav-project (navigator) outranks the landscape's prior-project" in m
+                   for m in caplog.messages)
+        # an operator's explicit project that is not the navigator's pick stays `operator`
+        r2, _ = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")),
+                            project="prior-project", origin={"source": "dispatch",
+                                                             "dispatch_navigator": {"move": "extend"}})
+        assert _meta(r2.handle_id)["project_binding"] == "operator"
+
+    def test_the_fallback_rule_is_read_off_the_scan_that_picked_the_project(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        calls = []
+        real = handle_mod._match_existing_project
+
+        def counted(message):
+            calls.append(message)
+            return real(message)
+
+        monkeypatch.setattr(handle_mod, "_match_existing_project", counted)
+        assert handle_mod._project_for_goal("Refresh the board-reports index page") == ("board-reports", "named")
+        assert len(calls) == 1
+        slug, rule = handle_mod._project_for_goal(GOAL_FOLLOW_UP)
+        assert rule == "minted" and slug == handle_mod._default_project_for(GOAL_FOLLOW_UP)
+        assert len(calls) == 3  # one per resolution — never a second scan to name the rule
+
+    def test_a_now_answer_binds_no_project(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from handle import handle
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        with _no_hosted_free(), _classify_now():
+            r = handle(GOAL_FOLLOW_UP, adapter=_NowAndJudge(_related(1, "carries it forward")),
+                       force_lane="now", dry_run=False)
+        assert r.status == "done" and r.lane == "now"
+        meta = _meta(r.handle_id)
+        assert "project_binding" not in meta and "project" not in meta
+
+    def test_a_failed_stamp_is_said_not_swallowed(self, monkeypatch, tmp_path, caplog):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        monkeypatch.setattr(runs, "stamp_run_metadata", lambda fields: None)
+        r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge())
+        assert kw["project"]
+        assert any("not recorded in run metadata" in m for m in caplog.messages)
+
+
+class TestTheBoundProjectComposes:
+    def test_the_scope_pass_decides_in_the_bound_project(self, monkeypatch, tmp_path):
+        # the literal path: landscape → binding → scope generation → the loop;
+        # the scope's decision domain is the bound project, not the goal slug
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        import config
+        from handle import _default_project_for
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        monkeypatch.setattr(config, "get_bool",
+                            lambda key, default=False: True if key == "scope_generation" else default)
+        gen = MagicMock(return_value=None)
+        with patch("scope.generate_resolved_intent", gen):
+            r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert kw["project"] == "board-reports"
+        assert gen.call_count == 1
+        assert gen.call_args.kwargs["decision_domain"] == "board-reports" != _default_project_for(GOAL_FOLLOW_UP)
+
+    def test_a_fork_of_a_landscape_bound_run_records_the_real_parent_project(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import _default_project_for
+        from orch_items import projects_root, project_dir
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        parent, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert kw["project"] == "board-reports" != _default_project_for(GOAL_FOLLOW_UP)
+        # the parent's run is done; a dispatched child forks from it
+        import runs
+        runs.stamp_run_metadata_for(parent.handle_id, {"status": "done", "ended_at": "2026-09-13T00:00:00Z"})
+        child_goal = "Draft the cover letter for the investor deck"
+        rec = MagicMock()
+        with patch("ancestry.record_fork_ancestry", rec):
+            child, ckw = _agenda_run(monkeypatch, child_goal, _NowAndJudge(),
+                                     origin={"source": "dispatch", "parent_handle_id": parent.handle_id,
+                                             "parent_goal": GOAL_FOLLOW_UP})
+        assert ckw["project"] == _default_project_for(child_goal)
+        assert rec.call_count == 1
+        assert rec.call_args.kwargs["parent_id"] == "board-reports"
+        assert rec.call_args.kwargs["parent_dir"] == project_dir("board-reports")
+        assert rec.call_args.args[0] == project_dir(ckw["project"])
+        # a parent with no recorded run keeps the goal-text derivation
+        rec2 = MagicMock()
+        with patch("ancestry.record_fork_ancestry", rec2):
+            _agenda_run(monkeypatch, child_goal, _NowAndJudge(),
+                        origin={"source": "dispatch", "parent_handle_id": "nope0000", "parent_goal": GOAL_FOLLOW_UP})
+        assert rec2.call_args.kwargs["parent_id"] == _default_project_for(GOAL_FOLLOW_UP)

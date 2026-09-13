@@ -339,15 +339,24 @@ def _match_existing_project(message: str) -> str:
         return ""
 
 
+def _project_for_goal(message: str) -> "tuple[str, str]":
+    """Project identity for a project-less goal and the rule that bound it:
+    (an existing project named in the goal text, "named") else (the minted
+    goal slug, "minted"). ONE directory observation decides both — the rule
+    is read off the same scan that picked the project, never a second scan
+    that a directory appearing or vanishing in between could contradict."""
+    matched = _match_existing_project(message)
+    if matched:
+        return matched, "named"
+    from loop_artifacts import resolve_project_slug
+    return resolve_project_slug(message), "minted"
+
+
 def _default_project_for(message: str) -> str:
     """Project identity for a project-less goal: an existing project named in
     the goal text, else the minted goal slug. Both the loop fence and the
     scope pass must resolve through here so they can't diverge."""
-    matched = _match_existing_project(message)
-    if matched:
-        return matched
-    from loop_artifacts import resolve_project_slug
-    return resolve_project_slug(message)
+    return _project_for_goal(message)[0]
 
 
 def _run_now(
@@ -2067,27 +2076,43 @@ def _handle_impl(
         # another LLM call.  Stamp it before recall so the next run can join
         # this one even though metadata was opened before lane classification.
         # Project identity, by precedence (2026-09-13): the operator's
-        # explicit project (an override, never the design); the project of
-        # the run the LANDSCAPE chose (Maro's own decision from the run
-        # history — the deliverable lands where the prior work is); an
-        # existing project literally named in the goal (the string
-        # shortcut the landscape is meant to retire — kept as the fallback
-        # for fresh goals because the lexical judge still misses
-        # continuations whose wording shares no tokens, BACKLOG #65 (3));
-        # else the minted slug. The rule that bound it is recorded so the
-        # shortcut's share can be measured before it is removed.
-        if project:
+        # explicit project (an override, never the design) — or, riding the
+        # same argument, the dispatch NAVIGATOR's pick from the recent-
+        # projects menu (handle_queue: Maro's own decision, made with
+        # project evidence; recorded as `navigator`, not as an operator's
+        # word); the project of the run the LANDSCAPE chose and judged the
+        # goal to CONTINUE (Maro's own decision from the run history — the
+        # deliverable lands where the prior work is); an existing project
+        # literally named in the goal (the string shortcut the landscape is
+        # meant to retire — kept as the fallback for fresh goals because
+        # the lexical judge still misses continuations whose wording shares
+        # no tokens, BACKLOG #65 (3)); else the minted slug. The rule that
+        # bound it is recorded so the shortcut's share can be measured
+        # before it is removed, and so a navigator/landscape disagreement
+        # is measurable before either is made to outrank the other.
+        _nav_pick = ""
+        if isinstance((origin or {}).get("dispatch_navigator"), dict):
+            _nav_pick = str(origin["dispatch_navigator"].get("project") or "")
+        if project and project == _nav_pick:
+            _agenda_project, _project_binding = project, "navigator"
+        elif project:
             _agenda_project, _project_binding = project, "operator"
         elif _landscape_project:
             _agenda_project, _project_binding = _landscape_project, "landscape"
         else:
-            _agenda_project = _default_project_for(message)
-            _project_binding = "named" if _match_existing_project(message) else "minted"
+            _agenda_project, _project_binding = _project_for_goal(message)
+        if _landscape_project and _landscape_project != _agenda_project:
+            log.warning("project binding: %s (%s) outranks the landscape's %s",
+                        _agenda_project, _project_binding, _landscape_project)
         try:
             from runs import stamp_run_metadata as _stamp_project_metadata
-            _stamp_project_metadata({"project": _agenda_project, "project_binding": _project_binding})
+            if _stamp_project_metadata({"project": _agenda_project,
+                                        "project_binding": _project_binding}) is None:
+                log.warning("project binding: %s (%s) not recorded in run metadata",
+                            _agenda_project, _project_binding)
         except Exception:
-            pass
+            log.warning("project binding: %s (%s) not recorded in run metadata",
+                        _agenda_project, _project_binding, exc_info=True)
         log.info("project binding: %s (%s)", _agenda_project, _project_binding)
 
         # pipeline: prefix — user specifies explicit steps as "step1 | step2 | step3".
@@ -2197,8 +2222,11 @@ def _handle_impl(
         # fork records its lineage in the child project's ancestry.json —
         # the same chain build_ancestry_prompt injects and recall falls back
         # to — so origin-walk and ancestry.json stop being two disagreeing
-        # sources. First fork wins; parent identity derives from parent_goal
-        # via the same _default_project_for the parent's own loop used.
+        # sources. First fork wins; parent identity is the project the
+        # parent run RECORDED (its metadata — a landscape-bound parent works
+        # in a project its goal text never names, review 2026-09-13), and
+        # only for a parent with no recorded run the goal-text derivation
+        # its own loop would have used.
         if origin and origin.get("related_by") != "landscape":
             # A landscape-decided relation is a RUN relation (origin +
             # recall thread carry it); it is not a project fork, so it
@@ -2210,7 +2238,9 @@ def _handle_impl(
                 _par_goal = str(origin.get("parent_goal") or "").strip()
                 _par_hid = str(origin.get("parent_handle_id") or "").strip()
                 _child_slug = str(_loop_kwargs.get("project") or "")
-                _par_slug = _default_project_for(_par_goal) if _par_goal else ""
+                from landscape import recorded_project as _recorded_project
+                _par_slug = (_recorded_project(_par_hid) if _par_hid else "") or \
+                    (_default_project_for(_par_goal) if _par_goal else "")
                 if (_par_goal or _par_hid) and _child_slug and _child_slug != _par_slug:
                     record_fork_ancestry(
                         _anc_pdir(_child_slug),

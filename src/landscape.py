@@ -37,7 +37,7 @@ FLOOR = 0.2
 TOP_K = 3
 RELATED_HEAD = 2000
 SCAN_CAP = 200          # eligible finished runs considered (newest first)
-PROMPT_VER = 3          # template 2's text; the answer read strictly (review 2026-09-05)
+PROMPT_VER = 4          # template 3 + `continues` and each candidate's project (review 2026-09-13)
 
 # A prior run is a candidate when it RAN TO AN END: every terminal status the
 # lifecycle writes (run_curation's success / partial / fail vocabularies),
@@ -67,7 +67,36 @@ _CONTRACT = {
     1: '{"relation": "fresh" | "related" | "rerun", "run": "<candidate number, or 0 for fresh>", "reason": "<one sentence>"}',
     2: '{"relation": "fresh" | "related" | "rerun", "run": <the candidate\'s number (1, 2, …) or its run id, or 0 for fresh>, "reason": "<one sentence>"}',
     3: '{"relation": "fresh" | "related" | "rerun", "run": <the candidate\'s number (1, 2, …) or its run id, or 0 for fresh>, "reason": "<one sentence>"}',
+    # the fourth also asks whether the goal CONTINUES the chosen run's work —
+    # `related` covers a tangent whose answer is useful context, which is not
+    # the same as "the deliverable belongs with that run" (review 2026-09-13:
+    # a context relation must not be promoted into a workspace decision)
+    4: '{"relation": "fresh" | "related" | "rerun", "run": <the candidate\'s number (1, 2, …) or its run id, or 0 for fresh>, "continues": <true when the goal carries that run\'s work forward and its deliverable belongs with it, false when the run is only context>, "reason": "<one sentence>"}',
 }
+
+
+def project_name(value: Any) -> str:
+    """A recorded project identity as a directory NAME, or "". Persisted
+    metadata is a boundary: only a non-empty string with no path separators
+    and not `.`/`..` names a project — anything else (a number, a list, a
+    path) is rejected rather than coerced into some directory's name."""
+    if not isinstance(value, str):
+        return ""
+    name = value.strip()
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        return ""
+    return name
+
+
+def recorded_project(handle_id: str) -> str:
+    """The project a run recorded in its metadata (validated name), or ""."""
+    try:
+        from runs import resolve_run_dir
+        rd = resolve_run_dir(str(handle_id or ""))
+        meta = _read_meta(Path(rd)) if rd else None
+    except Exception:
+        return ""
+    return project_name((meta or {}).get("project"))
 
 
 def goal_words(text: str) -> set:
@@ -137,7 +166,8 @@ def _candidates(goal: str, *, exclude_handle_id: str = "") -> Tuple[List[dict], 
             below += 1
             continue
         found.append({"handle_id": hid, "goal": prompt, "similarity": round(sim, 4),
-                      "status": status, "run_dir": str(rd)})
+                      "status": status, "run_dir": str(rd),
+                      "project": project_name(meta.get("project"))})
     # by similarity descending, then handle descending (stable two-pass sort)
     found.sort(key=lambda c: c["handle_id"], reverse=True)
     found.sort(key=lambda c: c["similarity"], reverse=True)
@@ -164,11 +194,18 @@ def prompt(goal: str, cands: List[dict], *, ver: int = PROMPT_VER) -> str:
              _CONTRACT[ver or 1],
              "fresh: no prior run bears on the goal. related: a prior run bears on it "
              "(a follow-up, an angle, a tangent) and its answer is useful context. "
-             "rerun: a prior run asked the same thing.", "",
-             "New goal:", goal, ""]
+             "rerun: a prior run asked the same thing."]
+    if (ver or 1) >= 4:
+        lines.append("continues: true when the goal carries the chosen run's work forward, so "
+                     "its deliverable belongs in that run's project; false when the run is "
+                     "only useful context (an angle, a tangent, the same method for other "
+                     "work). A rerun always continues.")
+    lines += ["", "New goal:", goal, ""]
     for i, c in enumerate(cands, 1):
         lines.append(f"Candidate {i} (run {c['handle_id']}, similarity {c['similarity']:.2f}, outcome {c['status'] or 'unknown'}):")
         lines.append(f"Goal: {c['goal']}")
+        if (ver or 1) >= 4:
+            lines.append(f"Project: {c.get('project') or '(none recorded)'}")
         lines.append(f"Answer: {answer_head(c['handle_id'], c.get('run_dir')) or '(none recorded)'}")
         lines.append("")
     return "\n".join(lines)
@@ -178,6 +215,15 @@ def parse(text: str, cands: List[dict], *, ver: int = PROMPT_VER) -> Tuple[str, 
     """Read the judge's answer against the candidates under the contract of
     the template version it was asked with. Returns (relation, chosen
     handle_id or "", reason); raises ValueError outside the contract."""
+    return parse_full(text, cands, ver=ver)[:3]
+
+
+def parse_full(text: str, cands: List[dict], *, ver: int = PROMPT_VER) -> Tuple[str, str, str, bool]:
+    """`parse` plus the continuation verdict: (relation, chosen, reason,
+    continues). A rerun always continues; a related run continues only when
+    the fourth contract's `continues` is the JSON boolean true — absent,
+    a string, or asked under an older template reads as NOT continuing (the
+    relation and its context stand; the project is not bound on it)."""
     s = (text or "").strip()
     i, j = s.find("{"), s.rfind("}")
     if i < 0 or j <= i:
@@ -199,7 +245,8 @@ def parse(text: str, cands: List[dict], *, ver: int = PROMPT_VER) -> Tuple[str, 
         # fresh that names one is contradictory evidence, not fresh
         if strict and run not in (None, 0, "0", "") and not (isinstance(run, float) and run == 0):
             raise ValueError(f"fresh names candidate {run!r}")
-        return rel, "", reason
+        return rel, "", reason, False
+    continues = rel == "rerun" or ((ver or 1) >= 4 and a.get("continues") is True)
     n = 0
     if isinstance(run, bool):
         n = 0
@@ -221,7 +268,7 @@ def parse(text: str, cands: List[dict], *, ver: int = PROMPT_VER) -> Tuple[str, 
             n = int(v)
     if n < 1 or n > len(cands):
         raise ValueError(f"{rel} names candidate {run!r}, which is not one of {len(cands)}")
-    return rel, cands[n - 1]["handle_id"], reason
+    return rel, cands[n - 1]["handle_id"], reason, continues
 
 
 def decide(goal: str, *, handle_id: str, adapter=None, fresh: bool = False,
@@ -230,7 +277,8 @@ def decide(goal: str, *, handle_id: str, adapter=None, fresh: bool = False,
     or a zero-argument factory for it (called only when candidates exist).
     No judge with candidates ⇒ unreadable (fresh, recorded as such)."""
     rec: Dict[str, Any] = {"floor": FLOOR, "top_k": TOP_K, "scanned": 0, "below_floor": 0,
-                           "candidates": [], "relation": "fresh", "chosen": "", "reason": ""}
+                           "candidates": [], "relation": "fresh", "chosen": "", "reason": "",
+                           "continues": False}
     if fresh:
         rec["rule"] = RULE_FRESH_OVERRIDE
         if why:
@@ -240,7 +288,7 @@ def decide(goal: str, *, handle_id: str, adapter=None, fresh: bool = False,
     rec["scanned"], rec["below_floor"] = scanned, below
     if truncated:
         rec["truncated"] = True
-    rec["candidates"] = [{k: c[k] for k in ("handle_id", "goal", "similarity", "status")} for c in cands]
+    rec["candidates"] = [{k: c[k] for k in ("handle_id", "goal", "similarity", "status", "project")} for c in cands]
     if not cands:
         rec["rule"] = RULE_NO_CANDIDATES
         return rec
@@ -268,11 +316,12 @@ def decide(goal: str, *, handle_id: str, adapter=None, fresh: bool = False,
         rec["rule"], rec["reason"] = RULE_UNREADABLE, f"judge failed: {str(exc).splitlines()[0][:200]}"
         return rec
     try:
-        rel, chosen, reason = parse(content, cands)
+        rel, chosen, reason, continues = parse_full(content, cands)
     except ValueError as exc:
         rec["rule"], rec["reason"] = RULE_UNREADABLE, str(exc)[:200]
         return rec
     rec["rule"], rec["relation"], rec["chosen"], rec["reason"] = RULE_JUDGE, rel, chosen, reason
+    rec["continues"] = continues
     return rec
 
 
@@ -302,23 +351,30 @@ def apply(handle_id: str, origin: Optional[dict], rec: Dict[str, Any]) -> Option
 
 
 def chosen_project(rec: Dict[str, Any]) -> str:
-    """The project of the run the landscape chose (related / rerun): the
-    goal follows that run, so its deliverable lands where the prior work
-    is. "" when the relation is fresh, the chosen run recorded no project,
-    or that project directory no longer exists (a fresh slug is then
-    minted as before). The handle binds the loop's project through this
-    before it falls back to the goal-text shortcuts."""
+    """The project of the run the landscape chose AND judged the goal to
+    continue (`continues`: a rerun, or a related run whose work the goal
+    carries forward — not a tangent that is merely useful context): the
+    deliverable lands where the prior work is. "" when fresh, when the
+    judge did not say the goal continues that run, when the chosen run
+    recorded no valid project name, or when that project is not a
+    directory inside the projects root (a symlink pointing out of the root
+    is not a project: `is_dir()` alone would follow it — the same
+    containment guard the navigator's binder keeps). The handle then falls
+    back to the goal-text shortcuts."""
     if rec.get("relation") not in ("related", "rerun") or not rec.get("chosen"):
         return ""
+    if rec.get("continues") is not True:
+        return ""
     try:
-        from runs import resolve_run_dir
         from orch_items import projects_root
-        rd = resolve_run_dir(str(rec["chosen"]))
-        meta = _read_meta(Path(rd)) if rd else None
-        project = str((meta or {}).get("project") or "").strip()
-        if not project or "/" in project or project in (".", ".."):
+        project = recorded_project(str(rec["chosen"]))
+        if not project:
             return ""
-        return project if (projects_root() / project).is_dir() else ""
+        root = projects_root()
+        target = root / project
+        if not target.is_dir() or not target.resolve().is_relative_to(root.resolve()):
+            return ""
+        return project
     except Exception:
         log.warning("landscape: chosen run's project unreadable, binding by goal text", exc_info=True)
         return ""
