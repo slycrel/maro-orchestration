@@ -139,17 +139,33 @@ def _workspace_config_path() -> Path:
     return workspace_root() / "config.yml"
 
 
+_load_faults: list[str] = []
+
+
+def load_faults() -> list[str]:
+    """Paths that failed to load on the most recent uncached config read."""
+    return list(_load_faults)
+
+
 def _load_yaml(path: Path) -> dict:
     """Load a YAML file. Returns {} if missing/malformed."""
-    if not path.exists():
-        return {}
+    import yaml
     try:
-        import yaml
         text = path.read_text(encoding="utf-8")
         data = yaml.safe_load(text)
-        return data if isinstance(data, dict) else {}
-    except Exception:
+        if data is None:
+            return {}  # an empty file is an empty mapping, not a fault
+        if isinstance(data, dict):
+            return data
+    except FileNotFoundError:
         return {}
+    except (OSError, UnicodeError, yaml.YAMLError):
+        pass
+    # review r17: a file that exists but cannot be read, parsed, or is not
+    # a mapping is a FAULT, remembered for `load_faults()` — defaulting
+    # must not turn an unreadable hook into "no hook owed".
+    _load_faults.append(str(path))
+    return {}
 
 
 # Cached merged config — loaded once per process *per config path pair*,
@@ -184,6 +200,7 @@ def load_config(*, reload: bool = False) -> dict:
     if _config_cache is not None and not reload and _config_cache_key == cache_key:
         return _config_cache
 
+    _load_faults.clear()
     user = _load_yaml(user_path)
     workspace = _load_yaml(workspace_path)
 
@@ -196,8 +213,9 @@ def load_config(*, reload: bool = False) -> dict:
         else:
             merged[k] = v
 
-    _config_cache = merged
-    _config_cache_key = cache_key
+    # review r17: retry faults even when a repaired file keeps its mtime.
+    _config_cache = None if _load_faults else merged
+    _config_cache_key = None if _load_faults else cache_key
     return merged
 
 

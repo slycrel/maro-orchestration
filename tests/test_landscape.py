@@ -3330,6 +3330,57 @@ class TestEverySenderKeepsTheSameWord:
         monkeypatch.setattr(observe, "write_event", lambda *a, **kw: False)
         assert notify.tell("run_completed", payload) is False
 
+    @pytest.mark.parametrize("fault", ["malformed", "unreadable", "non_mapping"])
+    def test_real_config_fault_keeps_the_story_owed(self, monkeypatch, tmp_path, fault):
+        _setup(monkeypatch, tmp_path)
+        import config
+        import notify
+        import observe
+        from pathlib import Path
+
+        path = config._workspace_config_path()
+        path.write_text("notify: [" if fault == "malformed" else
+                        "- not a mapping" if fault == "non_mapping" else
+                        "notify:\n  command: some-hook\n")
+        real_read = Path.read_text
+        blocked = fault == "unreadable"
+
+        def read_text(self, *args, **kwargs):
+            if self == path and blocked:
+                raise OSError("config unreadable")
+            return real_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", read_text)
+        monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+        payload = {"handle_id": "faulted", "status": "done"}
+        assert config.get("notify.command", "") == ""
+        assert notify.hook_owed("run_completed") is None
+        assert config.load_faults() == [str(path)]
+        assert notify.tell("run_completed", payload) is False
+
+        # Recovery must be re-read even if the mtime has not changed.
+        import os
+        stat = path.stat()
+        blocked = False
+        path.write_text("notify: {}\n")
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        assert config.get("notify.command", "") == ""
+        assert config.load_faults() == []
+        assert notify.hook_owed("run_completed") is False
+        assert notify.tell("run_completed", payload) is True
+
+        # an EMPTY file is an empty mapping, not a fault (the live default)
+        path.write_text("")
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1))
+        assert config.get("notify.command", "") == ""
+        assert config.load_faults() == []
+        assert notify.hook_owed("run_completed") is False
+        path.unlink()
+        assert config.get("notify.command", "") == ""
+        assert config.load_faults() == []
+        assert notify.hook_owed("run_completed") is False
+        assert notify.tell("run_completed", payload) is True
+
     def test_the_journal_row_carries_the_bare_story(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         import notify
@@ -3343,7 +3394,22 @@ class TestEverySenderKeepsTheSameWord:
         assert rows[-1][1]["detail"] == "[abc12345] goal_achieved=False source=closure", rows[-1]
         card = {**bare, "result_excerpt": "Revenue rose 12%."}
         notify.tell("run_completed", card)
+        failure = rows[-1][1]["detail"]
+        assert failure == "[abc12345] goal_achieved=False source=closure; Revenue rose 12%."
+        assert notify.tell("run_completed", {**card, "goal_achieved": True})
+        success = rows[-1][1]["detail"]
+        assert success == "[abc12345] goal_achieved=True source=closure; Revenue rose 12%."
+        assert success != failure
+        assert notify.tell("run_completed", {**card, "goal_achieved": None,
+                                             "verdict_pending": True})
+        assert rows[-1][1]["detail"] == (
+            "[abc12345] goal_achieved=None source=closure verdict_pending; Revenue rose 12%.")
+        assert notify.tell("run_completed", {"result_excerpt": "Revenue rose 12%."})
         assert rows[-1][1]["detail"] == "Revenue rose 12%."
+        from context_budget import clip
+        prefix = "[abc12345] goal_achieved=False source=closure; "
+        assert notify.tell("run_completed", {**card, "result_excerpt": "x" * 500})
+        assert rows[-1][1]["detail"] == prefix + clip("x" * 500, 300 - len(prefix))
         notify.tell("run_verdict", bare)
         assert rows[-1][1]["detail"].startswith("[abc12345] goal_achieved=False source=closure")
 

@@ -140,11 +140,16 @@ def hook_owed(event_type: str) -> Optional[bool]:
     r16: both had read as "no hook owed", and a journal row then
     acknowledged a story the configured recipient never got)."""
     try:
-        from config import get as _get
+        from config import get as _get, load_faults
         command = str(_get("notify.command", "") or "").strip()
+        # review r17: the loader's defaults do not prove no hook is owed.
+        if load_faults():
+            return None
         if not command:
             return False
         events = _get("notify.events", DEFAULT_EVENTS)
+        if load_faults():
+            return None
         if events is None or events == "" or events == []:
             events = DEFAULT_EVENTS
         if isinstance(events, str) or not isinstance(events, (list, tuple, set, frozenset)):
@@ -231,18 +236,18 @@ def _journal(event_type: str, payload: dict) -> bool:
         from observe import write_event
         # 300 is a deliberate event-lane projection cap (write_event's rows
         # are PIPE_BUF-bounded downstream) — announced, not silent.
-        _detail = _cb_clip(str(payload.get("result_excerpt",
-                                           payload.get("summary", ""))), 300)
-        if event_type == "run_completed" and not _detail and (
+        _excerpt = str(payload.get("result_excerpt", payload.get("summary", "")))
+        _detail = _cb_clip(_excerpt, 300)
+        if event_type == "run_completed" and (
                 "goal_achieved" in payload or payload.get("goal_verdict_source")):
-            # A bare story (no card — the record's own verdict, review
-            # r15) has no excerpt: the row carries the identity and the
-            # verdict, or polling substrates receive only "done"
-            # (review r16).
-            _detail = _cb_clip(
+            # review r17: reserve the verdict so an excerpt cannot hide failure.
+            _detail = (
                 f"[{handle_id}] goal_achieved={payload.get('goal_achieved')}"
                 + (f" source={payload.get('goal_verdict_source')}"
-                   if payload.get("goal_verdict_source") else ""), 300)
+                   if payload.get("goal_verdict_source") else "")
+                + (" verdict_pending" if payload.get("verdict_pending") else ""))
+            if _excerpt:
+                _detail += "; " + _cb_clip(_excerpt, max(0, 300 - len(_detail) - 2))
         if event_type == "run_verdict":
             # The verdict IS this event's content — the generic projection
             # dropped it entirely and polling substrates received an empty

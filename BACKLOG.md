@@ -6701,8 +6701,25 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   carries `[handle] goal_achieved=… source=…`; `notify.hook_owed`
   returns None when the config cannot be read or `notify.events` is
   not a list of names, and `tell` then acknowledges nothing but a
-  clean hook run (both had read as "no hook owed"). Direction
-  recorded: a
+  clean hook run (both had read as "no hook owed"). Round 17 (the
+  FIRST flipped round — Jeremy's 2026-09-13 rule: after 4–5 rounds
+  codex writes the fix in a worktree and Claude reviews/lands; codex
+  wrote this one, one correction on review): the loader remembers
+  faults — `config.load_faults()` names a config file that exists but
+  could not be read/parsed or is not a mapping (an EMPTY file is an
+  empty mapping, not a fault — codex's draft faulted it, which would
+  have made every story unknowable on a box with an empty config), a
+  faulted load is not cached so a repaired file with the same mtime is
+  re-read, and `hook_owed` returns None while a fault stands (the r16
+  guard sat above the loader that swallows the fault); the early
+  sender records `early_told` only when the acknowledged card carried
+  the answer (`answer_summary`/`result_excerpt` — an empty early card
+  had read as a delivered answer and the follow-up carried none); the
+  `run_completed` journal row carries `[handle] goal_achieved=…
+  source=… [verdict_pending]; excerpt` whenever the payload has a
+  verdict field, the verdict reserved before the clipped excerpt (a
+  judged failure and a success had produced identical rows).
+  Direction recorded: a
   settlement that fails in the run AND at the finalize is kept for the
   sweep's retry in the same process; only a process death loses it, and
   then the sweep reverts even an adopted retry — the retry's adoption

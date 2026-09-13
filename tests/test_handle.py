@@ -5642,8 +5642,18 @@ class TestVerdictFollowup:
             events.append(("closure-ran", {}))
             return self._closure_decision()
 
+        def _fake_loop(*args, **kwargs):
+            import json
+            import runs
+            # review r17: the answer-first contract needs an actual answer.
+            artifact = runs.current_run_dir() / "artifact"
+            artifact.mkdir(exist_ok=True)
+            (artifact / f"now-{runs.current_handle_id()}.json").write_text(
+                json.dumps({"result": "Built X successfully."}))
+            return self._fake_loop_result()
+
         with patch("agent_loop.run_agent_loop",
-                   side_effect=lambda g, *a, **kw: self._fake_loop_result()), \
+                   side_effect=_fake_loop), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.evaluate_closure", side_effect=_fake_closure), \
              patch("quality_gate.run_quality_gate", return_value=gate):
@@ -5737,6 +5747,38 @@ class TestVerdictFollowup:
             (_run_dir(result.handle_id) / "metadata.json").read_text())
         vp = meta.get("verdict_pending") or {}
         assert vp.get("notified_early") is True and vp.get("early_told") is False
+        assert meta.get("final_notified_at")
+
+    def test_empty_early_card_downgrades_to_full_completion(
+            self, monkeypatch, tmp_path):
+        import runs
+        import observe
+        import notify
+        real_close = runs.close_run
+        calls = []
+
+        def close_run(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == 1:
+                return None
+            return real_close(*args, **kwargs)
+
+        monkeypatch.setattr(runs, "close_run", close_run)
+        monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+        assert notify.hook_owed("run_completed") is False
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events, emit_returns=False)
+        names = [e for e, _ in events]
+        assert names.count("run_completed") == 2
+        assert "run_verdict" not in names
+        final = [p for e, p in events if e == "run_completed"][-1]
+        assert final.get("result_excerpt") or final.get("answer_summary")
+        import json
+        meta = json.loads(
+            (runs.run_dir(result.handle_id) / "metadata.json").read_text())
+        vp = meta["verdict_pending"]
+        assert vp["notified_early"] is True
+        assert vp["early_told"] is False
         assert meta.get("final_notified_at")
 
     def test_non_done_terminal_keeps_synchronous_ordering(

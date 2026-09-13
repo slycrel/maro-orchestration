@@ -2990,20 +2990,14 @@ def _handle_impl(
                                         "verdict_pending": True},
                         run_dir=str(_run_dir_early(_hid_early)),
                     )
-                    # tell() returns the OWED channel's word: the hook
-                    # ran cleanly when one is configured for the event,
-                    # else the journal row was written (review r16: a
-                    # failed journal row with no hook had been recorded
-                    # as an answer that reached the user, and the
-                    # follow-up then carried only the verdict). Recorded
-                    # as `early_told`; the finalize and the repair sweeps
-                    # route run_verdict only when it is True — otherwise
-                    # the full run_completed, so the user's only external
-                    # message is never a verdict for an answer they never
-                    # received (review 2026-08-13). `hook_delivered` /
-                    # `hook_configured` stay for markers' legacy readers.
+                    # review r17: a clean acknowledgment of an empty card
+                    # is not an answer received. Keep the attempt marker,
+                    # but route the finalize and repairs to a full completion.
                     _vp_marker["notified_early"] = True
-                    _vp_marker["early_told"] = bool(_delivered)
+                    _vp_marker["early_told"] = bool(
+                        _delivered and isinstance(_card_early, dict)
+                        and (_card_early.get("answer_summary")
+                             or _card_early.get("result_excerpt")))
                     _vp_marker["hook_delivered"] = bool(_delivered)
                     try:
                         from config import get as _nc_get
