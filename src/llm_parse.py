@@ -188,7 +188,7 @@ def safe_float(
         return default
     try:
         result = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: int too large (round 15)
         return default
 
     import math

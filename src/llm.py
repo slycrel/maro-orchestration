@@ -2177,59 +2177,61 @@ def _build_stream_probes(default_model: str = "", *, agentic: bool = True):
     return _combined
 
 
-def _extract_result_object(text: str) -> Optional[dict]:
-    """Scan merged stdout+stderr for the claude CLI's `{"type": "result"}`
-    object, skipping past warning text and non-result JSON noise."""
+# No token counter, cost or id in a claude CLI capture is this long; a JSON
+# integer past it is malformed. Decoded through the hook below it becomes
+# +inf — which `llm_errors.finite_nonneg` rejects field by field — instead of
+# raising Python's int-digit-limit ValueError out of the decoder (review
+# round 15, 2026-09-13: a 5000-digit integer in one event hid the auth-error
+# frame behind it, and inside the frame it hid the frame itself).
+_MAX_INT_DIGITS = 18
+
+
+def _bounded_int(s: str) -> Any:
+    return int(s) if len(s) <= _MAX_INT_DIGITS else float("inf")
+
+
+def _iter_stream_documents(text: str) -> Iterator[dict]:
+    """The top-level JSON documents of a claude CLI capture — the ONE event
+    boundary every reader shares (review rounds 12–15, 2026-09-13).
+
+    A document starts where a line begins with `{` at column 0: a
+    stream-json NDJSON event and a pretty-printed `--output-format json`
+    object alike. Everything the decoder consumes from there belongs to
+    that document, so nested objects — pretty or compact, on their own
+    line or not — are data, never events. Text before a brace on the same
+    line is not a protocol event; indented lines are never top-level;
+    lines that do not decode (plain text, a torn trailing line) are
+    skipped. Malformed integers decode as +inf (see `_bounded_int`).
+    """
     text = (text or "").strip()
-    if not text:
-        return None
-    # One event boundary for both readers (review round 13, 2026-09-13):
-    # `_parse_stream_json` frames events as complete JSON LINES; this
-    # scanner used to promote any brace-delimited object anywhere in the
-    # capture, so a result-shaped object embedded in a diagnostic line
-    # (`diagnostic: {"type":"result","subtype":"success",...}`) outranked
-    # the real terminal frame. Line-framed result events win; the LAST is
-    # the terminal one (round 12). Only when no line-framed result exists
-    # does the whole-document fallback run — for a pretty-printed or
-    # single-object `--output-format json` capture — and that fallback
-    # accepts an object only where a LINE starts with it (leading warning
-    # lines are skipped; text before a brace on the same line is not a
-    # protocol event).
-    last = None
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(ev, dict) and ev.get("type") == "result":
-            last = ev
-    if last is not None:
-        return last
-    decoder = json.JSONDecoder()
+    # Constructed here, not at module level: the destructive-rewrite and
+    # silent-drop scanners census a decoder they can see bound in scope.
+    decoder = json.JSONDecoder(parse_int=_bounded_int)
     pos = 0
-    skip_until = 0  # end offset of the document decoded last (round 14)
+    skip_until = 0
     for line in text.splitlines(keepends=True):
         start = pos
         pos += len(line)
-        if start < skip_until:
-            # Inside a document already decoded: its nested objects are
-            # data, not events (round 14: a result-shaped object inside a
-            # pretty-printed error's `errors[]` outranked the error).
+        if start < skip_until or not line.startswith("{"):
             continue
-        stripped = line.lstrip()
-        if not stripped.startswith("{"):
-            continue
-        start += len(line) - len(stripped)
         try:
-            data, consumed = decoder.raw_decode(text[start:])
-        except json.JSONDecodeError:
+            data, end = decoder.raw_decode(text, start)  # `end` is absolute
+        except ValueError:  # JSONDecodeError and any other decode failure
             continue
-        skip_until = start + consumed
-        if isinstance(data, dict) and data.get("type") == "result":
-            last = data
+        skip_until = end
+        if isinstance(data, dict):
+            yield data
+
+
+def _extract_result_object(text: str) -> Optional[dict]:
+    """The claude CLI's terminal `{"type": "result"}` object: the LAST
+    top-level result document of the capture (see
+    `_iter_stream_documents` — the boundary `_parse_stream_json` uses).
+    Warning text and non-result documents are skipped."""
+    last = None
+    for doc in _iter_stream_documents(text):
+        if doc.get("type") == "result":
+            last = doc
     return last
 
 
@@ -2239,15 +2241,8 @@ def _assistant_text_tail(stdout: str, limit: int = 4000) -> str:
     before its terminal failure. Never raises past its caller's guard."""
     parts: List[str] = []
     malformed = 0  # assistant events whose containers are not the protocol's
-    for line in (stdout or "").splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue  # not an event line (the CLI interleaves plain text)
-        try:
-            ev = json.loads(line)
-        except Exception:
-            continue  # a torn or partial line; not a record of anything
-        if not isinstance(ev, dict) or ev.get("type") != "assistant":
+    for ev in _iter_stream_documents(stdout):
+        if ev.get("type") != "assistant":
             continue
         # Round 13: one malformed event (`"message": ["x"]`) raised out of
         # the reader and the outer guard dropped EVERY block collected
@@ -2369,11 +2364,31 @@ def _stringify_tool_result(content) -> str:
         parts = []
         for b in content:
             if isinstance(b, dict):
-                parts.append(b.get("text", "") if b.get("type") == "text" else json.dumps(b))
+                if b.get("type") == "text":
+                    t = b.get("text", "")
+                    # round 15: a non-string text value broke the join and
+                    # a SUCCESSFUL capture became a parser-origin block
+                    parts.append(t if isinstance(t, str) else json.dumps(t, default=str))
+                else:
+                    parts.append(json.dumps(b, default=str))
             else:
                 parts.append(str(b))
         return "\n".join(p for p in parts if p)
     return json.dumps(content)
+
+
+def _bounded_cost(v: Any) -> float:
+    """A billed dollar figure: finite, bounded, non-negative — or 0 with a
+    warning (round 15: `safe_float` let an oversized integer overflow and
+    a successful call became a zero-accounting block)."""
+    if v is None:
+        return 0.0
+    from llm_errors import finite_nonneg as _fnn
+    c = _fnn(v, float, -1.0)
+    if c < 0:
+        log.warning("claude result total_cost_usd=%r malformed — recorded as 0", v)
+        return 0.0
+    return c
 
 
 def _main_model_from_usage(model_usage: Optional[dict], requested: str) -> str:
@@ -2387,8 +2402,11 @@ def _main_model_from_usage(model_usage: Optional[dict], requested: str) -> str:
     when nothing matches (or several do), the highest-costUSD entry is the
     one that did the work.
     """
-    mu = model_usage or {}
+    mu = model_usage if isinstance(model_usage, dict) else {}
     if not mu:
+        if model_usage:
+            log.warning("claude result modelUsage is %s, not an object — main model unattributed",
+                        type(model_usage).__name__)
         return "claude"
     matches = [k for k in mu if requested and requested in k]
     if len(matches) == 1:
@@ -2431,19 +2449,8 @@ def _parse_stream_json(text: str) -> dict:
         return out
     uses = []            # ordered [(id, name, input)]
     results_by_id = {}   # id -> {output, is_error}
-    saw_any_event = False
     malformed = 0        # events/blocks whose fields are not the protocol's (round 14)
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(ev, dict):
-            continue
-        saw_any_event = True
+    for ev in _iter_stream_documents(text):
         etype = ev.get("type")
         if etype == "assistant":
             _msg = ev.get("message")
@@ -2494,13 +2501,10 @@ def _parse_stream_json(text: str) -> dict:
         }
         for (uid, name, inp) in uses
     ]
-    if out["result"] is None:
-        # One selection for both readers (round 14: this fallback ran only
-        # when NO event line parsed, so an `init` line ahead of a pretty-
-        # printed result left this reader with None while the scanner
-        # found the frame — rc=0 then delivered the whole capture as
-        # prose and a flag_stuck answer completed as done).
-        out["result"] = _extract_result_object(text)
+    # `out["result"]` is the last top-level result document — the same
+    # selection `_extract_result_object` makes over the same framing
+    # (round 14: a separate fallback gate left this reader with None while
+    # the scanner found the frame; round 15: one framer for both).
     return out
 
 
@@ -3460,7 +3464,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_tokens=cache_read,
-            cost_usd=safe_float(data.get("total_cost_usd")),
+            cost_usd=_bounded_cost(data.get("total_cost_usd")),
             tool_events=tool_events,
             backend=self.backend,
         ))

@@ -683,6 +683,42 @@ merge-back examines a different checkout. Predates this chunk; which
 directory a parallel step should execute in is a phase-3b design
 question for Jeremy.
 
+*Review round 15 (2026-09-13, codex skeptic + QA, whole chunk): one
+shared HIGH on round 14's framing, one HIGH at the decode boundary, three
+MEDs; all fixed.* (lxvi) **One framer for every reader.** Round 14
+protected only the whole-document fallback: the line-framed first pass
+still promoted a COMPACT nested object sitting on its own line inside a
+multi-line document (indented or not), so both readers agreed on the
+wrong terminal frame. `_iter_stream_documents` is now the single event
+boundary: a document starts where a line begins with `{` at column 0
+(an NDJSON event and a pretty-printed object alike); everything the
+decoder consumes belongs to that document, so nested objects are data
+whatever their formatting; indented lines are never top-level.
+`_extract_result_object`, `_parse_stream_json` and
+`_assistant_text_tail` all iterate it — there is no second grammar to
+disagree with. Pinned with compact-nested fixtures (both nestings, both
+indents, both exit codes) and the NDJSON-beside-a-document control.
+(lxvii) **Decoding is bounded at the protocol boundary.** A 5000-digit
+JSON integer raised Python's int-digit-limit `ValueError` (not a
+`JSONDecodeError`) out of every decode site: in a side event it hid the
+auth-error frame behind it (parser-origin `retry_backoff`, no breaker,
+no pause); inside the frame it hid the frame. The framer decodes with a
+`parse_int` hook that turns any integer past 18 digits into `+inf` —
+which `finite_nonneg` already rejects field by field — and catches
+`ValueError`, so the frame is read and only the malformed counter is
+dropped (warned). The global digit limit is untouched (asserted).
+(lxviii) **Three more auxiliary fields isolated:** a non-string
+tool_result `text` broke the join, a list-valued `modelUsage` raised on
+`.get`, and an oversized `total_cost_usd` overflowed `safe_float` — each
+turned a SUCCESSFUL capture into a zero-accounting block. Text values
+are stringified per block, `modelUsage` is validated (warned, main model
+unattributed), success billing goes through the bounded validator
+(`_bounded_cost`, warned, 0), and `safe_float` catches `OverflowError`.
+Census: the three readers' drop sites collapsed into the framer, which
+the silent-drop census now counts (`decoder.raw_decode` registered as a
+parse call; REVIEWED entry); the destructive-rewrite scanner classifies
+none of the four as a RISK site any more, so the manifest lists none.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

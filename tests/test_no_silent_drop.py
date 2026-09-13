@@ -77,6 +77,10 @@ SRC = Path(__file__).parent.parent / "src"
 
 _PARSE_CALLS = {
     ("json", "loads"), ("json", "load"),
+    # a scope-local `decoder = json.JSONDecoder(...)` driven by raw_decode
+    # (llm._iter_stream_documents, review round 15, 2026-09-13) — without
+    # this line the shared stream framer's skip left the census
+    ("decoder", "raw_decode"),
     ("yaml", "safe_load"), ("yaml", "load"),
     ("pickle", "loads"), ("pickle", "load"),
     ("tomllib", "loads"), ("tomllib", "load"),
@@ -173,8 +177,10 @@ _STREAM_CAPTURE = ("subprocess stream-json capture, not a durable store; "
                    "counted and warned")
 
 REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
-    ("llm.py", "_assistant_text_tail"): _STREAM_CAPTURE,
-    ("llm.py", "_extract_result_object"): _STREAM_CAPTURE,
+    # round 15: the three readers (`_extract_result_object`,
+    # `_parse_stream_json`, `_assistant_text_tail`) now share this one
+    # framer, so this is the only stream-capture drop site.
+    ("llm.py", "_iter_stream_documents"): _STREAM_CAPTURE,
     ("memory_ledger.py", "mark_outcomes_superseded._mark"): _STAMPER,
     ("memory_ledger.py", "stamp_outcome_verdict._stamp"): _STAMPER,
     ("memory_ledger.py", "stamp_outcome_stop_verdict._stamp"): _STAMPER,
@@ -243,7 +249,6 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
     ("llm.py", "CodexCLIAdapter._stream_events"): 1,
     ("llm.py", "_is_plain_missing_session_error"): 1,
-    ("llm.py", "_parse_stream_json"): 1,
     ("llm.py", "_run_subprocess_safe._drain_new_events"): 1,
 
     ("loop_finalize.py", "_mint_run_risks_to_project"): 1,

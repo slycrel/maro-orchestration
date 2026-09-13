@@ -69,8 +69,7 @@ _add("subprocess", """
  build_loop_runner.py:_worker_session_already_active
  container_exec.py:_credentials_expiry_probe worktree.py:_sanitize_untrusted_git""")
 _add("stream", """
- llm.py:_parse_stream_json llm.py:_stream_events llm.py:_is_plain_missing_session_error
- llm.py:_assistant_text_tail llm.py:_extract_result_object
+ llm.py:_stream_events llm.py:_is_plain_missing_session_error
  orch_bridges.py:_tail_lines orch_bridges.py:_extract_session_result_from_text
  orch_bridges.py:command_execution_bridge orch_bridges.py:command_execution_bridge._execute
  orch_bridges.py:review_command_validation_bridge

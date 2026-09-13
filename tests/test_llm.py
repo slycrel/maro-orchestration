@@ -4006,3 +4006,113 @@ def test_malformed_auxiliary_events_keep_the_terminal_result(caplog):
         resp = a.complete([LLMMessage("user", "build a thing")])
     assert resp.content == "Finished the task." and (resp.input_tokens, resp.output_tokens) == (37, 9)
     assert resp.cost_usd == pytest.approx(0.12)
+
+
+# ---------------------------------------------------------------------------
+# Review round 15 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+_R15_NESTED_OK = '{"type": "result", "subtype": "success", "is_error": false, "result": "diagnostic example: finished"}'
+_R15_NESTED_ERR = '{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": "x"}'
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+@pytest.mark.parametrize("indent", ["    ", ""])
+def test_a_compact_nested_object_on_its_own_line_is_data(rc, indent):
+    # Round 15: round 14 protected only the whole-document fallback; the
+    # line-framed first pass still promoted a COMPACT nested object that
+    # sat on its own line inside a multi-line document (indented or not).
+    from llm import _extract_result_object, _parse_stream_json, _terminal_failure
+    err_doc = ('{\n  "type": "result",\n  "subtype": "error_during_execution",\n  "is_error": true,\n'
+               '  "errors": [\n    "OAuth session expired - Please run /login",\n' + indent + _R15_NESTED_OK
+               + '\n  ]\n}')
+    assert json.loads(err_doc)["subtype"] == "error_during_execution", "fixture is a valid document"
+    assert _extract_result_object(err_doc)["subtype"] == "error_during_execution"
+    assert _parse_stream_json(err_doc)["result"]["subtype"] == "error_during_execution"
+    assert _terminal_failure(err_doc) is True
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=err_doc)):
+        with pytest.raises(RuntimeError, match="OAuth session expired"):
+            a.complete([LLMMessage("user", "build a thing")])
+    ok_doc = ('{\n  "type": "result",\n  "subtype": "success",\n  "is_error": false,\n'
+              '  "result": "Finished the task.",\n  "notes": [\n' + indent + _R15_NESTED_ERR + '\n  ]\n}')
+    assert _terminal_failure(ok_doc) is False
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=ok_doc)):
+        assert a.complete([LLMMessage("user", "build a thing")]).content == "Finished the task."
+    # NDJSON events beside a document: the events still frame as before
+    stream = _R14_INIT + "\n" + err_doc + "\n" + json.dumps({"type": "system", "subtype": "x"})
+    assert _parse_stream_json(stream)["result"]["subtype"] == "error_during_execution"
+
+
+def test_an_oversized_integer_never_hides_the_terminal_frame(caplog):
+    # Round 15: a 5000-digit integer raised Python's int-digit-limit
+    # ValueError (not JSONDecodeError) out of every decode site — in a
+    # side event it hid the auth frame behind it (parser-origin
+    # retry_backoff, no breaker, no pause); inside the frame it hid the
+    # frame itself. Decoding is bounded at the protocol boundary.
+    import logging, sys
+    from llm import _parse_stream_json
+    from llm_errors import call_usage_evidence
+    huge = "1" + "0" * 5000
+    limit_before = sys.get_int_max_str_digits()
+    side = '{"type": "system", "subtype": "init", "n": ' + huge + '}'
+    auth = _r12_frame("error_during_execution", usage={"input_tokens": 37, "output_tokens": 9}, total_cost_usd=0.12)
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=side + "\n" + auth)):
+        with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+            a.complete([LLMMessage("user", "build a thing")])
+    assert call_usage_evidence(ei.value)["tokens_in"] == 37
+    # the oversized counter INSIDE the frame: frame kept, that field rejected, siblings kept
+    inside = ('{"type": "result", "subtype": "error_during_execution", "is_error": true, '
+              '"result": "OAuth session expired - Please run /login", '
+              '"usage": {"input_tokens": ' + huge + ', "output_tokens": 9}, "total_cost_usd": 0.12}')
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=1, stderr="", container_executed=False, stdout=inside)):
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei2:
+                a.complete([LLMMessage("user", "build a thing")])
+    ev = call_usage_evidence(ei2.value)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (0, 9, 0.12)
+    assert "input_tokens" in caplog.text and "malformed" in caplog.text
+    # and in a SUCCESS frame
+    ok = ('{"type": "result", "subtype": "success", "is_error": false, "result": "Finished the task.", '
+          '"usage": {"input_tokens": ' + huge + ', "output_tokens": 9}, "total_cost_usd": ' + huge + '}')
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=0, stderr="", container_executed=False, stdout=ok)):
+        resp = a.complete([LLMMessage("user", "build a thing")])
+    assert resp.content == "Finished the task." and (resp.input_tokens, resp.output_tokens) == (0, 9)
+    assert resp.cost_usd == 0.0
+    assert _parse_stream_json(ok)["result"]["usage"]["input_tokens"] == float("inf")
+    assert sys.get_int_max_str_digits() == limit_before, "the global limit is not the fix"
+
+
+def test_malformed_tool_result_text_and_model_usage_keep_the_answer(caplog):
+    # Round 15: two more auxiliary fields aborted a SUCCESSFUL capture —
+    # a non-string tool_result text broke the join, a list-valued
+    # modelUsage raised on .get — and an oversized total_cost_usd
+    # overflowed safe_float. The answer and its counters survive all three.
+    import logging
+    from llm_parse import safe_float
+    assert safe_float(10 ** 400) == 0.0
+    events = [
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "x"}}]}}),
+        json.dumps({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [
+                {"type": "text", "text": {"unexpected": "object"}}, {"type": "text", "text": "the file"}]}]}}),
+        json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Finished the task.",
+                    "usage": {"input_tokens": 37, "output_tokens": 9}, "total_cost_usd": 10 ** 400,
+                    "modelUsage": ["other-model"]}),
+    ]
+    a = ClaudeSubprocessAdapter()
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=0, stderr="", container_executed=False, stdout="\n".join(events))):
+            resp = a.complete([LLMMessage("user", "build a thing")])
+    assert resp.content == "Finished the task." and (resp.input_tokens, resp.output_tokens) == (37, 9)
+    assert resp.cost_usd == 0.0
+    assert [e["name"] for e in resp.tool_events] == ["Read"] and "the file" in resp.tool_events[0]["output"]
+    assert "modelUsage" in caplog.text and "total_cost_usd" in caplog.text
