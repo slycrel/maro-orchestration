@@ -2261,6 +2261,11 @@ def _rate_limited_failure(stdout: str) -> bool:
         return False
     obj = _extract_result_object(stdout)
     if _terminal_failure_obj(obj):
+        # An explicit terminal failure decides the question by ITSELF
+        # (review round 11, 2026-09-13: only auth text took precedence, so
+        # an `error_max_turns` behind a rejected rate_limit_event bought a
+        # replay of an executor call that had already done its work). It
+        # is a rate-limit story only if the failure itself says so.
         _terminal = _terminal_error_text(obj)
         if _terminal:
             try:
@@ -2269,6 +2274,10 @@ def _rate_limited_failure(stdout: str) -> bool:
                     return False
             except Exception:
                 pass
+        _tl = (_terminal or "").lower()
+        _subtype = str(obj.get("subtype") or "").lower()
+        return bool("hit your limit" in _tl or "rate limit" in _tl or "rate_limit" in _tl
+                    or "rate_limit" in _subtype)
     combined = (stdout or "").lower()
     return bool(_parse_stream_json(stdout)["rate_limited"]
                 or "hit your limit" in combined or "rate limit" in combined)
@@ -3167,24 +3176,44 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 # in the terminal object — was recorded as zero work and
                 # zero spend). Same channel the runaway kill uses; the
                 # outcome builders ADD it to the step's accounting.
-                try:
-                    if isinstance(_err_obj, dict):
-                        _usage = _err_obj.get("usage")
-                        if isinstance(_usage, dict):
-                            # Each counter independently (round 10): output
-                            # and cache-served input are spend too, and a
-                            # cost with zero fresh input is still a cost.
-                            if _usage.get("input_tokens") is not None:
-                                _err.fresh_input_tokens = int(_usage.get("input_tokens") or 0)  # type: ignore[attr-defined]
-                            if _usage.get("output_tokens") is not None:
-                                _err.fresh_output_tokens = int(_usage.get("output_tokens") or 0)  # type: ignore[attr-defined]
-                            _cr = _usage.get("cache_read_input_tokens", _usage.get("cache_read_tokens"))
-                            if _cr is not None:
-                                _err.fresh_cache_read_tokens = int(_cr or 0)  # type: ignore[attr-defined]
-                        if _err_obj.get("total_cost_usd") is not None:
-                            _err.estimated_cost_usd = float(_err_obj.get("total_cost_usd") or 0.0)  # type: ignore[attr-defined]
-                except Exception:
-                    log.debug("terminal usage not attached to the failure", exc_info=True)
+                # Each counter independently, each through the shared
+                # total validator (round 11: one `try` around all of them
+                # let a single malformed field make a paid failure look
+                # free). Conventions match the success path: fresh input =
+                # uncached ingest (input + cache creation); cache reads
+                # ride separately and are folded into TOTAL input by the
+                # outcome builders.
+                if isinstance(_err_obj, dict):
+                    from llm_errors import finite_nonneg as _fnn
+                    _usage = _err_obj.get("usage")
+                    if isinstance(_usage, dict):
+                        _malformed = []
+                        if _usage.get("input_tokens") is not None:
+                            _v = _fnn(_usage.get("input_tokens"), int, -1)
+                            _err.fresh_input_tokens = (  # type: ignore[attr-defined]
+                                (0 if _v < 0 else _v)
+                                + _fnn(_usage.get("cache_creation_input_tokens", 0), int, 0))
+                            if _v < 0:
+                                _malformed.append("input_tokens")
+                        if _usage.get("output_tokens") is not None:
+                            _v = _fnn(_usage.get("output_tokens"), int, -1)
+                            _err.fresh_output_tokens = 0 if _v < 0 else _v  # type: ignore[attr-defined]
+                            if _v < 0:
+                                _malformed.append("output_tokens")
+                        _cr = _usage.get("cache_read_input_tokens", _usage.get("cache_read_tokens"))
+                        if _cr is not None:
+                            _v = _fnn(_cr, int, -1)
+                            _err.fresh_cache_read_tokens = 0 if _v < 0 else _v  # type: ignore[attr-defined]
+                            if _v < 0:
+                                _malformed.append("cache_read_input_tokens")
+                        if _malformed:
+                            log.warning("claude terminal usage malformed (%s) — that counter recorded as 0",
+                                        ", ".join(_malformed))
+                    if _err_obj.get("total_cost_usd") is not None:
+                        _v = _fnn(_err_obj.get("total_cost_usd"), float, -1.0)
+                        _err.estimated_cost_usd = 0.0 if _v < 0 else _v  # type: ignore[attr-defined]
+                        if _v < 0:
+                            log.warning("claude terminal total_cost_usd malformed — recorded as 0")
                 if _container_auth_owned:
                     # The breaker owns this failure's story: FailoverAdapter
                     # must neither trip the process-wide backend circuit

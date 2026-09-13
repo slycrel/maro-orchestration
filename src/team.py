@@ -97,6 +97,7 @@ class TeamResult:
     tokens_in: int = 0
     tokens_out: int = 0
     provider_cost_usd: float = 0.0  # the ticket call's billed cost (round 10)
+    error_class: str = ""           # llm_errors class of an adapter failure (round 11)
 
 
 # ---------------------------------------------------------------------------
@@ -264,12 +265,26 @@ def create_team_worker(
             # own re-raise) and every typed environmental refusal.
             raise
         log.warning("team.create_worker failed role=%r: %s", role, exc)
+        # An ordinary failure keeps what the ticket left behind (round 11:
+        # this branch returned "" and zero accounting — a killed specialist's
+        # partial output and paid usage vanished before the parent saw them).
+        _ecls, _ev = "", {"partial": "", "tokens_in": 0, "tokens_out": 0, "cache_read": 0, "cost": 0.0}
+        try:
+            from llm_errors import classify_error, call_usage_evidence
+            _ecls = str(classify_error(exc).error_class or "")
+            _ev = call_usage_evidence(exc)
+        except Exception:
+            pass
         return TeamResult(
             role=role,
             task=task,
             status="blocked",
-            result="",
+            result=_ev["partial"],
             stuck_reason=f"LLM call failed: {exc}",
+            tokens_in=_ev["tokens_in"] + _ev["cache_read"],
+            tokens_out=_ev["tokens_out"],
+            provider_cost_usd=_ev["cost"],
+            error_class=_ecls,
         )
 
     if resp.tool_calls:

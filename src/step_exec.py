@@ -1410,7 +1410,10 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[st
         # failure with zero fresh input lost its cost and output tokens).
         if (_fresh or _fresh_cost or _ev["tokens_out"] or _ev["cache_read"]
                 or getattr(exc, "fresh_input_tokens", None) is not None):
-            _blocked["tokens_in"] = int(tokens_in or 0) + _fresh
+            # tokens_in is TOTAL input, cache reads included (the
+            # LLMResponse / StepOutcome / estimate_cost convention — round
+            # 11: fresh-only here priced a cache-only failure at zero).
+            _blocked["tokens_in"] = int(tokens_in or 0) + _fresh + _ev["cache_read"]
             _blocked["tokens_out"] = int(tokens_out or 0) + _ev["tokens_out"]
             _blocked["provider_cost_usd"] = float(provider_cost_usd or 0.0) + _fresh_cost
             if _ev["cache_read"]:
@@ -2249,6 +2252,8 @@ def execute_step(
             if _tw_blocked:
                 _outcome["stuck_reason"] = (f"team worker [{_tw_role}] blocked: "
                                            f"{getattr(_tw_res, 'stuck_reason', '') or 'no reason given'}")
+                if getattr(_tw_res, "error_class", ""):
+                    _outcome["error_class"] = str(_tw_res.error_class)
         elif tc.name == "schedule_run":
             _sched_goal = tc.arguments.get("goal", "")
             _sched_when = tc.arguments.get("when", "in 1 hour")

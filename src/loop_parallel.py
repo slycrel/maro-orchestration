@@ -231,6 +231,8 @@ def _run_parallel_batch(
             iteration=iteration,
             tokens_in=_batch_oc.get("tokens_in", 0),
             tokens_out=_batch_oc.get("tokens_out", 0),
+            cache_read_tokens=_batch_oc.get("cache_read_tokens", 0) or 0,
+            provider_cost_usd=float(_batch_oc.get("provider_cost_usd", 0.0) or 0.0),
             elapsed_ms=_b_elapsed,
             confidence=_batch_oc.get("confidence", "unverified"),
             injected_steps=_batch_oc.get("inject_steps", []),
@@ -389,6 +391,11 @@ def _run_parallel_path(
             iteration=_i,
             tokens_in=_oc.get("tokens_in", 0),
             tokens_out=_oc.get("tokens_out", 0),
+            # Round 11: both fields defaulted to zero here, so the fan-out /
+            # DAG lanes' returned steps (and the log built from them) lost
+            # the refusal's billed spend and cache attribution.
+            cache_read_tokens=_oc.get("cache_read_tokens", 0) or 0,
+            provider_cost_usd=float(_oc.get("provider_cost_usd", 0.0) or 0.0),
             confidence=_oc.get("confidence", "unverified"),
             injected_steps=_oc.get("inject_steps", []),
             call_record=_oc.get("call_record", ""),

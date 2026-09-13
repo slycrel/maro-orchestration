@@ -507,6 +507,17 @@ class TestContainerAuthPauseOnParallelPaths:
         ctx, res = self._fanout(monkeypatch, [self._DONE, self._PLAIN])
         assert res.status == "stuck" and res.pause_reason == "" and ctx.pause_reason == ""
 
+    @pytest.mark.parametrize("use_dag", [False, True])
+    def test_the_refusals_spend_reaches_the_returned_step(self, monkeypatch, use_dag):
+        # Round 11: the fan-out/DAG result constructor defaulted billed cost
+        # and cache reads to zero.
+        rich = dict(self._AUTH, tokens_in=137, tokens_out=9, cache_read_tokens=100, provider_cost_usd=0.12)
+        ctx, res = self._fanout(monkeypatch, [self._DONE, rich], use_dag=use_dag)
+        assert res.status == "interrupted" and len(res.steps) == 2
+        s = res.steps[1]
+        assert (s.tokens_in, s.tokens_out, s.cache_read_tokens) == (137, 9, 100), s
+        assert s.provider_cost_usd == pytest.approx(0.12)
+
     def test_a_pause_outranks_a_later_plain_block(self, monkeypatch):
         ctx, res = self._fanout(monkeypatch, [self._AUTH, self._PLAIN])
         assert res.status == "interrupted"
@@ -1291,8 +1302,52 @@ class TestReviewRound10:
         cause.fresh_cache_read_tokens = 100; cause.estimated_cost_usd = 0.12
         wrapper = RuntimeError("wrapped"); wrapper.__cause__ = cause
         out = _blocked_outcome_from_exc(wrapper)
-        assert (out["tokens_in"], out["tokens_out"], out["cache_read_tokens"]) == (0, 9, 100), out
+        # tokens_in is TOTAL input (cache reads included) — the estimator's
+        # convention; round 11 caught the fresh-only pin here.
+        assert (out["tokens_in"], out["tokens_out"], out["cache_read_tokens"]) == (100, 9, 100), out
         assert out["provider_cost_usd"] == pytest.approx(0.12)
+        from metrics import estimate_cost
+        assert estimate_cost(out["tokens_in"], out["tokens_out"], model="", cache_read_tokens=out["cache_read_tokens"]) > 0
         # control: nothing attached → nothing stamped
         bare = _blocked_outcome_from_exc(RuntimeError("refused before launch"))
         assert (bare["tokens_in"], bare["tokens_out"]) == (0, 0) and "provider_cost_usd" not in bare
+
+
+class TestReviewRound11:
+    def test_an_ordinary_specialist_failure_keeps_its_evidence(self, monkeypatch, tmp_path):
+        # Round 11: create_team_worker's ordinary except returned "" and zero
+        # accounting, so a killed specialist's partial output and paid usage
+        # never reached the parent step.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step
+        from team import create_team_worker
+        exc = RuntimeError("claude subprocess timed out: liveness stall")
+        exc.maro_partial_output = "ticket work already performed"
+        exc.fresh_input_tokens = 37; exc.fresh_output_tokens = 9
+        exc.fresh_cache_read_tokens = 100; exc.estimated_cost_usd = 0.12
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; container_capable = True; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", input_tokens=7, output_tokens=3, cost_usd=0.01,
+                                       tool_calls=[ToolCall(name="create_team_worker",
+                                                            arguments={"role": "research", "task": "inspect inbox"})])
+                raise exc
+        class _Raising:
+            model_key = "t"; backend = "subprocess"; container_capable = True
+            def complete(self, messages, **kwargs):
+                raise exc
+        res = create_team_worker("research", "inspect inbox", adapter=_Raising())
+        assert res.status == "blocked" and "ticket work already performed" in res.result
+        assert (res.tokens_in, res.tokens_out) == (137, 9) and res.provider_cost_usd == pytest.approx(0.12)
+        assert res.error_class == "retry_backoff"
+        b = _Adapter()
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                               adapter=b, tools=[], project_dir=str(tmp_path))
+        assert outcome["status"] == "blocked" and "ticket work already performed" in outcome["result"], outcome
+        assert (outcome["tokens_in"], outcome["tokens_out"]) == (144, 12)
+        assert outcome["provider_cost_usd"] == pytest.approx(0.13)
+        assert outcome.get("error_class") == "retry_backoff"

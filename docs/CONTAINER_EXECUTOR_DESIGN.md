@@ -538,6 +538,29 @@ both director branches. The doc's "self-clears" claim now states its
 cadence (first executor call after the 300 s recheck; shape-only when
 the expiry is unknown).
 
+*Review round 11 (2026-09-13, codex skeptic + QA, whole chunk): one HIGH
+on round 10's own seam, four accounting carry-throughs; all fixed.*
+(xlvi) **An explicit terminal failure decides the retry question by
+itself.** Only auth text had outranked an earlier rejected
+`rate_limit_event`, so an `error_max_turns` behind one bought a replay of
+an executor call that had already done its work; a terminal failure is a
+rate-limit story only if the failure itself names the limit. (xlvii)
+**Each terminal counter attaches independently** through the shared
+total validator (one `try` around all of them let a single malformed
+field make a paid failure look free; malformed counters are now warned
+and recorded as 0), with the success path's conventions: fresh input =
+uncached ingest, cache reads separate. (xlviii) **Total-input
+accounting:** the outcome builders fold cache reads into `tokens_in`
+(the LLMResponse / StepOutcome / estimator contract — fresh-only priced
+a cache-only failure at zero); the worker lane too. (xlix) **The fan-out
+/ DAG and batch result constructors carry billed cost and cache reads**
+(both defaulted to zero, so those lanes' returned steps and the log
+built from them lost the refusal's spend). (l) **An ordinary specialist
+failure keeps its evidence and class:** `create_team_worker`'s except
+returned "" and zero accounting; it now records the partial output,
+usage, cost and llm_errors class, and the parent's blocked outcome
+carries the class.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

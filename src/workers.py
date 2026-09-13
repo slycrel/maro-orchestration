@@ -308,7 +308,8 @@ def dispatch_worker(
             # partial output (the only record of what the ticket did) and
             # a runaway's measured ingest (the spend the brake accounts for).
             _ev = _cue(exc)
-            _partial, _fresh, _fresh_out = _ev["partial"], _ev["tokens_in"], _ev["tokens_out"]
+            # Same total-input convention as step outcomes (round 11).
+            _partial, _fresh, _fresh_out = _ev["partial"], _ev["tokens_in"] + _ev["cache_read"], _ev["tokens_out"]
         except Exception:
             _fresh_out = 0
         return WorkerResult(

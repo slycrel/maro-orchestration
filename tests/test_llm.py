@@ -2700,6 +2700,61 @@ class TestContainerExecutorWrap:
         assert "Completed the rate limit configuration change." in resp.content
         assert a._rate_limit_wait == 60, "success resets the backoff"
 
+    def test_a_non_auth_terminal_failure_is_never_replayed(self, monkeypatch, tmp_path):
+        # Round 11: only auth text outranked an earlier rejected
+        # rate_limit_event; an `error_max_turns` behind one bought a replay
+        # of an executor call that had already done its work.
+        import container_exec as ce
+        from llm import _rate_limited_failure
+        event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+        maxed = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                            "result": "Reached max turns (20)", "usage": {"input_tokens": 37, "output_tokens": 9},
+                            "total_cost_usd": 0.12})
+        assert _rate_limited_failure(event + "\n" + maxed) is False
+        # controls: the terminal failure itself naming the limit IS the story; no object → the stream decides
+        limited = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                              "result": "You've hit your limit · resets 3pm"})
+        assert _rate_limited_failure(event + "\n" + limited) is True
+        assert _rate_limited_failure(limited) is True
+        assert _rate_limited_failure(event) is True
+        assert _rate_limited_failure("You've hit your limit · resets 3pm") is True
+        ce.reset_container_caches()
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        ok = MagicMock(returncode=0, stderr="", container_executed=False,
+                       stdout=json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "second"}))
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe", side_effect=[
+                MagicMock(returncode=1, stderr="", container_executed=False, stdout=event + "\n" + maxed), ok]) as run:
+            with pytest.raises(RuntimeError, match="max turns") as ei:
+                a.complete([LLMMessage("user", "build a thing")])
+        assert run.call_count == 1, "one launch — the finished work is not replayed"
+        from llm_errors import call_usage_evidence
+        assert call_usage_evidence(ei.value)["tokens_in"] == 37
+
+    @pytest.mark.parametrize("bad", ["input_tokens", "output_tokens", "cache_read_input_tokens", "total_cost_usd"])
+    def test_one_malformed_terminal_counter_keeps_the_others(self, monkeypatch, bad):
+        # Round 11: one `try` around every conversion let a single malformed
+        # field make a paid failure look free.
+        from llm_errors import call_usage_evidence
+        body = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                "result": "OAuth session expired - Please run /login",
+                "usage": {"input_tokens": 37, "output_tokens": 9, "cache_read_input_tokens": 100},
+                "total_cost_usd": 0.12}
+        if bad == "total_cost_usd":
+            body["total_cost_usd"] = "many"
+        else:
+            body["usage"][bad] = "many"
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=0, stderr="", container_executed=False, stdout=json.dumps(body))):
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")])
+        ev = call_usage_evidence(ei.value)
+        expect = {"partial": "", "tokens_in": 37, "tokens_out": 9, "cache_read": 100, "cost": 0.12}
+        expect[{"input_tokens": "tokens_in", "output_tokens": "tokens_out",
+                "cache_read_input_tokens": "cache_read", "total_cost_usd": "cost"}[bad]] = 0
+        assert ev == expect, (bad, ev)
+
     @pytest.mark.parametrize("flag", ["true", None, 0, "", False])
     def test_a_malformed_terminal_flag_still_outranks_a_rate_limit_event(self, monkeypatch, tmp_path, flag):
         # Round 10: _rate_limited_failure kept its own truthy-flag reading,
