@@ -302,14 +302,15 @@ def dispatch_worker(
     except Exception as exc:
         _ecls, _partial, _fresh = "", "", 0
         try:
-            from llm_errors import classify_error as _cls, kill_evidence as _kev
+            from llm_errors import classify_error as _cls, call_usage_evidence as _cue
             _ecls = str(_cls(exc).error_class or "")
             # Round 8: the same evidence step outcomes keep — a kill's
             # partial output (the only record of what the ticket did) and
             # a runaway's measured ingest (the spend the brake accounts for).
-            _partial, _fresh, _ = _kev(exc)
+            _ev = _cue(exc)
+            _partial, _fresh, _fresh_out = _ev["partial"], _ev["tokens_in"], _ev["tokens_out"]
         except Exception:
-            pass
+            _fresh_out = 0
         return WorkerResult(
             worker_type=worker_type,
             ticket=ticket,
@@ -319,6 +320,7 @@ def dispatch_worker(
             blocked_origin="adapter",
             error_class=_ecls,
             tokens_in=_fresh,
+            tokens_out=_fresh_out,
         )
 
     if resp.tool_calls:

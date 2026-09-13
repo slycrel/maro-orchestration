@@ -386,7 +386,9 @@ def run_director(
                 report = _pause_report(
                     _skip_pause, loop_result.stuck_reason or "",
                     f"{_undone} step(s) did not finish",
-                    [s.result for s in done_steps if s.result])
+                    [s.result for s in done_steps if s.result]
+                    + [f"**step {i + 1} (partial — refused by the environment; not accepted)**\n{s.result}"
+                       for i, s in enumerate(loop_result.steps) if s.status == "blocked" and s.result])
             log.info("director_skip_done id=%s loop_status=%s steps=%d elapsed=%dms",
                      director_id, loop_result.status, len(done_steps), elapsed)
             return DirectorResult(
@@ -609,7 +611,10 @@ def run_director(
                 _env_pause = _worker_environmental_pause(result)
                 if _env_pause:
                     director_pause_reason = _env_pause
-                    if _draft.result and not result.result:
+                    # Retained whatever the refused revision left behind
+                    # (round 10: gated on an empty revision result, a
+                    # refusal carrying partial evidence discarded the draft).
+                    if _draft.result:
                         result.unaccepted_draft = _draft.result
                     log.warning("director: revision of ticket %s refused by the environment "
                                 "(%s) — directive paused", ticket.ticket_id, _env_pause)
@@ -657,7 +662,9 @@ def run_director(
              if r.status == "done" and r.result]
             + [f"**{r.worker_type} (draft — its revision was refused by the environment; "
                f"not accepted)**\n{r.unaccepted_draft}"
-               for r in worker_results if getattr(r, "unaccepted_draft", "")])
+               for r in worker_results if getattr(r, "unaccepted_draft", "")]
+            + [f"**{r.worker_type} (partial — refused by the environment; not accepted)**\n{r.result}"
+               for r in worker_results if r.status == "blocked" and r.result])
         _log("paused — deterministic report, no compile call")
     else:
         _log("compiling final report...")

@@ -96,6 +96,7 @@ class TeamResult:
     stuck_reason: Optional[str] = None
     tokens_in: int = 0
     tokens_out: int = 0
+    provider_cost_usd: float = 0.0  # the ticket call's billed cost (round 10)
 
 
 # ---------------------------------------------------------------------------
@@ -256,8 +257,11 @@ def create_team_worker(
         # A token-runaway kill is a policy signal, not a worker-level failure:
         # converting it to a generic blocked TeamResult hides it from the
         # no-retry handling that exists to stop the ingest being replayed.
-        from llm_errors import TokenRunawayError as _TRE
-        if isinstance(exc, _TRE) or _is_policy_signal(exc):
+        from llm_errors import TokenRunawayError as _TRE, BudgetRunawayError as _BRE
+        if isinstance(exc, (_TRE, _BRE)) or _is_policy_signal(exc):
+            # Both runaway classes (round 10: the run-wide cost breaker's
+            # stop verdict has no pause mapping by design, so it needs its
+            # own re-raise) and every typed environmental refusal.
             raise
         log.warning("team.create_worker failed role=%r: %s", role, exc)
         return TeamResult(
@@ -278,6 +282,7 @@ def create_team_worker(
                 result=tc.arguments.get("result", resp.content),
                 tokens_in=resp.input_tokens,
                 tokens_out=resp.output_tokens,
+                provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
             )
         elif tc.name == "flag_blocked":
             return TeamResult(
@@ -288,6 +293,7 @@ def create_team_worker(
                 stuck_reason=tc.arguments.get("reason", "unknown"),
                 tokens_in=resp.input_tokens,
                 tokens_out=resp.output_tokens,
+                provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
             )
 
     # Fallback: treat content as result
@@ -299,6 +305,7 @@ def create_team_worker(
             result=resp.content,
             tokens_in=resp.input_tokens,
             tokens_out=resp.output_tokens,
+                provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
         )
 
     return TeamResult(
@@ -307,6 +314,9 @@ def create_team_worker(
         status="blocked",
         result="",
         stuck_reason="Worker produced no useful output",
+        tokens_in=resp.input_tokens,
+        tokens_out=resp.output_tokens,
+        provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
     )
 
 

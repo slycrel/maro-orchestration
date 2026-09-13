@@ -265,3 +265,18 @@ def test_worker_kill_preserves_partial_output_and_usage(monkeypatch, tmp_path):
     assert r.result == "[partial output before kill]\npartial work already performed"
     assert r.tokens_in == 100000
 
+
+
+def test_worker_kill_keeps_output_tokens_too(monkeypatch):
+    # Round 10: the ticket's output tokens were dropped with the kill.
+    from workers import dispatch_worker
+    exc = RuntimeError("killed")
+    exc.maro_partial_output = "half a ticket"; exc.fresh_input_tokens = 5; exc.fresh_output_tokens = 2
+    class _Adapter:
+        model_key = "t"; backend = "subprocess"
+        def complete(self, messages, **kwargs):
+            raise exc
+    import container_exec as ce
+    monkeypatch.setattr(ce, "enforce_backend_container_contract", lambda *a, **k: None)
+    r = dispatch_worker("research", "find it", context="", adapter=_Adapter(), dry_run=False)
+    assert r.status == "blocked" and (r.tokens_in, r.tokens_out) == (5, 2) and "half a ticket" in r.result

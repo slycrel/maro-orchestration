@@ -2700,6 +2700,36 @@ class TestContainerExecutorWrap:
         assert "Completed the rate limit configuration change." in resp.content
         assert a._rate_limit_wait == 60, "success resets the backoff"
 
+    @pytest.mark.parametrize("flag", ["true", None, 0, "", False])
+    def test_a_malformed_terminal_flag_still_outranks_a_rate_limit_event(self, monkeypatch, tmp_path, flag):
+        # Round 10: _rate_limited_failure kept its own truthy-flag reading,
+        # so an auth-error envelope with a malformed (or clear) flag behind
+        # a rejected rate_limit_event bought another launch instead of the
+        # breaker + class marker. One terminal-status reading now.
+        import container_exec as ce
+        import notify
+        from llm import _rate_limited_failure
+        from llm_errors import classify_error
+        event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+        mixed = event + "\n" + json.dumps({"type": "result", "subtype": "error_during_execution",
+                                           "is_error": flag, "result": "OAuth session expired · Please run /login"})
+        assert _rate_limited_failure(mixed) is False
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        ok = MagicMock(returncode=0, stderr="", container_executed=True,
+                       stdout=json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Repeated"}))
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe", side_effect=[MagicMock(returncode=0, stderr="", container_executed=True, stdout=mixed), ok]) as run:
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 1, "one launch — no replay behind the rate-limit event"
+        assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+        assert ce.auth_breaker_snapshot() is not None
+
     @pytest.mark.parametrize("envelope", ["result", "errors"])
     def test_a_zero_exit_with_an_explicit_error_result_is_a_failure(self, monkeypatch, tmp_path, envelope):
         # Review round 8: the failure path required rc != 0; an explicit
@@ -3611,6 +3641,7 @@ def test_a_terminal_failure_after_work_keeps_its_usage():
     assert kill_evidence(ei.value) == ("", 37, 0.12)
     out = _blocked_outcome_from_exc(ei.value, tokens_in=3)
     assert out["tokens_in"] == 40 and out["provider_cost_usd"] == pytest.approx(0.12), out
+    assert out["tokens_out"] == 9, out  # round 10: output usage survives too
     # through the failover wrapper (raised `from` the adapter's error)
     wrapper = RuntimeError("wrapped"); wrapper.__cause__ = ei.value
     assert _blocked_outcome_from_exc(wrapper)["tokens_in"] == 37

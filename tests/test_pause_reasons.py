@@ -1209,3 +1209,90 @@ class TestReviewRound9:
         out = _blocked_outcome_from_exc(e, tokens_in=2)
         assert out["error_class"] == "container_auth" and out["tokens_in"] == 2, out
         assert out.get("provider_cost_usd", 0.0) == 0.0
+
+
+class TestReviewRound10:
+    def _adapter(self, nested, first_cost=0.01):
+        from llm import LLMResponse, ToolCall
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; container_capable = True
+            def __init__(self):
+                self.calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", input_tokens=7, output_tokens=3, cost_usd=first_cost,
+                                       tool_calls=[ToolCall(name="create_team_worker",
+                                                            arguments={"role": "research", "task": "inspect inbox"})])
+                return nested()
+        return _Adapter()
+
+    def test_a_nested_budget_runaway_keeps_its_class(self, monkeypatch, tmp_path):
+        # The run-wide cost breaker's stop verdict has no pause mapping by
+        # design, so the team lane's policy-signal test missed it.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        from llm_errors import BudgetRunawayError
+        from step_exec import execute_step
+        def _boom():
+            raise BudgetRunawayError(9.0, 6.0)
+        a = self._adapter(_boom)
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                               adapter=a, tools=[], project_dir=str(tmp_path))
+        assert a.calls == 2 and outcome["status"] == "blocked"
+        assert outcome.get("error_class") == "budget_runaway", outcome
+        assert (outcome["tokens_in"], outcome["tokens_out"]) == (7, 3)
+
+    def test_the_specialists_spend_is_the_steps_spend(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step
+        a = self._adapter(lambda: LLMResponse(content="", input_tokens=100, output_tokens=20, cost_usd=0.5,
+                                              tool_calls=[ToolCall(name="deliver_result", arguments={"result": "12 messages"})]))
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                               adapter=a, tools=[], project_dir=str(tmp_path))
+        assert outcome["status"] == "done"
+        assert (outcome["tokens_in"], outcome["tokens_out"]) == (107, 23), outcome
+        assert outcome["provider_cost_usd"] == pytest.approx(0.51)
+        # a blocked ticket's spend counts the same way
+        b = self._adapter(lambda: LLMResponse(content="", input_tokens=50, output_tokens=5, cost_usd=0.2,
+                                              tool_calls=[ToolCall(name="flag_blocked", arguments={"reason": "no data", "partial": ""})]))
+        out2 = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                            adapter=b, tools=[], project_dir=str(tmp_path))
+        assert out2["status"] == "blocked" and (out2["tokens_in"], out2["tokens_out"]) == (57, 8), out2
+        assert out2["provider_cost_usd"] == pytest.approx(0.21)
+
+    def test_an_initial_wrapped_refusal_keeps_its_partial_output(self, monkeypatch, tmp_path):
+        # The initial-call handler's own shallow read passed "" explicitly,
+        # overriding the builder's chain-aware read for a wrapped failure.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        from container_exec import ContainerAuthExpired
+        from llm_errors import BackendError, classify_error
+        from step_exec import execute_step
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; container_capable = True
+            def complete(self, messages, **kwargs):
+                cause = ContainerAuthExpired("expired")
+                cause.maro_partial_output = "work completed before expiry"
+                cause.fresh_input_tokens = 7
+                wrapper = BackendError(classify_error(cause))
+                raise wrapper from cause
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1, completed_context=[],
+                               adapter=_Adapter(), tools=[], project_dir=str(tmp_path))
+        assert outcome["status"] == "blocked" and outcome.get("error_class") == "container_auth", outcome
+        assert "work completed before expiry" in outcome["result"] and "before kill" in outcome["result"]
+        assert outcome["tokens_in"] == 7
+
+    def test_a_wrapped_failure_with_zero_fresh_input_keeps_cost_and_output(self):
+        from step_exec import _blocked_outcome_from_exc
+        cause = RuntimeError("claude subprocess failed: OAuth session expired")
+        cause.fresh_input_tokens = 0; cause.fresh_output_tokens = 9
+        cause.fresh_cache_read_tokens = 100; cause.estimated_cost_usd = 0.12
+        wrapper = RuntimeError("wrapped"); wrapper.__cause__ = cause
+        out = _blocked_outcome_from_exc(wrapper)
+        assert (out["tokens_in"], out["tokens_out"], out["cache_read_tokens"]) == (0, 9, 100), out
+        assert out["provider_cost_usd"] == pytest.approx(0.12)
+        # control: nothing attached → nothing stamped
+        bare = _blocked_outcome_from_exc(RuntimeError("refused before launch"))
+        assert (bare["tokens_in"], bare["tokens_out"]) == (0, 0) and "provider_cost_usd" not in bare

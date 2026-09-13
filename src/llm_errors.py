@@ -23,7 +23,7 @@ from __future__ import annotations
 import math
 import subprocess
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 # The six classes (+ FATAL for everything unmatched).
 RETRY_BACKOFF = "retry_backoff"        # transient — same-backend ladder
@@ -298,35 +298,51 @@ def kill_evidence(exc: BaseException) -> Tuple[str, int, float]:
     fresh_input_tokens, estimated_cost_usd): the partial output is the
     only record of what the call did before dying (the tail, framed);
     the runaway fields are the spend the brake exists to account for."""
-    def _attr(name, default):
-        # FailoverAdapter re-raises actionable failures as a fresh
-        # BackendError `from` the adapter's exception; the evidence rides
-        # the cause, not the wrapper (review round 9, 2026-09-13).
-        _e, _hops = exc, 0
-        while _e is not None and _hops < 8:
-            _v = getattr(_e, name, None)
-            if _v is not None:
-                return _v
-            _e, _hops = getattr(_e, "__cause__", None), _hops + 1
+    _u = call_usage_evidence(exc)
+    return _u["partial"], _u["tokens_in"], _u["cost"]
+
+
+def evidence_attr(exc: BaseException, name: str, default=None):
+    """Read an evidence attribute off `exc` or, failing that, its cause
+    chain: FailoverAdapter re-raises actionable failures as a fresh
+    BackendError `from` the adapter's exception, so the evidence rides the
+    cause, not the wrapper (review round 9, 2026-09-13)."""
+    _e, _hops = exc, 0
+    while _e is not None and _hops < 8:
+        _v = getattr(_e, name, None)
+        if _v is not None:
+            return _v
+        _e, _hops = getattr(_e, "__cause__", None), _hops + 1
+    return default
+
+
+def finite_nonneg(v, cast, default):
+    """Accounting is total, finite and non-negative or it is the default
+    (review round 9: int(inf) raised OverflowError past the blocked
+    builder's guard, NaN reached cost records, a negative subtracted)."""
+    try:
+        x = cast(v if v is not None else default)
+    except Exception:
         return default
+    if isinstance(x, float) and not math.isfinite(x):
+        return default
+    return x if x >= 0 else default
 
-    def _num(v, cast, default):
-        # Accounting is total, finite and non-negative or it is zero
-        # (review round 9: int(inf) raised OverflowError past the blocked
-        # builder's guard, NaN reached cost records, a negative subtracted).
-        try:
-            x = cast(v if v is not None else default)
-        except Exception:
-            return default
-        if isinstance(x, float) and not math.isfinite(x):
-            return default
-        return x if x >= 0 else default
 
-    _p = str(_attr("maro_partial_output", "") or "")
-    partial = f"[partial output before kill]\n{_p[-2000:]}" if _p else ""
-    fresh = _num(_attr("fresh_input_tokens", 0), int, 0)
-    cost = _num(_attr("estimated_cost_usd", 0.0), float, 0.0)
-    return partial, fresh, cost
+def call_usage_evidence(exc: BaseException) -> Dict[str, Any]:
+    """Everything a failed/killed adapter call leaves behind, as one record
+    (review round 10, 2026-09-13: the 3-tuple carried input tokens and
+    cost only — a failure after cache-served work recorded zero tokens
+    and, through the wrapper with zero fresh input, zero spend). Keys:
+    partial, tokens_in, tokens_out, cache_read, cost. Never raises."""
+    _p = str(evidence_attr(exc, "maro_partial_output", "") or "")
+    return {
+        "partial": f"[partial output before kill]\n{_p[-2000:]}" if _p else "",
+        "tokens_in": finite_nonneg(evidence_attr(exc, "fresh_input_tokens", 0), int, 0),
+        "tokens_out": finite_nonneg(evidence_attr(exc, "fresh_output_tokens", 0), int, 0),
+        "cache_read": finite_nonneg(evidence_attr(exc, "fresh_cache_read_tokens", 0), int, 0),
+        "cost": finite_nonneg(evidence_attr(exc, "estimated_cost_usd", 0.0), float, 0.0),
+    }
 
 
 def is_actionable(info: ErrorInfo) -> bool:

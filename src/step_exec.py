@@ -1372,10 +1372,11 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[st
     step already incurred (a runaway kill's own ingest is ADDED to that —
     round 3: replacing it undercounted the re-call). Never raises."""
     try:
-        from llm_errors import kill_evidence
-        _partial, _fresh, _fresh_cost = kill_evidence(exc)
+        from llm_errors import call_usage_evidence
+        _ev = call_usage_evidence(exc)
     except Exception:  # documented never-raises; the class still wins over the accounting
-        _partial, _fresh, _fresh_cost = "", 0, 0.0
+        _ev = {"partial": "", "tokens_in": 0, "tokens_out": 0, "cache_read": 0, "cost": 0.0}
+    _partial, _fresh, _fresh_cost = _ev["partial"], _ev["tokens_in"], _ev["cost"]
     if partial_result is None:
         # A killed subprocess's partial output (llm.py attaches it on
         # timeout/runaway kills) is the only record of what the step did
@@ -1403,11 +1404,17 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[st
         # it consumed a lot. Recording it as a zero-token step would hide
         # the spend from run totals, cost reports and skill telemetry —
         # exactly the accounting the brake exists to protect.
-        # `_fresh` is read through the failover wrapper's cause chain
-        # (round 9), so the attribute may live on the cause, not on `exc`.
-        if _fresh or getattr(exc, "fresh_input_tokens", None) is not None:
+        # Evidence is read through the failover wrapper's cause chain
+        # (round 9), so the attributes may live on the cause, not on
+        # `exc`; every counter counts on its own (round 10: a wrapped
+        # failure with zero fresh input lost its cost and output tokens).
+        if (_fresh or _fresh_cost or _ev["tokens_out"] or _ev["cache_read"]
+                or getattr(exc, "fresh_input_tokens", None) is not None):
             _blocked["tokens_in"] = int(tokens_in or 0) + _fresh
+            _blocked["tokens_out"] = int(tokens_out or 0) + _ev["tokens_out"]
             _blocked["provider_cost_usd"] = float(provider_cost_usd or 0.0) + _fresh_cost
+            if _ev["cache_read"]:
+                _blocked["cache_read_tokens"] = _ev["cache_read"]
         return _blocked
     except Exception:
         return {
@@ -1820,12 +1827,11 @@ def execute_step(
         # A killed subprocess's partial output (llm.py attaches it on
         # timeout/runaway kills) is the only record of what the step did
         # before dying — the tail, not "", becomes the blocked result so
-        # DEAD_ENDS "Attempted:" and recovery see real evidence.
-        _partial = str(getattr(exc, "maro_partial_output", "") or "")
-        _partial_result = (
-            f"[partial output before kill]\n{_partial[-2000:]}" if _partial else ""
-        )
-        return _stamp_flavor(_blocked_outcome_from_exc(exc, partial_result=_partial_result))
+        # DEAD_ENDS "Attempted:" and recovery see real evidence. The
+        # builder owns that read (round 10: this handler's own shallow
+        # read passed "" explicitly and overrode the builder's chain-aware
+        # one for a wrapped failure).
+        return _stamp_flavor(_blocked_outcome_from_exc(exc))
 
     _provider_cost_usd = safe_float(getattr(resp, "cost_usd", 0.0))
     _executor_session_id = str(getattr(resp, "session_id", "") or "")
@@ -2223,6 +2229,12 @@ def execute_step(
             # is not a done step (round 9 — the parent stamped `done`
             # unconditionally, so a nested refusal read as successful work).
             _tw_blocked = getattr(_tw_res, "status", "") == "blocked"
+            # The specialist's spend is this step's spend (round 10: only
+            # the parent call's tokens reached the budgets and the report).
+            _tw_in = int(getattr(_tw_res, "tokens_in", 0) or 0)
+            _tw_out = int(getattr(_tw_res, "tokens_out", 0) or 0)
+            _provider_cost_usd += safe_float(getattr(_tw_res, "provider_cost_usd", 0.0))
+            _tok += _tw_in + _tw_out
             log.info("step %d %s (create_team_worker) role=%r tokens=%d elapsed=%.1fs",
                      step_num, "BLOCKED" if _tw_blocked else "DONE", _tw_role, _tok,
                      time.monotonic() - _step_t0)
@@ -2230,8 +2242,8 @@ def execute_step(
                 "status": "blocked" if _tw_blocked else "done",
                 "result": _tw_result_text,
                 "summary": f"Team worker [{_tw_role}]: {_tw_task[:60]}",
-                "tokens_in": resp.input_tokens,
-                "tokens_out": resp.output_tokens,
+                "tokens_in": resp.input_tokens + _tw_in,
+                "tokens_out": resp.output_tokens + _tw_out,
                 "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
             }
             if _tw_blocked:

@@ -212,7 +212,9 @@ lane would run the worker *outside* the container the contract demands);
 `container-auth-expired` reason, so loop_execute ends the run `interrupted`
 with the typed pause on the first refusal — one step, no blocked-step churn
 — and the continuation lane's resume test accepts it once the operator
-re-seeds and the breaker self-clears. Before this the refusal was
+re-seeds and the breaker self-clears (on the first executor call after its
+300 s recheck cadence; shape-only when the volume's expiry is unknown).
+Before this the refusal was
 classified FATAL/auth by text and the run churned retries. Docker-down keeps
 the base `ContainerUnavailable` and its old handling. (b) *Liveness.* The
 breaker stays reactive, but the session's own end is knowable in advance:
@@ -509,6 +511,32 @@ That has been the live behaviour since the wrapper landed and is
 arguably the right one for a stalled worker (a stall is not an
 environmental outage); flipping it is a §13e-adjacent call, logged in
 BACKLOG for Jeremy.
+
+*Review round 10 (2026-09-13, codex skeptic + QA, whole chunk): one HIGH
+on round 9's own seams, the rest carry-through; all fixed.* (xli) **One
+reading of a terminal result's status.** The rate-limit retry predicate
+kept its own truthy-`is_error` test, so an auth-error envelope with a
+malformed or clear flag behind a rejected `rate_limit_event` bought
+another launch instead of the breaker; `_terminal_failure_obj` now
+serves the failure test and the predicate. (xlii) **Both runaway classes
+cross the team boundary** — the run-wide cost breaker's stop verdict has
+no pause mapping by design, so the policy-signal test alone missed
+`BudgetRunawayError`; the parent now carries `budget_runaway` to the
+loop's stop branch. (xliii) **The specialist's spend is the step's
+spend:** `TeamResult` carries its call's cost and the parent outcome
+folds the ticket's tokens and cost in (delivered or blocked). (xliv)
+**Evidence is one record.** `call_usage_evidence` (partial, input,
+output, cache-read, cost) replaces the 3-tuple at the outcome builders;
+the terminal failure attaches every counter independently (a cost with
+zero fresh input, cache-served work); the initial-call handler no longer
+overrides the builder's chain-aware read with its own shallow "" (a
+wrapped refusal lost its partial output there); the worker lane keeps
+output tokens. (xlv) **A refused revision keeps both** the paid-for draft
+(retention was gated on an EMPTY revision result) and the revision's
+partial output, and the pause report renders each under its own label on
+both director branches. The doc's "self-clears" claim now states its
+cadence (first executor call after the 300 s recheck; shape-only when
+the expiry is unknown).
 
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 

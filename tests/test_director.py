@@ -4074,3 +4074,34 @@ class TestEnvironmentalRefusalStopsDispatch:
         monkeypatch.setattr(_director_mod, "dispatch_worker", _blocked)
         result = run_director("research and build a report", dry_run=True)
         assert len(calls) >= len(result.tickets) and result.pause_reason == ""
+
+
+def test_a_refused_revision_with_partial_output_keeps_both(monkeypatch, tmp_path):
+    # Round 10: draft retention was gated on an EMPTY revision result, so a
+    # refusal carrying partial evidence discarded the paid-for draft; and
+    # the pause report showed neither.
+    from workers import WorkerResult
+    import director as _director_mod
+    from director import ReviewDecision, Ticket, run_director
+    _setup(monkeypatch, tmp_path)
+    calls = []
+    def _dispatch(worker_type, task, *, context="", **kw):
+        calls.append(task)
+        if len(calls) == 1:
+            return WorkerResult(worker_type=worker_type, ticket=task, status="done", result="draft")
+        return WorkerResult(worker_type=worker_type, ticket=task, status="blocked",
+                            result="[partial output before kill]\nREVISION PARTIAL",
+                            stuck_reason="LLM call failed (container_auth): re-seed the volume",
+                            blocked_origin="adapter", error_class="container_auth")
+    monkeypatch.setattr(_director_mod, "dispatch_worker", _dispatch)
+    monkeypatch.setattr(_director_mod, "_review_worker_output",
+                        lambda **kw: (ReviewDecision(accepted=False, reason="thin", revision_request="more"), (0, 0)))
+    monkeypatch.setattr(_director_mod, "_produce_spec",
+                        lambda directive, adapter, dry_run, _log: (
+                            "spec", [Ticket(ticket_id="t1", worker_type="research", task="find it")], (0, 0)))
+    monkeypatch.setattr(_director_mod, "_challenge_spec", lambda *a, **k: ("spec", (0, 0)), raising=False)
+    result = run_director("research and build a report", dry_run=False, adapter=object())
+    assert result.pause_reason == "container-auth-expired" and len(calls) == 2
+    assert result.worker_results[0].unaccepted_draft == "draft"
+    assert "(draft — its revision was refused" in result.report and "\ndraft" in result.report
+    assert "(partial — refused by the environment" in result.report and "REVISION PARTIAL" in result.report

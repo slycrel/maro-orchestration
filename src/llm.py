@@ -2223,7 +2223,15 @@ def _terminal_failure(stdout: str) -> bool:
     and a zero exit with an explicit error result is a failure — before
     this it became an empty ordinary response, past the breaker and the
     classifier."""
-    obj = _extract_result_object(stdout)
+    return _terminal_failure_obj(_extract_result_object(stdout))
+
+
+def _terminal_failure_obj(obj: Optional[dict]) -> bool:
+    """The ONE reading of a terminal result object's status, shared by the
+    failure test and the rate-limit retry predicate (review round 10,
+    2026-09-13: the predicate kept its own truthy-flag reading, so a
+    malformed flag on an auth-error envelope behind a rejected
+    rate_limit_event bought another launch instead of the breaker)."""
     if not isinstance(obj, dict):
         return False
     _flag = obj.get("is_error", False)
@@ -2252,7 +2260,7 @@ def _rate_limited_failure(stdout: str) -> bool:
     if _extract_success_result(stdout) is not None:
         return False
     obj = _extract_result_object(stdout)
-    if obj is not None and obj.get("is_error"):
+    if _terminal_failure_obj(obj):
         _terminal = _terminal_error_text(obj)
         if _terminal:
             try:
@@ -3160,10 +3168,20 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 # zero spend). Same channel the runaway kill uses; the
                 # outcome builders ADD it to the step's accounting.
                 try:
-                    if isinstance(_err_obj, dict) and isinstance(_err_obj.get("usage"), dict):
-                        _usage = _err_obj["usage"]
-                        if _usage.get("input_tokens") is not None:
-                            _err.fresh_input_tokens = int(_usage.get("input_tokens") or 0)  # type: ignore[attr-defined]
+                    if isinstance(_err_obj, dict):
+                        _usage = _err_obj.get("usage")
+                        if isinstance(_usage, dict):
+                            # Each counter independently (round 10): output
+                            # and cache-served input are spend too, and a
+                            # cost with zero fresh input is still a cost.
+                            if _usage.get("input_tokens") is not None:
+                                _err.fresh_input_tokens = int(_usage.get("input_tokens") or 0)  # type: ignore[attr-defined]
+                            if _usage.get("output_tokens") is not None:
+                                _err.fresh_output_tokens = int(_usage.get("output_tokens") or 0)  # type: ignore[attr-defined]
+                            _cr = _usage.get("cache_read_input_tokens", _usage.get("cache_read_tokens"))
+                            if _cr is not None:
+                                _err.fresh_cache_read_tokens = int(_cr or 0)  # type: ignore[attr-defined]
+                        if _err_obj.get("total_cost_usd") is not None:
                             _err.estimated_cost_usd = float(_err_obj.get("total_cost_usd") or 0.0)  # type: ignore[attr-defined]
                 except Exception:
                     log.debug("terminal usage not attached to the failure", exc_info=True)
