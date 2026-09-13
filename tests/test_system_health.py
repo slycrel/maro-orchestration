@@ -682,6 +682,34 @@ class TestContainerAuthProbe:
         assert len(_events(SUBSYSTEM_RECOVERED)) == 1
         assert snap["processes"]["streaky"]["status"] == OK, "untouched entries survive"
 
+    def test_a_busy_lock_skips_the_cycle_even_under_fail_open(self, monkeypatch, _tmp_health):
+        # Round 6: the snapshot transaction (read → probe → narrated= → write)
+        # used the DEFAULT lock contract, which proceeds UNLOCKED under
+        # MARO_FILELOCK_FAIL_OPEN on contention — two cycles could then
+        # double- or lose-narrate. It now requires the lock: busy → skipped
+        # whole (no probe, no write, no narration).
+        import threading
+        from file_lock import locked_write
+        monkeypatch.setenv("MARO_FILELOCK_FAIL_OPEN", "1")
+        monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "0.2")
+        probes = []
+        monkeypatch.setattr(sh, "DECLARED_PROCESSES", [
+            _decl(lambda prior: probes.append(1) or (SILENT, "down", {}))])
+        held = threading.Event(); release = threading.Event()
+        def holder():
+            with locked_write(_tmp_health):
+                held.set(); release.wait(5)
+        t = threading.Thread(target=holder); t.start(); held.wait(2)
+        try:
+            summary = run_health_probes()
+        finally:
+            release.set(); t.join(5)
+        assert summary.get("skipped", "").startswith("snapshot lock busy")
+        assert probes == [] and not _tmp_health.exists() and _events() == []
+        # control: the lock free → the cycle runs and narrates
+        summary = run_health_probes()
+        assert summary["ran"] == 1 and probes == [1] and len(_events(SUBSYSTEM_SILENT)) == 1
+
     def test_session_with_time_left_stays_ok_and_names_the_date(self, monkeypatch):
         self._patch(monkeypatch, "on", None)
         self._liveness(monkeypatch, 20)

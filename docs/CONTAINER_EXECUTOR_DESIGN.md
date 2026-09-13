@@ -385,6 +385,34 @@ because `deploy/hermes/dispatch.py` pops every workspace var at import
 (`c1234567-patient-yarrow`, 2026-09-07; left in place — run data is never
 auto-deleted); the test now isolates after the load.
 
+*Review round 6 (2026-09-13, codex skeptic + QA, whole chunk) found two
+HIGHs in the retry loop's remaining twins and three carry-through gaps;
+fixed before landing.* (xxi) **The terminal result decides.** A stream
+carrying a rejected `rate_limit_event` *and* ending in "OAuth session
+expired" still counted as rate-limited (another backoff cycle, then the
+rate-limit error past the breaker). `_rate_limited_failure` now lets an
+explicit terminal error result naming an auth failure outrank any earlier
+rate-limit evidence; the entry and the retry share it. (xxii) **A retry
+that times out is not replayed.** `TimeoutExpired` inside the retry loop
+`continue`d — a killed executor step (which may have acted) was launched
+again, and on exhaustion the stale rate-limit text was the cause and the
+timeout's partial output was gone. It now raises the initial call's own
+timeout error (kill reason + `maro_partial_output`), backoff persisted.
+(xxiii) **The heartbeat delivers OK observations too.** Round 5 ran the
+one-probe health cycle only on warn/expired, so a heartbeat-only box never
+re-armed (`narrated="silent"` forever) and the *next* expiry's warning was
+swallowed. Every sample now feeds the edge; the composed test proves
+SILENT → RECOVERED → SILENT through the real state machine. (xxiv) **The
+health transaction requires its lock** (`locked_write(..., require=True)`,
+busy → cycle skipped whole: no probe, no write, no narration); under
+`MARO_FILELOCK_FAIL_OPEN` the default contract proceeded unlocked and two
+cycles could double- or lose-narrate. (xxv) **`maro doctor` reads the
+expiry record** — a fifth container row, "Container auth session": ok /
+WARN / EXPIRED from the heartbeat's liveness record, and "expiry NOT
+ESTABLISHED" named as such (the breaker row is reactive: clear right up to
+the first casualty, so a known-expired session showed four green rows).
+Closes the round-4 residual.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

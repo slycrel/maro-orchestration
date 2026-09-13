@@ -11,6 +11,7 @@ Real API calls are NOT made in tests — subprocess tests mock the binary.
 """
 
 import json
+import subprocess
 import sys
 import os
 from pathlib import Path
@@ -2599,6 +2600,68 @@ class TestContainerExecutorWrap:
             assert run.call_count == 3
             assert "rate-limited after 2 retries" in str(ei.value)
             assert ce.auth_breaker_snapshot() is None
+
+    def test_a_terminal_auth_result_outranks_an_earlier_rate_limit_event(self, monkeypatch, tmp_path):
+        # Review round 6: a stream carrying a rejected rate_limit_event AND
+        # ending in "OAuth session expired" kept _still_rate_limited=True —
+        # another backoff cycle, then the rate-limit error past the breaker.
+        # The terminal error result names the remedy.
+        import container_exec as ce
+        import notify
+        from llm import _rate_limited_failure
+        from llm_errors import classify_error
+        event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+        mixed = event + "\n" + json.dumps({"type": "result", "subtype": "success", "is_error": True,
+                                           "result": "OAuth session expired · Please run /login"})
+        assert _rate_limited_failure(mixed) is False
+        assert _rate_limited_failure(event) is True
+        assert _rate_limited_failure("You've hit your limit · resets 3pm") is True
+        assert _rate_limited_failure(json.dumps({"type": "result", "is_error": True,
+                                                 "result": "You have hit your limit"})) is True
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 3
+        with patch("llm._run_subprocess_safe", side_effect=[
+                limited, MagicMock(returncode=1, stderr="", container_executed=True, stdout=mixed)]) as run:
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 2
+        assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+        assert ce.auth_breaker_snapshot() is not None
+
+    def test_a_retry_that_times_out_is_not_replayed(self, monkeypatch, tmp_path):
+        # Review round 6: TimeoutExpired inside the retry loop `continue`d —
+        # a killed executor step (which may have acted) was launched again
+        # and, on exhaustion, the STALE rate-limit text was the cause and
+        # the timeout's partial output was gone. Same contract as the
+        # initial call: raise the timeout error with its partial output.
+        import container_exec as ce
+        import notify
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        killed = subprocess.TimeoutExpired(cmd=["claude"], timeout=600, output="partial work already performed")
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 3
+        with patch("llm._run_subprocess_safe", side_effect=[limited, killed, limited]) as run:
+            with pytest.raises(RuntimeError, match="timed out") as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 2, "a killed retry is never replayed"
+        assert "rate-limited" not in str(ei.value)
+        assert getattr(ei.value, "maro_partial_output", "") == "partial work already performed"
+        assert a._rate_limit_wait > 60, "the backoff still persists for the next call"
 
     def test_failover_stands_down_for_container_owned_auth_error(self, monkeypatch):
         # One container auth death must not trip the process-wide subprocess

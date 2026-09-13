@@ -569,9 +569,20 @@ def run_health_probes(*, verbose: bool = False,
         # of both reading narrated=None and double-narrating / last-writer-
         # winning the history (atomic_write alone does not lock). Probes
         # only READ other stores, so no lock-ordering cycle is possible.
-        from file_lock import locked_write
+        from file_lock import locked_write, FileLockTimeout
         pending_narrations: List[Tuple[ProcessDeclaration, str, str]] = []
-        with locked_write(_snapshot_path()):
+        try:
+            _guard = locked_write(_snapshot_path(), require=True)
+            _guard.__enter__()
+        except FileLockTimeout as exc:
+            # require=True (review round 6): under MARO_FILELOCK_FAIL_OPEN the
+            # default contract proceeds UNLOCKED on contention — two cycles
+            # would then race the narrated= state (double or lost
+            # narration). A busy lock means this cycle is skipped whole:
+            # no probe, no write, no narration.
+            summary["skipped"] = f"snapshot lock busy: {str(exc)[:120]}"
+            return summary
+        try:
             snapshot = load_snapshot()
             processes = snapshot.get("processes")
             if not isinstance(processes, dict):
@@ -629,6 +640,8 @@ def run_health_probes(*, verbose: bool = False,
             if _only is None:
                 snapshot["cycle"] = int(snapshot.get("cycle", 0) or 0) + 1
             _write_snapshot(snapshot)
+        finally:
+            _guard.__exit__(None, None, None)
 
         # Narrate only after the snapshot recording narrated= persisted:
         # a failed write must not leave the log claiming the user was told

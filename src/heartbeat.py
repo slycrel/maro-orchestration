@@ -846,6 +846,11 @@ def run_heartbeat(
                 report.checks["container_auth"] = (
                     f"{'fail' if _lvl == 'expired' else 'warn'}: "
                     f"{_sw.get('container_auth_liveness_detail') or _lvl}")
+            if _lvl:
+                # Every observation, ok included (review round 6): the edge
+                # is told-silent → OK; a heartbeat-only box that skipped the
+                # OK samples never re-armed, so the NEXT expiry's warning
+                # would have been swallowed as already narrated.
                 try:
                     from system_health import run_health_probes
                     run_health_probes(only=("container_auth",))

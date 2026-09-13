@@ -2197,6 +2197,27 @@ def _extract_result_object(text: str) -> Optional[dict]:
     return None
 
 
+def _rate_limited_failure(stdout: str) -> bool:
+    """Is this failed CLI response a rate-limit story (worth a backoff
+    retry)? Structured rate_limit_event first, the two phrases as backup —
+    EXCEPT that an explicit terminal error result naming an auth failure
+    decides first (review round 6, 2026-09-13): a stream can carry an
+    earlier rejected rate_limit_event and still END in "OAuth session
+    expired"; that final failure names the remedy and must reach the
+    breaker + class marker, never another backoff cycle."""
+    obj = _extract_result_object(stdout)
+    if obj is not None and obj.get("is_error") and obj.get("result"):
+        try:
+            from container_exec import is_auth_error_text
+            if is_auth_error_text(str(obj["result"])[:4000]):
+                return False
+        except Exception:
+            pass
+    combined = (stdout or "").lower()
+    return bool(_parse_stream_json(stdout)["rate_limited"]
+                or "hit your limit" in combined or "rate limit" in combined)
+
+
 def _stringify_tool_result(content) -> str:
     """Flatten a Claude Code tool_result `content` (str | list-of-blocks |
     other) into a plain string for verification."""
@@ -2932,9 +2953,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             # gone — every stream-json response embeds "resetsAt", so it now
             # false-positives on ordinary errors. Keep the phrase checks as a
             # backup for any plain-text error surface.
-            _combined = merged.lower()
-            if (_parse_stream_json(result.stdout)["rate_limited"]
-                    or "hit your limit" in _combined or "rate limit" in _combined):
+            if _rate_limited_failure(result.stdout):
                 import time as _time
                 # Multi-cycle polling: retry up to _RATE_LIMIT_MAX_RETRIES times.
                 # Each cycle waits exponentially longer (60→120→240→480→900→1800s, capped).
@@ -2986,18 +3005,20 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                             env_extra=_env_extra,
                             stream_probe=_build_stream_probes(model_str, agentic=not no_tools),
                             container_name=_container_name, executor_step=bool(executor) and not no_tools)
-                    except subprocess.TimeoutExpired:
-                        log.warning("rate limit retry timed out after %ds, will retry", _timeout)
-                        continue
+                    except subprocess.TimeoutExpired as _texc:
+                        # The initial call's contract (review round 6): a
+                        # timed-out call is never replayed — an executor
+                        # step may have acted — and its partial output and
+                        # kill annotations travel with the error. Before
+                        # this it `continue`d: another launch, and on
+                        # exhaustion the stale rate-limit text as the cause.
+                        self._rate_limit_wait = _wait
+                        raise _subprocess_timeout_error("claude", _texc, _timeout)
                     if result.returncode == 0:
                         _retry_success = True
                         break
-                    # Check if still rate-limited — the entry's own
-                    # predicate (structured event first, phrases as backup).
-                    _retry_combined = result.stdout.lower()
-                    if not (_parse_stream_json(result.stdout)["rate_limited"]
-                            or "hit your limit" in _retry_combined
-                            or "rate limit" in _retry_combined):
+                    # Check if still rate-limited — the entry's own predicate.
+                    if not _rate_limited_failure(result.stdout):
                         # The retry died of something ELSE (an expired
                         # container session, a crash). That is not a
                         # rate-limit story: it falls through to the generic
