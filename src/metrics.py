@@ -396,8 +396,19 @@ def record_step_cost(
     Returns the recorded entry dict (useful for testing).
     """
     step_type = classify_step_type(step_text)
-    est_usd = estimate_cost(tokens_in, tokens_out, model=model or None,
-                            cache_read_tokens=cache_read_tokens)
+    _estimate_error = ""
+    try:
+        est_usd = estimate_cost(tokens_in, tokens_out, model=model or None,
+                                cache_read_tokens=cache_read_tokens)
+    except Exception as _exc:
+        # The row still lands (round 14): an estimator failure on a
+        # malformed counter must not lose the step's spend record, and
+        # the failure is named on the row rather than swallowed.
+        _estimate_error = f"{type(_exc).__name__}: {_exc}"[:120]
+        logging.getLogger("maro.metrics").warning(
+            "step cost estimate failed for loop %s (%s): %s — recorded with "
+            "estimate 0", loop_id or "?", step_text[:60], _estimate_error)
+        est_usd = 0.0
     provider = max(0.0, float(provider_cost_usd or 0.0))
     cost_usd = provider if provider > 0 else est_usd
     entry = {
@@ -421,6 +432,8 @@ def record_step_cost(
     }
     if provider > 0:
         entry["estimated_cost_usd"] = round(est_usd, 8)
+    if _estimate_error:
+        entry["estimate_error"] = _estimate_error
     try:
         path = _step_costs_path()
         path.parent.mkdir(parents=True, exist_ok=True)

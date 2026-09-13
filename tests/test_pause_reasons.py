@@ -1565,3 +1565,51 @@ class TestReviewRound13:
         entry = record_step_cost("list the newest five", 137, 9, "blocked", goal="g",
                                  loop_id="loop-r13b", provider_cost_usd=0.12)
         assert "persisted" not in entry and spend_for_loops(["loop-r13b"]) == pytest.approx(0.12)
+
+
+class TestReviewRound14:
+    """Round 14 (2026-09-13): accounting failures never outrank the pause."""
+
+    def test_an_oversized_counter_does_not_break_the_pause(self, monkeypatch, tmp_path, caplog):
+        # The sequential driver priced the step BEFORE the pause seam and
+        # caught only ImportError: an OverflowError from an absurd counter
+        # ended the loop with no pause stamped and no step record.
+        import logging
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        fake = tmp_path / "claude"; fake.write_text("#!/bin/sh\nexit 0\n"); fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+        import runs, loop_planning, loop_execute
+        from agent_loop import run_agent_loop
+        from stop_verdicts import PAUSE_ERR_CONTAINER_AUTH
+        monkeypatch.setattr(loop_planning, "_decompose", lambda *a, **k: ["list the newest five", "count"])
+        monkeypatch.setattr(loop_planning, "_shape_steps", lambda steps, **k: list(steps))
+        monkeypatch.setattr(loop_execute, "_execute_step", lambda **kw: {
+            "status": "blocked", "error_class": "container_auth",
+            "stuck_reason": "LLM call failed (container_auth): re-seed", "result": "",
+            "tokens_in": 10 ** 400, "tokens_out": 9})
+        rd = runs.create_run_dir("cauth0014", prompt="read the inbox")
+        with caplog.at_level(logging.WARNING):
+            with runs.scoped_run_dir(rd):
+                result = run_agent_loop("read the inbox", dry_run=False, max_steps=3, handle_id="cauth0014")
+        assert result.status == "interrupted" and result.pause_reason == PAUSE_ERR_CONTAINER_AUTH, result
+        meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+        assert meta.get("pause_reason") == PAUSE_ERR_CONTAINER_AUTH
+        assert len(result.steps) == 1 and result.steps[0].status == "blocked"
+        assert "cost estimate failed" in caplog.text
+        rows = [r for r in TestReviewRound12._ledger_rows(self) if r.get("loop_id") == result.loop_id]
+        assert len(rows) == 1 and rows[0]["status"] == "blocked" and rows[0].get("estimate_error"), rows
+
+    def test_a_failed_estimate_still_records_the_row(self, monkeypatch, caplog):
+        import logging
+        import metrics
+        from metrics import record_step_cost, spend_for_loops
+        def boom(*a, **k):
+            raise OverflowError("int too large to convert to float")
+        monkeypatch.setattr(metrics, "estimate_cost", boom)
+        with caplog.at_level(logging.WARNING, logger="maro.metrics"):
+            entry = record_step_cost("list the newest five", 137, 9, "blocked", goal="g",
+                                     loop_id="loop-r14", provider_cost_usd=0.12)
+        assert entry["cost_usd"] == pytest.approx(0.12) and entry["estimate_error"].startswith("OverflowError")
+        assert "persisted" not in entry and spend_for_loops(["loop-r14"]) == pytest.approx(0.12)
+        assert "loop-r14" in caplog.text and "estimate failed" in caplog.text

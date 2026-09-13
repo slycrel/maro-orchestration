@@ -643,6 +643,46 @@ the entry `persisted: false`. Silent-drop census + triage manifest:
 both new stream readers triaged as subprocess-capture parsers (the
 baseline's `_parse_stream_json` class).
 
+*Review round 14 (2026-09-13, codex skeptic + QA, whole chunk): two HIGHs
+on round 13's reader seam, one HIGH on the accounting validator, one MED;
+all fixed. One HIGH recorded as an out-of-scope lead.* (lxii) **The
+whole-document fallback respects document boundaries.** Round 13's
+line-start fallback kept scanning the lines INSIDE the object it had just
+decoded, so a result-shaped object nested in a pretty-printed error's
+`errors[]` outranked the error (auth failure read as success). The
+fallback now advances past each decoded document; nested objects are
+data. Pinned both ways (success nested in error, error nested in
+success), both exit codes. (lxiii) **One selection for both readers.**
+`_parse_stream_json` fell back to the document scanner only when NO
+event line parsed; an `init` line ahead of a pretty-printed result left
+it with `None` while `_extract_result_object` found the frame — at rc=0
+the whole capture was delivered as prose and a `flag_stuck` answer
+completed as `done` with zero usage. The stream parser now always
+defers to the scanner when its own pass finds no result frame, so the
+two readers select one terminal object. (lxiv) **Counters are bounded.**
+`finite_nonneg` checked finiteness only for floats; a 400-digit JSON
+integer passed as a valid int and the cost estimator's float conversion
+raised `OverflowError` in the sequential driver AHEAD of the pause seam
+(which caught only `ImportError`) — the refusal never stamped its
+pause. The validator now rejects anything above `COUNTER_MAX` (10¹⁵);
+the driver's pricing block catches every exception (pricing is
+telemetry, warned as incomplete); `record_step_cost` records the row
+with `estimate_error` named when the estimator fails instead of raising
+before its append. Pinned through the real sequential driver: the pause
+stamps, the step record and the ledger row both land. (lxv) **Malformed
+auxiliary fields are isolated too.** Round 13 guarded `message/content`
+only; a list-valued `rate_limit_info` or an unhashable tool id raised
+while `_stream_events` re-parsed a SUCCESSFUL capture, turning completed
+work into a parser-origin block with zero accounting. Every auxiliary
+field is validated on its own, malformed ones counted and warned, the
+terminal frame read regardless. **Out-of-scope lead (not changed;
+BACKLOG):** parallel steps pass the project dir as the executor's
+explicit `cwd`, which outranks the step's provisioned worktree (phase
+3b, 2026-07-03) — concurrent workers share the project directory while
+merge-back examines a different checkout. Predates this chunk; which
+directory a parallel step should execute in is a phase-3b design
+question for Jeremy.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

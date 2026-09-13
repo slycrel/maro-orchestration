@@ -3915,3 +3915,94 @@ def test_a_malformed_assistant_event_keeps_the_other_partial_evidence(caplog, or
     ev = call_usage_evidence(ei.value)
     assert "work already performed" in ev["partial"] and ev["tokens_in"] == 37
     assert "2 malformed assistant event(s)/block(s) skipped" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Review round 14 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+_R14_INIT = json.dumps({"type": "system", "subtype": "init", "session_id": "s1", "tools": []})
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_an_init_event_does_not_suppress_the_pretty_printed_terminal_frame(rc):
+    # Round 14: `_parse_stream_json` fell back to the document scanner only
+    # when NO event line parsed; an `init` line ahead of a pretty-printed
+    # result left it with None while `_extract_result_object` found the
+    # frame — at rc=0 the whole capture was delivered as prose (a
+    # flag_stuck answer completed as done, usage 0).
+    from llm import _extract_result_object, _parse_stream_json
+    ok = json.loads(_r12_frame("success", result="Finished the task.",
+                               usage={"input_tokens": 5, "cache_creation_input_tokens": 30, "output_tokens": 9}))
+    text = _R14_INIT + "\n" + json.dumps(ok, indent=2)
+    assert _parse_stream_json(text)["result"] == _extract_result_object(text) == ok
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text)):
+        resp = a.complete([LLMMessage("user", "build a thing")])
+    assert resp.content == "Finished the task." and (resp.input_tokens, resp.output_tokens) == (35, 9)
+    err = json.loads(_r12_frame("error_during_execution"))
+    text2 = _R14_INIT + "\n" + json.dumps(err, indent=2)
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text2)):
+        with pytest.raises(RuntimeError, match="OAuth session expired"):
+            a.complete([LLMMessage("user", "build a thing")])
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_a_nested_result_object_never_replaces_its_document(rc):
+    # Round 14: the whole-document fallback kept scanning the LINES INSIDE
+    # the object it had just decoded, so a result-shaped object nested in
+    # a pretty-printed error's `errors[]` outranked the error itself.
+    from llm import _extract_result_object, _terminal_failure
+    nested_ok = {"type": "result", "subtype": "success", "is_error": False, "result": "diagnostic example: finished"}
+    err = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+           "errors": ["OAuth session expired - Please run /login", nested_ok]}
+    text = json.dumps(err, indent=2)
+    assert _extract_result_object(text)["subtype"] == "error_during_execution"
+    assert _terminal_failure(text) is True
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text)):
+        with pytest.raises(RuntimeError, match="OAuth session expired"):
+            a.complete([LLMMessage("user", "build a thing")])
+    # the mirror: an error nested inside a real success is data too
+    ok = {"type": "result", "subtype": "success", "is_error": False, "result": "Finished the task.",
+          "notes": {"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "x"}}
+    text2 = json.dumps(ok, indent=2)
+    assert _terminal_failure(text2) is False
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text2)):
+        assert a.complete([LLMMessage("user", "build a thing")]).content == "Finished the task."
+
+
+def test_malformed_auxiliary_events_keep_the_terminal_result(caplog):
+    # Round 14: the round-13 guards covered message/content only — a
+    # list-valued rate_limit_info raised on .get and a list-valued tool id
+    # raised as a dict key while `_stream_events` re-parsed the capture, so
+    # a completed call became a parser-origin block with zero accounting.
+    import logging
+    from llm import _parse_stream_json
+    events = [
+        json.dumps({"type": "rate_limit_event", "rate_limit_info": ["bad"]}),
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": ["bad"], "name": "Bash", "input": {}},
+            {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "x"}}]}}),
+        json.dumps({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": [], "content": "x"},
+            {"type": "tool_result", "tool_use_id": "t1", "content": "the file"}]}}),
+        _r12_frame("success", result="Finished the task.",
+                   usage={"input_tokens": 37, "output_tokens": 9}, total_cost_usd=0.12),
+    ]
+    body = "\n".join(events)
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        parsed = _parse_stream_json(body)
+    assert parsed["result"]["subtype"] == "success" and parsed["rate_limited"] is False
+    assert [(e["name"], e["output"]) for e in parsed["tool_events"]] == [("Read", "the file")]
+    assert "3 malformed event(s)/block(s) skipped" in caplog.text
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=0, stderr="", container_executed=False, stdout=body)):
+        resp = a.complete([LLMMessage("user", "build a thing")])
+    assert resp.content == "Finished the task." and (resp.input_tokens, resp.output_tokens) == (37, 9)
+    assert resp.cost_usd == pytest.approx(0.12)

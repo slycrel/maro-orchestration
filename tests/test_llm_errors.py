@@ -355,3 +355,23 @@ def test_kill_evidence_reads_through_the_failover_wrapper():
     wrapper.__cause__ = cause
     assert kill_evidence(wrapper) == ("[partial output before kill]\nabc", 7, 0.5)
     assert kill_evidence(RuntimeError("bare")) == ("", 0, 0.0)
+
+
+@pytest.mark.parametrize("value, cast, want", [
+    (10 ** 400, int, 0), (10 ** 16, int, 0), (10 ** 12, int, 10 ** 12),
+    (1e300, float, 0.0), (float(10 ** 15), float, float(10 ** 15)), ("1" + "0" * 400, int, 0),
+])
+def test_finite_nonneg_is_bounded(value, cast, want):
+    # Round 14: a valid JSON integer of 400 digits passed as a finite int
+    # and overflowed the float pricer ahead of the pause seam.
+    from llm_errors import finite_nonneg, COUNTER_MAX
+    assert finite_nonneg(value, cast, cast(0)) == want
+    assert COUNTER_MAX == 10 ** 15
+
+
+def test_an_oversized_terminal_counter_keeps_the_others():
+    from llm_errors import call_usage_evidence
+    exc = RuntimeError("claude subprocess failed")
+    exc.fresh_input_tokens = 10 ** 400; exc.fresh_output_tokens = 9; exc.estimated_cost_usd = 0.12
+    ev = call_usage_evidence(exc)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (0, 9, 0.12)

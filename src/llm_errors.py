@@ -329,15 +329,26 @@ def evidence_attr(exc: BaseException, name: str, default=None):
     return default
 
 
+# No token counter or dollar figure a call can produce is this large; a
+# JSON integer past it is malformed (review round 14, 2026-09-13: a valid
+# JSON integer of 400 digits passed as a finite int, then the cost
+# estimator's float conversion raised OverflowError ahead of the pause
+# seam). Bounded here so every consumer prices what it accepts.
+COUNTER_MAX = 10 ** 15
+
+
 def finite_nonneg(v, cast, default):
-    """Accounting is total, finite and non-negative or it is the default
-    (review round 9: int(inf) raised OverflowError past the blocked
-    builder's guard, NaN reached cost records, a negative subtracted)."""
+    """Accounting is total, finite, bounded and non-negative or it is the
+    default (review round 9: int(inf) raised OverflowError past the blocked
+    builder's guard, NaN reached cost records, a negative subtracted;
+    round 14: an oversized integer overflowed the pricer)."""
     try:
         x = cast(v if v is not None else default)
     except Exception:
         return default
     if isinstance(x, float) and not math.isfinite(x):
+        return default
+    if x > COUNTER_MAX:
         return default
     return x if x >= 0 else default
 

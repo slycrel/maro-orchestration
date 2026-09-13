@@ -1190,8 +1190,14 @@ def _execute_main_loop(
             # model swings the figure when steps switch cheap<->mid<->power.
             total_cost_usd += _step_cost
             _total_cost = total_cost_usd
-        except ImportError:
+        except Exception as _cost_exc:
+            # Pricing is telemetry: it must never end the loop ahead of
+            # the pause seam below (round 14: an oversized counter raised
+            # OverflowError here and the refusal never stamped its pause).
+            log.warning("step %d cost estimate failed (accounting incomplete): %s",
+                        item_index, _cost_exc)
             _step_cost = _step_provider_cost
+            total_cost_usd += _step_cost
             _total_cost = total_cost_usd
         log.info("step %d %s tokens_step=%d tokens_total=%d cost_step=$%.4f cost_total=$%.4f model=%s elapsed=%dms iter=%d/%d",
                  step_idx, outcome.get("status", "?"),

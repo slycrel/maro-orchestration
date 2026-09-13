@@ -2210,16 +2210,24 @@ def _extract_result_object(text: str) -> Optional[dict]:
         return last
     decoder = json.JSONDecoder()
     pos = 0
+    skip_until = 0  # end offset of the document decoded last (round 14)
     for line in text.splitlines(keepends=True):
         start = pos
         pos += len(line)
-        if not line.lstrip().startswith("{"):
+        if start < skip_until:
+            # Inside a document already decoded: its nested objects are
+            # data, not events (round 14: a result-shaped object inside a
+            # pretty-printed error's `errors[]` outranked the error).
             continue
-        start += len(line) - len(line.lstrip())
+        stripped = line.lstrip()
+        if not stripped.startswith("{"):
+            continue
+        start += len(line) - len(stripped)
         try:
-            data, _consumed = decoder.raw_decode(text[start:])
+            data, consumed = decoder.raw_decode(text[start:])
         except json.JSONDecodeError:
             continue
+        skip_until = start + consumed
         if isinstance(data, dict) and data.get("type") == "result":
             last = data
     return last
@@ -2424,6 +2432,7 @@ def _parse_stream_json(text: str) -> dict:
     uses = []            # ordered [(id, name, input)]
     results_by_id = {}   # id -> {output, is_error}
     saw_any_event = False
+    malformed = 0        # events/blocks whose fields are not the protocol's (round 14)
     for line in text.splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -2439,25 +2448,42 @@ def _parse_stream_json(text: str) -> dict:
         if etype == "assistant":
             _msg = ev.get("message")
             _content = _msg.get("content") if isinstance(_msg, dict) else None
+            if not isinstance(_content, list):
+                malformed += 1
             for block in (_content if isinstance(_content, list) else []):
                 if isinstance(block, dict) and block.get("type") == "tool_use":
-                    uses.append((block.get("id"), block.get("name", ""), block.get("input")))
+                    _uid = block.get("id")
+                    if _uid is not None and not isinstance(_uid, (str, int)):
+                        malformed += 1  # an unhashable id would break the join below
+                        continue
+                    uses.append((_uid, block.get("name", ""), block.get("input")))
         elif etype == "user":
             _msg = ev.get("message")
             content = _msg.get("content") if isinstance(_msg, dict) else None
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
-                        results_by_id[block.get("tool_use_id")] = {
+                        _tid = block.get("tool_use_id")
+                        if _tid is not None and not isinstance(_tid, (str, int)):
+                            malformed += 1
+                            continue
+                        results_by_id[_tid] = {
                             "output": _stringify_tool_result(block.get("content")),
                             "is_error": bool(block.get("is_error", False)),
                         }
         elif etype == "result":
             out["result"] = ev
         elif etype == "rate_limit_event":
-            status = (ev.get("rate_limit_info") or {}).get("status")
+            _info = ev.get("rate_limit_info")
+            if _info is not None and not isinstance(_info, dict):
+                malformed += 1
+                _info = None
+            status = (_info or {}).get("status")
             if status is not None and status != "allowed":
                 out["rate_limited"] = True
+    if malformed:
+        log.warning("claude stream: %d malformed event(s)/block(s) skipped — tool-event "
+                    "evidence is incomplete; the terminal frame is read on its own", malformed)
     out["tool_events"] = [
         {
             "name": name,
@@ -2468,7 +2494,12 @@ def _parse_stream_json(text: str) -> dict:
         }
         for (uid, name, inp) in uses
     ]
-    if out["result"] is None and not saw_any_event:
+    if out["result"] is None:
+        # One selection for both readers (round 14: this fallback ran only
+        # when NO event line parsed, so an `init` line ahead of a pretty-
+        # printed result left this reader with None while the scanner
+        # found the frame — rc=0 then delivered the whole capture as
+        # prose and a flag_stuck answer completed as done).
         out["result"] = _extract_result_object(text)
     return out
 
