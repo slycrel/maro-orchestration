@@ -77,15 +77,38 @@ _CONTRACT = {
 
 def project_name(value: Any) -> str:
     """A recorded project identity as a directory NAME, or "". Persisted
-    metadata is a boundary: only a non-empty string with no path separators
-    and not `.`/`..` names a project — anything else (a number, a list, a
-    path) is rejected rather than coerced into some directory's name."""
+    metadata is a boundary: only a non-empty string with no path separators,
+    no surrounding whitespace, and not `.`/`..` names a project — anything
+    else (a number, a list, a path, a padded name) is rejected rather than
+    coerced or canonicalised into some OTHER directory's name (on Linux
+    " board-reports " and "board-reports" are two directories)."""
     if not isinstance(value, str):
         return ""
-    name = value.strip()
-    if not name or "/" in name or "\\" in name or name in (".", ".."):
+    name = value
+    if not name or name != name.strip() or "/" in name or "\\" in name or name in (".", ".."):
         return ""
     return name
+
+
+def project_inside_root(name: str) -> bool:
+    """Whether `projects_root()/name` is a place a run may bind to: absent
+    (it will be created), or a real directory that RESOLVES inside the
+    projects root. A symlink — to anywhere — or a non-directory is not a
+    project (`is_dir()` alone follows links out of the root). False on any
+    error: the safe direction for the directory a deliverable lands in."""
+    if not project_name(name):
+        return False
+    try:
+        from orch_items import projects_root
+        root = projects_root()
+        target = root / name
+        if target.is_symlink():
+            return False
+        if not target.exists():
+            return True
+        return target.is_dir() and target.resolve().is_relative_to(root.resolve())
+    except Exception:
+        return False
 
 
 def recorded_project(handle_id: str) -> str:
@@ -370,13 +393,28 @@ def chosen_project(rec: Dict[str, Any]) -> str:
         project = recorded_project(str(rec["chosen"]))
         if not project:
             return ""
-        root = projects_root()
-        target = root / project
-        if not target.is_dir() or not target.resolve().is_relative_to(root.resolve()):
+        if not (projects_root() / project).is_dir() or not project_inside_root(project):
             return ""
         return project
     except Exception:
         log.warning("landscape: chosen run's project unreadable, binding by goal text", exc_info=True)
+        return ""
+
+
+def context_only_project(rec: Dict[str, Any]) -> str:
+    """The project of a run the judge related the goal to WITHOUT saying the
+    goal continues its work (a tangent, the same method for other work):
+    context, not a destination. The handle keeps its automatic fallbacks
+    (the named shortcut, the minted slug — which reuses an existing slug
+    for a goal that opens the same way) out of this project: a verdict of
+    "context only" must not be undone one layer down (review 2026-09-13
+    round 2). "" when fresh, when the goal continues the run, or when the
+    run recorded no valid project name."""
+    if rec.get("relation") != "related" or not rec.get("chosen") or rec.get("continues") is True:
+        return ""
+    try:
+        return recorded_project(str(rec["chosen"]))
+    except Exception:
         return ""
 
 

@@ -307,9 +307,12 @@ def _env_flag(name: str, default: bool = False) -> bool:
 _PROJECT_MATCH_MIN_LEN = 6
 
 
-def _match_existing_project(message: str) -> str:
+def _match_existing_project(message: str, exclude: "tuple[str, ...]" = ()) -> str:
     """If the goal text literally names an existing project directory, return
-    that project name; else "".
+    that project name; else "". Names in `exclude` and entries that do not
+    resolve inside the projects root (a symlink out of it — the containment
+    the landscape binder refuses must not be re-granted by the shortcut,
+    review 2026-09-13 round 2) are never matched.
 
     A dispatched goal like "deepen one edge in the polymarket-edges ledger"
     must bind to the existing `polymarket-edges` project — minting a fresh
@@ -326,30 +329,54 @@ def _match_existing_project(message: str) -> str:
             return ""
         msg = message.lower()
         best = ""
+        from landscape import project_inside_root
         for d in root.iterdir():
             name = d.name
-            if not d.is_dir() or len(name) < _PROJECT_MATCH_MIN_LEN:
+            if not d.is_dir() or len(name) < _PROJECT_MATCH_MIN_LEN or name in exclude:
                 continue
             if len(name) <= len(best):
                 continue
             if re.search(r"(?<![a-z0-9-])" + re.escape(name.lower()) + r"(?![a-z0-9-])", msg):
+                if not project_inside_root(name):
+                    log.warning("project shortcut: %r named in the goal is not a project inside the root; skipped", name)
+                    continue
                 best = name
         return best
     except Exception:
         return ""
 
 
-def _project_for_goal(message: str) -> "tuple[str, str]":
+def _project_for_goal(message: str, exclude: "tuple[str, ...]" = ()) -> "tuple[str, str]":
     """Project identity for a project-less goal and the rule that bound it:
     (an existing project named in the goal text, "named") else (the minted
     goal slug, "minted"). ONE directory observation decides both — the rule
     is read off the same scan that picked the project, never a second scan
-    that a directory appearing or vanishing in between could contradict."""
-    matched = _match_existing_project(message)
+    that a directory appearing or vanishing in between could contradict.
+
+    `exclude` names projects the automatic fallbacks may not land in — the
+    landscape's context-only project (review 2026-09-13 round 2: the minted
+    slug REUSES an existing slug for a goal that opens the same way, so
+    "…report for client B" would land in client A's project one layer below
+    the judge's "context only"). A slug that is excluded, or whose directory
+    does not resolve inside the projects root, steps to the first free
+    `-2`, `-3`… sibling."""
+    matched = _match_existing_project(message, exclude)
     if matched:
         return matched, "named"
     from loop_artifacts import resolve_project_slug
-    return resolve_project_slug(message), "minted"
+    from landscape import project_inside_root
+    slug = resolve_project_slug(message)
+    if slug in exclude or not project_inside_root(slug):
+        import orch_items as _oi
+        base = slug
+        for n in range(2, 1000):
+            cand = f"{base}-{n}"
+            if cand not in exclude and not (_oi.projects_root() / cand).exists():
+                slug = cand
+                break
+        log.info("project fallback: %r steps aside to %r (%s)", base, slug,
+                 "context only" if base in exclude else "not a project inside the root")
+    return slug, "minted"
 
 
 def _default_project_for(message: str) -> str:
@@ -1306,41 +1333,64 @@ def _handle_impl(
     # The project the landscape's decision binds (feature 2 follow-up,
     # 2026-09-13, decree [[feedback_decisions_belong_to_maro]]): a goal
     # that follows a prior run lands where that run's work is. "" when
-    # fresh, overridden, or the chosen run's project is gone.
+    # fresh, overridden, or the chosen run's project is gone. The
+    # context-only project is the one the automatic fallbacks keep out of.
     _landscape_project = ""
+    _context_only_project = ""
+    _landscape_decided = False
+    _origin_as_given = dict(origin) if origin else None
+
+    def _decide_landscape(goal_text: str) -> None:
+        # The stage as one decision over `goal_text`, re-runnable: the
+        # clarified goal (a channel reply that names other work than the
+        # goal as submitted) is judged again, and everything the first
+        # decision derived — origin, related context, the bound and the
+        # context-only project — is replaced, never merged (review
+        # 2026-09-13 round 2). Starts from the origin the CALLER gave.
+        nonlocal origin, _related_ctx, _landscape_project, _context_only_project, _landscape_decided
+        import landscape as _landscape
+        def _judge(_adapter=adapter):
+            # the landscape's one call rides the hosted-free family when
+            # it is available (same seat as the NOW verdict judge), else
+            # the run's own adapter — a cheap call either way. Built
+            # only when there is a candidate to judge.
+            try:
+                from hosted_free import build_hosted_free_adapter as _hf_build
+                _hf = _hf_build()
+            except Exception:
+                _hf = None
+            return _hf if _hf is not None else _adapter
+        _land = _landscape.decide(
+            goal_text, handle_id=handle_id,
+            adapter=None if dry_run else _judge,
+            fresh=bool(fresh or dry_run),
+            why="" if fresh else ("dry_run" if dry_run else ""))
+        _new_origin = _landscape.apply(handle_id, dict(_origin_as_given) if _origin_as_given else None, _land)
+        if _landscape_decided and not _new_origin:
+            # a re-decision that no longer follows a run: the stamped origin
+            # of the first decision must not outlive it
+            from runs import stamp_run_metadata_for as _stamp_origin
+            _stamp_origin(handle_id, {"origin": dict(_origin_as_given or {})})
+        origin = _new_origin
+        _related_ctx = _landscape.related_context(_land)
+        _landscape_project = _landscape.chosen_project(_land)
+        _context_only_project = _landscape.context_only_project(_land)
+        _landscape_decided = True
+        log.info("landscape: %s (%s) %d candidate(s) of %d scanned%s",
+                 _land.get("relation"), _land.get("rule"),
+                 len(_land.get("candidates") or []), _land.get("scanned", 0),
+                 f" → follows {_land['chosen']}" if _land.get("chosen") else "")
+        if verbose:
+            print(f"[maro:{handle_id}] landscape: {_land.get('relation')} "
+                  f"({_land.get('rule')}; {len(_land.get('candidates') or [])} "
+                  f"candidate(s) of {_land.get('scanned', 0)} scanned)"
+                  + (f" — follows run {_land['chosen']}: {_land.get('reason', '')}"
+                     if _land.get("chosen") else ""),
+                  file=sys.stderr, flush=True)
+
     if not (origin or {}).get("parent_handle_id"):
         try:
-            import landscape as _landscape
-            def _judge(_adapter=adapter):
-                # the landscape's one call rides the hosted-free family when
-                # it is available (same seat as the NOW verdict judge), else
-                # the run's own adapter — a cheap call either way. Built
-                # only when there is a candidate to judge.
-                try:
-                    from hosted_free import build_hosted_free_adapter as _hf_build
-                    _hf = _hf_build()
-                except Exception:
-                    _hf = None
-                return _hf if _hf is not None else _adapter
-            _land = _landscape.decide(
-                _raw_input, handle_id=handle_id,
-                adapter=None if dry_run else _judge,
-                fresh=bool(fresh or dry_run),
-                why="" if fresh else ("dry_run" if dry_run else ""))
-            origin = _landscape.apply(handle_id, origin, _land)
-            _related_ctx = _landscape.related_context(_land)
-            _landscape_project = _landscape.chosen_project(_land)
-            log.info("landscape: %s (%s) %d candidate(s) of %d scanned%s",
-                     _land.get("relation"), _land.get("rule"),
-                     len(_land.get("candidates") or []), _land.get("scanned", 0),
-                     f" → follows {_land['chosen']}" if _land.get("chosen") else "")
-            if verbose:
-                print(f"[maro:{handle_id}] landscape: {_land.get('relation')} "
-                      f"({_land.get('rule')}; {len(_land.get('candidates') or [])} "
-                      f"candidate(s) of {_land.get('scanned', 0)} scanned)"
-                      + (f" — follows run {_land['chosen']}: {_land.get('reason', '')}"
-                         if _land.get("chosen") else ""),
-                      file=sys.stderr, flush=True)
+            _decide_landscape(_raw_input)
         except Exception as _land_exc:
             # The decision is recorded even when the stage itself fails: an
             # unreadable landscape is fresh, and the run is not blocked on
@@ -1966,6 +2016,17 @@ def _handle_impl(
                         _reply = channel.ask(_q)
                         if _reply:
                             message = f"{message}\n\nAdditional context: {_reply}"
+                            if _landscape_decided:
+                                # the landscape judged the goal AS SUBMITTED;
+                                # the reply may name other work ("this is for
+                                # client B") — decide again over the clarified
+                                # goal before anything binds on the first verdict
+                                try:
+                                    _decide_landscape(message)
+                                    log.info("landscape: re-decided over the clarified goal")
+                                except Exception as _re_exc:
+                                    log.warning("landscape: re-decision over the clarified goal failed, "
+                                                "keeping the first: %s", _re_exc)
                         # Fall through to continue execution
                     else:
                         # No channel — return clarification_needed (CLI path).
@@ -2100,7 +2161,11 @@ def _handle_impl(
         elif _landscape_project:
             _agenda_project, _project_binding = _landscape_project, "landscape"
         else:
-            _agenda_project, _project_binding = _project_for_goal(message)
+            _agenda_project, _project_binding = _project_for_goal(
+                message, (_context_only_project,) if _context_only_project else ())
+        if _context_only_project and _project_binding in ("named", "minted"):
+            log.info("project binding: %s (%s) keeps out of %s (context only)",
+                     _agenda_project, _project_binding, _context_only_project)
         if _landscape_project and _landscape_project != _agenda_project:
             log.warning("project binding: %s (%s) outranks the landscape's %s",
                         _agenda_project, _project_binding, _landscape_project)
@@ -3631,6 +3696,19 @@ def _handle_impl(
                         _escalated_project = (
                             project or getattr(loop_result, "project", "") or ""
                         ) + "-escalated"
+                        # the run's project changes here (loop init stamps
+                        # it again); the binding provenance must not keep
+                        # claiming the landscape/operator chose a project
+                        # they never saw (review 2026-09-13 round 2)
+                        try:
+                            from runs import stamp_run_metadata as _stamp_esc
+                            if _stamp_esc({"project": _escalated_project,
+                                           "project_binding": "escalated"}) is None:
+                                log.warning("project binding: %s (escalated) not recorded in run metadata",
+                                            _escalated_project)
+                        except Exception:
+                            log.warning("project binding: %s (escalated) not recorded in run metadata",
+                                        _escalated_project, exc_info=True)
                         # Preserve the normal run contract (measurement
                         # provenance, handle identity, deferred learning,
                         # callback/context, repo fence) while changing only

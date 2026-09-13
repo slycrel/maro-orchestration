@@ -6474,7 +6474,21 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   the other; the fallback rule is read off the ONE scan that picked
   the project; a failed stamp is logged; a fork of a landscape-bound
   parent records the parent's RECORDED project (`recorded_project`),
-  not its goal-text slug. Recorded, not changed: a project deleted
+  not its goal-text slug. Round 2: the fallbacks were undoing the
+  verdicts one layer down — the minted slug REUSES an existing slug for
+  a goal that opens the same way ("…report for client B" landed in
+  client A's project under a `continues: false` verdict) and the named
+  shortcut followed the symlink the binder had just refused; now
+  `landscape.context_only_project` is an exclusion for both fallbacks
+  (`_project_for_goal(message, exclude)` steps to the first free `-2`,
+  `-3`… sibling) and `project_inside_root` guards the shortcut and the
+  slug too; a channel clarification that changes the goal re-decides
+  the landscape over the clarified goal (`_decide_landscape` is one
+  re-runnable decision; a re-decision that no longer follows a run
+  resets the stamped origin to the caller's); quality escalation stamps
+  `project_binding: escalated` with the `-escalated` project; a
+  whitespace-padded recorded name is rejected, not canonicalised into
+  the other directory. Recorded, not changed: a project deleted
   between selection and loop init is recreated empty by
   `ensure_project` (deletion is manual and opt-in here — data-retention
   decree — and the window is seconds).

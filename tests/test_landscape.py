@@ -334,6 +334,9 @@ class _NowAndJudge:
         self.calls.append((messages, kwargs))
         purpose = kwargs.get("purpose")
         text = self.judge_answer if purpose == "landscape" else "Revenue rose 12% on services; margins held at 41%."
+        if purpose == "landscape" and isinstance(text, list):
+            # scripted in order; the last answer repeats
+            text = text.pop(0) if len(text) > 1 else text[0]
         if purpose == "landscape" and text is None:
             raise AssertionError("the landscape was consulted when it should not have been")
 
@@ -865,9 +868,9 @@ class TestProjectBindingProvenance:
         calls = []
         real = handle_mod._match_existing_project
 
-        def counted(message):
+        def counted(message, exclude=()):
             calls.append(message)
-            return real(message)
+            return real(message, exclude)
 
         monkeypatch.setattr(handle_mod, "_match_existing_project", counted)
         assert handle_mod._project_for_goal("Refresh the board-reports index page") == ("board-reports", "named")
@@ -945,3 +948,214 @@ class TestTheBoundProjectComposes:
             _agenda_run(monkeypatch, child_goal, _NowAndJudge(),
                         origin={"source": "dispatch", "parent_handle_id": "nope0000", "parent_goal": GOAL_FOLLOW_UP})
         assert rec2.call_args.kwargs["parent_id"] == _default_project_for(GOAL_FOLLOW_UP)
+
+
+class TestTheFallbacksHonourTheJudge:
+    """Review round 2 (2026-09-13): a verdict the judge or the binder made
+    must not be undone one layer down by the automatic fallbacks."""
+
+    def test_a_context_only_verdict_keeps_the_minted_slug_out_of_that_project(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import landscape
+        from handle import _default_project_for, _project_for_goal
+        from loop_artifacts import resolve_project_slug
+        from orch_items import projects_root
+        goal_a = "Summarize the quarterly revenue report for client A"
+        goal_b = "Summarize the quarterly revenue report for client B"
+        slug = resolve_project_slug(goal_a)
+        (projects_root() / slug).mkdir(parents=True)
+        prior = _finished_run(goal_a, "Client A: revenue rose.", extra={"project": slug})
+        # the fixture: both goals open the same way, so the minted slug REUSES client A's project
+        assert _default_project_for(goal_b) == slug and _project_for_goal(goal_b) == (slug, "minted")
+        r, kw = _agenda_run(monkeypatch, goal_b, _NowAndJudge(_related(1, "same method, other client", continues=False)))
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["chosen"] == prior and meta["landscape"]["continues"] is False
+        assert kw["project"] != slug and kw["project"].startswith(slug + "-")
+        assert (meta["project"], meta["project_binding"]) == (kw["project"], "minted")
+        # the unit: the context-only project, and the fallback stepping aside from it
+        assert landscape.context_only_project(meta["landscape"]) == slug
+        assert landscape.context_only_project({**meta["landscape"], "continues": True}) == ""
+        assert landscape.context_only_project({"relation": "rerun", "chosen": prior}) == ""
+        assert _project_for_goal(goal_b, (slug,)) == (slug + "-2", "minted")
+        (projects_root() / (slug + "-2")).mkdir()
+        assert _project_for_goal(goal_b, (slug,)) == (slug + "-3", "minted")
+
+    def test_a_context_only_verdict_keeps_the_named_shortcut_out_of_that_project(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from handle import _match_existing_project
+        from orch_items import projects_root
+        (projects_root() / "client-a").mkdir(parents=True)
+        prior = _finished_run("Write the client-a quarterly report", "Done.", extra={"project": "client-a"})
+        goal = "Use the client-a report as a template for client B"
+        assert _match_existing_project(goal) == "client-a", "the fixture: the goal names the source project"
+        r, kw = _agenda_run(monkeypatch, goal, _NowAndJudge(_related(1, "a template, other work", continues=False)))
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["chosen"] == prior
+        assert kw["project"] != "client-a" and meta["project_binding"] == "minted"
+        # and when the judge says the goal continues that work, the named project it is
+        # (a fresh workspace: the run above would otherwise be the newest candidate)
+        _setup(monkeypatch, tmp_path / "two")
+        (projects_root() / "client-a").mkdir(parents=True)
+        _finished_run("Write the client-a quarterly report", "Done.", extra={"project": "client-a"})
+        r2, kw2 = _agenda_run(monkeypatch, goal, _NowAndJudge(_related(1, "carries it forward")))
+        assert kw2["project"] == "client-a" and _meta(r2.handle_id)["project_binding"] == "landscape"
+
+    def test_a_rejected_symlink_is_not_reselected_by_the_goal_text(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import landscape
+        from handle import _match_existing_project, _project_for_goal
+        from loop_artifacts import resolve_project_slug
+        from orch_items import projects_root
+        root = projects_root()
+        root.mkdir(parents=True, exist_ok=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (root / "client-a").symlink_to(outside, target_is_directory=True)
+        assert not landscape.project_inside_root("client-a")
+        assert landscape.project_inside_root("not-there") and not landscape.project_inside_root("../x")
+        (root / "real-one").mkdir()
+        assert landscape.project_inside_root("real-one")
+        # the named shortcut skips it ...
+        goal = "Extend the client-a report"
+        assert _match_existing_project(goal) == ""
+        prior = _finished_run("Write the client-a report", "Done.", extra={"project": "client-a"})
+        r, kw = _agenda_run(monkeypatch, goal, _NowAndJudge(_related(1, "carries it forward")))
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["chosen"] == prior and meta["landscape"]["continues"] is True
+        assert kw["project"] != "client-a" and meta["project_binding"] == "minted"
+        assert (root / kw["project"]).resolve().is_relative_to(root.resolve()) or not (root / kw["project"]).exists()
+        # ... and so does the minted slug when the slug's own directory is a link out of the root
+        goal2 = "Extend the client report now"
+        slug2 = resolve_project_slug(goal2)
+        (root / slug2).symlink_to(outside, target_is_directory=True)
+        assert _project_for_goal(goal2) == (slug2 + "-2", "minted")
+
+    def test_a_whitespace_padded_name_is_rejected_not_canonicalised(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import landscape
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        (projects_root() / " board-reports ").mkdir(parents=True)
+        assert landscape.project_name(" board-reports ") == "" and landscape.project_name("board-reports\n") == ""
+        a = _finished_run(GOAL_HAIKU, "leaves", extra={"project": " board-reports "})
+        assert landscape.recorded_project(a) == ""
+        assert landscape.chosen_project({"relation": "related", "chosen": a, "continues": True}) == ""
+
+
+class TestTheDecisionFollowsTheGoalItBindsOn:
+    def test_a_clarified_goal_is_judged_again_before_it_binds(self, monkeypatch, tmp_path):
+        # the landscape judged the goal AS SUBMITTED; the channel reply names
+        # other work — the decision, its origin, its context and the bound
+        # project all follow the clarified goal
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle, _default_project_for
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        from orch_items import projects_root
+        import llm
+        (projects_root() / "client-a").mkdir(parents=True)
+        prior = _finished_run(GOAL_QUARTERLY, "Client A: revenue rose.", extra={"project": "client-a"})
+        adapter = _NowAndJudge([_related(1, "carries it forward"),
+                                _related(1, "the same method for client B", continues=False)])
+        monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: adapter)
+        channel = MagicMock()
+        channel.ask.return_value = "This is for client B; use a separate workspace."
+        loop_kwargs = []
+
+        def _fake_run(g, *x, **k):
+            loop_kwargs.append((g, k))
+            return LoopResult(loop_id="test-clar", project=k.get("project", ""), goal=g, status="done",
+                              stuck_reason=None,
+                              steps=[StepOutcome(index=0, text="step", status="done", result="output", iteration=0)])
+
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": False, "question": "Which client?"}), \
+             patch("director.verify_goal_completion",
+                   return_value=ClosureVerdict(complete=True, confidence=0.9, gaps=[],
+                                               summary="verified", checks_run=2, checks_passed=2)), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            r = handle(GOAL_FOLLOW_UP, force_lane="agenda", dry_run=False, channel=channel)
+        channel.ask.assert_called_once_with("Which client?")
+        goal_run, kw = loop_kwargs[0]
+        assert "Additional context: This is for client B" in goal_run
+        judged = [m[0][-1].content for m in adapter.calls if m[1].get("purpose") == "landscape"]
+        assert len(judged) == 2 and "client B" in judged[1] and "client B" not in judged[0]
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["chosen"] == prior and meta["landscape"]["continues"] is False
+        assert kw["project"] != "client-a" and meta["project_binding"] == "minted"
+        assert meta["origin"]["relation"] == "related" and meta["origin"]["parent_handle_id"] == prior
+
+    def test_a_clarified_goal_that_is_fresh_drops_the_first_decisions_origin(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        from orch_items import projects_root
+        import llm
+        (projects_root() / "client-a").mkdir(parents=True)
+        prior = _finished_run(GOAL_QUARTERLY, "Client A: revenue rose.", extra={"project": "client-a"})
+        fresh = json.dumps({"relation": "fresh", "run": 0, "reason": "other work"})
+        adapter = _NowAndJudge([_related(1, "carries it forward"), fresh])
+        monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: adapter)
+        channel = MagicMock()
+        channel.ask.return_value = "Not that report — a new one for client B."
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=lambda g, *x, **k: LoopResult(
+                 loop_id="l", project=k.get("project", ""), goal=g, status="done", stuck_reason=None,
+                 steps=[StepOutcome(index=0, text="s", status="done", result="o", iteration=0)])), \
+             patch("intent.check_goal_clarity", return_value={"clear": False, "question": "Which?"}), \
+             patch("director.verify_goal_completion",
+                   return_value=ClosureVerdict(complete=True, confidence=0.9, gaps=[],
+                                               summary="verified", checks_run=2, checks_passed=2)), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            r = handle(GOAL_FOLLOW_UP, force_lane="agenda", dry_run=False, channel=channel,
+                       origin={"source": "cli"})
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["relation"] == "fresh" and meta["landscape"]["chosen"] == ""
+        assert meta["origin"] == {"source": "cli"}, meta["origin"]
+        assert meta["project_binding"] == "minted"
+
+    def test_an_escalation_changes_the_project_and_says_so(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        from orch_items import projects_root
+        import llm
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        adapter = _NowAndJudge(_related(1, "carries it forward"))
+        monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: adapter)
+        projects = []
+
+        def _fake_run(g, *x, **k):
+            projects.append(k.get("project", ""))
+            return LoopResult(loop_id=f"lr-{len(projects)}", project=k.get("project", ""), goal=g,
+                              status="done", stuck_reason=None,
+                              steps=[StepOutcome(index=0, text="s", status="done", result="o", iteration=0)])
+
+        verdicts = [ClosureVerdict(complete=True, confidence=0.65, gaps=[], summary="weak", checks_run=2, checks_passed=1),
+                    ClosureVerdict(complete=True, confidence=0.9, gaps=[], summary="ok", checks_run=2, checks_passed=2)]
+        gate = MagicMock()
+        gate.escalate = True
+        gate.contested_claims = []
+        gate.reason = "weak coverage"
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", side_effect=lambda *a, **k: verdicts.pop(0)), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            r = handle(GOAL_FOLLOW_UP, force_lane="agenda", model="cheap", dry_run=False)
+        assert projects == ["board-reports", "board-reports-escalated"], projects
+        meta = _meta(r.handle_id)
+        assert (meta["project"], meta["project_binding"]) == ("board-reports-escalated", "escalated")
