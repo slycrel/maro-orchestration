@@ -2337,6 +2337,72 @@ def _terminal_auth_field(obj: Optional[dict]) -> Optional[str]:
     return None
 
 
+def _terminal_usage(obj: Optional[dict]) -> Dict[str, Any]:
+    """The validated counters of a terminal result object — fresh input
+    (input + cache creation), output, cache reads, cost — each field
+    independently validated (malformed → 0, named in one warning); zeros
+    when `obj` is not a dict. One reading for the failure branch and for
+    the rate-limit retry loop's earlier attempts (round 17, 2026-09-13:
+    each retry overwrote the capture, so a paid attempt that then hit the
+    limit vanished from the eventual failure's or success's accounting)."""
+    out: Dict[str, Any] = {"fresh_in": 0, "out": 0, "cache_read": 0, "cost": 0.0}
+    if not isinstance(obj, dict):
+        return out
+    from llm_errors import finite_nonneg as _fnn
+    malformed: List[str] = []
+    usage = obj.get("usage")
+    if isinstance(usage, dict):
+        def _counter(field: str, alt: str = "") -> int:
+            raw = usage.get(field, usage.get(alt) if alt else None)
+            if raw is None:
+                return 0
+            v = _fnn(raw, int, -1)
+            if v < 0:
+                malformed.append(field)
+                return 0
+            return v
+        # Validated independently, then summed (round 12: cache creation
+        # was gated on a non-null input counter).
+        out["fresh_in"] = _counter("input_tokens") + _counter("cache_creation_input_tokens")
+        out["out"] = _counter("output_tokens")
+        out["cache_read"] = _counter("cache_read_input_tokens", "cache_read_tokens")
+    if obj.get("total_cost_usd") is not None:
+        v = _fnn(obj.get("total_cost_usd"), float, -1.0)
+        if v < 0:
+            malformed.append("total_cost_usd")
+            v = 0.0
+        out["cost"] = v
+    if malformed:
+        log.warning("claude terminal usage malformed (%s) — that counter recorded as 0",
+                    ", ".join(malformed))
+    return out
+
+
+def _add_call_evidence(exc: BaseException, ev: Dict[str, Any], partial: str = "") -> None:
+    """ADD one call's validated evidence to the attributes
+    `llm_errors.call_usage_evidence` reads; partial text is PREPENDED (an
+    earlier attempt's work precedes the final one's)."""
+    for attr, key in (("fresh_input_tokens", "fresh_in"), ("fresh_output_tokens", "out"),
+                      ("fresh_cache_read_tokens", "cache_read"), ("estimated_cost_usd", "cost")):
+        if ev.get(key):
+            setattr(exc, attr, (getattr(exc, attr, 0) or 0) + ev[key])
+    if partial:
+        prev = str(getattr(exc, "maro_partial_output", "") or "")
+        exc.maro_partial_output = f"{partial}\n{prev}" if prev else partial  # type: ignore[attr-defined]
+
+
+def _capture_evidence(stdout: str) -> Dict[str, Any]:
+    """A capture's terminal usage plus its assistant text — what one
+    attempt paid for and produced."""
+    ev = _terminal_usage(_extract_result_object(stdout))
+    try:
+        ev["partial"] = _assistant_text_tail(stdout)
+    except Exception:
+        log.debug("partial output not read from the capture", exc_info=True)
+        ev["partial"] = ""
+    return ev
+
+
 def _terminal_failure(stdout: str) -> bool:
     """Did the CLI's terminal result object say `is_error: true`? The payload
     is ground truth in BOTH directions (review round 8, 2026-09-13): a
@@ -2491,8 +2557,12 @@ def _parse_stream_json(text: str) -> dict:
     events parse (e.g. a pretty-printed single object).
     """
     out = {"result": None, "tool_events": [], "rate_limited": False}
-    text = (text or "").strip()
-    if not text:
+    # Read as written (round 17): a `.strip()` here moved an indented
+    # first line to column 0 — a lone indented rate_limit_event example
+    # bought another executor launch, an indented result example became
+    # the answer — while the framer's own callers saw zero documents.
+    text = text or ""
+    if not text.strip():
         return out
     uses = []            # ordered [(id, name, input)]
     results_by_id = {}   # id -> {output, is_error}
@@ -3160,6 +3230,21 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     result.returncode,
                 )
 
+        # Evidence of the rate-limit retry loop's EARLIER attempts (round 17):
+        # each retry replaces `result`, so what a replaced attempt paid for
+        # and produced is folded here and added exactly once to whatever
+        # this call ends in — the final failure, a refusal or kill before
+        # the next launch, or the eventual success.
+        _prior: Dict[str, Any] = {"fresh_in": 0, "out": 0, "cache_read": 0, "cost": 0.0, "partial": ""}
+
+        def _fold_prior(stdout: str) -> None:
+            _ev = _capture_evidence(stdout)
+            for _k in ("fresh_in", "out", "cache_read", "cost"):
+                _prior[_k] += _ev[_k]
+            if _ev["partial"]:
+                _prior["partial"] = (f"{_prior['partial']}\n{_ev['partial']}"
+                                     if _prior["partial"] else _ev["partial"])
+
         if (result.returncode != 0 or _terminal_failure(result.stdout)) and _rc_payload is None:
             # stdout holds the merged stdout+stderr stream from the subprocess.
             merged = result.stdout.strip()
@@ -3205,6 +3290,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         "rate limit detected (attempt %d/%d), waiting %ds before retry",
                         _attempt + 1, _RATE_LIMIT_MAX_RETRIES, _wait,
                     )
+                    _fold_prior(result.stdout)  # the attempt this retry replaces
                     _time.sleep(_wait)
                     _total_slept += _wait
                     _wait = min(_wait * 2, _RATE_LIMIT_CYCLE_CAP)
@@ -3213,7 +3299,14 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     # cause a docker --name conflict (adversarial-review
                     # 2026-07-12). None when not containerizing.
                     if resolve_container_run is not None and _container_name is not None:
-                        _container_name = resolve_container_run(no_tools, executor)
+                        try:
+                            _container_name = resolve_container_run(no_tools, executor)
+                        except Exception as _rexc:
+                            # A refusal before the next launch (the breaker
+                            # tripped meanwhile) still owes the earlier
+                            # attempts' evidence (round 17).
+                            _add_call_evidence(_rexc, _prior, _prior["partial"])
+                            raise
                     try:
                         # env_extra was missing here pre-2026-07-27: a
                         # rate-limit retry of a capped call ran uncapped.
@@ -3230,7 +3323,9 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         # this it `continue`d: another launch, and on
                         # exhaustion the stale rate-limit text as the cause.
                         self._rate_limit_wait = _wait
-                        raise _subprocess_timeout_error("claude", _texc, _timeout)
+                        _terr = _subprocess_timeout_error("claude", _texc, _timeout)
+                        _add_call_evidence(_terr, _prior, _prior["partial"])
+                        raise _terr
                     if (_extract_success_result(result.stdout) is not None
                             or (result.returncode == 0 and not _terminal_failure(result.stdout))):
                         # Payload-first, like the initial call (rounds 7–8):
@@ -3260,15 +3355,23 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 if not _retry_success and _still_rate_limited:
                     if result.returncode != 0:
                         if _capped_out:
-                            raise RuntimeError(
+                            _rl_err = RuntimeError(
                                 f"claude rate-limited; bailed after {_total_slept}s of backoff "
                                 f"(total cap {_RATE_LIMIT_TOTAL_CAP}s) — retry later: "
                                 f"{result.stdout[:200]}"
                             )
-                        raise RuntimeError(
-                            f"claude rate-limited after {_RATE_LIMIT_MAX_RETRIES} retries: "
-                            f"{result.stdout[:200]}"
-                        )
+                        else:
+                            _rl_err = RuntimeError(
+                                f"claude rate-limited after {_RATE_LIMIT_MAX_RETRIES} retries: "
+                                f"{result.stdout[:200]}"
+                            )
+                        # Every attempt's spend rides the exhaustion error
+                        # too (round 17): the last capture's, then the
+                        # replaced ones'.
+                        _last = _capture_evidence(result.stdout)
+                        _add_call_evidence(_rl_err, _last, _last["partial"])
+                        _add_call_evidence(_rl_err, _prior, _prior["partial"])
+                        raise _rl_err
 
             # Re-check after retries: a retry can also exit non-zero with a
             # usable success payload.
@@ -3291,6 +3394,14 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 _err_text = _terminal_error_text(_err_obj)
                 if _err_text:
                     detail = _err_text[:300]
+                elif isinstance(_err_obj, dict):
+                    # A terminal object without error text names ITSELF
+                    # (round 17): the raw capture behind it is diagnostics
+                    # and quoted examples, and the classifier text-matches
+                    # this detail — a quoted OAuth line made a max-turns
+                    # failure a HOST login story (auth_actionable).
+                    detail = (f"terminal {str(_err_obj.get('subtype') or 'error')[:60]} "
+                              "result without error text")
                 else:
                     detail = result.stdout.strip()[:300] or "(no output)"
                 # A CONTAINERIZED call dying on a login/auth failure means the
@@ -3319,12 +3430,19 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         _auth_field = _terminal_auth_field(_err_obj)
                         if _auth_field is not None:
                             _breaker_text = _auth_field
-                        elif _err_text:
-                            _breaker_text = _err_text
+                        elif isinstance(_err_obj, dict):
+                            # A terminal object WITHOUT auth text decides
+                            # by itself (round 17): the raw capture behind
+                            # it is diagnostics and quoted examples — an
+                            # OAuth example in an assistant message or a
+                            # diagnostic array tripped the breaker on a
+                            # healthy session and refused every later call.
+                            _breaker_text = ""
                         else:
                             _breaker_text = result.stdout.strip()[:2000]
-                        note_container_failure(_breaker_text)
-                        _container_auth_owned = is_auth_error_text(_breaker_text)
+                        if _breaker_text:
+                            note_container_failure(_breaker_text)
+                        _container_auth_owned = bool(_breaker_text) and is_auth_error_text(_breaker_text)
                     except Exception:
                         log.debug("container auth-breaker note failed", exc_info=True)
                 _err = RuntimeError(
@@ -3343,56 +3461,23 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 # ride separately and are folded into TOTAL input by the
                 # outcome builders.
                 if isinstance(_err_obj, dict):
-                    from llm_errors import finite_nonneg as _fnn
                     # The CLI ran to a terminal result of its own: this
                     # failure is never a failover/retry story (round 12).
                     _err.maro_terminal_failure = True  # type: ignore[attr-defined]
-                    _usage = _err_obj.get("usage")
-                    if isinstance(_usage, dict):
-                        _malformed = []
-                        _in_raw = _usage.get("input_tokens")
-                        _cc_raw = _usage.get("cache_creation_input_tokens")
-                        if _in_raw is not None or _cc_raw is not None:
-                            # Validated independently, then summed (round
-                            # 12: cache creation was gated on a non-null
-                            # input counter).
-                            _in = _fnn(_in_raw, int, -1) if _in_raw is not None else 0
-                            _cc = _fnn(_cc_raw, int, -1) if _cc_raw is not None else 0
-                            if _in < 0:
-                                _malformed.append("input_tokens"); _in = 0
-                            if _cc < 0:
-                                _malformed.append("cache_creation_input_tokens"); _cc = 0
-                            _err.fresh_input_tokens = _in + _cc  # type: ignore[attr-defined]
-                        if _usage.get("output_tokens") is not None:
-                            _v = _fnn(_usage.get("output_tokens"), int, -1)
-                            _err.fresh_output_tokens = 0 if _v < 0 else _v  # type: ignore[attr-defined]
-                            if _v < 0:
-                                _malformed.append("output_tokens")
-                        _cr = _usage.get("cache_read_input_tokens", _usage.get("cache_read_tokens"))
-                        if _cr is not None:
-                            _v = _fnn(_cr, int, -1)
-                            _err.fresh_cache_read_tokens = 0 if _v < 0 else _v  # type: ignore[attr-defined]
-                            if _v < 0:
-                                _malformed.append("cache_read_input_tokens")
-                        if _malformed:
-                            log.warning("claude terminal usage malformed (%s) — that counter recorded as 0",
-                                        ", ".join(_malformed))
-                    if _err_obj.get("total_cost_usd") is not None:
-                        _v = _fnn(_err_obj.get("total_cost_usd"), float, -1.0)
-                        _err.estimated_cost_usd = 0.0 if _v < 0 else _v  # type: ignore[attr-defined]
-                        if _v < 0:
-                            log.warning("claude terminal total_cost_usd malformed — recorded as 0")
-                    # What the call produced before its terminal failure
-                    # (round 12: usage rode the exception, the assistant
-                    # text and tool activity did not — the blocked step's
-                    # result stayed ""). The kill path attaches the raw
-                    # tail; here the assistant's own text is the evidence.
-                    try:
-                        _tail = _assistant_text_tail(result.stdout)
-                        if _tail:
-                            _err.maro_partial_output = _tail  # type: ignore[attr-defined]
-                    except Exception:
-                        log.debug("terminal partial output not attached", exc_info=True)
+                    # The failed call's own spend and output ride on the
+                    # exception so the blocked outcome can record them
+                    # (rounds 9 + 12: an auth failure AFTER work was
+                    # recorded as zero work and zero spend, and the
+                    # assistant's text was lost). Same channel the runaway
+                    # kill uses; the outcome builders ADD it to the step's
+                    # accounting. Conventions match the success path: fresh
+                    # input = uncached ingest (input + cache creation);
+                    # cache reads ride separately and are folded into TOTAL
+                    # input by the outcome builders.
+                    _final = _capture_evidence(result.stdout)
+                    _add_call_evidence(_err, _final, _final["partial"])
+                # ... and the rate-limit retry loop's replaced attempts (round 17).
+                _add_call_evidence(_err, _prior, _prior["partial"])
                 if _container_auth_owned:
                     # The breaker owns this failure's story: FailoverAdapter
                     # must neither trip the process-wide backend circuit
@@ -3433,6 +3518,14 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 _session_state.clear()
         response = self._collect(
             self._stream_events(result.stdout, tools=tools, rc_payload=_rc_payload))
+        if any(_prior[_k] for _k in ("fresh_in", "out", "cache_read", "cost")):
+            # A success after paid rate-limited attempts accounts for ALL
+            # of them (round 17). `input_tokens` is TOTAL input (cache
+            # reads included), as everywhere in this adapter.
+            response.input_tokens += _prior["fresh_in"] + _prior["cache_read"]
+            response.output_tokens += _prior["out"]
+            response.cache_read_tokens += _prior["cache_read"]
+            response.cost_usd += _prior["cost"]
         if _session_active:
             response.session_id = _new_session_id
             response.session_resumed = bool(_resume_id and cmd.count("--resume"))
@@ -3458,7 +3551,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         (payload-first rc handling); it takes precedence over the parsed
         stream's own result, matching the pre-port behavior exactly.
         """
-        text = (raw_output or "").strip()
+        text = raw_output or ""  # framed as written (round 17); trimmed only for display
         stream = _parse_stream_json(text)
         tool_events = stream["tool_events"]
         data = rc_payload or stream["result"]
@@ -3466,9 +3559,9 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         if data is None:
             # Fallback: no parseable result event — treat the whole capture
             # as plain text content.
-            yield StreamEvent(kind="chunk", text=text)
+            yield StreamEvent(kind="chunk", text=text.strip())
             yield StreamEvent(kind="done", response=LLMResponse(
-                content=text, tool_events=tool_events, backend=self.backend,
+                content=text.strip(), tool_events=tool_events, backend=self.backend,
             ))
             return
 

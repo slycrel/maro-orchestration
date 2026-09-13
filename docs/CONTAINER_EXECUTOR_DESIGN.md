@@ -759,6 +759,53 @@ result (both: one launch, `container_auth`, breaker reason names OAuth,
 diagnostic without an auth field is a rate-limit retry then a non-auth
 failure with the breaker clear.
 
+*Review round 17 (2026-09-13, codex skeptic + QA, whole chunk): one
+shared HIGH on the round-16 framer's callers, one HIGH on the breaker's
+raw-capture fallback, one MED on retry accounting; all fixed.* (lxxi)
+**The framer's callers read the capture as written too.** Round 16
+removed the framer's own `.strip()`, but `_parse_stream_json` and
+`_stream_events` still stripped their input before framing: a lone
+INDENTED rate_limit_event example bought another executor launch
+(`_rate_limited_failure` read the parser's `rate_limited`), and an
+indented result example on a clean exit became the answer — a tool
+call, with the example's usage attributed — while the framer's own
+callers saw zero documents. Both callers now pass the capture through
+untouched; only the plain-text fallback trims for display. Pinned
+through the real adapter: the indented event (one launch; the column-0
+control retries), the indented result example (no tool call, zero
+usage, the prose content; the column-0 control yields the `flag_stuck`
+call with its 37 tokens). (lxxii) **A terminal object without error
+text decides by itself.** When the terminal result carried neither
+`result` nor `errors[]` text (an `error_max_turns` with `errors: []`),
+the breaker fell back to searching the raw capture — an OAuth line
+quoted in an assistant message or a diagnostic array tripped it on a
+HEALTHY session, every later executor call refused, and the operator
+was told to re-seed; the display detail took the same raw head, so the
+classifier text-matched it as a host login failure (`auth_actionable`).
+With a terminal object present the breaker reads only its fields (no
+text → no note, not auth-owned) and the detail names the object
+(`terminal error_max_turns result without error text`); the raw-capture
+search survives only for captures with no terminal object at all.
+Pinned: array and assistant quotations (`fatal`, breaker clear, no
+pause) with the errors-populated positive control. (lxxiii) **Every
+rate-limited attempt's spend rides the call's outcome.** The retry loop
+replaced `result` on each attempt, so a paid attempt that then hit the
+limit (work, usage, cost, assistant text) vanished from the eventual
+auth failure, timeout, pre-launch refusal, exhaustion error, or
+success. `_terminal_usage` is the one validated reading of a terminal
+object's counters (the failure branch uses it too), `_capture_evidence`
+adds the assistant text, and `_add_call_evidence` ADDS to the evidence
+attributes `call_usage_evidence` reads (earlier partial text first).
+Each retry folds the attempt it replaces into `_prior`, and `_prior` is
+added exactly once to whatever the call ends in: the final failure, the
+retry's timeout error, the resolver's refusal before the next launch,
+the exhaustion error (which now carries the last attempt's evidence
+too), or the success response (fresh + cache reads into TOTAL input).
+Pinned with a 100/20/$0.50 first attempt against each ending
+(137/29/$0.62 on the auth pause with both attempts' text in order;
+142/29/5 on success; 100/20/$0.50 on the kill and on the refusal;
+150/30/$0.75 on exhaustion).
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

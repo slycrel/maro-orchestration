@@ -4311,3 +4311,160 @@ def test_a_long_non_auth_diagnostic_is_not_an_auth_story(monkeypatch, tmp_path):
     assert run.call_count == 2, "a genuine rate-limit story still gets its backoff retry"
     assert classify_error(ei.value, backend="subprocess").error_class != "container_auth"
     assert ce.auth_breaker_snapshot() is None
+
+
+# ---------------------------------------------------------------------------
+# Review round 17 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+_R17_LIMITED = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                           "result": "You've hit your limit · resets 3pm",
+                           "usage": {"input_tokens": 100, "output_tokens": 20}, "total_cost_usd": 0.5})
+_R17_LIMITED_2 = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                             "result": "You've hit your limit · resets 4pm",
+                             "usage": {"input_tokens": 50, "output_tokens": 10}, "total_cost_usd": 0.25})
+_R17_SUCCESS = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Finished the task.",
+                           "usage": {"input_tokens": 37, "output_tokens": 9, "cache_read_input_tokens": 5},
+                           "total_cost_usd": 0.12})
+
+
+def _r17_assistant(text):
+    return json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+
+
+def _r17_result(rc, stdout):
+    return MagicMock(returncode=rc, stderr="", container_executed=True, stdout=stdout)
+
+
+def test_an_indented_lone_event_is_not_a_protocol_event(monkeypatch, tmp_path):
+    # Round 17: the framer read the capture as written, but two of its
+    # callers (`_parse_stream_json`, `_stream_events`) still stripped it
+    # first — a lone indented rate_limit_event example bought another
+    # executor launch, an indented result example became the answer with
+    # its usage attributed, while the framer itself saw zero documents.
+    from llm import LLMTool, _iter_stream_documents, _parse_stream_json, _rate_limited_failure
+    _r16_container_lane(monkeypatch, tmp_path)
+    limit_event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+    indented = "  " + limit_event
+    assert list(_iter_stream_documents(indented)) == []
+    assert _parse_stream_json(indented)["rate_limited"] is False
+    assert _rate_limited_failure(indented) is False
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, indented)) as run:
+        with pytest.raises(RuntimeError, match="claude subprocess failed"):
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1, "an indented example is not grounds for another launch"
+    # positive control: the same event at column 0 IS a rate-limit story
+    assert _rate_limited_failure(limit_event) is True
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, limit_event)) as run:
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 2
+    # an indented result example on a clean exit is prose, not a tool call with usage
+    tool = LLMTool(name="flag_stuck", description="stuck", parameters={"type": "object"})
+    example = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                          "result": json.dumps({"tool": "flag_stuck", "reason": "example"}),
+                          "usage": {"input_tokens": 37, "output_tokens": 9}, "total_cost_usd": 0.12})
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(0, "    " + example)):
+        resp = a.complete([LLMMessage("user", "build a thing")], executor=True, tools=[tool])
+    assert resp.tool_calls == [] and (resp.input_tokens, resp.output_tokens, resp.cost_usd) == (0, 0, 0.0)
+    assert resp.content == example
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(0, example)):
+        ctl = a.complete([LLMMessage("user", "build a thing")], executor=True, tools=[tool])
+    assert [t.name for t in ctl.tool_calls] == ["flag_stuck"] and ctl.input_tokens == 37
+
+
+@pytest.mark.parametrize("quote", ["array", "assistant"])
+def test_a_terminal_object_without_error_text_never_reads_the_raw_capture(monkeypatch, tmp_path, quote):
+    # Round 17: with a terminal object that carried no error text, the
+    # breaker fell back to searching the raw capture — an OAuth example
+    # quoted in an assistant message or a diagnostic array tripped it on a
+    # healthy session and every later executor call refused.
+    from llm_errors import classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for
+    ce = _r16_container_lane(monkeypatch, tmp_path)
+    example = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                          "errors": [_R16_OAUTH]})
+    quoted = ("[\n" + example + "\n]") if quote == "array" else _r17_assistant(
+        "If the session had expired the CLI would print: " + _R16_OAUTH)
+    terminal = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True, "errors": []})
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 3
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, quoted + "\n" + terminal)) as run:
+        with pytest.raises(RuntimeError, match="claude subprocess failed") as ei:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1
+    assert classify_error(ei.value, backend="subprocess").error_class == "fatal"
+    assert ce.auth_breaker_snapshot() is None, "a healthy session must not be declared expired"
+    out = _blocked_outcome_from_exc(ei.value)
+    assert out["status"] == "blocked" and environmental_pause_for(out) == ""
+    # positive control: the same capture whose terminal object DOES name the auth failure
+    real = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True, "errors": [_R16_OAUTH]})
+    _r16_blocked_story(monkeypatch, tmp_path, quoted + "\n" + real)
+
+
+def _r17_two_attempts(monkeypatch, tmp_path, second, *, max_retries=3):
+    from llm_errors import call_usage_evidence
+    _r16_container_lane(monkeypatch, tmp_path)
+    first = _r17_assistant("Attempt one read the inbox.") + "\n" + _R17_LIMITED
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = max_retries
+    with patch("llm._run_subprocess_safe", side_effect=[_r17_result(1, first), second]) as run:
+        try:
+            resp = a.complete([LLMMessage("user", "build a thing")], executor=True)
+        except Exception as exc:  # the twins that end in an error
+            return run.call_count, exc, call_usage_evidence(exc)
+    return run.call_count, resp, None
+
+
+def test_paid_rate_limit_attempts_fold_into_the_auth_pause(monkeypatch, tmp_path):
+    # Round 17: each retry overwrote `result`, so the paid first attempt
+    # (100 in / 20 out / $0.50, and its assistant text) vanished from the
+    # eventual auth failure's evidence — the paused step's ledger row
+    # understated the work.
+    from llm_errors import classify_error
+    second = _r17_result(1, _r17_assistant("Attempt two hit the expired session.") + "\n" + _R16_AUTH)
+    launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, second)
+    assert launches == 2 and classify_error(exc, backend="subprocess").error_class == "container_auth"
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (137, 29, pytest.approx(0.62))
+    assert "Attempt one read the inbox." in ev["partial"] and "Attempt two hit" in ev["partial"]
+    assert ev["partial"].index("Attempt one") < ev["partial"].index("Attempt two")
+
+
+def test_paid_rate_limit_attempts_fold_into_the_eventual_success(monkeypatch, tmp_path):
+    launches, resp, _ = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(0, _R17_SUCCESS))
+    assert launches == 2 and resp.content == "Finished the task."
+    # 100 fresh + (37 fresh + 5 cache) — input_tokens is TOTAL input
+    assert (resp.input_tokens, resp.output_tokens, resp.cache_read_tokens) == (142, 29, 5)
+    assert resp.cost_usd == pytest.approx(0.62)
+
+
+def test_paid_rate_limit_attempts_fold_into_a_kill_or_refusal_before_the_next_launch(monkeypatch, tmp_path):
+    from llm_errors import classify_error
+    # a retry killed on its wall clock: the first attempt's spend still rides
+    launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, subprocess.TimeoutExpired(cmd="claude", timeout=5))
+    assert launches == 2 and "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (100, 20, pytest.approx(0.5))
+    assert "Attempt one read the inbox." in ev["partial"]
+    # the breaker trips between attempts: the resolver's refusal carries it too
+    import container_exec as ce
+    calls = {"n": 0}
+    real_resolve = ce.resolve_container_run
+
+    def _resolve(no_tools, executor):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise ce.ContainerAuthExpired("executor.container=require but the container lane is unavailable")
+        return real_resolve(no_tools, executor)
+    monkeypatch.setattr(ce, "resolve_container_run", _resolve)
+    launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(0, _R17_SUCCESS))
+    assert launches == 1 and classify_error(exc, backend="subprocess").error_class == "container_auth"
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (100, 20, pytest.approx(0.5))
+
+
+def test_every_rate_limited_attempt_rides_the_exhaustion_error(monkeypatch, tmp_path):
+    launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(1, _R17_LIMITED_2), max_retries=1)
+    assert launches == 2 and "rate-limited after 1 retries" in str(exc)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (150, 30, pytest.approx(0.75))
