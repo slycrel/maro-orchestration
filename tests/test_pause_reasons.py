@@ -61,9 +61,13 @@ class TestVocabulary:
         assert PAUSE_REASONS_OPERATOR == frozenset(
             (PAUSE_OP_MANUAL, PAUSE_OP_CLARIFICATION,
              PAUSE_OP_BUDGET_DECISION))
+        # + container-auth-expired (2026-09-13): executor.container=require
+        # refused because the auth volume's session is dead — a human
+        # re-seeds, the breaker self-clears, the run resumes.
+        from stop_verdicts import PAUSE_ERR_CONTAINER_AUTH
         assert PAUSE_REASONS_ERROR == frozenset(
             (PAUSE_ERR_BUSY, PAUSE_ERR_WRITER_DIED, PAUSE_ERR_LLM_UNREACHABLE,
-             PAUSE_ERR_NO_TOKENS, PAUSE_ERR_DISK_FULL))
+             PAUSE_ERR_NO_TOKENS, PAUSE_ERR_DISK_FULL, PAUSE_ERR_CONTAINER_AUTH))
         assert not (PAUSE_REASONS_OPERATOR & PAUSE_REASONS_ERROR)
         assert VALID_PAUSE_REASONS == PAUSE_REASONS_OPERATOR | PAUSE_REASONS_ERROR
 
@@ -270,3 +274,81 @@ def test_stranded_sweep_stamps_writer_died(runs_env):
     meta = json.loads((rd / "metadata.json").read_text())
     assert meta["status"] == "stranded"
     assert meta["pause_reason"] == PAUSE_ERR_WRITER_DIED
+
+
+class TestContainerAuthPause:
+    """require-lane refusal for a dead session maps to its own typed pause;
+    the backend-auth gap (dead API key) stays deliberately unmapped."""
+
+    def test_container_auth_error_class_maps_to_typed_pause(self):
+        from stop_verdicts import (pause_reason_for_error_class,
+                                   PAUSE_ERR_CONTAINER_AUTH, pause_family)
+        assert pause_reason_for_error_class("container_auth") == PAUSE_ERR_CONTAINER_AUTH
+        assert PAUSE_ERR_CONTAINER_AUTH == "container-auth-expired"
+        assert pause_family(PAUSE_ERR_CONTAINER_AUTH) == "error"
+
+    def test_backend_auth_stays_unmapped(self):
+        from stop_verdicts import pause_reason_for_error_class
+        assert pause_reason_for_error_class("auth_actionable") == ""
+
+
+class TestContainerAuthPauseEndToEnd:
+    """The literal path (2026-09-13): resolve_container_run raises
+    ContainerAuthExpired inside the adapter → step_exec carries the
+    container_auth error class → loop_execute stamps the typed pause and
+    ends the run `interrupted` — no blocked-step churn against a session
+    no retry can revive."""
+
+    def test_step_exec_carries_the_container_auth_class(self, tmp_path):
+        import container_exec as ce
+        from step_exec import execute_step
+
+        class _Raising:
+            model_key = "test"
+            backend = "subprocess"
+            def complete(self, messages, **kwargs):
+                raise ce.ContainerAuthExpired(
+                    "executor.container=require but the container lane is "
+                    "unavailable: container auth breaker tripped (OAuth session expired)")
+
+        outcome = execute_step(
+            goal="read the inbox", step_text="list the newest five", step_num=1,
+            total_steps=1, completed_context=[], adapter=_Raising(), tools=[],
+            project_dir=str(tmp_path))
+        assert outcome["status"] == "blocked"
+        assert outcome["error_class"] == "container_auth"
+        assert "maro-claude-auth" in outcome["user_action"]
+
+    def test_loop_pauses_typed_on_the_container_auth_class(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        fake = tmp_path / "claude"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+        import runs
+        import loop_planning
+        import loop_execute
+        from agent_loop import run_agent_loop
+        from stop_verdicts import PAUSE_ERR_CONTAINER_AUTH
+        monkeypatch.setattr(loop_planning, "_decompose",
+                            lambda *a, **k: ["list the newest five", "count the inbox"])
+        monkeypatch.setattr(loop_planning, "_shape_steps", lambda steps, **k: list(steps))
+        executed = []
+
+        def _worker(**kwargs):
+            executed.append(kwargs["step_text"])
+            return {"status": "blocked", "error_class": "container_auth",
+                    "stuck_reason": "LLM call failed (container_auth): re-seed",
+                    "user_action": "re-seed the maro-claude-auth volume",
+                    "result": "", "tokens_in": 0, "tokens_out": 0}
+        monkeypatch.setattr(loop_execute, "_execute_step", _worker)
+        rd = runs.create_run_dir("cauth0001", prompt="read the inbox")
+        with runs.scoped_run_dir(rd):
+            result = run_agent_loop("read the inbox", dry_run=False, max_steps=3,
+                                    handle_id="cauth0001")
+        assert executed == ["list the newest five"], "no retry churn: one refusal, then pause"
+        assert result.status == "interrupted"
+        assert result.pause_reason == PAUSE_ERR_CONTAINER_AUTH
+        meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+        assert meta.get("pause_reason") == PAUSE_ERR_CONTAINER_AUTH

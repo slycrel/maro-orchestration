@@ -414,6 +414,21 @@ class ContainerUnavailable(RuntimeError):
     the call — the `require` contract refuses rather than silently degrading."""
 
 
+class ContainerAuthExpired(ContainerUnavailable):
+    """The `require` refusal whose cause is the auth breaker (the volume's
+    OAuth session is dead), not docker. Distinct type because the remedy is
+    different and human-shaped: docker-down is an ops fault the run's
+    blocked/recovery machinery may outlive; a dead session needs the operator
+    to re-seed the volume, so the run must PAUSE (typed `container-auth-
+    expired`, §13e environmental family) and resume once the breaker clears.
+    `maro_error_class` is what llm_errors.classify_error keys on — a type
+    marker, not text matching, so a worker step that merely *mentions* auth
+    cannot ride this path (2026-09-13, after the 09-12 expiry churned a
+    `require`-less run to the host and a `require` run would have churned
+    blocked-step retries against a session no retry can revive)."""
+    maro_error_class = "container_auth"
+
+
 def enforce_backend_container_contract(adapter, executor: bool) -> None:
     """Executor-lane backend gate (2026-08-13 review residual, fixed
     2026-08-15): `resolve_container_run` lives inside the subprocess
@@ -1033,6 +1048,130 @@ def auth_breaker_blocks() -> Optional[str]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Auth liveness (2026-09-13): the breaker is REACTIVE — the first casualty of
+# every session expiry was a real run (08-12, 09-12). The session's own
+# expiry is knowable in advance: the volume's credentials carry
+# `refreshTokenExpiresAt` (the ~30-day lifetime whose end IS the monthly
+# outage; the access token is refreshed by every run and never the problem).
+# The heartbeat reads that timestamp on its own cadence (one docker run per
+# _AUTH_LIVENESS_TTL_S, no token spend, TIMESTAMPS ONLY — the credential
+# bytes never transit to the host, same rule as _reseed_probe) into a state
+# file; system_health's container_auth probe reads the file (no docker in a
+# probe) and goes SILENT with the re-seed date while there is still time to
+# act. Warn margin: a fixed 3 days — long enough to cover a weekend, short
+# enough that the warning is not standing noise for 27 days a month.
+# ---------------------------------------------------------------------------
+
+_AUTH_LIVENESS_TTL_S = 6 * 3600.0
+AUTH_EXPIRY_WARN_DAYS = 3.0
+_LIVENESS_PROBE_TIMEOUT_S = _RESEED_PROBE_TIMEOUT_S
+
+
+def _auth_liveness_path():
+    from pathlib import Path
+    from config import memory_dir
+    return Path(memory_dir()) / "container_auth_liveness.json"
+
+
+def _credentials_expiry_probe() -> Tuple[bool, dict]:
+    """Read the auth volume's session timestamps (epoch seconds) — nothing
+    else. Returns (ok, {"has_refresh", "refresh_expires_at",
+    "access_expires_at", "mtime"}) or (False, {"detail": ...})."""
+    cred_path = f"{AUTH_MOUNT}/.credentials.json"
+    script = (
+        "import json,os;"
+        f"p={cred_path!r};"
+        "o=json.load(open(p)).get('claudeAiOauth') or {};"
+        "print(int(os.stat(p).st_mtime), int(bool(o.get('refreshToken'))),"
+        " int((o.get('refreshTokenExpiresAt') or 0)//1000),"
+        " int((o.get('expiresAt') or 0)//1000))"
+    )
+    ok, out = _run([
+        "docker", "run", "--rm", *_user_args(),
+        "-e", f"HOME={CONTAINER_HOME}",
+        "--mount", (f"type=volume,source={AUTH_VOLUME},"
+                    f"target={AUTH_MOUNT},readonly"),
+        "--entrypoint", "python3", container_image(), "-c", script,
+    ], _LIVENESS_PROBE_TIMEOUT_S)
+    if not ok:
+        return False, {"detail": f"credentials expiry probe failed: {out[:120]}"}
+    try:
+        mtime, has_refresh, refresh_exp, access_exp = (
+            int(x) for x in out.strip().splitlines()[-1].split())
+    except Exception as exc:
+        return False, {"detail": f"credentials expiry probe unparseable: {exc}"}
+    return True, {
+        "mtime": mtime, "has_refresh": bool(has_refresh),
+        "refresh_expires_at": refresh_exp, "access_expires_at": access_exp,
+    }
+
+
+def auth_liveness_state() -> Optional[dict]:
+    """The last persisted liveness record, or None. File read only."""
+    import json
+    try:
+        data = json.loads(_auth_liveness_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) and data.get("checked_at") else None
+    except Exception:
+        return None
+
+
+def refresh_auth_liveness(*, max_age_s: float = _AUTH_LIVENESS_TTL_S,
+                          force: bool = False) -> Optional[dict]:
+    """Heartbeat-cadence refresh of the liveness record. No-op (None) when
+    the container lane is off; returns the fresh-enough existing record
+    without touching docker; otherwise probes and persists. Never raises."""
+    import json
+    from file_lock import atomic_write
+    try:
+        if container_mode() == "off":
+            return None
+        prior = auth_liveness_state()
+        if prior is not None and not force:
+            try:
+                if time.time() - float(prior.get("checked_at", 0.0)) < max_age_s:
+                    return prior
+            except (TypeError, ValueError):
+                pass
+        ok, info = _credentials_expiry_probe()
+        record = {"checked_at": time.time(), "ok": ok, **info}
+        path = _auth_liveness_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(path, json.dumps(record, sort_keys=True) + "\n")
+        return record
+    except Exception:
+        log.debug("refresh_auth_liveness failed", exc_info=True)
+        return None
+
+
+def auth_liveness_verdict(state: Optional[dict], *, now: Optional[float] = None,
+                          warn_days: float = AUTH_EXPIRY_WARN_DAYS) -> Tuple[str, str]:
+    """('ok' | 'warn' | 'expired' | 'unknown', detail). Pure; no I/O."""
+    now = time.time() if now is None else now
+    if not state:
+        return "unknown", "session expiry not yet probed (heartbeat records it)"
+    if not state.get("ok"):
+        return "unknown", str(state.get("detail") or "expiry probe failed")
+    if not state.get("has_refresh"):
+        return "expired", "credentials hold no refresh token (session wiped after a failed refresh)"
+    try:
+        exp = float(state.get("refresh_expires_at") or 0.0)
+    except (TypeError, ValueError):
+        exp = 0.0
+    if exp <= 0:
+        return "unknown", "credentials carry no refreshTokenExpiresAt"
+    from datetime import datetime, timezone
+    when = datetime.fromtimestamp(exp, tz=timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+    days = (exp - now) / 86400.0
+    if days <= 0:
+        return "expired", f"refresh token expired {when} — re-seed the {AUTH_VOLUME} volume"
+    if days <= warn_days:
+        return "warn", (f"refresh token expires {when} ({days:.1f} d) — re-seed the "
+                        f"{AUTH_VOLUME} volume before then (interactive `claude /login`)")
+    return "ok", f"refresh token valid until {when} ({days:.0f} d)"
+
+
 def _current_loop_id() -> str:
     """Best-effort owning-run id for the container name (design: maro-exec-
     <loop_id>-…). Falls back to the PID when no run dir is active."""
@@ -1138,6 +1277,15 @@ def _resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
         if auth_block is None:
             return container_name(_current_loop_id(), next(_seq_counter))
         reason = f"container auth breaker tripped ({auth_block[:120]})"
+        if mode == "require":
+            raise ContainerAuthExpired(
+                "executor.container=require but the container lane is "
+                f"unavailable: {reason} — re-seed the {AUTH_VOLUME} volume "
+                "(interactive `claude /login` inside the executor image; "
+                "`maro-bootstrap container-setup` prints the command); the "
+                "breaker clears itself on the next executor call after the "
+                "re-seed and the paused run can resume"
+            )
     if mode == "require":
         raise ContainerUnavailable(
             f"executor.container=require but the container lane is unavailable: {reason}"

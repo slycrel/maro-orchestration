@@ -598,6 +598,35 @@ class TestContainerAuthProbe:
         self._patch(monkeypatch, "on", None)
         status, evidence, obs = sh._probe_container_auth({})
         assert status == OK and obs["breaker_tripped"] is False
+        assert obs["liveness"] == "unknown"  # nothing recorded yet: still OK
+
+    def _liveness(self, monkeypatch, days_left, *, has_refresh=True):
+        import time
+        import container_exec as ce
+        monkeypatch.setattr(ce, "auth_liveness_state", lambda: {
+            "checked_at": time.time(), "ok": True, "has_refresh": has_refresh,
+            "refresh_expires_at": time.time() + days_left * 86400.0})
+
+    def test_session_expiring_within_margin_is_silent_before_any_failure(self, monkeypatch):
+        # The point of the record (2026-09-13): warn while there is still
+        # time to re-seed, not after the first run dies.
+        self._patch(monkeypatch, "require", None)
+        self._liveness(monkeypatch, 2)
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == SILENT and "expiring" in evidence and "re-seed" in evidence
+        assert obs["liveness"] == "warn" and obs["breaker_tripped"] is False
+
+    def test_session_expired_is_silent_even_with_breaker_clear(self, monkeypatch):
+        self._patch(monkeypatch, "on", None)
+        self._liveness(monkeypatch, -0.5)
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == SILENT and "EXPIRED" in evidence and obs["liveness"] == "expired"
+
+    def test_session_with_time_left_stays_ok_and_names_the_date(self, monkeypatch):
+        self._patch(monkeypatch, "on", None)
+        self._liveness(monkeypatch, 20)
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == OK and "valid until" in evidence and obs["liveness"] == "ok"
 
     def test_tripped_is_silent_immediately(self, monkeypatch):
         # A tripped breaker is a definite state, not cross-cycle noise — no

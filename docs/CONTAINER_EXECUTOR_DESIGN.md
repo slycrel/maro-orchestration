@@ -201,6 +201,34 @@ is a fence; the container is the wall. Residuals unchanged: typed pause
 → the generic environmental pause), and an auth liveness probe so the
 monthly expiry is caught before a run is.
 
+**Both residuals closed the same day (2026-09-13).** (a) *Typed pause.* A
+`require` refusal caused by the breaker now raises
+`ContainerAuthExpired(ContainerUnavailable)` carrying the type marker
+`maro_error_class = "container_auth"`; `llm_errors.classify_error` keys on
+the marker (never on text — a worker step that merely mentions auth cannot
+ride it) and returns a pause-shaped policy (no retry, no failover: the API
+lane would run the worker *outside* the container the contract demands);
+`stop_verdicts.pause_reason_for_error_class` maps it to the new
+`container-auth-expired` reason, so loop_execute ends the run `interrupted`
+with the typed pause on the first refusal — one step, no blocked-step churn
+— and the continuation lane's resume test accepts it once the operator
+re-seeds and the breaker self-clears. Before this the refusal was
+classified FATAL/auth by text and the run churned retries. Docker-down keeps
+the base `ContainerUnavailable` and its old handling. (b) *Liveness.* The
+breaker stays reactive, but the session's own end is knowable in advance:
+the volume's credentials carry `refreshTokenExpiresAt` — the ~30-day
+lifetime whose end IS the monthly outage (the access token is refreshed by
+every run). The heartbeat records it on its own cadence
+(`container_exec.refresh_auth_liveness`: one read-only docker run per 6 h,
+**timestamps only** — credential bytes never transit to the host, same rule
+as the re-seed probe — into `memory/container_auth_liveness.json`), and the
+`container_auth` health probe reads that file (no docker in a probe) and
+goes SILENT — captain's log + the health card — while there are ≤ 3 days
+left (`AUTH_EXPIRY_WARN_DAYS`: covers a weekend, is not standing noise the
+other 27 days) or the token is gone. Live on the runtime box: "refresh token
+valid until 2026-10-12 04:21Z (29 d)". Doctor's `--live` login probe is
+unchanged (it spends a token; the record does not).
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

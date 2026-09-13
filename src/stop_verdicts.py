@@ -167,6 +167,11 @@ PAUSE_ERR_WRITER_DIED = "writer-died"            # stranded sweep: crash/power l
 PAUSE_ERR_LLM_UNREACHABLE = "llm-unreachable"    # vocabulary reserved; stamp sites are an upgrade edge
 PAUSE_ERR_NO_TOKENS = "no-tokens"                # vocabulary reserved; stamp sites are an upgrade edge
 PAUSE_ERR_DISK_FULL = "disk-full"                # vocabulary reserved; stamp sites are an upgrade edge
+# executor.container=require and the auth volume's OAuth session is dead
+# (2026-09-13): the environment can't run the worker where the contract
+# demands; a human re-seeds the volume, the breaker self-clears, the run
+# resumes. Stamped by loop_execute via pause_reason_for_error_class.
+PAUSE_ERR_CONTAINER_AUTH = "container-auth-expired"
 
 def pause_reason_for_error_class(error_class: str) -> str:
     """Map a terminal step failure's llm_errors class to its typed pause.
@@ -178,9 +183,11 @@ def pause_reason_for_error_class(error_class: str) -> str:
     out-of-budget STOP verdict). This helper is the pause half: it makes
     the reserved NO_TOKENS/LLM_UNREACHABLE vocabulary real.
 
-    Returns "" for everything non-environmental: auth stays
-    terminal-surfaced (credentials need a human, and the reserved
-    vocabulary has no auth value — deliberate), budget_runaway stamps its
+    Returns "" for everything non-environmental: BACKEND auth stays
+    terminal-surfaced (a dead API key/CLI login on the host needs a human
+    and the reserved vocabulary has no value for it — deliberate; the
+    container lane's dead session is the one auth shape that IS a pause,
+    because re-seeding the volume heals it in place), budget_runaway stamps its
     stop verdict at its own break site, and ordinary step failures ride
     the blocked/recovery machinery unchanged.
     """
@@ -191,6 +198,8 @@ def pause_reason_for_error_class(error_class: str) -> str:
         "retry_at": PAUSE_ERR_NO_TOKENS,
         # the failover chain exhausted every backend — LLM unreachable
         "failover": PAUSE_ERR_LLM_UNREACHABLE,
+        # require lane refused: the auth volume's session is dead
+        "container_auth": PAUSE_ERR_CONTAINER_AUTH,
     }.get(error_class or "", "")
 
 
@@ -199,7 +208,7 @@ PAUSE_REASONS_OPERATOR = frozenset((
 ))
 PAUSE_REASONS_ERROR = frozenset((
     PAUSE_ERR_BUSY, PAUSE_ERR_WRITER_DIED, PAUSE_ERR_LLM_UNREACHABLE,
-    PAUSE_ERR_NO_TOKENS, PAUSE_ERR_DISK_FULL,
+    PAUSE_ERR_NO_TOKENS, PAUSE_ERR_DISK_FULL, PAUSE_ERR_CONTAINER_AUTH,
 ))
 VALID_PAUSE_REASONS = PAUSE_REASONS_OPERATOR | PAUSE_REASONS_ERROR
 

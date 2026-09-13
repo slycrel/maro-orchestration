@@ -13,6 +13,7 @@ import pytest
 from llm_errors import (
     AUTH_ACTIONABLE,
     BILLING_ACTIONABLE,
+    CONTAINER_AUTH,
     FAILOVER,
     FATAL,
     INPUT_TOO_LARGE,
@@ -289,3 +290,31 @@ def test_actionable_failover_alert_dedups_and_carries_chain(monkeypatch):
     # Second walk in the same process: no second alert for the same key.
     assert walk().content == "answer"
     assert len(events) == 1
+
+
+class _MarkedAuthExpired(RuntimeError):
+    """Stand-in for container_exec.ContainerAuthExpired: the classifier keys
+    on the type marker, never on the message text."""
+    maro_error_class = CONTAINER_AUTH
+
+
+def test_container_auth_marker_outranks_text_and_never_fails_over():
+    # The message deliberately carries a backend-auth pattern ("oauth token
+    # expired") AND a subprocess-death pattern: the marker must win, and the
+    # policy must be pause-shaped (no retry, no failover — the API lane
+    # would run the worker outside the container the require contract
+    # demands).
+    exc = _MarkedAuthExpired(
+        "executor.container=require but the container lane is unavailable: "
+        "container auth breaker tripped (oauth token expired); claude subprocess failed")
+    info = classify_error(exc, backend="subprocess")
+    assert info.error_class == CONTAINER_AUTH
+    assert info.retryable is False and info.failover is False
+    assert is_actionable(info)
+    assert "maro-claude-auth" in info.user_action and "/login" in info.user_action
+
+
+def test_container_auth_marker_is_a_type_marker_not_a_string_match():
+    # Plain text mentioning the class name does not qualify.
+    info = classify_error(RuntimeError("container_auth something"))
+    assert info.error_class != CONTAINER_AUTH

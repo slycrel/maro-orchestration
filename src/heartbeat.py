@@ -541,6 +541,22 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     except Exception as exc:
         log.debug("sweep: stranded-container reap failed: %s", exc)
 
+    # Container auth liveness (2026-09-13): record the auth volume's session
+    # expiry on the heartbeat cadence (one docker run per 6h, timestamps
+    # only, no token spend) so system_health can warn BEFORE the monthly
+    # expiry takes a real run down. No-op when the container lane is off.
+    try:
+        from container_exec import refresh_auth_liveness, auth_liveness_verdict
+        _live = refresh_auth_liveness()
+        if _live is not None:
+            _lvl, _ldetail = auth_liveness_verdict(_live)
+            result["container_auth_liveness"] = _lvl
+            if verbose and _lvl != "ok":
+                print(f"[heartbeat] container auth liveness {_lvl}: {_ldetail}",
+                      file=sys.stderr)
+    except Exception as exc:
+        log.debug("sweep: container auth liveness refresh failed: %s", exc)
+
     # Containerized self-dev (C3/C4): recover + reap scratch clones leaked by a
     # crash between provision and finalize. Retention-safe — a clone is removed
     # only when its owner PID is dead AND its work provably reached the live repo

@@ -432,11 +432,21 @@ def _probe_container_auth(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
             "unknown (resolve fails open; a dead session re-trips). "
             "Inspect memory/container_auth_breaker.json"), obs
     if state is None:
-        # Honest claim only: clear means NO auth failure has been observed
-        # since the last trip/clear — it does not prove the session is live
-        # (zero-token probe contract; review 2026-08-13).
+        # Breaker clear = no auth failure observed since the last trip/clear.
+        # Liveness (2026-09-13): the heartbeat records the session's own
+        # refresh-token expiry (container_exec.refresh_auth_liveness — the
+        # ~30-day lifetime whose end is the monthly outage); this probe reads
+        # that record only (no docker, no token) and warns while there is
+        # still time to re-seed, instead of the first run being the casualty.
+        from container_exec import auth_liveness_state, auth_liveness_verdict
+        level, detail = auth_liveness_verdict(auth_liveness_state())
+        obs["liveness"] = level
+        if level in ("warn", "expired"):
+            return SILENT, (
+                f"container session {'EXPIRED' if level == 'expired' else 'expiring'} "
+                f"(mode {mode}, breaker clear) — {detail}"), obs
         return OK, (f"container lane armed (mode {mode}) — no auth failure "
-                    "observed (reactive breaker clear)"), obs
+                    f"observed (reactive breaker clear); {detail}"), obs
     tripped_at = state.get("tripped_at")
     try:
         when = datetime.fromtimestamp(
@@ -506,7 +516,8 @@ DECLARED_PROCESSES: List[ProcessDeclaration] = [
         name="container_auth",
         description="containerized executor auth session (maro-claude-auth volume)",
         expectation=("no unresolved auth failure on the container lane "
-                     "(reactive breaker clear; liveness is not probed)"),
+                     "(reactive breaker clear) and the session's refresh "
+                     "token not within 3 days of expiry (heartbeat-recorded)"),
         probe=_probe_container_auth,
     ),
 ]

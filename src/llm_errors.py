@@ -34,6 +34,7 @@ INPUT_TOO_LARGE = "input_too_large"    # context overrun — retry/failover usel
 OUTPUT_CAP_EXCEEDED = "output_cap_exceeded"  # utility call blew its own token cap — caller's fallback, never failover
 BUDGET_RUNAWAY = "budget_runaway"      # run's runaway cost circuit tripped — never retry/failover
 TOKEN_RUNAWAY = "token_runaway"        # ONE subprocess call crossed the per-call ingest ceiling — step blocked, run continues
+CONTAINER_AUTH = "container_auth"      # executor.container=require and the auth volume's session is dead — PAUSE the run, human re-seeds
 FATAL = "fatal"                        # unclassified — propagate raw
 
 
@@ -174,6 +175,12 @@ def _action_for(cls: str, backend: str) -> str:
         return ("The API key for this backend was rejected (auth error). Check the "
                 "key in your environment/config, or unset it to fall back to "
                 "another configured backend.")
+    if cls == CONTAINER_AUTH:
+        return ("The executor container's Claude session has expired "
+                "(executor.container=require). Re-seed the maro-claude-auth "
+                "volume: run the interactive login from `maro-bootstrap "
+                "container-setup` (`claude /login` inside the executor image), "
+                "then resume the paused run.")
     if cls == BILLING_ACTIONABLE:
         return ("Backend credits/quota exhausted (not a rate limit — waiting will "
                 "not help). Top up the account, or configure another backend "
@@ -217,6 +224,12 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
         return _mk(BUDGET_RUNAWAY)
     if isinstance(exc, TokenRunawayError):
         return _mk(TOKEN_RUNAWAY)
+    # Type marker, not text: container_exec.ContainerAuthExpired carries it.
+    # Outranks the auth text patterns below because the remedy differs — no
+    # failover (the API lane would run the worker OUTSIDE the container the
+    # require contract demands), no retry: the run pauses until re-seeded.
+    if getattr(exc, "maro_error_class", "") == CONTAINER_AUTH:
+        return _mk(CONTAINER_AUTH)
 
     if any(p in msg for p in _INPUT_PATTERNS):
         return _mk(INPUT_TOO_LARGE)
@@ -272,4 +285,5 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
 def is_actionable(info: ErrorInfo) -> bool:
     """True when the user must act (auth/billing/input) — these surface on
     every channel (stderr, run metadata, notify, doctor)."""
-    return info.error_class in (AUTH_ACTIONABLE, BILLING_ACTIONABLE, INPUT_TOO_LARGE)
+    return info.error_class in (AUTH_ACTIONABLE, BILLING_ACTIONABLE, INPUT_TOO_LARGE,
+                                CONTAINER_AUTH)
