@@ -2183,22 +2183,45 @@ def _extract_result_object(text: str) -> Optional[dict]:
     text = (text or "").strip()
     if not text:
         return None
-    decoder = json.JSONDecoder()
-    start = text.find("{")
+    # One event boundary for both readers (review round 13, 2026-09-13):
+    # `_parse_stream_json` frames events as complete JSON LINES; this
+    # scanner used to promote any brace-delimited object anywhere in the
+    # capture, so a result-shaped object embedded in a diagnostic line
+    # (`diagnostic: {"type":"result","subtype":"success",...}`) outranked
+    # the real terminal frame. Line-framed result events win; the LAST is
+    # the terminal one (round 12). Only when no line-framed result exists
+    # does the whole-document fallback run — for a pretty-printed or
+    # single-object `--output-format json` capture — and that fallback
+    # accepts an object only where a LINE starts with it (leading warning
+    # lines are skipped; text before a brace on the same line is not a
+    # protocol event).
     last = None
-    while start != -1:
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
         try:
-            data, consumed = decoder.raw_decode(text[start:])
+            ev = json.loads(line)
         except json.JSONDecodeError:
-            start = text.find("{", start + 1)
+            continue
+        if isinstance(ev, dict) and ev.get("type") == "result":
+            last = ev
+    if last is not None:
+        return last
+    decoder = json.JSONDecoder()
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        start = pos
+        pos += len(line)
+        if not line.lstrip().startswith("{"):
+            continue
+        start += len(line) - len(line.lstrip())
+        try:
+            data, _consumed = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
             continue
         if isinstance(data, dict) and data.get("type") == "result":
-            # The LAST result object is the terminal one — the same rule
-            # `_parse_stream_json` applies (review round 12, 2026-09-13:
-            # first-wins here vs last-wins there let a capture carrying a
-            # success frame ahead of an auth-error frame complete as done).
             last = data
-        start = text.find("{", start + consumed)
     return last
 
 
@@ -2207,23 +2230,37 @@ def _assistant_text_tail(stdout: str, limit: int = 4000) -> str:
     capture, joined, last `limit` chars — the evidence of what a call did
     before its terminal failure. Never raises past its caller's guard."""
     parts: List[str] = []
+    malformed = 0  # assistant events whose containers are not the protocol's
     for line in (stdout or "").splitlines():
         line = line.strip()
         if not line.startswith("{"):
-            continue
+            continue  # not an event line (the CLI interleaves plain text)
         try:
             ev = json.loads(line)
         except Exception:
-            continue
+            continue  # a torn or partial line; not a record of anything
         if not isinstance(ev, dict) or ev.get("type") != "assistant":
             continue
-        for block in ((ev.get("message") or {}).get("content") or []):
+        # Round 13: one malformed event (`"message": ["x"]`) raised out of
+        # the reader and the outer guard dropped EVERY block collected
+        # before it. Each event is validated on its own; the ones that do
+        # not fit are counted and named, the rest keep their evidence.
+        msg = ev.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            malformed += 1
+            continue
+        for block in content:
             if not isinstance(block, dict):
+                malformed += 1
                 continue
             if block.get("type") == "text" and block.get("text"):
                 parts.append(str(block["text"]))
             elif block.get("type") == "tool_use" and block.get("name"):
                 parts.append(f"[tool_use: {block['name']}]")
+    if malformed:
+        log.warning("claude stream: %d malformed assistant event(s)/block(s) skipped — "
+                    "the partial-output evidence is incomplete", malformed)
     return "\n".join(parts)[-limit:]
 
 
@@ -2400,11 +2437,14 @@ def _parse_stream_json(text: str) -> dict:
         saw_any_event = True
         etype = ev.get("type")
         if etype == "assistant":
-            for block in (ev.get("message") or {}).get("content") or []:
+            _msg = ev.get("message")
+            _content = _msg.get("content") if isinstance(_msg, dict) else None
+            for block in (_content if isinstance(_content, list) else []):
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     uses.append((block.get("id"), block.get("name", ""), block.get("input")))
         elif etype == "user":
-            content = (ev.get("message") or {}).get("content")
+            _msg = ev.get("message")
+            content = _msg.get("content") if isinstance(_msg, dict) else None
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -3345,9 +3385,28 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
 
         raw_result = data.get("result", "")
         usage = data.get("usage", {}) or {}
-        cache_read = usage.get("cache_read_input_tokens", 0)
-        input_tokens = usage.get("input_tokens", 0) + cache_read
-        output_tokens = usage.get("output_tokens", 0)
+        if not isinstance(usage, dict):
+            log.warning("claude result usage is %s, not an object — counted as 0", type(usage).__name__)
+            usage = {}
+
+        def _u(field: str) -> int:
+            # Round 13: the success sibling of the terminal branch read raw
+            # counters and dropped cache creation — the uncached ingest —
+            # so successful calls under-reported total input to every fold
+            # and ledger downstream. Same validation, same sum, both paths.
+            from llm_errors import finite_nonneg as _fnn
+            raw = usage.get(field)
+            if raw is None:
+                return 0
+            v = _fnn(raw, int, -1)
+            if v < 0:
+                log.warning("claude result usage %s=%r malformed — counted as 0", field, raw)
+                return 0
+            return v
+
+        cache_read = _u("cache_read_input_tokens")
+        input_tokens = _u("input_tokens") + _u("cache_creation_input_tokens") + cache_read
+        output_tokens = _u("output_tokens")
 
         content = raw_result
         tool_calls: List[ToolCall] = []

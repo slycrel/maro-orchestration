@@ -521,27 +521,38 @@ def _run_steps_parallel(
         # the session adapter; the per-step cheap downgrade was removed.
         step_adapter = adapter
 
-        # _execute_step handles prefetch internally
-        outcome = _run_in_step_worktree(f"step{step_idx}", lambda: _execute_step(
-            goal=goal,
-            step_text=step_text,
-            step_num=step_idx,
-            total_steps=len(steps),
-            completed_context=[],
-            adapter=step_adapter,
-            tools=tools,
-            verbose=verbose,
-            ancestry_context=ancestry_context,
-            project_dir=project_dir,
-            shared_ctx=shared_ctx,
-            incremental_context=incremental_context,
-        ))
-        if not _halt["reason"]:
-            _env = _environmental_pause(outcome)
-            if _env:
-                _halt["reason"] = _env
-                log.warning("parallel step %d refused by the environment (%s) — "
-                            "queued steps will not start", step_idx, _env)
+        def _publish_halt(oc: dict) -> None:
+            # Published the moment the step's outcome exists — BEFORE the
+            # worktree wrapper's merge-back/cleanup (review round 13: that
+            # finalization can wait on the repo lock, and a peer finishing
+            # meanwhile admitted a queued step against the dead session).
+            if not _halt["reason"]:
+                _env = _environmental_pause(oc)
+                if _env:
+                    _halt["reason"] = _env
+                    log.warning("parallel step %d refused by the environment (%s) — "
+                                "queued steps will not start", step_idx, _env)
+
+        def _run_step() -> dict:
+            # _execute_step handles prefetch internally
+            oc = _execute_step(
+                goal=goal,
+                step_text=step_text,
+                step_num=step_idx,
+                total_steps=len(steps),
+                completed_context=[],
+                adapter=step_adapter,
+                tools=tools,
+                verbose=verbose,
+                ancestry_context=ancestry_context,
+                project_dir=project_dir,
+                shared_ctx=shared_ctx,
+                incremental_context=incremental_context,
+            )
+            _publish_halt(oc)
+            return oc
+
+        outcome = _run_in_step_worktree(f"step{step_idx}", _run_step)
 
         # Post-step security scan — parallel fan-out skips the main loop's
         # _post_step_checks, so we do a lightweight scan here.  Ralph verify
@@ -732,29 +743,39 @@ def _run_steps_dag(
         # session adapter; the per-step cheap downgrade was removed.
         step_adapter = adapter
 
-        outcome = _run_in_step_worktree(f"dagstep{step_idx}", lambda: _execute_step(
-            goal=goal,
-            step_text=step_text,
-            step_num=step_idx,
-            total_steps=n,
-            completed_context=dep_ctx,
-            adapter=step_adapter,
-            tools=tools,
-            verbose=verbose,
-            ancestry_context=ancestry_context,
-            project_dir=project_dir,
-            shared_ctx=shared_ctx,
-            incremental_context=incremental_context,
-        ))
-        # Set the halt HERE, in the worker (review round 3: the coordinator
-        # only learns of the refusal after it consumes the future, and a
-        # pool thread picks its next already-submitted root before that).
-        if not _halt["reason"]:
-            _env = _environmental_pause(outcome)
-            if _env:
-                _halt["reason"] = _env
-                log.warning("dag step %d refused by the environment (%s) — "
-                            "submitted-but-unstarted steps will not run", step_idx, _env)
+        def _publish_halt(oc: dict) -> None:
+            # Set the halt HERE, in the worker (review round 3: the
+            # coordinator only learns of the refusal after it consumes the
+            # future, and a pool thread picks its next already-submitted
+            # root before that) — and BEFORE the worktree wrapper's
+            # merge-back/cleanup (review round 13: finalization can wait on
+            # the repo lock while a peer admits a queued root).
+            if not _halt["reason"]:
+                _env = _environmental_pause(oc)
+                if _env:
+                    _halt["reason"] = _env
+                    log.warning("dag step %d refused by the environment (%s) — "
+                                "submitted-but-unstarted steps will not run", step_idx, _env)
+
+        def _run_step() -> dict:
+            oc = _execute_step(
+                goal=goal,
+                step_text=step_text,
+                step_num=step_idx,
+                total_steps=n,
+                completed_context=dep_ctx,
+                adapter=step_adapter,
+                tools=tools,
+                verbose=verbose,
+                ancestry_context=ancestry_context,
+                project_dir=project_dir,
+                shared_ctx=shared_ctx,
+                incremental_context=incremental_context,
+            )
+            _publish_halt(oc)
+            return oc
+
+        outcome = _run_in_step_worktree(f"dagstep{step_idx}", _run_step)
         with results_lock:
             results[step_idx] = outcome
         if verbose:

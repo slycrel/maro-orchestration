@@ -602,6 +602,47 @@ question above); the terminal branch's `fatal` means the loop's step
 recovery, not a backend retry, decides what happens after a max-turns
 exhaustion.
 
+*Review round 13 (2026-09-13, codex skeptic + QA, whole chunk): one
+shared HIGH on round 12's own seam, one scheduler HIGH, three MEDs; all
+fixed.* (lvii) **One event boundary for both terminal readers.** Round
+12 made both readers keep the LAST result frame, but
+`_extract_result_object` still promoted any brace-delimited object
+anywhere in the capture while `_parse_stream_json` framed complete JSON
+lines — a result-shaped object inside a diagnostic line (`diagnostic:
+{"type":"result","subtype":"success",…}`) outranked the real
+auth-error frame, bypassing the breaker and completing as `done`. The
+scanner now prefers line-framed result events (the stream parser's
+boundary) and only falls back to the whole-document scan when none
+exist, accepting an object only where a line starts with it (a
+pretty-printed single object behind a warning line still parses; text
+before a brace on the same line is not a protocol event). Pinned in
+both orderings, both exit codes, plus the pretty-printed control. (lviii)
+**The halt is published before worktree finalization.** Both schedulers
+set the halt after `_run_in_step_worktree` returned — i.e. after the
+refused step's merge-back/cleanup, which can wait on the repo lock — so
+a peer finishing meanwhile admitted a queued step against the dead
+session. The halt is now published inside the wrapped callback the
+moment the outcome exists; pinned with a two-worker, delayed-merge
+regression for fan-out and DAG (proven to fail on the pre-fix code).
+(lix) **Successful frames count cache creation.** The terminal branch
+summed input + cache creation (round 12) but its success sibling read
+raw counters and dropped cache creation, so every successful call
+under-reported total input to the folds and ledger downstream; the
+success path now validates each counter (warning on malformed, null as
+0) and sums input + cache creation + cache read. (lx) **A malformed
+assistant event no longer wipes the partial.** One event whose
+`message` was a list raised out of `_assistant_text_tail` and the outer
+guard attached nothing; each event's containers are validated on their
+own, malformed ones are counted and warned, and the rest keep their
+evidence — the same container validation now guards
+`_parse_stream_json`. (lxi) **A failed ledger append is visible.**
+`record_step_cost` swallowed the append failure and returned the entry
+as if recorded, so the new callers' guards never fired and the run
+card's total read as complete; it now warns naming the loop id and marks
+the entry `persisted: false`. Silent-drop census + triage manifest:
+both new stream readers triaged as subprocess-capture parsers (the
+baseline's `_parse_stream_json` class).
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

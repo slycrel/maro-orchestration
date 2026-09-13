@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -425,8 +426,16 @@ def record_step_cost(
         path.parent.mkdir(parents=True, exist_ok=True)
         from file_lock import locked_append
         locked_append(path, json.dumps(entry))
-    except Exception:
-        pass  # never break the caller
+    except Exception as _exc:
+        # Never break the caller — but never pretend either (review round
+        # 13, 2026-09-13: a swallowed append returned the entry as if
+        # recorded, and the run card's spend_for_loops total read as
+        # complete while missing this row).
+        entry["persisted"] = False
+        logging.getLogger("maro.metrics").warning(
+            "step-costs ledger append FAILED for loop %s (%s): %s — the run's "
+            "recorded spend is now incomplete", loop_id or "?",
+            step_text[:60], _exc)
     return entry
 
 

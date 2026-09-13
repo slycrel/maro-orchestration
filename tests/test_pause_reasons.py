@@ -1492,3 +1492,76 @@ class TestReviewRound12:
         assert [(r["status"], r["tokens_in"]) for r in rows] == [("done", 20), ("blocked", 137)], rows
         assert rows[1]["cache_read_tokens"] == 100
         assert spend_for_loops(["loop-t"]) == pytest.approx(0.15)
+
+
+class TestReviewRound13:
+    """Round 13 (2026-09-13): the halt is published before worktree
+    finalization; a failed ledger append is visible."""
+
+    _AUTH = TestSchedulersStopOnEnvironmentalPause._AUTH
+    _DONE = {"status": "done", "result": "ok", "summary": "ok", "tokens_in": 1, "tokens_out": 1}
+
+    @pytest.mark.parametrize("use_dag", [False, True])
+    def test_queued_work_stops_while_the_refused_step_is_merging(self, monkeypatch, use_dag):
+        # Two workers, three independent steps. Step 1 is refused and its
+        # worktree merge-back then WAITS; step 2 finishes meanwhile and
+        # frees a worker. Step 3 must not start: the halt is known the
+        # moment step 1's outcome exists, not after its merge.
+        import threading, time as _t
+        import loop_parallel
+        executed = []
+        started2, published1, done2 = threading.Event(), threading.Event(), threading.Event()
+        def fake(**kw):
+            i = kw["step_num"]
+            executed.append(i)
+            if i == 1:
+                started2.wait(5)      # step 2 is running beside us
+                return dict(self._AUTH)
+            if i == 2:
+                started2.set()
+                published1.wait(5)    # the refusal is known before we finish
+            return dict(self._DONE)
+        def wrapper(label, fn):
+            oc = fn()                 # the outcome exists (and, fixed, the halt)
+            if label.endswith("step1"):
+                published1.set()
+                # the merge-back of the refused step, waiting on the repo lock
+                done2.wait(5)
+                _t.sleep(0.4)         # long enough for the freed worker to pick step 3
+            elif label.endswith("step2"):
+                done2.set()
+            return oc
+        monkeypatch.setattr(loop_parallel, "_execute_step", fake)
+        monkeypatch.setattr(loop_parallel, "_run_in_step_worktree", wrapper)
+        if use_dag:
+            out = loop_parallel._run_steps_dag(goal="g", steps=["a", "b", "c"],
+                                               deps={1: set(), 2: set(), 3: set()}, adapter=None,
+                                               ancestry_context="", tools=[], verbose=False, max_workers=2)
+        else:
+            out = loop_parallel._run_steps_parallel(goal="g", steps=["a", "b", "c"], adapter=None,
+                                                    ancestry_context="", tools=[], verbose=False, max_workers=2)
+        assert sorted(executed) == [1, 2], executed
+        assert len(out) == 3 and out[0]["error_class"] == "container_auth"
+        assert out[2]["stuck_reason"].startswith("not started"), out[2]
+
+    def test_a_failed_ledger_append_is_visible(self, monkeypatch, caplog):
+        # Round 13: record_step_cost swallowed the append failure and
+        # returned the entry as if recorded; the callers' own guards never
+        # fired and the run card's total read as complete.
+        import logging
+        import file_lock
+        from metrics import record_step_cost, spend_for_loops
+        def boom(path, line):
+            raise OSError("disk full")
+        monkeypatch.setattr(file_lock, "locked_append", boom)
+        with caplog.at_level(logging.WARNING, logger="maro.metrics"):
+            entry = record_step_cost("list the newest five", 137, 9, "blocked", goal="g",
+                                     loop_id="loop-r13", provider_cost_usd=0.12)
+        assert entry["persisted"] is False and entry["cost_usd"] == pytest.approx(0.12)
+        assert "loop-r13" in caplog.text and "disk full" in caplog.text and "incomplete" in caplog.text
+        assert spend_for_loops(["loop-r13"]) == 0.0
+        # control: a working append carries no such mark and reaches the ledger
+        monkeypatch.undo()
+        entry = record_step_cost("list the newest five", 137, 9, "blocked", goal="g",
+                                 loop_id="loop-r13b", provider_cost_usd=0.12)
+        assert "persisted" not in entry and spend_for_loops(["loop-r13b"]) == pytest.approx(0.12)

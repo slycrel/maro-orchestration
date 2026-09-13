@@ -3824,3 +3824,94 @@ def test_a_terminal_failure_after_work_keeps_the_assistant_text():
         with pytest.raises(RuntimeError) as ei2:
             a.complete([LLMMessage("user", "build a thing")])
     assert call_usage_evidence(ei2.value)["partial"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Review round 13 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_a_diagnostic_result_object_cannot_override_the_terminal_frame(rc):
+    # Round 13: `_extract_result_object` promoted any brace-delimited object
+    # anywhere in the capture while `_parse_stream_json` framed complete
+    # lines — a result-shaped object inside a diagnostic line outranked the
+    # real terminal frame (auth failure read as success, breaker bypassed).
+    from llm import _extract_result_object, _parse_stream_json, _terminal_failure
+    auth = _r12_frame("error_during_execution")
+    diag_ok = 'diagnostic: ' + _r12_frame("success", result="Finished the task.")
+    text = auth + "\n" + diag_ok
+    assert _extract_result_object(text) == _parse_stream_json(text)["result"]
+    assert _terminal_failure(text) is True
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text)):
+        with pytest.raises(RuntimeError, match="OAuth session expired"):
+            a.complete([LLMMessage("user", "build a thing")])
+    # the mirror: a diagnostic-embedded ERROR cannot fail a real success line
+    ok = _r12_frame("success", result="Finished the task.")
+    text2 = ok + "\ndiagnostic: " + auth
+    assert _terminal_failure(text2) is False
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text2)):
+        assert a.complete([LLMMessage("user", "build a thing")]).content == "Finished the task."
+    # compatibility: a pretty-printed single object behind a warning line still parses
+    pretty = "warning: something\n" + json.dumps(json.loads(ok), indent=2)
+    assert _extract_result_object(pretty)["result"] == "Finished the task."
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=0, stderr="", container_executed=False, stdout=pretty)):
+        assert a.complete([LLMMessage("user", "build a thing")]).content == "Finished the task."
+    # and a lone diagnostic-embedded object is not a protocol event at all
+    assert _extract_result_object("diagnostic: " + ok) is None
+
+
+def test_a_successful_frame_counts_cache_creation_ingest(caplog):
+    # Round 13: the terminal branch summed input + cache creation; its
+    # success sibling read raw counters and dropped cache creation, so
+    # every successful call under-reported total input downstream.
+    import logging
+    ok = _r12_frame("success", result="Finished the task.",
+                    usage={"input_tokens": 5, "cache_creation_input_tokens": 30,
+                           "cache_read_input_tokens": 100, "output_tokens": 9})
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=0, stderr="", container_executed=False, stdout=ok)):
+        resp = a.complete([LLMMessage("user", "build a thing")])
+    assert (resp.input_tokens, resp.cache_read_tokens, resp.output_tokens) == (135, 100, 9)
+    bad = _r12_frame("success", result="Finished the task.",
+                     usage={"input_tokens": "many", "cache_creation_input_tokens": 30,
+                            "cache_read_input_tokens": None, "output_tokens": 9})
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=0, stderr="", container_executed=False, stdout=bad)):
+            resp = a.complete([LLMMessage("user", "build a thing")])
+    assert (resp.input_tokens, resp.cache_read_tokens, resp.output_tokens) == (30, 0, 9)
+    assert "input_tokens='many' malformed" in caplog.text
+
+
+@pytest.mark.parametrize("order", ["malformed-first", "malformed-last"])
+def test_a_malformed_assistant_event_keeps_the_other_partial_evidence(caplog, order):
+    # Round 13: one assistant event whose `message` was a list raised out
+    # of the partial reader; the outer guard then attached NOTHING — the
+    # valid text collected beside it was lost, at DEBUG.
+    import logging
+    from llm import _parse_stream_json
+    from llm_errors import call_usage_evidence
+    good = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "work already performed"}]}})
+    bad = json.dumps({"type": "assistant", "message": ["malformed"]})
+    bad2 = json.dumps({"type": "assistant", "message": {"content": "not a list"}})
+    events = [bad, bad2, good] if order == "malformed-first" else [good, bad, bad2]
+    body = "\n".join(events + [_r12_frame("error_during_execution",
+                                           usage={"input_tokens": 37, "output_tokens": 9}, total_cost_usd=0.12)])
+    # the stream parser survives the same events and still finds the frame
+    parsed = _parse_stream_json(body)
+    assert parsed["result"]["subtype"] == "error_during_execution"
+    a = ClaudeSubprocessAdapter()
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=1, stderr="", container_executed=False, stdout=body)):
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+                a.complete([LLMMessage("user", "build a thing")])
+    ev = call_usage_evidence(ei.value)
+    assert "work already performed" in ev["partial"] and ev["tokens_in"] == 37
+    assert "2 malformed assistant event(s)/block(s) skipped" in caplog.text

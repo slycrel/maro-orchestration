@@ -155,7 +155,26 @@ _SKILL_UPSERT_STAMPER = ("keyed upsert under locked_write + atomic_write "
                          "TestTheSkillStoresSurviveATornByte in "
                          "tests/test_skills.py and "
                          "tests/mutation/skills_preserve.json.")
+# llm.py's stream-capture readers (review rounds 12–13, 2026-09-13). The
+# "store" is a subprocess's merged stdout — the claude CLI's stream-json
+# NDJSON interleaved with plain-text lines and possibly a torn trailing
+# line. Nothing durable is read: a line that is not a complete JSON object
+# is, by the protocol, not an event, and the readers that DO carry
+# consequence (the terminal frame → `_extract_result_object`/`_parse_stream_json`,
+# the usage counters) validate their fields and warn on malformed ones;
+# `_assistant_text_tail` counts and warns on malformed assistant events so
+# incomplete partial-output evidence is announced. Same class as the
+# baseline's `_parse_stream_json` entry; pinned by
+# test_a_diagnostic_result_object_cannot_override_the_terminal_frame and
+# test_a_malformed_assistant_event_keeps_the_other_partial_evidence in
+# tests/test_llm.py.
+_STREAM_CAPTURE = ("subprocess stream-json capture, not a durable store; "
+                   "non-event lines are protocol noise, malformed events are "
+                   "counted and warned")
+
 REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
+    ("llm.py", "_assistant_text_tail"): _STREAM_CAPTURE,
+    ("llm.py", "_extract_result_object"): _STREAM_CAPTURE,
     ("memory_ledger.py", "mark_outcomes_superseded._mark"): _STAMPER,
     ("memory_ledger.py", "stamp_outcome_verdict._stamp"): _STAMPER,
     ("memory_ledger.py", "stamp_outcome_stop_verdict._stamp"): _STAMPER,
