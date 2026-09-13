@@ -6499,7 +6499,18 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   fails closed rather than returning the excluded base, and a clarified
   re-decision replaces the stamped origin in the SAME write as the
   record (`landscape.apply(..., replace=True)`, empty origin included).
-  Recorded, not changed: a project deleted
+  Round 4: the decision is a TRANSACTION — `_decide_landscape` derives
+  (context, bound project, context-only project) before it records, then
+  installs all of it or nothing (a context read raising after the stamp
+  had left a new parent on disk with the old project live); a
+  re-decision that cannot be made runs the clarified goal FRESH (the
+  stage-failed policy: goal-text binding, caller's origin, no prior
+  context — never the first verdict, which was about a goal that no
+  longer exists); a free sibling is RESERVED by `mkdir` at allocation
+  (two pending same-opening goals both saw `-2` vacant); the allocator
+  refuses a path-shaped base (`ValueError`) and an escalation of a
+  path-shaped OPERATOR project stays beside it as given (the override),
+  logged. Recorded, not changed: a project deleted
   between selection and loop init is recreated empty by
   `ensure_project` (deletion is manual and opt-in here — data-retention
   decree — and the window is seconds).

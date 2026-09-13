@@ -976,9 +976,9 @@ class TestTheFallbacksHonourTheJudge:
         assert landscape.context_only_project(meta["landscape"]) == slug
         assert landscape.context_only_project({**meta["landscape"], "continues": True}) == ""
         assert landscape.context_only_project({"relation": "rerun", "chosen": prior}) == ""
-        assert _project_for_goal(goal_b, (slug,)) == (slug + "-2", "minted")
-        (projects_root() / (slug + "-2")).mkdir()
+        # (the flow above reserved -2; each allocation reserves the next)
         assert _project_for_goal(goal_b, (slug,)) == (slug + "-3", "minted")
+        assert _project_for_goal(goal_b, (slug,)) == (slug + "-4", "minted")
 
     def test_a_context_only_verdict_keeps_the_named_shortcut_out_of_that_project(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
@@ -1210,12 +1210,12 @@ class TestTheConstraintsSurviveTheTransitions:
         (root / "client-a-2").symlink_to(tmp_path / "gone")
         assert not (root / "client-a-2").exists() and (root / "client-a-2").is_symlink()
         assert handle_mod._free_project_name("client-a", ("client-a",)) == "client-a-3"
+        assert (root / "client-a-3").is_dir(), "the name is reserved, not merely observed"
         # the range exhausted: a random suffix, never the base
         monkeypatch.setattr(handle_mod, "_PROJECT_SIBLING_CAP", 4)
-        for n in (3, 4):
-            (root / f"client-a-{n}").mkdir()
+        (root / "client-a-4").mkdir()
         name = handle_mod._free_project_name("client-a", ("client-a",))
-        assert name != "client-a" and name.startswith("client-a-") and not (root / name).exists()
+        assert name != "client-a" and name.startswith("client-a-") and (root / name).is_dir()
         assert len(name) == len("client-a-") + 8
         # even that taken: fail closed
         import uuid
@@ -1365,3 +1365,159 @@ class TestTheConstraintsSurviveTheTransitions:
         assert meta["landscape"]["relation"] == "fresh"
         assert "parent_handle_id" not in (meta.get("origin") or {}), meta.get("origin")
         assert meta["project_binding"] == "minted" and meta["project"] != "client-a"
+
+
+class TestTheDecisionIsATransaction:
+    """Review round 4 (2026-09-13): a decision is derived, recorded, then
+    installed — all or nothing; a re-decision that cannot be made does not
+    leave the clarified goal running on the first one; a free sibling is
+    reserved, not merely observed; a path is never suffixed into a name."""
+
+    def test_a_context_read_that_fails_leaves_the_first_decision_whole(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        import landscape
+        from handle import handle, _default_project_for
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        from orch_items import projects_root
+        import llm
+        (projects_root() / "client-a").mkdir(parents=True)
+        (projects_root() / "client-b").mkdir(parents=True)
+        a = _finished_run("Write the client-a quarterly report", "Client A done.", extra={"project": "client-a"})
+        b = _finished_run("Write the client-b quarterly report", "Client B done.", extra={"project": "client-b"})
+        # the judge follows A first, then (clarified) B; the context read for
+        # B blows up after the decision is derived
+        # the judge names the runs by id (both candidates tie on similarity)
+        adapter = _NowAndJudge([json.dumps({"relation": "related", "run": a, "continues": True, "reason": "A"}),
+                                json.dumps({"relation": "related", "run": b, "continues": True, "reason": "B"})])
+        monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: adapter)
+        real_ctx = landscape.related_context
+        calls = []
+
+        def flaky_ctx(rec):
+            calls.append(rec.get("chosen"))
+            if rec.get("chosen") == b:
+                raise OSError("run storage unavailable")
+            return real_ctx(rec)
+
+        monkeypatch.setattr(landscape, "related_context", flaky_ctx)
+        channel = MagicMock()
+        channel.ask.return_value = "This is for the second client, a separate workspace."
+        loop_kwargs = []
+
+        def _fake_run(g, *x, **k):
+            loop_kwargs.append(k)
+            return LoopResult(loop_id="l", project=k.get("project", ""), goal=g, status="done", stuck_reason=None,
+                              steps=[StepOutcome(index=0, text="s", status="done", result="o", iteration=0)])
+
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+        goal = "Write the quarterly report"
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": False, "question": "Which client?"}), \
+             patch("director.verify_goal_completion",
+                   return_value=ClosureVerdict(complete=True, confidence=0.9, gaps=[],
+                                               summary="verified", checks_run=2, checks_passed=2)), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            r = handle(goal, force_lane="agenda", dry_run=False, channel=channel)
+        assert calls == [a, b]
+        meta = _meta(r.handle_id)
+        # neither decision drives the clarified goal: persisted AND live state agree on "fresh"
+        assert meta["landscape"]["relation"] == "fresh" and "re-decision failed" in meta["landscape"]["reason"]
+        assert "parent_handle_id" not in (meta.get("origin") or {})
+        assert loop_kwargs[0]["project"] not in ("client-a", "client-b")
+        assert meta["project_binding"] == "minted"
+        assert "## Related prior run" not in (loop_kwargs[0].get("ancestry_context_extra") or "")
+
+    def test_a_replacement_stamp_that_fails_does_not_run_the_clarified_goal_on_the_first_verdict(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        import runs
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        from orch_items import projects_root
+        import llm
+        (projects_root() / "client-a").mkdir(parents=True)
+        prior = _finished_run(GOAL_QUARTERLY, "Client A: revenue rose.", extra={"project": "client-a"})
+        adapter = _NowAndJudge([_related(1, "carries it forward"), _related(1, "other client", continues=False)])
+        monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: adapter)
+        real_stamp = runs.stamp_run_metadata_for
+        stamps = []
+
+        def failing_replacement(hid, fields):
+            stamps.append(dict(fields))
+            if "origin" in fields and fields.get("landscape", {}).get("continues") is False:
+                return None  # the replacement write fails
+            return real_stamp(hid, fields)
+
+        monkeypatch.setattr(runs, "stamp_run_metadata_for", failing_replacement)
+        channel = MagicMock()
+        channel.ask.return_value = "This is for client B; use a separate workspace."
+        loop_kwargs = []
+
+        def _fake_run(g, *x, **k):
+            loop_kwargs.append(k)
+            return LoopResult(loop_id="l", project=k.get("project", ""), goal=g, status="done", stuck_reason=None,
+                              steps=[StepOutcome(index=0, text="s", status="done", result="o", iteration=0)])
+
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": False, "question": "Which client?"}), \
+             patch("director.verify_goal_completion",
+                   return_value=ClosureVerdict(complete=True, confidence=0.9, gaps=[],
+                                               summary="verified", checks_run=2, checks_passed=2)), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            r = handle(GOAL_FOLLOW_UP, force_lane="agenda", dry_run=False, channel=channel)
+        assert any(s.get("landscape", {}).get("continues") is False for s in stamps), "the replacement was attempted"
+        assert loop_kwargs[0]["project"] != "client-a"
+        meta = _meta(r.handle_id)
+        assert meta["project"] != "client-a" and meta["project_binding"] == "minted"
+        assert meta["landscape"]["relation"] == "fresh" and not meta["landscape"].get("chosen")
+        assert "re-decision failed" in meta["landscape"]["reason"]
+        assert "parent_handle_id" not in (meta.get("origin") or {}), meta.get("origin")
+        assert prior not in (loop_kwargs[0].get("ancestry_context_extra") or "")
+
+    def test_a_free_sibling_is_reserved_not_observed(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        from orch_items import projects_root
+        root = projects_root()
+        # two pending runs that both saw -2 vacant get two names
+        first = handle_mod._free_project_name("client-a", ("client-a",))
+        second = handle_mod._free_project_name("client-a", ("client-a",))
+        assert (first, second) == ("client-a-2", "client-a-3")
+        assert (root / first).is_dir() and (root / second).is_dir()
+        # through the binding: two same-opening goals under a context-only verdict land apart
+        goal_b = "Summarize the quarterly revenue report for client B"
+        goal_c = "Summarize the quarterly revenue report for client C"
+        from loop_artifacts import resolve_project_slug
+        slug = resolve_project_slug(goal_b)
+        assert resolve_project_slug(goal_c) == slug
+        pb = handle_mod._project_for_goal(goal_b, (slug,))
+        pc = handle_mod._project_for_goal(goal_c, (slug,))
+        assert pb != pc and pb[1] == pc[1] == "minted"
+
+    def test_a_path_is_never_suffixed_into_a_name(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        from orch_items import projects_root
+        for bad in ("../outside", "/tmp/x", "a/b", " padded ", ""):
+            with pytest.raises(ValueError):
+                handle_mod._free_project_name(bad, ())
+        assert not (tmp_path / "outside-2").exists() and not (projects_root() / "outside-2").exists()
+        # an escalation of a path-shaped OPERATOR project stays beside it (the override), never elsewhere
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        r, projects = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")),
+                                      project="../outside")
+        assert projects == ["../outside", "../outside-escalated"], projects
+        meta = _meta(r.handle_id)
+        assert (meta["project"], meta["project_binding"]) == ("../outside-escalated", "escalated")
+        assert not any(p.name.startswith("outside-escalated-") for p in tmp_path.iterdir())

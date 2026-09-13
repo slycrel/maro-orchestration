@@ -309,26 +309,41 @@ _PROJECT_SIBLING_CAP = 999
 
 
 def _free_project_name(base: str, exclude: "tuple[str, ...]" = ()) -> str:
-    """The first `base-2`, `base-3`… that is not excluded and is FREE —
-    nothing at that path, not even a dangling symlink (`exists()` follows a
-    link and reports a dangling one absent; the loop's mkdir would then hit
-    the link). Past the cap a random suffix is tried once; if even that is
-    taken the binding fails closed — the excluded or unsafe base is never
-    returned (review 2026-09-13 round 3)."""
+    """The first `base-2`, `base-3`… that is not excluded and is FREE, and
+    RESERVED for the caller: the directory is created here, exclusively
+    (`mkdir` without exist_ok is the atomic claim — two pending runs that
+    both observed `-2` vacant would otherwise both bind it and the second
+    would inherit the first's work; the loop's `ensure_project` is
+    idempotent over an existing empty directory). A dangling symlink counts
+    as taken (`exists()` reports it absent; mkdir would hit the link). Past
+    the cap a random suffix is tried once; if even that is taken the
+    binding fails closed — the excluded or unsafe base is never returned.
+    `base` must be a valid project NAME: suffixing cannot repair a
+    path-shaped identity (review 2026-09-13 rounds 3–4)."""
+    from landscape import project_name
+    if not project_name(base):
+        raise ValueError(f"not a project name: {base!r}")
     import orch_items as _oi
     root = _oi.projects_root()
+    root.mkdir(parents=True, exist_ok=True)
 
-    def _free(name: str) -> bool:
+    def _claim(name: str) -> bool:
         target = root / name
-        return name not in exclude and not target.is_symlink() and not target.exists()
+        if name in exclude or target.is_symlink() or target.exists():
+            return False
+        try:
+            target.mkdir()
+        except FileExistsError:
+            return False
+        return True
 
     for n in range(2, _PROJECT_SIBLING_CAP + 1):
         cand = f"{base}-{n}"
-        if _free(cand):
+        if _claim(cand):
             return cand
     import uuid
     cand = f"{base}-{uuid.uuid4().hex[:8]}"
-    if _free(cand):
+    if _claim(cand):
         return cand
     raise RuntimeError(f"no free project name beside {base!r}")
 
@@ -1387,15 +1402,21 @@ def _handle_impl(
             adapter=None if dry_run else _judge,
             fresh=bool(fresh or dry_run),
             why="" if fresh else ("dry_run" if dry_run else ""))
-        # a re-decision replaces the stamped origin in the same write as
-        # the record (even with an empty one): the first decision's parent
-        # must not outlive it, and apply raises when nothing was recorded
+        # Everything the decision derives is computed BEFORE anything is
+        # recorded or installed, so a failure anywhere leaves both the
+        # persisted and the live state as they were (review r4: a context
+        # read raising after the stamp left a new parent on disk with the
+        # old project live). A re-decision replaces the stamped origin in
+        # the same write as the record (even with an empty one): the first
+        # decision's parent must not outlive it; apply raises when nothing
+        # was recorded.
+        _new_ctx = _landscape.related_context(_land)
+        _new_project = _landscape.chosen_project(_land)
+        _new_context_only = _landscape.context_only_project(_land)
         _new_origin = _landscape.apply(handle_id, dict(_origin_as_given) if _origin_as_given else None,
                                        _land, replace=_landscape_decided)
         origin = _new_origin
-        _related_ctx = _landscape.related_context(_land)
-        _landscape_project = _landscape.chosen_project(_land)
-        _context_only_project = _landscape.context_only_project(_land)
+        _related_ctx, _landscape_project, _context_only_project = _new_ctx, _new_project, _new_context_only
         _landscape_decided = True
         log.info("landscape: %s (%s) %d candidate(s) of %d scanned%s",
                  _land.get("relation"), _land.get("rule"),
@@ -2046,8 +2067,25 @@ def _handle_impl(
                                     _decide_landscape(message)
                                     log.info("landscape: re-decided over the clarified goal")
                                 except Exception as _re_exc:
+                                    # the first decision was about a goal that
+                                    # no longer exists: nothing it derived may
+                                    # drive the clarified one. The run goes on
+                                    # FRESH (the stage-failed policy) — the
+                                    # goal-text fallback binds the project, the
+                                    # caller's origin stands, no prior context
+                                    # rides in (review r4).
                                     log.warning("landscape: re-decision over the clarified goal failed, "
-                                                "keeping the first: %s", _re_exc)
+                                                "running fresh: %s", _re_exc)
+                                    origin = dict(_origin_as_given) if _origin_as_given else None
+                                    _related_ctx = _landscape_project = _context_only_project = ""
+                                    try:
+                                        from runs import stamp_run_metadata_for as _stamp_land_fresh
+                                        _stamp_land_fresh(handle_id, {
+                                            "landscape": {"rule": "judge_unreadable", "relation": "fresh",
+                                                          "reason": f"re-decision failed: {str(_re_exc)[:200]}"},
+                                            "origin": dict(_origin_as_given or {})})
+                                    except Exception:
+                                        pass
                         # Fall through to continue execution
                     else:
                         # No channel — return clarification_needed (CLI path).
@@ -2281,10 +2319,10 @@ def _handle_impl(
             )
 
         _ralph_from_cfg = _cfg.get("ralph_verify", "").strip().lower() == "true"
-        # Dispatched goals arrive project-less; default the loop's project
-        # identity via _default_project_for — an existing project named in the
-        # goal, else the minted goal slug (same derivation the scope pass uses
-        # below) — so the cwd fence, per-step cwd binds, and prompt project_dir
+        # Dispatched goals arrive project-less; the loop's project identity
+        # is `_agenda_project` — bound above by precedence (operator /
+        # navigator / landscape / named / minted; the scope pass uses the
+        # same value) — so the cwd fence, per-step cwd binds, and prompt project_dir
         # all engage instead of silently running unfenced from the launch cwd
         # (BACKLOG #1, 3rd repro), and scope + execution stop pointing at two
         # different project dirs. `project` itself stays as-given: routing
@@ -3724,9 +3762,16 @@ def _handle_impl(
                         # transition and carries the binding's constraints:
                         # never the landscape's context-only project, never
                         # a path outside the projects root (review r3)
-                        from landscape import project_inside_root as _esc_inside
+                        from landscape import project_inside_root as _esc_inside, project_name as _esc_name
                         _esc_exclude = (_context_only_project,) if _context_only_project else ()
-                        if _escalated_project in _esc_exclude or not _esc_inside(_escalated_project):
+                        if not _esc_name(_escalated_project):
+                            # a path-shaped project is the OPERATOR's explicit
+                            # choice (handle accepts it as given); the retry
+                            # stays beside it — suffixing cannot make a name of
+                            # a path, and the allocator refuses one (review r4)
+                            log.warning("escalation: %r is not a project name (operator path); kept as given",
+                                        _escalated_project)
+                        elif _escalated_project in _esc_exclude or not _esc_inside(_escalated_project):
                             _esc_base = _escalated_project
                             _escalated_project = _free_project_name(_esc_base, _esc_exclude)
                             log.info("escalation: %r steps aside to %r", _esc_base, _escalated_project)
