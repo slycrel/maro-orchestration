@@ -2091,7 +2091,7 @@ class TestRecoveryOutlivesTheHandle:
         (projects_root() / "board-reports").mkdir(parents=True)
         _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
         real = runs.stamp_run_metadata
-        real_for = runs.stamp_run_metadata_for
+        real_for = runs.revise_run_metadata_for
         refused = []
 
         def settled(fields):
@@ -2104,28 +2104,29 @@ class TestRecoveryOutlivesTheHandle:
                 return None
             return real(fields)
 
-        def refusing_for(hid, fields):
-            if settled(fields):
+        def refusing_for(hid, fn):
+            if settled(fn(_meta(hid))):
                 refused.append("finalize")
                 return None
-            return real_for(hid, fields)
+            return real_for(hid, fn)
 
         monkeypatch.setattr(runs, "stamp_run_metadata", refusing)
-        monkeypatch.setattr(runs, "stamp_run_metadata_for", refusing_for)
+        monkeypatch.setattr(runs, "revise_run_metadata_for", refusing_for)
         r, projects = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
         assert projects == ["board-reports", "board-reports-escalated"]
         assert refused == ["run", "run", "finalize"], refused
-        # kept WHOLE, not dropped — the intended outcome AND the marker's
-        # resolution the same finalize write carried (review r9)
+        # kept WHOLE, not dropped — the intended outcome AND the finalize's
+        # obligation to resolve the marker (review r9/r10: the resolution is
+        # materialised from the store's snapshot at the drain, not carried)
         kept = handle_mod._UNSETTLED_TRANSITIONS.get(r.handle_id)
         assert kept and kept["project_transition"]["outcome"] == "adopted"
         assert (kept["project"], kept["project_binding"]) == ("board-reports-escalated", "escalated")
-        assert kept["verdict_pending"]["resolved_at"]
+        assert kept["_finalize"] is True and "verdict_pending" not in kept
         meta = _meta(r.handle_id)
         assert "settled_at" not in meta["project_transition"] and landscape.run_settled(meta) is False
         # the store comes back; the sweep in this process writes the kept
         # settlement first, even with nothing aged on disk and the owner alive
-        monkeypatch.setattr(runs, "stamp_run_metadata_for", real_for)
+        monkeypatch.setattr(runs, "revise_run_metadata_for", real_for)
         res = sweep_transition_orphans(grace_s=10 ** 9)
         assert res["status"] == "completed" and res["retried"] == 1 and res["stamped"] == 0, res
         assert r.handle_id not in handle_mod._UNSETTLED_TRANSITIONS
@@ -2244,18 +2245,23 @@ class TestTheFinalizeIsOneObligation:
                                           "settled_by": "handle", "outcome": "adopted"}}
         monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {hid: dict(adopted)})
         real_for = runs.stamp_run_metadata_for
+        real_revise = runs.revise_run_metadata_for
         writes = []
         refuse = {"n": 1}
 
-        def once_failing(h, fields):
-            t = fields.get("project_transition") or {}
-            writes.append(t.get("outcome"))
-            if refuse["n"]:
-                refuse["n"] -= 1
-                return None
+        def recording(h, fields):
+            writes.append((fields.get("project_transition") or {}).get("outcome"))
             return real_for(h, fields)
 
-        monkeypatch.setattr(runs, "stamp_run_metadata_for", once_failing)
+        def once_failing(h, fn):
+            writes.append((fn(_meta(h)).get("project_transition") or {}).get("outcome"))
+            if refuse["n"]:
+                refuse["n"] -= 1
+                return None  # the store could not be read or written
+            return real_revise(h, fn)
+
+        monkeypatch.setattr(runs, "stamp_run_metadata_for", recording)
+        monkeypatch.setattr(runs, "revise_run_metadata_for", once_failing)
         res = sweep_transition_orphans(grace_s=60)
         assert res == {"status": "completed", "stamped": 0, "considered": 0, "retried": 0, "dropped": 0}, res
         assert writes == ["adopted"], writes  # no reverting write followed the failed drain
@@ -2293,8 +2299,13 @@ class TestTheFinalizeIsOneObligation:
         runs.stamp_run_metadata_for(later, {"project_transition": {**active, "since": "2026-09-13T02:00:01+00:00"}})
         monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {
             reverted: dict(adopted),
-            later: {**adopted, "verdict_pending": {"since": "2026-09-13T02:00:00+00:00", "loop_id": "lr-9",
-                                                   "resolved_at": "2026-09-13T02:30:00+00:00"}}})
+            later: {**adopted, "_finalize": True,
+                    "verdict_pending": {"since": "2026-09-13T02:00:00+00:00", "loop_id": "lr-9",
+                                        "resolved_at": "2026-09-13T02:30:00+00:00"}}})
+        # the decision reads the store's LOCKED snapshot, not a read of its
+        # own — an unreadable pre-read is not "write as kept" (review r10)
+        import audit_repair
+        monkeypatch.setattr(audit_repair, "_read_metadata", lambda rd: None)
         res = sweep_transition_orphans(grace_s=10 ** 9)
         assert res["retried"] == 1 and res["dropped"] == 1 and res["stamped"] == 0, res
         assert handle_mod._UNSETTLED_TRANSITIONS == {}
@@ -2316,17 +2327,18 @@ class TestTheFinalizeIsOneObligation:
         from orch_items import projects_root
         (projects_root() / "board-reports").mkdir(parents=True)
         _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
-        real_for = runs.stamp_run_metadata_for
+        real_for = runs.revise_run_metadata_for
         refused = []
 
-        def refusing_resolution(hid, fields):
+        def refusing_resolution(hid, fn):
+            fields = fn(_meta(hid))
             vp = fields.get("verdict_pending")
             if isinstance(vp, dict) and vp.get("resolved_at"):
                 refused.append(sorted(fields))
                 return None
-            return real_for(hid, fields)
+            return real_for(hid, fn)
 
-        monkeypatch.setattr(runs, "stamp_run_metadata_for", refusing_resolution)
+        monkeypatch.setattr(runs, "revise_run_metadata_for", refusing_resolution)
         r, projects = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
         assert projects == ["board-reports", "board-reports-escalated"]
         assert refused == [["verdict_pending"]], refused  # the settlement itself was written in the run
@@ -2334,8 +2346,8 @@ class TestTheFinalizeIsOneObligation:
         assert meta["project_transition"]["outcome"] == "adopted" and meta["project_transition"]["settled_at"]
         assert not meta["verdict_pending"].get("resolved_at") and landscape.run_settled(meta) is False
         kept = handle_mod._UNSETTLED_TRANSITIONS.get(r.handle_id)
-        assert kept and sorted(kept) == ["verdict_pending"] and kept["verdict_pending"]["resolved_at"]
-        monkeypatch.setattr(runs, "stamp_run_metadata_for", real_for)
+        assert kept == {"_finalize": True}, kept  # the obligation, not a materialised patch
+        monkeypatch.setattr(runs, "revise_run_metadata_for", real_for)
         res = sweep_transition_orphans(grace_s=10 ** 9)
         assert res["retried"] == 1 and res["dropped"] == 0, res
         meta = _meta(r.handle_id)
@@ -2373,3 +2385,119 @@ class TestTheFinalizeIsOneObligation:
         res = sweep_verdict_orphans(grace_s=0)
         assert res["status"] == "completed" and res["stamped"] == 1, res
         assert _meta(hid)["verdict_pending"]["resolved_at"]
+
+
+class TestTheObligationNeedsNoRead:
+    """Review round 10 (2026-09-13): the finalize's obligation exists
+    without a read of its own and the drain materialises the marker's
+    resolution from the store's snapshot; a store that cannot be read
+    defers the drain rather than writing as kept; the eligibility decision
+    and the publication share one locked snapshot."""
+
+    def test_a_finalize_that_could_not_read_still_owes_the_marker(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        import landscape
+        import handle as handle_mod
+        from audit_repair import sweep_transition_orphans
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        real = runs.revise_run_metadata_for
+        failed = []
+
+        def unreadable(hid, fn):
+            failed.append(hid)
+            raise OSError("[Errno 5] Input/output error: metadata.json")
+
+        monkeypatch.setattr(runs, "revise_run_metadata_for", unreadable)
+        r, projects = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert projects == ["board-reports", "board-reports-escalated"] and failed == [r.handle_id]
+        meta = _meta(r.handle_id)
+        # the run's own settlement was written in the run; only the marker is open
+        assert meta["project_transition"]["outcome"] == "adopted" and meta["project_transition"]["settled_at"]
+        assert not meta["verdict_pending"].get("resolved_at") and landscape.run_settled(meta) is False
+        # the obligation was kept with NOTHING read — no patch to carry
+        assert handle_mod._UNSETTLED_TRANSITIONS.get(r.handle_id) == {"_finalize": True}
+        monkeypatch.setattr(runs, "revise_run_metadata_for", real)
+        res = sweep_transition_orphans(grace_s=10 ** 9)
+        assert res["retried"] == 1 and res["dropped"] == 0 and res["stamped"] == 0, res
+        meta = _meta(r.handle_id)
+        assert meta["verdict_pending"]["resolved_at"] and meta["verdict_pending"]["loop_id"]
+        assert landscape.run_settled(meta) is True and r.handle_id not in handle_mod._UNSETTLED_TRANSITIONS
+        cands, _, _ = landscape.candidates(GOAL_FOLLOW_UP + " and headcount")
+        assert any(c["handle_id"] == r.handle_id and c["project"] == "board-reports-escalated" for c in cands)
+        # nothing owed twice: a finalize obligation over a resolved marker is a no-op
+        handle_mod._UNSETTLED_TRANSITIONS[r.handle_id] = {"_finalize": True}
+        assert sweep_transition_orphans(grace_s=10 ** 9)["dropped"] == 1
+        assert _meta(r.handle_id)["verdict_pending"] == meta["verdict_pending"]
+
+    def test_an_unreadable_store_defers_the_drain(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import file_lock
+        import handle as handle_mod
+        from audit_repair import sweep_transition_orphans
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        active = {"kind": "escalation", "from": "board-reports", "from_binding": "landscape",
+                  "to": "board-reports-escalated", "since": "2026-09-13T00:00:01+00:00"}
+        hid = _finished_run(GOAL_QUARTERLY, "A.", extra={"project": "board-reports-escalated", "project_binding": "escalated",
+                                                          "project_transition": active})
+        adopted = {"project": "board-reports-escalated", "project_binding": "escalated",
+                   "project_transition": {**active, "settled_at": "2026-09-13T00:20:00+00:00",
+                                          "settled_by": "handle", "outcome": "adopted"}}
+        monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {hid: dict(adopted)})
+        real_rmw = file_lock.locked_rmw
+        before = _meta(hid)
+
+        def unreadable(path, fn, **kw):
+            if path.name == "metadata.json":
+                raise OSError("[Errno 5] Input/output error")
+            return real_rmw(path, fn, **kw)
+
+        monkeypatch.setattr(file_lock, "locked_rmw", unreadable)
+        res = sweep_transition_orphans(grace_s=60)
+        assert res == {"status": "completed", "stamped": 0, "considered": 0, "retried": 0, "dropped": 0}, res
+        assert hid in handle_mod._UNSETTLED_TRANSITIONS and _meta(hid) == before
+        monkeypatch.setattr(file_lock, "locked_rmw", real_rmw)
+        res = sweep_transition_orphans(grace_s=60)
+        assert res["retried"] == 1 and res["stamped"] == 0, res
+        assert _meta(hid)["project_transition"]["outcome"] == "adopted"
+
+    def test_the_decision_and_the_write_share_one_snapshot(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import json as _json
+        import file_lock
+        import runs
+        import handle as handle_mod
+        from audit_repair import sweep_transition_orphans
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        active = {"kind": "escalation", "from": "board-reports", "from_binding": "landscape",
+                  "to": "board-reports-escalated", "since": "2026-09-13T00:00:01+00:00"}
+        hid = _finished_run(GOAL_QUARTERLY, "A.", extra={"project": "board-reports-escalated", "project_binding": "escalated",
+                                                          "project_transition": active})
+        adopted = {"project": "board-reports-escalated", "project_binding": "escalated",
+                   "project_transition": {**active, "settled_at": "2026-09-13T00:20:00+00:00",
+                                          "settled_by": "handle", "outcome": "adopted"}}
+        monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {hid: dict(adopted)})
+        real_rmw = file_lock.locked_rmw
+        reverted = {"project": "board-reports", "project_binding": "landscape",
+                    "project_transition": {**active, "settled_at": "2026-09-13T01:05:00+00:00",
+                                           "settled_by": "transition_orphan_sweep", "outcome": "reverted"}}
+
+        def another_sweep_first(path, fn, **kw):
+            # every read before this point saw the transition ACTIVE; the
+            # revert lands just before the lock is taken
+            if path.name == "metadata.json":
+                m = _json.loads(path.read_text(encoding="utf-8"))
+                m.update(reverted)
+                path.write_text(_json.dumps(m), encoding="utf-8")
+            return real_rmw(path, fn, **kw)
+
+        monkeypatch.setattr(file_lock, "locked_rmw", another_sweep_first)
+        res = sweep_transition_orphans(grace_s=10 ** 9)
+        assert res["dropped"] == 1 and res["retried"] == 0 and res["stamped"] == 0, res
+        m = _meta(hid)
+        assert (m["project"], m["project_transition"]["outcome"]) == ("board-reports", "reverted")
+        assert handle_mod._UNSETTLED_TRANSITIONS == {}

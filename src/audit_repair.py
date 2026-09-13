@@ -684,42 +684,35 @@ def _pending_settlements() -> Optional[dict]:
     return pending if isinstance(pending, dict) else None
 
 
-def _reconciled_with_disk(handle_id: str, fields: dict) -> dict:
-    """The kept finalize write against what the store carries NOW: a
-    settlement the disk already has (another process's sweep settled it,
-    or the handle ran a later transition — the RESUME lane reuses the
-    handle id) is dropped rather than replayed over it, and a marker the
-    disk already shows resolved is not re-resolved (review r9: an
-    unconditional replay after another sweep's revert flipped a settled
-    identity, and readers had bound to it). Unreadable metadata → the
-    write is tried as kept."""
-    from runs import run_dir
-    t = fields.get("project_transition")
-    vp = fields.get("verdict_pending")
-    if not isinstance(t, dict) and not isinstance(vp, dict):
-        return dict(fields)
-    try:
-        meta = _read_metadata(run_dir(handle_id))
-    except Exception:
-        meta = None
-    if meta is None:
-        return dict(fields)
-    out = dict(fields)
+def reconcile_kept_write(existing: dict, kept: dict) -> dict:
+    """A kept write against the store's LOCKED snapshot `existing` — the
+    fields still owed, or {} when the store already carries the outcome.
+    A kept SETTLEMENT is owed only while the snapshot's transition is
+    active with the same `since` (another process's sweep may have
+    reverted it; the RESUME lane reuses the handle id for a later
+    transition) — otherwise the disk's settlement stands and readers that
+    bound to it keep their world. A FINALIZE obligation (`_finalize`)
+    also resolves the snapshot's verdict marker when it is still active,
+    materialised HERE from the snapshot: the obligation exists without a
+    read of its own (review r10: a failed read before the finalize's
+    write kept nothing). Runs inside `runs.revise_run_metadata_for`, so
+    the decision and the publication share one snapshot (review r9/r10)."""
+    out = {k: v for k, v in kept.items() if k not in ("_finalize", "verdict_pending")}
+    t = out.get("project_transition")
     if isinstance(t, dict):
-        disk = meta.get("project_transition")
+        disk = existing.get("project_transition")
         same = (isinstance(disk, dict) and not disk.get("settled_at")
                 and disk.get("since") == t.get("since"))
         if not same:
             for key in ("project", "project_binding", "project_transition"):
                 out.pop(key, None)
-            log.warning("transition sweep: kept settlement for %s (%s) dropped — the "
-                        "store carries %s", handle_id, t.get("outcome"),
-                        "a settled transition" if isinstance(disk, dict) and disk.get("settled_at")
-                        else "another transition" if isinstance(disk, dict) else "no transition")
-    if isinstance(vp, dict):
-        dvp = meta.get("verdict_pending")
-        if isinstance(dvp, dict) and dvp.get("resolved_at"):
-            out.pop("verdict_pending", None)
+    if kept.get("_finalize"):
+        dvp = existing.get("verdict_pending")
+        if isinstance(dvp, dict) and not dvp.get("resolved_at"):
+            kvp = kept.get("verdict_pending")
+            stamp = (kvp.get("resolved_at") if isinstance(kvp, dict) and kvp.get("resolved_at")
+                     else datetime.now(timezone.utc).isoformat())
+            out["verdict_pending"] = {**dvp, "resolved_at": stamp}
     return out
 
 
@@ -744,11 +737,12 @@ def sweep_transition_orphans(
     (a settlement in flight from the finalize is already on disk or in
     (1)). The revert is `landscape.settle_project_transition` (the
     delivered project restored in the same write). A kept write is
-    reconciled with the store first (`_reconciled_with_disk`) and a handle
-    whose kept write still fails is left out of the disk pass. Serialized
-    under the repair pidfile."""
+    decided from the locked snapshot (`reconcile_kept_write` inside
+    `runs.revise_run_metadata_for`) and a handle whose kept write still
+    fails is left out of the disk pass. Serialized under the repair
+    pidfile."""
     from proc_lock import acquire_pidfile
-    from runs import runs_root, stamp_run_metadata_for
+    from runs import runs_root, stamp_run_metadata_for, revise_run_metadata_for
     from landscape import settle_project_transition
 
     def _transition_only(meta: dict) -> bool:
@@ -782,23 +776,29 @@ def sweep_transition_orphans(
     stamped = considered = retried = dropped = 0
     try:
         for hid in list(pending.keys()):
-            fields = pending.get(hid)
-            if not isinstance(fields, dict) or not fields:
+            kept = pending.get(hid)
+            if not isinstance(kept, dict) or not kept:
                 pending.pop(hid, None)
                 continue
-            fields = _reconciled_with_disk(str(hid), fields)
-            if not fields:
-                pending.pop(hid, None)
-                dropped += 1
-                continue
-            if stamp_run_metadata_for(str(hid), fields) is None:
-                log.warning("transition sweep: kept settlement for %s still not "
-                            "writable — retrying next sweep", hid)
+            # decided AND published from one locked snapshot; a store that
+            # cannot be read or written keeps the obligation (review r10:
+            # an unreadable eligibility read had meant "write as kept")
+            written = revise_run_metadata_for(
+                str(hid), lambda existing, _k=kept: reconcile_kept_write(existing, _k))
+            if written is None:
+                log.warning("transition sweep: kept write for %s still not "
+                            "readable/writable — retrying next sweep", hid)
                 continue
             pending.pop(hid, None)
+            if not written:
+                dropped += 1
+                log.warning("transition sweep: kept write for %s dropped — the store "
+                            "already carries its outcome (%s)", hid,
+                            (kept.get("project_transition") or {}).get("outcome") or "marker")
+                continue
             retried += 1
-            log.info("transition sweep: kept settlement for %s written (%s)",
-                     hid, (fields.get("project_transition") or {}).get("outcome"))
+            log.info("transition sweep: kept write for %s written (%s)",
+                     hid, ", ".join(sorted(written)))
         now = time.time()
         for run_dir in candidates:
             if stamped >= max(1, int(limit)):

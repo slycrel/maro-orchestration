@@ -544,6 +544,40 @@ def stamp_run_metadata_for(handle_id: str, fields: dict) -> Optional[Path]:
     return _stamp_metadata_at(rd, fields)
 
 
+def revise_run_metadata_for(handle_id: str, revise) -> Optional[dict]:
+    """A stamp DECIDED from the locked snapshot: `revise(existing) -> fields`
+    runs inside the metadata lock and returns the fields to merge — or an
+    empty dict / None to decline (no write, no new inode). Returns the
+    fields merged, {} when `revise` declined, None when the store could
+    not be read or written (the caller keeps its obligation). For the
+    repair paths that must not publish over what another writer settled
+    (review 2026-09-13 r10: an eligibility read OUTSIDE the lock followed
+    by an unconditional merge replayed a kept adoption over a sweep's
+    revert whenever that read failed)."""
+    try:
+        rd = run_dir(handle_id)
+        meta_path = rd / "metadata.json"
+        out: dict = {}
+
+        def _merge(old: str):
+            existing = _parse_meta_or_park(old, meta_path, "revise_run_metadata_for")
+            fields = revise(dict(existing))
+            if not fields:
+                return None
+            for k, v in fields.items():
+                if v is not None:
+                    existing[k] = v
+            out.update(fields)
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _merge)
+        return out
+    except Exception:
+        return None
+
+
 def _stamp_metadata_at(rd: Optional[Path], fields: dict) -> Optional[Path]:
     try:
         if rd is None or not fields:

@@ -1033,6 +1033,35 @@ def handle(
                 # route the notify below. From here on, "marker still active"
                 # in any run dir is exactly the crash signature the
                 # audit_repair sweep hunts.
+                # The finalize's write is ONE obligation — resolve this
+                # run's verdict marker and record any settlement the run
+                # could not — DECIDED from the locked snapshot
+                # (`audit_repair.reconcile_kept_write`), so it exists
+                # without a read of its own: a store that cannot be read
+                # or written keeps the obligation in
+                # `_UNSETTLED_TRANSITIONS` (flagged `_finalize`) and the
+                # transition sweep drains it from this process once the
+                # store is back (review r8–r10: keeping the settlement
+                # alone left the marker active and the verdict sweep
+                # skips a living owner; a failed read before the write
+                # kept nothing at all); only a death loses it, and the
+                # sweeps then work from disk.
+                _obligation = {k: v for k, v in dict(_UNSETTLED_TRANSITIONS.get(_hid) or {}).items()
+                               if k != "verdict_pending"}
+                _obligation["_finalize"] = True
+                try:
+                    from runs import revise_run_metadata_for as _revise_fin
+                    from audit_repair import reconcile_kept_write as _reconcile_fin
+                    _written = _revise_fin(
+                        _hid, lambda existing: _reconcile_fin(existing, _obligation))
+                except Exception:
+                    _written = None
+                if _written is None:
+                    _UNSETTLED_TRANSITIONS[_hid] = _obligation
+                    log.error("finalize write for %s not recorded; kept for the "
+                              "maintenance retry", _hid)
+                else:
+                    _UNSETTLED_TRANSITIONS.pop(_hid, None)
                 _vp_meta = {}
                 _meta_loop_ids: list = []
                 try:
@@ -1045,38 +1074,6 @@ def handle(
                     _vp_meta = _meta_all.get("verdict_pending") or {}
                     if not isinstance(_vp_meta, dict):
                         _vp_meta = {}
-                    # a project-transition settlement the run could not
-                    # record goes in the SAME write as the marker's
-                    # resolution: "verdict resolved" must imply "transition
-                    # settled" for every reader (review 2026-09-13 round 7)
-                    _pending_pt = _UNSETTLED_TRANSITIONS.get(_hid) if _hid else None
-                    _fin_fields: dict = dict(_pending_pt or {})
-                    _fin_fields.pop("verdict_pending", None)
-                    if _vp_meta and not _vp_meta.get("resolved_at"):
-                        _resolved = dict(_vp_meta)
-                        _resolved["resolved_at"] = datetime.now(
-                            timezone.utc).isoformat()
-                        _fin_fields["verdict_pending"] = _resolved
-                    if _fin_fields:
-                        from runs import stamp_run_metadata_for as _srm_resolve
-                        if _srm_resolve(_hid, _fin_fields) is None:
-                            # KEPT WHOLE, not dropped: the finalize's write
-                            # is ONE obligation — the settlement AND the
-                            # marker's resolution — and the transition
-                            # sweep drains it from this process once the
-                            # store is back (review r8/r9: keeping the
-                            # settlement alone left the marker active, and
-                            # the verdict sweep skips a living owner, so a
-                            # healthy worker's run stayed out of the
-                            # landscape for the worker's life); only a
-                            # death loses it, and the sweeps then work from
-                            # disk
-                            _UNSETTLED_TRANSITIONS[_hid] = dict(_fin_fields)
-                            log.error("finalize write for %s not recorded (%s); kept for "
-                                      "the maintenance retry", _hid,
-                                      ", ".join(sorted(_fin_fields)))
-                        else:
-                            _UNSETTLED_TRANSITIONS.pop(_hid, None)
                 except Exception:
                     _vp_meta = {}
                 _tail_lid = ""

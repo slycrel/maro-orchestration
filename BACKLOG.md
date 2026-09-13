@@ -6596,7 +6596,20 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   cannot signal is a system process that took the number; the other
   reading would leave the run unresolved, and out of the landscape, for
   that process's life. Premise: a workspace shared by workers under
-  different users is not a deployment Maro has. Direction recorded: a
+  different users is not a deployment Maro has. Round 10: the
+  finalize's obligation needs no read of its own — it is a FLAG
+  (`_finalize`) plus any settlement the run could not record, and the
+  marker's resolution is materialised from the store's LOCKED snapshot
+  (`audit_repair.reconcile_kept_write` inside the new
+  `runs.revise_run_metadata_for`, a stamp decided from the snapshot it
+  merges into; `revise` returning nothing = no write, no new inode) —
+  round 9 kept a materialised patch, so a failed READ before the
+  finalize's write kept nothing and the marker stayed active for the
+  worker's life; the drain decides and publishes from ONE snapshot (an
+  unreadable eligibility pre-read had meant "write as kept", replaying
+  an adoption over another sweep's revert) and a store that cannot be
+  read or written defers the kept write (warned each sweep) rather
+  than dropping or writing it. Direction recorded: a
   settlement that fails in the run AND at the finalize is kept for the
   sweep's retry in the same process; only a process death loses it, and
   then the sweep reverts even an adopted retry — the retry's adoption
