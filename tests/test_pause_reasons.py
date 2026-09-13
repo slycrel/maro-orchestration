@@ -502,7 +502,164 @@ class TestContainerAuthPauseOnParallelPaths:
         with runs.scoped_run_dir(rd):
             result = run_agent_loop("g", dry_run=False, max_steps=5, handle_id="cauth0002",
                                     parallel_fan_out=2)
-        if result.pause_reason != PAUSE_ERR_CONTAINER_AUTH:
-            pytest.skip(f"this harness did not reach the batch path (status={result.status}); "
-                        "the batch stamp is covered by test_batch_member_stamps_the_pause")
+        assert result.pause_reason == PAUSE_ERR_CONTAINER_AUTH, result
         assert result.status == "interrupted" and "c" not in seq
+
+
+class TestToolSearchRecallRefusal:
+    """Review round 2: the tool_search re-call's handler sits OUTSIDE the
+    initial call's `except`, so re-raising the environmental error escaped
+    execute_step (uncaught on the sequential driver, stringified by the
+    fan-out pool). It must become the same typed blocked outcome, with the
+    first call's spend kept on the step's books."""
+
+    def test_refused_recall_is_a_typed_blocked_outcome(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import tool_search
+        from llm import LLMResponse, ToolCall
+        from container_exec import ContainerAuthExpired
+        from step_exec import execute_step
+        from stop_verdicts import environmental_pause_for, PAUSE_ERR_CONTAINER_AUTH
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", input_tokens=7, output_tokens=3, cost_usd=0.01,
+                                       tool_calls=[ToolCall(name="tool_search", arguments={"query": "mail"})])
+                raise ContainerAuthExpired("executor.container=require but the container lane is unavailable")
+
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [{"name": "imap_read", "description": "d",
+                                                     "input_schema": {"type": "object", "properties": {}}}])
+        adapter = _Adapter()
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
+                               completed_context=[], adapter=adapter, tools=[],
+                               project_dir=str(tmp_path))
+        assert adapter.calls == 2
+        assert outcome["status"] == "blocked" and outcome["error_class"] == "container_auth", outcome
+        assert environmental_pause_for(outcome) == PAUSE_ERR_CONTAINER_AUTH
+        assert (outcome["tokens_in"], outcome["tokens_out"]) == (7, 3)
+        assert outcome.get("provider_cost_usd") == pytest.approx(0.01)
+
+    def test_a_plain_recall_failure_still_falls_through(self, monkeypatch, tmp_path):
+        # Negative control: a non-environmental re-call failure keeps the
+        # old behaviour (log, fall through to the first response).
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import tool_search
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "mail"})])
+                raise RuntimeError("flaky")
+
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [{"name": "imap_read", "description": "d",
+                                                     "input_schema": {"type": "object", "properties": {}}}])
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
+                               completed_context=[], adapter=_Adapter(), tools=[],
+                               project_dir=str(tmp_path))
+        assert outcome.get("error_class") != "container_auth"
+
+
+class TestSchedulersStopOnEnvironmentalPause:
+    """Review round 2: the REAL schedulers kept submitting after a refusal
+    (the DAG released dependents regardless of outcome; fan-out queued
+    everything upfront). One refusal now stops further submission; peers
+    already running finish; unstarted steps are marked, not executed."""
+
+    _AUTH = {"status": "blocked", "error_class": "container_auth",
+             "stuck_reason": "LLM call failed (container_auth): re-seed", "result": "",
+             "tokens_in": 0, "tokens_out": 0}
+    _PLAIN = {"status": "blocked", "stuck_reason": "tool refused", "result": "",
+              "tokens_in": 0, "tokens_out": 0}
+
+    def _arm(self, monkeypatch, outcome):
+        import loop_parallel
+        executed = []
+        def fake(**kw):
+            executed.append(kw["step_num"])
+            return dict(outcome)
+        monkeypatch.setattr(loop_parallel, "_execute_step", fake)
+        monkeypatch.setattr(loop_parallel, "_run_in_step_worktree", lambda label, fn: fn())
+        return executed
+
+    def test_dag_does_not_release_dependents_after_a_refusal(self, monkeypatch):
+        import loop_parallel
+        executed = self._arm(monkeypatch, self._AUTH)
+        out = loop_parallel._run_steps_dag(goal="g", steps=["a", "b", "c"],
+                                           deps={1: set(), 2: {1}, 3: {2}}, adapter=None,
+                                           ancestry_context="", tools=[], verbose=False, max_workers=2)
+        assert executed == [1]
+        assert out[0]["error_class"] == "container_auth"
+        assert all(o["status"] == "blocked" and o["stuck_reason"].startswith("not started") for o in out[1:])
+
+    def test_dag_control_a_plain_block_still_releases(self, monkeypatch):
+        import loop_parallel
+        executed = self._arm(monkeypatch, self._PLAIN)
+        loop_parallel._run_steps_dag(goal="g", steps=["a", "b", "c"], deps={1: set(), 2: {1}, 3: {2}},
+                                     adapter=None, ancestry_context="", tools=[], verbose=False, max_workers=2)
+        assert executed == [1, 2, 3]
+
+    def test_fanout_cancels_queued_steps_after_a_refusal(self, monkeypatch):
+        import loop_parallel
+        executed = self._arm(monkeypatch, self._AUTH)
+        out = loop_parallel._run_steps_parallel(goal="g", steps=["a", "b", "c"], adapter=None,
+                                                ancestry_context="", tools=[], verbose=False, max_workers=1)
+        assert executed == [1]
+        assert len(out) == 3 and out[0]["error_class"] == "container_auth"
+        assert all(o["stuck_reason"].startswith("not started") for o in out[1:])
+
+    def test_fanout_control_a_plain_block_runs_everything(self, monkeypatch):
+        import loop_parallel
+        executed = self._arm(monkeypatch, self._PLAIN)
+        loop_parallel._run_steps_parallel(goal="g", steps=["a", "b", "c"], adapter=None,
+                                          ancestry_context="", tools=[], verbose=False, max_workers=1)
+        assert sorted(executed) == [1, 2, 3]
+
+
+class TestParallelPausePersists:
+    """Review round 2: the fan-out/DAG early return in agent_loop bypassed
+    loop_finalize's stop-verdict stamp, and the continuation lane picks
+    RESUME by reading metadata.pause_reason — so a paused parallel run
+    restarted under a new identity."""
+
+    def test_fanout_pause_reaches_metadata_and_passes_the_resume_test(self, monkeypatch, tmp_path):
+        import json as _json
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        fake = tmp_path / "claude"; fake.write_text("#!/bin/sh\nexit 0\n"); fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+        import runs, loop_planning, agent_loop
+        from agent_loop import run_agent_loop
+        from loop_types import LoopResult
+        from stop_verdicts import PAUSE_ERR_CONTAINER_AUTH
+        steps = ["a", "b", "c"]
+        monkeypatch.setattr(loop_planning, "_decompose", lambda *a, **k: list(steps))
+        monkeypatch.setattr(loop_planning, "_shape_steps", lambda s, **k: list(s))
+        monkeypatch.setattr(loop_planning, "_steps_are_independent", lambda s: True)
+        seen = {}
+        def fake_parallel(ctx, *a, **k):
+            seen["called"] = True
+            ctx.stamp_pause(PAUSE_ERR_CONTAINER_AUTH)
+            return LoopResult(loop_id=ctx.loop_id, project=ctx.project, goal=ctx.goal,
+                              status="interrupted", steps=[], total_tokens_in=0, total_tokens_out=0,
+                              elapsed_ms=1, stuck_reason="environmental pause",
+                              pause_reason=PAUSE_ERR_CONTAINER_AUTH)
+        monkeypatch.setattr(agent_loop, "_run_parallel_path", fake_parallel)
+        rd = runs.create_run_dir("cauth0003", prompt="g")
+        with runs.scoped_run_dir(rd):
+            result = run_agent_loop("g", dry_run=False, max_steps=5, handle_id="cauth0003",
+                                    parallel_fan_out=2)
+        assert seen.get("called"), "harness did not take the fan-out path"
+        assert result.status == "interrupted" and result.pause_reason == PAUSE_ERR_CONTAINER_AUTH
+        meta = _json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+        assert meta.get("pause_reason") == PAUSE_ERR_CONTAINER_AUTH
+        # the continuation lane's strict-affirmative resume test (handle_queue)
+        assert meta.get("pause_reason") and not meta.get("goal_verdict_source")

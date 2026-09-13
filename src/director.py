@@ -110,6 +110,13 @@ class DirectorResult:
     elapsed_ms: int = 0
     log_path: Optional[str] = None
     worker_slice: bool = False  # was memory.worker_slice active for this run? (default-on since 2026-07-08)
+    # The typed environmental pause that stopped dispatch (review round 2,
+    # 2026-09-13): a worker ticket refused by the environment (dead
+    # container session, dead backend) ends the directive `stuck` with this
+    # set — no review, no revision, no further tickets — instead of the
+    # director judging and re-dispatching a refusal. Same vocabulary as the
+    # loop's pause_reason; "" otherwise.
+    pause_reason: str = ""
 
     def summary(self) -> str:
         done = sum(1 for r in self.worker_results if r.status == "done")
@@ -451,6 +458,7 @@ def run_director(
             except Exception:
                 parent_goal_brain = ""
 
+    director_pause_reason = ""
     for ticket in tickets:
         _log(f"dispatching worker={ticket.worker_type} task={ticket.task[:50]!r}")
 
@@ -526,6 +534,18 @@ def run_director(
                 ticket.ticket_id, ticket.worker_type,
             )
 
+        _env_pause = _worker_environmental_pause(result)
+        if _env_pause:
+            # The environment refused the ticket — reviewing or revising
+            # a refusal spends calls to re-refuse (round 2). Stop here.
+            director_pause_reason = _env_pause
+            worker_results.append(result)
+            log.warning("director: ticket %s refused by the environment (%s) — "
+                        "directive paused, no review/revision/further tickets",
+                        ticket.ticket_id, _env_pause)
+            _log(f"environmental pause: {_env_pause} — dispatch stopped")
+            break
+
         # Review worker output
         review, rev_tokens = _review_worker_output(
             directive=directive,
@@ -565,6 +585,13 @@ def run_director(
                         log.warning("director: slice_echo failed for revision of ticket %s: %s", ticket.ticket_id, exc)
                 total_tokens_in += result.tokens_in
                 total_tokens_out += result.tokens_out
+                _env_pause = _worker_environmental_pause(result)
+                if _env_pause:
+                    director_pause_reason = _env_pause
+                    log.warning("director: revision of ticket %s refused by the environment "
+                                "(%s) — directive paused", ticket.ticket_id, _env_pause)
+                    _log(f"environmental pause: {_env_pause} — dispatch stopped")
+                    break
                 review, rev_tokens = _review_worker_output(
                     directive=directive,
                     ticket=revised_ticket,
@@ -588,6 +615,8 @@ def run_director(
         if result.status == "done" and result.result:
             completed_context.add(
                 f"[{ticket.worker_type}] {ticket.task}:\n{result.result}")
+        if director_pause_reason:
+            break
 
     # Phase 3: Compile final report
     _log("compiling final report...")
@@ -688,6 +717,7 @@ def run_director(
         elapsed_ms=elapsed,
         log_path=log_path,
         worker_slice=worker_slice_enabled,
+        pause_reason=director_pause_reason,
     )
 
     log.info("director_done id=%s status=%s tickets=%d tokens=%d elapsed=%dms",
@@ -698,6 +728,22 @@ def run_director(
 
 # ---------------------------------------------------------------------------
 # Internal helpers
+# ---------------------------------------------------------------------------
+
+def _worker_environmental_pause(result: WorkerResult) -> str:
+    """The typed pause a blocked worker result calls for — the loop's own
+    seam (stop_verdicts.environmental_pause_for) fed the worker's
+    structured error class. "" for anything else; never raises."""
+    try:
+        from stop_verdicts import environmental_pause_for
+        return environmental_pause_for({
+            "status": result.status,
+            "error_class": str(getattr(result, "error_class", "") or ""),
+        })
+    except Exception:
+        return ""
+
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
 def _produce_spec(

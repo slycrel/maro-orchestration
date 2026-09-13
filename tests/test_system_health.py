@@ -597,8 +597,11 @@ class TestContainerAuthProbe:
     def test_armed_and_clear_is_ok(self, monkeypatch):
         self._patch(monkeypatch, "on", None)
         status, evidence, obs = sh._probe_container_auth({})
-        assert status == OK and obs["breaker_tripped"] is False
-        assert obs["liveness"] == "unknown"  # nothing recorded yet: still OK
+        # Review round 2: no expiry evidence is UNKNOWN, not OK — OK after
+        # a narrated SILENT narrates RECOVERED, and "we lost sight of it"
+        # is not recovery.
+        assert status == UNKNOWN and obs["breaker_tripped"] is False
+        assert obs["liveness"] == "unknown" and "not established" in evidence
 
     def _liveness(self, monkeypatch, days_left, *, has_refresh=True):
         import time
@@ -637,6 +640,24 @@ class TestContainerAuthProbe:
         status, evidence, obs = sh._probe_container_auth({})
         assert status == SILENT and obs["liveness"] == "warn"
         assert "last good sample" in evidence and "docker down" in evidence
+        # ... and once the good sample itself is stale (48 h), the probe
+        # goes UNKNOWN — never OK — so the standing warning is not
+        # narrated as recovered by a prolonged docker outage (round 2).
+        rec["last_good"]["checked_at"] = now - 49 * 3600
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == UNKNOWN and obs["liveness"] == "unknown"
+
+    def test_lost_observation_never_narrates_recovered(self, monkeypatch):
+        # The health lane's own edge rule: SILENT → UNKNOWN keeps the told
+        # state; only an affirmative OK narrates SUBSYSTEM_RECOVERED.
+        monkeypatch.setattr(
+            sh, "DECLARED_PROCESSES", [_decl(_seq_probe([SILENT, UNKNOWN, UNKNOWN, OK]))])
+        for _ in range(3):
+            run_health_probes()
+        assert len(_events(SUBSYSTEM_SILENT)) == 1
+        assert _events(SUBSYSTEM_RECOVERED) == []
+        run_health_probes()
+        assert len(_events(SUBSYSTEM_RECOVERED)) == 1
 
     def test_session_with_time_left_stays_ok_and_names_the_date(self, monkeypatch):
         self._patch(monkeypatch, "on", None)
@@ -673,7 +694,8 @@ class TestContainerAuthProbe:
         # OK means "no auth failure observed", never "session is live" —
         # nothing here probes liveness (review 2026-08-13).
         self._patch(monkeypatch, "on", None)
+        self._liveness(monkeypatch, 20)   # round 2: OK needs expiry evidence
         status, evidence, _ = sh._probe_container_auth({})
         assert status == OK
         assert "no auth failure observed" in evidence
-        assert "live" not in evidence.lower()
+        assert "is live" not in evidence.lower()

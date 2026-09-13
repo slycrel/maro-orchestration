@@ -1775,13 +1775,12 @@ class TestAuthLivenessHardening:
             "empty": {"claudeAiOauth": {"refreshToken": "", "refreshTokenExpiresAt": 1791000000000}},
             "string_ts": {"claudeAiOauth": {"refreshToken": "x", "refreshTokenExpiresAt": "1791000000000"}},
             "bad_ts": {"claudeAiOauth": {"refreshToken": "x", "refreshTokenExpiresAt": "soon"}},
-            "list": {"claudeAiOauth": ["nope"]},
-            "not_json": "{{{",
+            "huge_ts": {"claudeAiOauth": {"refreshToken": "x", "refreshTokenExpiresAt": 10 ** 400}},
         }
         out = {}
         for name, doc in cases.items():
             p = tmp_path / "c.json"
-            p.write_text(doc if isinstance(doc, str) else _json.dumps(doc))
+            p.write_text(_json.dumps(doc))
             r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
             assert r.returncode == 0 and r.stderr == "", (name, r.stderr)
             assert _re.fullmatch(r"[0-9]+ [01] [0-9]+ [0-9]+\n", r.stdout), (name, r.stdout)
@@ -1790,8 +1789,24 @@ class TestAuthLivenessHardening:
         assert out["live"][1:] == ["1", "1791000000", "1789312634"]
         assert out["null"][1] == "0" and out["empty"][1] == "0"
         assert out["string_ts"][1:3] == ["1", "1791000000"]
-        assert out["bad_ts"][1:3] == ["1", "0"]
-        assert out["list"][1:] == ["0", "0", "0"] and out["not_json"][1:] == ["0", "0", "0"]
+        assert out["bad_ts"][1:3] == ["1", "0"] and out["huge_ts"][1:3] == ["1", "0"]
+        # Review round 2: a file that is not the CLI's shape is a FAILED
+        # observation (fixed message, exit 1, nothing on stdout) — not the
+        # zero frame, which read as "session wiped" and dropped last_good.
+        failures = {
+            "list": _json.dumps({"claudeAiOauth": ["nope"]}),
+            "no_oauth": _json.dumps({"other": {"refreshToken": "rt-secret-bytes"}}),
+            "not_json": "{{{ rt-secret-bytes",
+        }
+        for name, text in failures.items():
+            (tmp_path / "c.json").write_text(text)
+            r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+            assert r.returncode == 1 and r.stdout == "", (name, r.stdout)
+            assert r.stderr.strip() == "credentials file missing, unreadable or not the CLI shape", (name, r.stderr)
+            assert "rt-secret-bytes" not in r.stderr and "Traceback" not in r.stderr
+        (tmp_path / "c.json").unlink()
+        r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+        assert r.returncode == 1 and "Traceback" not in r.stderr and r.stdout == ""
 
     @pytest.mark.parametrize("row", [
         {"checked_at": 1.8e9, "ok": "false", "has_refresh": "false", "refresh_expires_at": 2e9},
@@ -1898,3 +1913,106 @@ class TestAuthLivenessHardening:
         with caplog.at_level("WARNING"):
             assert ce.refresh_auth_liveness(force=True) is None
         assert any("liveness refresh failed" in r.message for r in caplog.records)
+
+
+class TestRoundTwoHardening:
+    """Review round 2 (2026-09-13): the fixes' own gaps."""
+
+    DAY = 86400.0
+
+    def _ws(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+
+    def test_reseed_probe_rejects_an_expired_refresh_token(self, monkeypatch):
+        # A restored backup: newer mtime, token present, but the reader
+        # says the token itself is already past its expiry — not a re-seed.
+        now = time.time()
+        monkeypatch.setattr(ce, "_credentials_expiry_probe",
+                            lambda: (True, {"mtime": int(now), "has_refresh": True,
+                                            "refresh_expires_at": int(now - 3600), "access_expires_at": 0}))
+        ok, detail = ce._reseed_probe(tripped_at=now - 600)
+        assert ok is False and "expired" in detail and "not re-seeded" in detail
+        # unknown expiry (0) stays shape-only (the pre-round-2 contract)
+        monkeypatch.setattr(ce, "_credentials_expiry_probe",
+                            lambda: (True, {"mtime": int(now), "has_refresh": True,
+                                            "refresh_expires_at": 0, "access_expires_at": 0}))
+        assert ce._reseed_probe(tripped_at=now - 600)[0] is True
+
+    def test_an_unreadable_credentials_file_keeps_last_good(self, monkeypatch, tmp_path):
+        # The container script exits 1 with a fixed message; the host must
+        # record a FAILED probe (last_good kept) — not "wiped".
+        self._ws(monkeypatch, tmp_path)
+        now = time.time()
+        monkeypatch.setattr(ce, "_run", lambda cmd, timeout: (True, f"{int(now)} 1 {int(now + 2 * self.DAY)} 0"))
+        first = ce.refresh_auth_liveness(force=True)
+        assert ce.auth_liveness_verdict(first)[0] == "warn"
+        monkeypatch.setattr(ce, "_run", lambda cmd, timeout: (False, "credentials file missing, unreadable or not the CLI shape"))
+        second = ce.refresh_auth_liveness(force=True)
+        assert second["ok"] is False and second["last_good"]["has_refresh"] is True
+        level, detail = ce.auth_liveness_verdict(second)
+        assert level == "warn" and "unreadable" in detail
+
+    def test_huge_json_integer_reads_as_absent_and_is_refreshed(self, monkeypatch, tmp_path):
+        # math.isfinite(10**400) raises OverflowError; the validator must be
+        # total, and an invalid file must be REPLACED by the next refresh.
+        import json as _json
+        self._ws(monkeypatch, tmp_path)
+        p = ce._auth_liveness_path(); p.parent.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        for field in ("checked_at", "refresh_expires_at", "access_expires_at", "mtime"):
+            rec = {"checked_at": now - 60, "ok": True, "has_refresh": True,
+                   "refresh_expires_at": now + 10 * self.DAY, "access_expires_at": 0, "mtime": 1}
+            rec[field] = 10 ** 400
+            p.write_text(_json.dumps(rec))
+            assert ce.auth_liveness_state() is None, field
+            assert ce.auth_liveness_verdict(ce.auth_liveness_state())[0] == "unknown"
+        # nested: a huge value inside last_good drops the sample, not the record
+        rec = {"checked_at": now - 60, "ok": False, "detail": "x",
+               "last_good": {"checked_at": now - 3600, "ok": True, "has_refresh": True,
+                             "refresh_expires_at": 10 ** 400}}
+        p.write_text(_json.dumps(rec))
+        got = ce.auth_liveness_state()
+        assert got is not None and "last_good" not in got
+        calls = {"n": 0}
+        def probe():
+            calls["n"] += 1
+            return True, {"mtime": 1, "has_refresh": True, "refresh_expires_at": int(now + 20 * self.DAY), "access_expires_at": 0}
+        monkeypatch.setattr(ce, "_credentials_expiry_probe", probe)
+        p.write_text(_json.dumps({"checked_at": 10 ** 400, "ok": True, "has_refresh": True, "refresh_expires_at": 1}))
+        fresh = ce.refresh_auth_liveness()
+        assert calls["n"] == 1 and fresh["ok"] is True and ce.auth_liveness_verdict(fresh)[0] == "ok"
+
+    def test_last_good_nests_one_level_only(self):
+        now = time.time()
+        inner = {"checked_at": now - 7200, "ok": True, "has_refresh": True, "refresh_expires_at": now + self.DAY}
+        mid = dict(inner, checked_at=now - 3600, last_good=inner)
+        rec = {"checked_at": now - 60, "ok": False, "detail": "x", "last_good": mid}
+        got = ce._valid_liveness_record(rec, now=now)
+        assert got["last_good"]["checked_at"] == mid["checked_at"] and "last_good" not in got["last_good"]
+
+    def test_refresh_never_runs_unlocked_under_fail_open(self, monkeypatch, tmp_path):
+        # MARO_FILELOCK_FAIL_OPEN=1 makes the DEFAULT lock contract proceed
+        # unlocked on contention; the recorder requires the lock instead —
+        # a busy lock means no probe, no write, the on-disk record returned.
+        import threading
+        from file_lock import locked_write
+        self._ws(monkeypatch, tmp_path)
+        monkeypatch.setenv("MARO_FILELOCK_FAIL_OPEN", "1")
+        monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "0.2")
+        path = ce._auth_liveness_path(); path.parent.mkdir(parents=True, exist_ok=True)
+        calls = {"n": 0}
+        monkeypatch.setattr(ce, "_credentials_expiry_probe",
+                            lambda: calls.__setitem__("n", calls["n"] + 1) or
+                            (True, {"mtime": 1, "has_refresh": True, "refresh_expires_at": 2_000_000_000, "access_expires_at": 0}))
+        held = threading.Event(); release = threading.Event()
+        def holder():
+            with locked_write(path):
+                held.set(); release.wait(5)
+        t = threading.Thread(target=holder); t.start(); held.wait(2)
+        try:
+            assert ce.refresh_auth_liveness(force=True) is None
+            assert calls["n"] == 0 and not path.exists()
+        finally:
+            release.set(); t.join(5)
+        assert ce.refresh_auth_liveness(force=True)["ok"] is True and calls["n"] == 1

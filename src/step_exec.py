@@ -1338,6 +1338,54 @@ def _persist_tool_transcript(tool_events: List[dict], project_dir: str, step_num
 # Step execution
 # ---------------------------------------------------------------------------
 
+def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: str = "",
+                              tokens_in: int = 0, tokens_out: int = 0,
+                              provider_cost_usd: float = 0.0) -> Dict[str, Any]:
+    """The blocked outcome an adapter exception becomes — ONE implementation
+    for both adapter calls in execute_step (the initial call and the
+    tool_search re-call; review round 2, 2026-09-13: the re-call's handler
+    sits outside the initial call's `except`, so a re-raise there escaped
+    execute_step). Carries the structured error class instead of
+    stringifying it away (BACKEND_RESILIENCE_DESIGN §2) and any spend the
+    step already incurred. Never raises."""
+    try:
+        from llm_errors import classify_error, is_actionable
+        _einfo = classify_error(exc)
+        _stuck = (
+            f"LLM call failed ({_einfo.error_class}): {_einfo.user_action}"
+            if is_actionable(_einfo) else f"LLM call failed: {exc}"
+        )
+        _blocked: Dict[str, Any] = {
+            "status": "blocked",
+            "stuck_reason": _stuck,
+            "error_class": _einfo.error_class,
+            "user_action": _einfo.user_action,
+            "result": partial_result,
+            "tokens_in": int(tokens_in or 0),
+            "tokens_out": int(tokens_out or 0),
+        }
+        if provider_cost_usd:
+            _blocked["provider_cost_usd"] = float(provider_cost_usd)
+        # A token-runaway kill is the one failure whose whole point is that
+        # it consumed a lot. Recording it as a zero-token step would hide
+        # the spend from run totals, cost reports and skill telemetry —
+        # exactly the accounting the brake exists to protect.
+        _fresh = getattr(exc, "fresh_input_tokens", None)
+        if _fresh is not None:
+            _blocked["tokens_in"] = int(_fresh)
+            _blocked["provider_cost_usd"] = float(
+                getattr(exc, "estimated_cost_usd", 0.0) or 0.0)
+        return _blocked
+    except Exception:
+        return {
+            "status": "blocked",
+            "stuck_reason": f"LLM call failed: {exc}",
+            "result": partial_result,
+            "tokens_in": int(tokens_in or 0),
+            "tokens_out": int(tokens_out or 0),
+        }
+
+
 def execute_step(
     goal: str,
     step_text: str,
@@ -1744,40 +1792,7 @@ def execute_step(
         _partial_result = (
             f"[partial output before kill]\n{_partial[-2000:]}" if _partial else ""
         )
-        try:
-            from llm_errors import classify_error, is_actionable
-            _einfo = classify_error(exc)
-            _stuck = (
-                f"LLM call failed ({_einfo.error_class}): {_einfo.user_action}"
-                if is_actionable(_einfo) else f"LLM call failed: {exc}"
-            )
-            _blocked = {
-                "status": "blocked",
-                "stuck_reason": _stuck,
-                "error_class": _einfo.error_class,
-                "user_action": _einfo.user_action,
-                "result": _partial_result,
-                "tokens_in": 0,
-                "tokens_out": 0,
-            }
-            # A token-runaway kill is the one failure whose whole point is that
-            # it consumed a lot. Recording it as a zero-token step would hide
-            # the spend from run totals, cost reports and skill telemetry —
-            # exactly the accounting the brake exists to protect.
-            _fresh = getattr(exc, "fresh_input_tokens", None)
-            if _fresh is not None:
-                _blocked["tokens_in"] = int(_fresh)
-                _blocked["provider_cost_usd"] = float(
-                    getattr(exc, "estimated_cost_usd", 0.0) or 0.0)
-            return _stamp_flavor(_blocked)
-        except Exception:
-            return _stamp_flavor({
-                "status": "blocked",
-                "stuck_reason": f"LLM call failed: {exc}",
-                "result": _partial_result,
-                "tokens_in": 0,
-                "tokens_out": 0,
-            })
+        return _stamp_flavor(_blocked_outcome_from_exc(exc, partial_result=_partial_result))
 
     _provider_cost_usd = safe_float(getattr(resp, "cost_usd", 0.0))
     _executor_session_id = str(getattr(resp, "session_id", "") or "")
@@ -1863,17 +1878,27 @@ def execute_step(
                     if isinstance(_rerun_exc, _TRE):
                         raise
                     # Same for an environmental refusal (dead backend, dead
-                    # container session — review 2026-09-13): the outer
-                    # handler classifies it into the typed pause; swallowing
-                    # it here blamed the tool name and the run churned.
+                    # container session — review 2026-09-13): swallowing it
+                    # here blamed the tool name and the run churned. This
+                    # handler is OUTSIDE the initial call's `except` (round 2:
+                    # a re-raise escaped execute_step — uncaught on the
+                    # sequential driver, stringified by the fan-out pool), so
+                    # the typed blocked outcome is built right here, keeping
+                    # the first call's spend on the step's books.
                     try:
                         from llm_errors import classify_error as _cls
                         from stop_verdicts import pause_reason_for_error_class as _prf
-                        if _prf(_cls(_rerun_exc).error_class):
-                            raise _rerun_exc
-                    except Exception as _reraise:
-                        if _reraise is _rerun_exc:
-                            raise
+                        _rerun_env = bool(_prf(_cls(_rerun_exc).error_class))
+                    except Exception:
+                        _rerun_env = False
+                    if _rerun_env:
+                        log.warning("step %d tool_search re-call refused by the environment: %s",
+                                    step_num, _rerun_exc)
+                        return _stamp_flavor(_blocked_outcome_from_exc(
+                            _rerun_exc,
+                            tokens_in=int(getattr(resp, "input_tokens", 0) or 0),
+                            tokens_out=int(getattr(resp, "output_tokens", 0) or 0),
+                            provider_cost_usd=_provider_cost_usd))
                     log.warning("step %d tool_search re-call failed: %s", step_num, _rerun_exc)
                     # Fall through to original response handling
             else:

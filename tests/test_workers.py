@@ -222,3 +222,20 @@ class TestWorkerMemorySlice:
         result = dispatch_worker(WORKER_OPS, "check status", dry_run=True)
         result.memory_slice_injected = True
         assert result.memory_slice_injected is True
+
+
+def test_adapter_failure_carries_the_structured_error_class():
+    # Review round 2 (2026-09-13): the text-only stuck_reason destroyed the
+    # typed refusal; the director reads error_class through the loop's seam.
+    from llm_errors import BackendError, ErrorInfo, CONTAINER_AUTH
+    from workers import dispatch_worker
+
+    class _Refusing:
+        model_key = "t"; backend = "subprocess"
+        def complete(self, messages, **kwargs):
+            raise BackendError(ErrorInfo(error_class=CONTAINER_AUTH, backend="subprocess",
+                                         retryable=False, failover=False,
+                                         user_action="re-seed", detail="breaker tripped"))
+    res = dispatch_worker("research", "look at the inbox", adapter=_Refusing())
+    assert res.status == "blocked" and res.blocked_origin == "adapter"
+    assert res.error_class == "container_auth"

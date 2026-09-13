@@ -3906,3 +3906,42 @@ def test_projectless_director_log_is_output_rooted(monkeypatch, tmp_path):
     assert expected.exists()
     from orch_items import resolve_artifact_path
     assert resolve_artifact_path(path_str) == expected
+
+
+class TestEnvironmentalRefusalStopsDispatch:
+    """Review round 2 (2026-09-13): a worker ticket refused by the
+    environment (typed container_auth) used to be reviewed, revised and
+    followed by the next ticket — each call re-refused. The director now
+    stops on the first such result and carries the typed pause."""
+
+    def test_refused_ticket_ends_dispatch_without_review(self, monkeypatch, tmp_path):
+        from workers import WorkerResult
+        import director as _director_mod
+        _setup(monkeypatch, tmp_path)
+        calls = []
+        def _refusing(worker_type, task, *, context="", **kw):
+            calls.append(task)
+            return WorkerResult(worker_type=worker_type, ticket=task, status="blocked", result="",
+                                stuck_reason="LLM call failed (container_auth): re-seed the volume",
+                                blocked_origin="adapter", error_class="container_auth")
+        monkeypatch.setattr(_director_mod, "dispatch_worker", _refusing)
+        def _no_review(**kw):
+            raise AssertionError("a refused ticket must not be reviewed")
+        monkeypatch.setattr(_director_mod, "_review_worker_output", _no_review)
+        result = run_director("research and build a report", dry_run=True)
+        assert len(result.tickets) >= 1 and len(calls) == 1
+        assert result.status == "stuck" and result.pause_reason == "container-auth-expired"
+        assert len(result.worker_results) == 1 and result.worker_results[0].error_class == "container_auth"
+
+    def test_a_plain_block_still_runs_the_full_directive(self, monkeypatch, tmp_path):
+        from workers import WorkerResult
+        import director as _director_mod
+        _setup(monkeypatch, tmp_path)
+        calls = []
+        def _blocked(worker_type, task, *, context="", **kw):
+            calls.append(task)
+            return WorkerResult(worker_type=worker_type, ticket=task, status="blocked", result="",
+                                stuck_reason="need more detail", blocked_origin="worker")
+        monkeypatch.setattr(_director_mod, "dispatch_worker", _blocked)
+        result = run_director("research and build a report", dry_run=True)
+        assert len(calls) >= len(result.tickets) and result.pause_reason == ""

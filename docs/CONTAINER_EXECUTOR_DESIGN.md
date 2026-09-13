@@ -257,6 +257,43 @@ prior good sample as `last_good` so a docker outage cannot narrate
 record's lock so overlapping heartbeats launch one container, and a failed
 persist is a logged warning, not a silent `None`.
 
+*Review round 2 (2026-09-13, codex skeptic + QA on the whole chunk) attacked
+the fixes and found three more HIGHs on the pause's path, all fixed before
+landing.* (v) The tool_search re-call's handler sits *outside* the initial
+call's `except`, so the round-1 "re-raise into the outer handler" escaped
+`execute_step` (uncaught on the sequential driver, stringified by the
+fan-out pool). One helper, `step_exec._blocked_outcome_from_exc`, now builds
+the typed blocked outcome for both adapter calls, keeping the first call's
+spend. (vi) The fan-out/DAG early return in `agent_loop` bypasses
+`loop_finalize`, whose stop-verdict stamp is the ONLY writer of
+`metadata.pause_reason` — and `handle_queue`'s strict-affirmative resume
+test reads exactly that, so a paused parallel run restarted under a new
+identity. The early return now stamps the pause with the same writer.
+(vii) The real schedulers kept going: `_run_steps_dag` released dependents
+regardless of the dep's outcome and `_run_steps_parallel` queued every step
+upfront, so a refusal walked the whole graph before the caller saw it. A
+halt flag set *in the worker* (a pool thread picks its next queued task
+before the main thread sees the refusal) makes every later task return a
+"not started — environmental pause" outcome without an adapter call; the
+DAG submits nothing further; in-flight peers drain. Mediums: the health
+probe maps an *unknown* liveness verdict (never recorded, stale, or a
+failed probe with nothing good to fall back on) to `UNKNOWN`, not `OK` —
+`run_health_probes` narrates RECOVERED on OK-after-SILENT, so "we lost sight
+of it" was being told as "healed"; the recorder takes its lock with
+`require=True` (under `MARO_FILELOCK_FAIL_OPEN` the default contract runs
+unlocked — the overlap race in the fix's clothes) and leaves the record
+alone when the lock is busy; `_reseed_probe` rejects a rewritten file whose
+refresh token is already past the expiry the reader hands back; the
+container script exits 1 with a fixed message for a missing/unreadable/
+wrong-shape file (a failed observation that keeps `last_good`) instead of
+printing the zero frame that read as "wiped"; the record validator is total
+(`math.isfinite(10**400)` raised inside the reader and made every refresh
+fail forever) and `last_good` nests one level; and the director lane —
+`workers.dispatch_worker` is a second `executor=True` caller — now carries
+the structured `error_class` on `WorkerResult` and stops dispatch (no
+review, no revision, no further tickets) on an environmental refusal,
+returning `DirectorResult.pause_reason`.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

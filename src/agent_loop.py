@@ -512,6 +512,22 @@ def run_agent_loop(
                              stuck_reason=_parallel_result.stuck_reason or "")
                 except Exception as _tr_exc:
                     log.debug("edge trace for parallel path failed: %s", _tr_exc)
+                # Round-2 review 2026-09-13: the early return also skipped
+                # loop_finalize's stop-verdict stamp, and the continuation
+                # lane picks RESUME over restart by reading
+                # metadata.pause_reason (handle_queue) — a typed pause that
+                # lived only on the LoopResult restarted the run under a new
+                # identity. Same writer, same semantics (empty verdict
+                # clears a stale one; the pause is written when truthy).
+                _par_pause = str(getattr(_parallel_result, "pause_reason", "") or "")
+                if _par_pause:
+                    try:
+                        from runs import stamp_run_stop_verdict as _stamp_par_pause
+                        _stamp_par_pause(stop_verdict="", stop_evidence="",
+                                         pause_reason=_par_pause)
+                    except Exception as _sp_exc:
+                        log.warning("parallel pause stamp failed for %s: %s",
+                                    ctx.loop_id, _sp_exc)
                 # 2026-07-08 adversarial review (finding #1): this early return
                 # bypasses _build_result_and_finalize() entirely — true for every
                 # finalize side effect (telegram notify, introspection, Reflexion

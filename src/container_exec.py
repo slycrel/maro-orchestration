@@ -985,6 +985,15 @@ def _reseed_probe(tripped_at: float) -> Tuple[bool, str]:
         # and loosening the comparison errs toward false self-clear →
         # re-trip → notification loop, the worse direction.
         return False, "credentials unchanged since trip — not re-seeded"
+    # The reader also hands back the refresh token's own expiry; a restored
+    # backup or a re-written file whose token is already past it is not a
+    # re-seed, whatever its mtime says (review round 2, 2026-09-13). An
+    # unknown expiry (0) stays shape-only, as before.
+    exp = float(info.get("refresh_expires_at") or 0.0)
+    if exp > 0 and exp <= time.time():
+        from datetime import datetime, timezone
+        when = datetime.fromtimestamp(exp, tz=timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+        return False, f"credentials rewritten but the refresh token expired {when} — not re-seeded"
     return True, "auth volume re-seeded (fresh credentials with refresh token)"
 
 
@@ -1078,23 +1087,28 @@ def _credentials_expiry_probe() -> Tuple[bool, dict]:
     cred_path = f"{AUTH_MOUNT}/.credentials.json"
     # Inside the container: the exact nested field must be a non-empty
     # string to count as a refresh token; expiry fields are read as numbers
-    # when they are numbers (or numeric strings) and 0 otherwise — a
-    # malformed file is reported as the four-integer frame with zeros, never
-    # as a traceback carrying file contents. Nothing but the frame prints.
+    # when they are numbers (or numeric strings) and 0 otherwise. A file
+    # that is missing, unreadable, not JSON or not the CLI's shape is a
+    # FAILED observation (fixed one-line message on stderr, exit 1 — never a
+    # traceback carrying file contents), not evidence of a wiped session:
+    # reporting it as the zero frame made a half-written file read as
+    # "expired" and dropped the last good sample (review round 2,
+    # 2026-09-13). Only a real object lacking the token is "wiped".
     script = (
-        "import json,os\n"
+        "import json,os,sys\n"
         f"p={cred_path!r}\n"
         "try:\n"
-        "    d=json.load(open(p)); o=d.get('claudeAiOauth') if isinstance(d,dict) else None\n"
-        "    o=o if isinstance(o,dict) else {}\n"
+        "    m=int(os.stat(p).st_mtime); d=json.load(open(p))\n"
+        "    o=d.get('claudeAiOauth') if isinstance(d,dict) else None\n"
         "except Exception:\n"
-        "    o={}\n"
+        "    o=None\n"
+        "if not isinstance(o,dict): sys.exit('credentials file missing, unreadable or not the CLI shape')\n"
         "def ms(v):\n"
         "    try: v=float(v)\n"
-        "    except (TypeError,ValueError): return 0\n"
+        "    except (TypeError,ValueError,OverflowError): return 0\n"
         "    return int(v//1000) if v==v and 0<v<1e14 else 0\n"
         "t=o.get('refreshToken')\n"
-        "print(int(os.stat(p).st_mtime), int(isinstance(t,str) and t.strip()!=''),"
+        "print(m, int(isinstance(t,str) and t.strip()!=''),"
         " ms(o.get('refreshTokenExpiresAt')), ms(o.get('expiresAt')))\n"
     )
     ok, out = _run([
@@ -1136,35 +1150,49 @@ _AUTH_LIVENESS_SKEW_S = 300.0
 _TS_MAX = 1e11   # epoch-seconds sanity bound (year ~5138)
 
 
-def _valid_liveness_record(data: Any, *, now: Optional[float] = None) -> Optional[dict]:
+def _finite_in(v: Any, lo: float, hi: float) -> bool:
+    """A real (non-bool) number, finite, within [lo, hi]. Total: a JSON
+    integer too large for a float (math.isfinite(10**400) raises
+    OverflowError — review round 2, 2026-09-13) is simply out of range."""
+    import math
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return False
+    try:
+        f = float(v)
+    except (OverflowError, ValueError):
+        return False
+    return math.isfinite(f) and lo <= f <= hi
+
+
+def _valid_liveness_record(data: Any, *, now: Optional[float] = None,
+                           _nested: bool = False) -> Optional[dict]:
     """The record if it is one we wrote and can still trust, else None.
     Validation happens ONCE, here at the file boundary (review 2026-09-13:
     string booleans, NaN/inf/oversized timestamps and future checked_at all
     walked into the verdict). Strict types: bool means bool, timestamps are
-    finite numbers inside sane bounds, checked_at is not in the future."""
-    import math
+    finite numbers inside sane bounds, checked_at is not in the future.
+    Total — never raises on any JSON value. `last_good` nests one level:
+    a sample inside a sample is dropped, not recursed."""
     now = time.time() if now is None else now
     if not isinstance(data, dict) or isinstance(data.get("ok"), bool) is False:
         return None
     ca = data.get("checked_at")
-    if isinstance(ca, bool) or not isinstance(ca, (int, float)) or not math.isfinite(ca):
-        return None
-    if ca <= 0 or ca > now + _AUTH_LIVENESS_SKEW_S:
+    if not _finite_in(ca, 0.0, now + _AUTH_LIVENESS_SKEW_S) or ca <= 0:
         return None
     if data["ok"]:
         hr = data.get("has_refresh")
         if not isinstance(hr, bool):
             return None
         for k in ("refresh_expires_at", "access_expires_at", "mtime"):
-            v = data.get(k, 0)
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) \
-                    or v < 0 or v > _TS_MAX:
+            if not _finite_in(data.get(k, 0), 0.0, _TS_MAX):
                 return None
-    lg = data.get("last_good")
-    if lg is not None:
-        lg = _valid_liveness_record(lg, now=now)
+    if "last_good" in data:
+        lg = None if _nested else _valid_liveness_record(data.get("last_good"), now=now, _nested=True)
+        data = dict(data)
         if lg is None or not lg.get("ok"):
-            data = dict(data); data.pop("last_good", None)
+            data.pop("last_good", None)
+        else:
+            data["last_good"] = lg
     return data
 
 
@@ -1175,9 +1203,9 @@ def auth_liveness_state(*, now: Optional[float] = None) -> Optional[dict]:
     import json
     try:
         data = json.loads(_auth_liveness_path().read_text(encoding="utf-8"))
+        return _valid_liveness_record(data, now=now)
     except Exception:
         return None
-    return _valid_liveness_record(data, now=now)
 
 
 def _liveness_age_ok(rec: dict, max_age_s: float, *, now: float) -> bool:
@@ -1196,15 +1224,24 @@ def refresh_auth_liveness(*, max_age_s: float = _AUTH_LIVENESS_TTL_S,
     could overwrite the newer). The lock is held across the probe (≤ 20 s).
     A failed probe never erases the last successful sample: it rides along
     as `last_good` so a docker outage cannot turn an expiry warning into a
-    false "recovered" on the health lane."""
+    false "recovered" on the health lane. The lock is REQUIRED (round 2):
+    under MARO_FILELOCK_FAIL_OPEN the default contract proceeds unlocked,
+    which is the overlap race wearing the fix's clothes — a lock that
+    cannot be taken leaves the record alone and returns what is on disk."""
     import json
-    from file_lock import locked_write, atomic_write
+    from file_lock import locked_write, atomic_write, FileLockTimeout
     try:
         if container_mode() == "off":
             return None
         path = _auth_liveness_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        with locked_write(path):
+        try:
+            _lock = locked_write(path, require=True)
+            _lock.__enter__()
+        except FileLockTimeout as exc:
+            log.warning("container auth liveness refresh skipped — record lock busy (%s)", exc)
+            return auth_liveness_state()
+        try:
             now = time.time()
             prior = auth_liveness_state(now=now)
             if prior is not None and not force and _liveness_age_ok(prior, max_age_s, now=now):
@@ -1217,6 +1254,8 @@ def refresh_auth_liveness(*, max_age_s: float = _AUTH_LIVENESS_TTL_S,
                     record["last_good"] = {k: v for k, v in good.items() if k != "last_good"}
             atomic_write(path, json.dumps(record, sort_keys=True) + "\n")
             return record
+        finally:
+            _lock.__exit__(None, None, None)
     except Exception:
         log.warning("container auth liveness refresh failed (record not updated)", exc_info=True)
         return None

@@ -401,9 +401,9 @@ def _run_parallel_path(
             if _env:
                 # §13e: the environment stopped this step (dead backend, dead
                 # container session) — the run pauses typed and resumable,
-                # it is not `stuck` (review 2026-09-13). Peers already
-                # running finish on their own; nothing further is scheduled
-                # because the fan-out returns here.
+                # it is not `stuck` (review 2026-09-13). The schedulers
+                # themselves stop submitting on the first such outcome
+                # (round 2); peers already running finish on their own.
                 if hasattr(ctx, "stamp_pause"):
                     ctx.stamp_pause(_env)
                 _fanout_loop_status = "interrupted"
@@ -456,7 +456,30 @@ def _run_steps_parallel(
 
     Returns outcomes list in step-index order.
     """
+    # Round-2 review 2026-09-13: an environmental refusal (dead container
+    # session, dead backend) used to be discovered only after the whole
+    # fan-out drained — every queued step was still started and refused in
+    # turn. The first such outcome halts the pool: the flag is set IN the
+    # worker (a pool thread picks its next queued task before the main
+    # thread ever sees the refusal, so cancelling from outside is not
+    # enough), every task that starts afterwards returns a not-started
+    # outcome without calling the adapter, and the main thread cancels
+    # what it still can. Peers already running finish on their own.
+    _halt = {"reason": ""}
+
+    def _not_started(step_idx: int) -> dict:
+        return {
+            "status": "blocked",
+            "stuck_reason": f"not started — environmental pause: {_halt['reason']}",
+            "result": "",
+            "summary": f"step {step_idx} not started (environmental pause)",
+            "tokens_in": 0,
+            "tokens_out": 0,
+        }
+
     def _run_one(step_idx: int, step_text: str) -> tuple[int, dict]:
+        if _halt["reason"]:
+            return step_idx, _not_started(step_idx)
         # Execution floor is MID (2026-07-20 decree) — parallel steps run on
         # the session adapter; the per-step cheap downgrade was removed.
         step_adapter = adapter
@@ -476,6 +499,12 @@ def _run_steps_parallel(
             shared_ctx=shared_ctx,
             incremental_context=incremental_context,
         ))
+        if not _halt["reason"]:
+            _env = _environmental_pause(outcome)
+            if _env:
+                _halt["reason"] = _env
+                log.warning("parallel step %d refused by the environment (%s) — "
+                            "queued steps will not start", step_idx, _env)
 
         # Post-step security scan — parallel fan-out skips the main loop's
         # _post_step_checks, so we do a lightweight scan here.  Ralph verify
@@ -526,8 +555,14 @@ def _run_steps_parallel(
         try:
             for f in as_completed(futures, timeout=_fanout_timeout):
                 try:
+                    if f.cancelled():
+                        outcomes_by_idx[futures[f] + 1] = _not_started(futures[f] + 1)
+                        continue
                     idx, outcome = f.result(timeout=30)
                     outcomes_by_idx[idx] = outcome
+                    if _halt["reason"]:
+                        for _g in futures:
+                            _g.cancel()
                 except Exception as exc:
                     i = futures[f]
                     outcomes_by_idx[i + 1] = {
@@ -598,6 +633,13 @@ def _run_steps_dag(
 
     n = len(steps)
     results: Dict[int, dict] = {}
+    # Round-2 review 2026-09-13: a completed dep used to be released to its
+    # dependents regardless of its outcome, so an environmental refusal
+    # walked the whole graph (each dependent started and refused in turn)
+    # before the caller saw the pause. Once set (in the worker, so an
+    # already-submitted peer sees it too), nothing further is submitted and
+    # nothing further calls the adapter; in-flight peers drain.
+    _halt = {"reason": ""}
     results_lock = _threading.Lock()
 
     # Mutable copy — we discard entries as deps complete
@@ -608,6 +650,12 @@ def _run_steps_dag(
     _fanout_timeout = int(os.environ.get("MARO_STEP_TIMEOUT", "600"))
 
     def _run_one(step_idx: int) -> tuple:
+        if _halt["reason"]:
+            return step_idx, {
+                "status": "blocked",
+                "stuck_reason": f"not started — environmental pause: {_halt['reason']}",
+                "result": "", "tokens_in": 0, "tokens_out": 0,
+            }
         step_text = steps[step_idx - 1]
         # Build completed_context from direct dep results (already done when we start)
         dep_ctx: List[str] = []
@@ -694,6 +742,18 @@ def _run_steps_dag(
                         "result": "", "tokens_in": 0, "tokens_out": 0,
                     }
 
+            if not _halt["reason"]:
+                with results_lock:
+                    _done_outcome = results.get(completed_idx) or {}
+                _env = _environmental_pause(_done_outcome)
+                if _env:
+                    _halt["reason"] = _env
+                    log.warning(
+                        "dag step %d refused by the environment (%s) — no further "
+                        "steps submitted, %d in flight drain", completed_idx, _env, len(active))
+            if _halt["reason"]:
+                continue
+
             # Unblock tasks whose only remaining dep was the just-completed one
             for step_idx in range(1, n + 1):
                 if step_idx not in results and step_idx not in active.values():
@@ -701,12 +761,14 @@ def _run_steps_dag(
 
             _submit_ready(pool)
 
-    # Fill any unreached tasks (deps of a timed-out step)
+    # Fill any unreached tasks (deps of a timed-out step, or everything
+    # behind an environmental pause)
     for i in range(1, n + 1):
         if i not in results:
             results[i] = {
                 "status": "blocked",
-                "stuck_reason": "dag: upstream dep did not complete",
+                "stuck_reason": (f"not started — environmental pause: {_halt['reason']}"
+                                 if _halt["reason"] else "dag: upstream dep did not complete"),
                 "result": "", "tokens_in": 0, "tokens_out": 0,
             }
 

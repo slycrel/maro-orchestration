@@ -69,6 +69,12 @@ class WorkerResult:
     # "LLM call failed: no access to endpoint" is an infrastructure
     # failure, not an under-specified ticket. "" for done results.
     blocked_origin: str = ""
+    # The structured error class behind an adapter-origin block (review
+    # round 2, 2026-09-13: the text-only stuck_reason destroyed the typed
+    # container_auth refusal, so the director reviewed and revised a
+    # refused ticket). Same vocabulary as step outcomes' `error_class`;
+    # "" when not an adapter failure or unclassifiable.
+    error_class: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +294,11 @@ def dispatch_worker(
             purpose="worker-ticket",  # EDGE 6: agentic seam, was unlabeled in call records
         )
     except Exception as exc:
+        try:
+            from llm_errors import classify_error as _cls
+            _ecls = str(_cls(exc).error_class or "")
+        except Exception:
+            _ecls = ""
         return WorkerResult(
             worker_type=worker_type,
             ticket=ticket,
@@ -295,6 +306,7 @@ def dispatch_worker(
             result="",
             stuck_reason=f"LLM call failed: {exc}",
             blocked_origin="adapter",
+            error_class=_ecls,
         )
 
     if resp.tool_calls:

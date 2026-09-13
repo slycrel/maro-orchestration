@@ -445,6 +445,16 @@ def _probe_container_auth(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
             return SILENT, (
                 f"container session {'EXPIRED' if level == 'expired' else 'expiring'} "
                 f"(mode {mode}, breaker clear) — {detail}"), obs
+        if level != "ok":
+            # No usable expiry evidence (never recorded, stale, or the
+            # latest probe failed with nothing good to fall back on) is
+            # UNKNOWN, not OK: run_health_probes narrates RECOVERED on
+            # OK-after-SILENT, so mapping "we lost sight of it" to OK told
+            # the operator a docker outage had healed the session (review
+            # round 2, 2026-09-13). UNKNOWN keeps the narrated warning
+            # standing until affirmative evidence arrives.
+            return UNKNOWN, (f"container lane armed (mode {mode}) — reactive "
+                             f"breaker clear; session expiry not established: {detail}"), obs
         return OK, (f"container lane armed (mode {mode}) — no auth failure "
                     f"observed (reactive breaker clear); {detail}"), obs
     tripped_at = state.get("tripped_at")
