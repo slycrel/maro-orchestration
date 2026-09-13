@@ -1259,8 +1259,15 @@ def close_run(
     *,
     status: str,
     backend_error=None,
+    final: bool = False,
 ) -> Optional[dict]:
     """Finalize a run-dir and return its curated run_card (or None).
+
+    `final=True` is the finalize-time close (handle's finally block, after
+    the verdict marker's resolution): it stamps `finalized_at`, the
+    handle's own record that its finalize RAN — the repair sweeps read it
+    where a host pid cannot tell a finished handle from a live process
+    (review 2026-09-13 r11). The answer-first early close never sets it.
 
     Slices the captain's-log window, snapshots the repo bundle, stamps the
     terminal status (merging an actionable backend_error when present),
@@ -1396,6 +1403,9 @@ def close_run(
                 extra["goal_verdict_source"] = VERDICT_SOURCE_RUN_ERRORED
         except Exception:
             pass
+    if final:
+        extra = dict(extra or {})
+        extra["finalized_at"] = datetime.now(timezone.utc).isoformat()
     finalize_failed = False
     try:
         finalize_run(handle_id, status=status, extra=extra)

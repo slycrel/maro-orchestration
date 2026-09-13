@@ -716,6 +716,80 @@ def reconcile_kept_write(existing: dict, kept: dict) -> dict:
     return out
 
 
+def _refresh_run_surfaces(handle_id: str, run_dir: Path, *, by: str) -> None:
+    """Best-effort card + reports refresh after a repair write (the saved
+    card is derived from metadata and does not follow it by itself —
+    review r11: a drained finalize left `done-verdict-pending` on disk)."""
+    try:
+        from run_curation import refresh_run_card_classification
+        from loop_report import write_reports_for_run_dir
+        refresh_run_card_classification(handle_id, run_dir=run_dir)
+        write_reports_for_run_dir(run_dir)
+    except Exception:
+        log.debug("%s: surface refresh failed for %s", by, handle_id, exc_info=True)
+
+
+def _drain_pending(pending: dict) -> tuple:
+    """Write this process's kept finalize writes — decided AND published
+    from one locked snapshot (`reconcile_kept_write` inside
+    `runs.revise_run_metadata_for`); a store that cannot be read or
+    written keeps the obligation (review r10). Caller holds the repair
+    pidfile. Returns (retried, dropped)."""
+    from runs import revise_run_metadata_for, run_dir
+    retried = dropped = 0
+    for hid in list(pending.keys()):
+        kept = pending.get(hid)
+        if not isinstance(kept, dict) or not kept:
+            pending.pop(hid, None)
+            continue
+        written = revise_run_metadata_for(
+            str(hid), lambda existing, _k=kept: reconcile_kept_write(existing, _k))
+        if written is None:
+            log.warning("kept-write drain: kept write for %s still not "
+                        "readable/writable — retrying next time", hid)
+            continue
+        pending.pop(hid, None)
+        if not written:
+            dropped += 1
+            log.warning("kept-write drain: kept write for %s dropped — the store "
+                        "already carries its outcome (%s)", hid,
+                        (kept.get("project_transition") or {}).get("outcome") or "marker")
+            continue
+        retried += 1
+        log.info("kept-write drain: kept write for %s written (%s)",
+                 hid, ", ".join(sorted(written)))
+        try:
+            _refresh_run_surfaces(str(hid), run_dir(str(hid)), by="kept-write drain")
+        except Exception:
+            log.debug("kept-write drain: run dir for %s unavailable for the "
+                      "surface refresh", hid, exc_info=True)
+    return retried, dropped
+
+
+def drain_kept_writes() -> dict:
+    """This process's kept finalize writes, drained NOW — the entry point
+    for a long-lived host that is not the heartbeat (`handle()` calls it on
+    entry; review r11: the heartbeat's sweep runs only in the heartbeat
+    process, so a listener holding an obligation never retried it).
+    Serialized under the repair pidfile; busy → nothing this time."""
+    from proc_lock import acquire_pidfile
+    pending = _pending_settlements()
+    if not pending:
+        return {"status": "completed", "retried": 0, "dropped": 0}
+    acquired = acquire_pidfile(
+        _REPAIR_LOCK, payload={"command": "kept-write-drain"})
+    if acquired.status != "acquired":
+        return {"status": acquired.status, "retried": 0, "dropped": 0}
+    try:
+        retried, dropped = _drain_pending(pending)
+        return {"status": "completed", "retried": retried, "dropped": dropped}
+    finally:
+        try:
+            acquired.handle.close()
+        except Exception:
+            pass
+
+
 def sweep_transition_orphans(
     *, grace_s: float = _ORPHAN_GRACE_S, limit: int = 20,
 ) -> dict:
@@ -742,7 +816,7 @@ def sweep_transition_orphans(
     fails is left out of the disk pass. Serialized under the repair
     pidfile."""
     from proc_lock import acquire_pidfile
-    from runs import runs_root, stamp_run_metadata_for, revise_run_metadata_for
+    from runs import runs_root, stamp_run_metadata_for
     from landscape import settle_project_transition
 
     def _transition_only(meta: dict) -> bool:
@@ -775,30 +849,7 @@ def sweep_transition_orphans(
                 "error": acquired.error}
     stamped = considered = retried = dropped = 0
     try:
-        for hid in list(pending.keys()):
-            kept = pending.get(hid)
-            if not isinstance(kept, dict) or not kept:
-                pending.pop(hid, None)
-                continue
-            # decided AND published from one locked snapshot; a store that
-            # cannot be read or written keeps the obligation (review r10:
-            # an unreadable eligibility read had meant "write as kept")
-            written = revise_run_metadata_for(
-                str(hid), lambda existing, _k=kept: reconcile_kept_write(existing, _k))
-            if written is None:
-                log.warning("transition sweep: kept write for %s still not "
-                            "readable/writable — retrying next sweep", hid)
-                continue
-            pending.pop(hid, None)
-            if not written:
-                dropped += 1
-                log.warning("transition sweep: kept write for %s dropped — the store "
-                            "already carries its outcome (%s)", hid,
-                            (kept.get("project_transition") or {}).get("outcome") or "marker")
-                continue
-            retried += 1
-            log.info("transition sweep: kept write for %s written (%s)",
-                     hid, ", ".join(sorted(written)))
+        retried, dropped = _drain_pending(pending)
         now = time.time()
         for run_dir in candidates:
             if stamped >= max(1, int(limit)):
@@ -831,14 +882,7 @@ def sweep_transition_orphans(
                             "— retrying next sweep", handle_id)
                 continue
             stamped += 1
-            try:
-                from run_curation import refresh_run_card_classification
-                from loop_report import write_reports_for_run_dir
-                refresh_run_card_classification(handle_id, run_dir=run_dir)
-                write_reports_for_run_dir(run_dir)
-            except Exception:
-                log.debug("transition-orphan sweep: surface refresh failed "
-                          "for %s", handle_id, exc_info=True)
+            _refresh_run_surfaces(handle_id, run_dir, by="transition-orphan sweep")
             log.info("transition-orphan sweep: %s reverted %s → %s (aged %.0fs)",
                      handle_id, t.get("to"), fields.get("project"), age_s)
         return {"status": "completed", "stamped": stamped, "considered": considered,
@@ -911,6 +955,15 @@ def sweep_verdict_orphans(
             vp = meta.get("verdict_pending")
             if not isinstance(vp, dict) or vp.get("resolved_at"):
                 continue
+            # The handle's OWN record that its finalize ran (`finalized_at`,
+            # the final close) outranks age and the host pid: the marker's
+            # resolution precedes that close, so an active marker on a
+            # finalized run is a failed resolving write — recover it now,
+            # whatever process hosts it and however young the marker
+            # (review r11: a long-lived host that never sweeps kept its
+            # finished run out of the landscape for its life). Its user
+            # story was told by the finalize itself — no notify here.
+            _finalized = bool(meta.get("finalized_at"))
             try:
                 since = datetime.fromisoformat(
                     str(vp.get("since", "")).replace("Z", "+00:00"))
@@ -919,7 +972,7 @@ def sweep_verdict_orphans(
                 # An unparseable `since` cannot prove youth — treat as aged
                 # (the pid corroboration below still protects a live run).
                 age_s = grace_s + 1
-            if age_s <= grace_s:
+            if age_s <= grace_s and not _finalized:
                 continue
             # Corroborate death before stamping (review 2026-08-13): the
             # early close stamps ended_at while the tail legitimately still
@@ -930,7 +983,7 @@ def sweep_verdict_orphans(
                 _pid = int(meta.get("pid") or 0)
             except (TypeError, ValueError):
                 _pid = 0
-            if _pid > 0:
+            if _pid > 0 and not _finalized:
                 try:
                     os.kill(_pid, 0)
                     continue  # owning process is alive — let it finish
@@ -956,7 +1009,7 @@ def sweep_verdict_orphans(
             from runs import stamp_run_metadata_for
 
             def _finish(run_dir=run_dir, handle_id=handle_id, vp=vp,
-                        meta=meta):
+                        meta=meta, notify=True):
                 # Shared repair epilogue: surfaces + the OWED notify — the
                 # crashed process never sent its follow-up (review
                 # 2026-08-13: repair must finish the user-visible story,
@@ -973,6 +1026,8 @@ def sweep_verdict_orphans(
                 except Exception:
                     log.debug("verdict-orphan sweep: surface refresh failed "
                               "for %s", handle_id, exc_info=True)
+                if not notify:
+                    return
                 try:
                     from notify import emit
                     reached = bool(
@@ -1014,7 +1069,7 @@ def sweep_verdict_orphans(
                                 handle_id)
                     continue
                 stamped += 1
-                _finish()
+                _finish(notify=not _finalized)
                 continue
             loop_id = str(vp.get("loop_id") or "")
             if not loop_id:
@@ -1058,7 +1113,7 @@ def sweep_verdict_orphans(
                             "for %s — retrying next sweep", handle_id)
                 continue
             stamped += 1
-            _finish()
+            _finish(notify=not _finalized)
             log.info("verdict-orphan sweep: %s stamped %s (marker aged %.0fs)",
                      handle_id, VERDICT_SOURCE_PENDING_ORPHANED, age_s)
         return {"status": "completed", "stamped": stamped,

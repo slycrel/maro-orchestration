@@ -6609,7 +6609,19 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   unreadable eligibility pre-read had meant "write as kept", replaying
   an adoption over another sweep's revert) and a store that cannot be
   read or written defers the kept write (warned each sweep) rather
-  than dropping or writing it. Direction recorded: a
+  than dropping or writing it. Round 11: recovery has a consumer in
+  EVERY process — the final close stamps `finalized_at` (the handle's
+  own record that its finalize ran; the answer-first early close never
+  sets it), and the verdict sweep recovers a finalized run with an
+  active marker whatever its age or host pid, without the notify the
+  finalize already sent (the sweep's pid check could not tell a
+  finished handle from a live host, so a long-lived listener — which
+  never runs the heartbeat's sweep — kept its finished run out of the
+  landscape for its life); `handle()` drains this process's kept
+  writes on entry (`audit_repair.drain_kept_writes`, not on dry runs);
+  a drained write refreshes the run card and reports like the disk
+  path does (the saved card had stayed `done-verdict-pending`).
+  Direction recorded: a
   settlement that fails in the run AND at the finalize is kept for the
   sweep's retry in the same process; only a process death loses it, and
   then the sweep reverts even an adopted retry — the retry's adoption

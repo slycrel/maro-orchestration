@@ -967,6 +967,18 @@ def handle(
         _pre_hid = _pre_hid_fn()
     except Exception:
         _pre_hid = None
+    # A kept finalize write from an EARLIER run in this process gets its
+    # retry as soon as the process does work again — the heartbeat's sweep
+    # runs only in the heartbeat process, and a long-lived listener that
+    # never sweeps otherwise held its obligation for its life (review r11).
+    # Best-effort; nothing kept costs nothing. Not on dry runs (side-effect
+    # free by contract).
+    if _UNSETTLED_TRANSITIONS and not dry_run:
+        try:
+            from audit_repair import drain_kept_writes as _drain_kept
+            _drain_kept()
+        except Exception:
+            log.debug("kept-write drain at handle entry failed", exc_info=True)
     try:
         result = _handle_impl(
             message,
@@ -1095,7 +1107,7 @@ def handle(
                 # (review 2026-08-13).
                 with _fin_cost_scope(_tail_lid, "curation"):
                     _card = _close_run(_hid, status=_status,
-                                       backend_error=_backend_err)
+                                       backend_error=_backend_err, final=True)
                 # Actionable backend death: ping the notify channel with the
                 # fix (auth/billing/context) — distinct from run_completed so
                 # substrates can render it as "act now", not "run finished".

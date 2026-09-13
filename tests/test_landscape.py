@@ -2501,3 +2501,114 @@ class TestTheObligationNeedsNoRead:
         m = _meta(hid)
         assert (m["project"], m["project_transition"]["outcome"]) == ("board-reports", "reverted")
         assert handle_mod._UNSETTLED_TRANSITIONS == {}
+
+
+class TestRecoveryHasAConsumerInEveryProcess:
+    """Review round 11 (2026-09-13): a finished handle is recoverable by
+    its own record (`finalized_at`, the final close) whatever process
+    hosts it; a long-lived host drains its kept writes at its next
+    handle; a drained write refreshes the run's surfaces like the disk
+    path does."""
+
+    def test_the_final_close_records_that_the_finalize_ran(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        r, _ = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        meta = _meta(r.handle_id)
+        assert meta["finalized_at"] and meta["ended_at"]
+        assert meta["verdict_pending"]["resolved_at"] <= meta["finalized_at"]
+
+    def test_a_finalized_run_with_an_active_marker_is_recovered_whatever_its_pid(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import os
+        from datetime import datetime, timezone
+        import runs
+        import landscape
+        import notify
+        from audit_repair import sweep_verdict_orphans
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        (projects_root() / "board-reports-escalated").mkdir(parents=True)
+        emitted = []
+        monkeypatch.setattr(notify, "emit", lambda kind, *a, **kw: emitted.append(kind) or True)
+        young = {"since": datetime.now(timezone.utc).isoformat(), "loop_id": "lr-1", "notified_early": True}
+        active = {"kind": "escalation", "from": "board-reports", "from_binding": "landscape",
+                  "to": "board-reports-escalated", "since": "2026-09-13T00:00:01+00:00"}
+        # the handle finished (its finalize ran: the marker write failed, the
+        # close landed) — the host is THIS live process, the marker is young
+        finalized = _finished_run(GOAL_QUARTERLY, "A.", extra={
+            "loop_ids": ["lr-1"], "verdict_pending": dict(young), "goal_verdict_source": "closure",
+            "goal_achieved": True, "finalized_at": datetime.now(timezone.utc).isoformat(),
+            "project": "board-reports-escalated", "project_binding": "escalated", "project_transition": active})
+        # the same shape WITHOUT the final close: an early-closed run whose tail still runs
+        early = _finished_run(GOAL_QUARTERLY + " again", "B.", extra={
+            "loop_ids": ["lr-2"], "verdict_pending": {**young, "loop_id": "lr-2"},
+            "goal_verdict_source": "closure", "goal_achieved": True})
+        for hid in (finalized, early):
+            runs.stamp_run_metadata_for(hid, {"pid": os.getpid()})
+        res = sweep_verdict_orphans(grace_s=3600)
+        assert res["status"] == "completed" and res["stamped"] == 1, res
+        m = _meta(finalized)
+        assert m["verdict_pending"]["resolved_at"] and m["goal_verdict_source"] == "closure"
+        # the provisional retry project is not the record: reverted in the same write
+        assert (m["project"], m["project_binding"]) == ("board-reports", "landscape")
+        assert m["project_transition"]["outcome"] == "reverted" and landscape.run_settled(m) is True
+        # its story was told by the finalize — the sweep owes no notify
+        assert emitted == [], emitted
+        e = _meta(early)
+        assert not e["verdict_pending"].get("resolved_at")
+
+    def test_a_long_lived_host_drains_its_kept_writes_at_its_next_handle(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import landscape
+        import handle as handle_mod
+        from handle import handle
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        marker = {"since": "2026-09-13T00:00:00+00:00", "loop_id": "lr-1", "notified_early": True}
+        # an earlier run of this process: its finalize could not write, the obligation is held here
+        earlier = _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={
+            "project": "board-reports", "loop_ids": ["lr-1"], "verdict_pending": dict(marker),
+            "goal_verdict_source": "closure", "goal_achieved": True})
+        monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {earlier: {"_finalize": True}})
+        assert landscape.run_settled(_meta(earlier)) is False
+        # a dry run is side-effect free: it does not drain
+        with _no_hosted_free(), _classify_now():
+            handle(GOAL_FOLLOW_UP, adapter=_NowAndJudge(_related(1, "carries it forward")), force_lane="now", dry_run=True)
+        assert earlier in handle_mod._UNSETTLED_TRANSITIONS and landscape.run_settled(_meta(earlier)) is False
+        # the next real handle in this process drains it FIRST — so the
+        # landscape it reads is settled
+        with _no_hosted_free(), _classify_now():
+            r = handle(GOAL_FOLLOW_UP, adapter=_NowAndJudge(_related(1, "carries it forward")), force_lane="now", dry_run=False)
+        assert r.status == "done"
+        assert handle_mod._UNSETTLED_TRANSITIONS == {}
+        m = _meta(earlier)
+        assert m["verdict_pending"]["resolved_at"] and landscape.run_settled(m) is True
+
+    def test_a_drained_write_refreshes_the_runs_surfaces(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import run_curation
+        import loop_report
+        import handle as handle_mod
+        from audit_repair import sweep_transition_orphans, drain_kept_writes
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        marker = {"since": "2026-09-13T00:00:00+00:00", "loop_id": "lr-1", "notified_early": True}
+        hid = _finished_run(GOAL_QUARTERLY, "A.", extra={
+            "project": "board-reports", "loop_ids": ["lr-1"], "verdict_pending": dict(marker),
+            "goal_verdict_source": "closure", "goal_achieved": True})
+        cards, reports = [], []
+        monkeypatch.setattr(run_curation, "refresh_run_card_classification",
+                            lambda h, run_dir=None, **kw: cards.append(h) or {"handle_id": h})
+        monkeypatch.setattr(loop_report, "write_reports_for_run_dir", lambda rd, **kw: reports.append(rd.name))
+        monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {hid: {"_finalize": True}})
+        res = drain_kept_writes()
+        assert res == {"status": "completed", "retried": 1, "dropped": 0}, res
+        assert cards == [hid] and len(reports) == 1 and reports[0].startswith(hid)
+        # a dropped write (nothing owed) refreshes nothing
+        handle_mod._UNSETTLED_TRANSITIONS[hid] = {"_finalize": True}
+        assert sweep_transition_orphans(grace_s=10 ** 9)["dropped"] == 1
+        assert cards == [hid] and len(reports) == 1
+        assert drain_kept_writes() == {"status": "completed", "retried": 0, "dropped": 0}
