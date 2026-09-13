@@ -348,10 +348,14 @@ def decide(goal: str, *, handle_id: str, adapter=None, fresh: bool = False,
     return rec
 
 
-def apply(handle_id: str, origin: Optional[dict], rec: Dict[str, Any]) -> Optional[dict]:
+def apply(handle_id: str, origin: Optional[dict], rec: Dict[str, Any], *, replace: bool = False) -> Optional[dict]:
     """Stamp the decision on the run's metadata; when a prior run was chosen,
     the origin names it as the parent (feature 1's lineage substrate) and
-    says the landscape chose it. Returns the origin to run with."""
+    says the landscape chose it. Returns the origin to run with. `replace`
+    (a RE-decision over a clarified goal) writes the origin even when it is
+    empty, in the same metadata operation as the record: an earlier
+    decision's parent must not outlive the decision that replaced it, and
+    two writes would leave a window where it does (review 2026-09-13 r3)."""
     from runs import stamp_run_metadata_for
     out = dict(origin or {})
     if rec.get("relation") in ("related", "rerun") and rec.get("chosen"):
@@ -364,7 +368,7 @@ def apply(handle_id: str, origin: Optional[dict], rec: Dict[str, Any]) -> Option
                     "related_by": RELATED_BY, "relation": rec["relation"]})
         out.setdefault("source", "cli")
     fields: Dict[str, Any] = {"landscape": rec}
-    if out:
+    if out or replace:
         fields["origin"] = out
     if stamp_run_metadata_for(handle_id, fields) is None:
         # the decision is recorded or it is not a decision: an unrecorded

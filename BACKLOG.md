@@ -6488,7 +6488,18 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   resets the stamped origin to the caller's); quality escalation stamps
   `project_binding: escalated` with the `-escalated` project; a
   whitespace-padded recorded name is rejected, not canonicalised into
-  the other directory. Recorded, not changed: a project deleted
+  the other directory. Round 3: the constraints had to survive the
+  TRANSITIONS after the binding — the escalation retry's `-escalated`
+  destination now carries the context-only exclusion and the containment
+  guard (steps to a free sibling), a discarded retry (dead or raising)
+  restores the delivered project + binding pair (else the next
+  continuation, recall and curation would bind to the dead retry's
+  workspace), the sibling allocator (`_free_project_name`) treats a
+  dangling symlink as taken, tries one random suffix past the cap and
+  fails closed rather than returning the excluded base, and a clarified
+  re-decision replaces the stamped origin in the SAME write as the
+  record (`landscape.apply(..., replace=True)`, empty origin included).
+  Recorded, not changed: a project deleted
   between selection and loop init is recreated empty by
   `ensure_project` (deletion is manual and opt-in here — data-retention
   decree — and the window is seconds).

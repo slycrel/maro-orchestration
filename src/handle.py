@@ -305,6 +305,32 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 _PROJECT_MATCH_MIN_LEN = 6
+_PROJECT_SIBLING_CAP = 999
+
+
+def _free_project_name(base: str, exclude: "tuple[str, ...]" = ()) -> str:
+    """The first `base-2`, `base-3`… that is not excluded and is FREE —
+    nothing at that path, not even a dangling symlink (`exists()` follows a
+    link and reports a dangling one absent; the loop's mkdir would then hit
+    the link). Past the cap a random suffix is tried once; if even that is
+    taken the binding fails closed — the excluded or unsafe base is never
+    returned (review 2026-09-13 round 3)."""
+    import orch_items as _oi
+    root = _oi.projects_root()
+
+    def _free(name: str) -> bool:
+        target = root / name
+        return name not in exclude and not target.is_symlink() and not target.exists()
+
+    for n in range(2, _PROJECT_SIBLING_CAP + 1):
+        cand = f"{base}-{n}"
+        if _free(cand):
+            return cand
+    import uuid
+    cand = f"{base}-{uuid.uuid4().hex[:8]}"
+    if _free(cand):
+        return cand
+    raise RuntimeError(f"no free project name beside {base!r}")
 
 
 def _match_existing_project(message: str, exclude: "tuple[str, ...]" = ()) -> str:
@@ -367,13 +393,8 @@ def _project_for_goal(message: str, exclude: "tuple[str, ...]" = ()) -> "tuple[s
     from landscape import project_inside_root
     slug = resolve_project_slug(message)
     if slug in exclude or not project_inside_root(slug):
-        import orch_items as _oi
         base = slug
-        for n in range(2, 1000):
-            cand = f"{base}-{n}"
-            if cand not in exclude and not (_oi.projects_root() / cand).exists():
-                slug = cand
-                break
+        slug = _free_project_name(base, exclude)
         log.info("project fallback: %r steps aside to %r (%s)", base, slug,
                  "context only" if base in exclude else "not a project inside the root")
     return slug, "minted"
@@ -1337,6 +1358,7 @@ def _handle_impl(
     # context-only project is the one the automatic fallbacks keep out of.
     _landscape_project = ""
     _context_only_project = ""
+    _project_binding = ""
     _landscape_decided = False
     _origin_as_given = dict(origin) if origin else None
 
@@ -1365,12 +1387,11 @@ def _handle_impl(
             adapter=None if dry_run else _judge,
             fresh=bool(fresh or dry_run),
             why="" if fresh else ("dry_run" if dry_run else ""))
-        _new_origin = _landscape.apply(handle_id, dict(_origin_as_given) if _origin_as_given else None, _land)
-        if _landscape_decided and not _new_origin:
-            # a re-decision that no longer follows a run: the stamped origin
-            # of the first decision must not outlive it
-            from runs import stamp_run_metadata_for as _stamp_origin
-            _stamp_origin(handle_id, {"origin": dict(_origin_as_given or {})})
+        # a re-decision replaces the stamped origin in the same write as
+        # the record (even with an empty one): the first decision's parent
+        # must not outlive it, and apply raises when nothing was recorded
+        _new_origin = _landscape.apply(handle_id, dict(_origin_as_given) if _origin_as_given else None,
+                                       _land, replace=_landscape_decided)
         origin = _new_origin
         _related_ctx = _landscape.related_context(_land)
         _landscape_project = _landscape.chosen_project(_land)
@@ -2290,8 +2311,9 @@ def _handle_impl(
         # sources. First fork wins; parent identity is the project the
         # parent run RECORDED (its metadata — a landscape-bound parent works
         # in a project its goal text never names, review 2026-09-13), and
-        # only for a parent with no recorded run the goal-text derivation
-        # its own loop would have used.
+        # only for a parent with no recorded project (no run found, or a
+        # run whose metadata carries no valid name) the goal-text
+        # derivation its own loop would have used.
         if origin and origin.get("related_by") != "landscape":
             # A landscape-decided relation is a RUN relation (origin +
             # recall thread carry it); it is not a project fork, so it
@@ -3693,22 +3715,36 @@ def _handle_impl(
                         _escalated_adapter = build_adapter(model=_next_tier)
                         _pre_escalation_loop = loop_result
                         _pre_escalation_loop_id = getattr(loop_result, "loop_id", None)
-                        _escalated_project = (
+                        _pre_escalation_project = (
                             project or getattr(loop_result, "project", "") or ""
-                        ) + "-escalated"
+                        )
+                        _pre_escalation_binding = _project_binding
+                        _escalated_project = _pre_escalation_project + "-escalated"
+                        # the retry's destination is an automatic project
+                        # transition and carries the binding's constraints:
+                        # never the landscape's context-only project, never
+                        # a path outside the projects root (review r3)
+                        from landscape import project_inside_root as _esc_inside
+                        _esc_exclude = (_context_only_project,) if _context_only_project else ()
+                        if _escalated_project in _esc_exclude or not _esc_inside(_escalated_project):
+                            _esc_base = _escalated_project
+                            _escalated_project = _free_project_name(_esc_base, _esc_exclude)
+                            log.info("escalation: %r steps aside to %r", _esc_base, _escalated_project)
                         # the run's project changes here (loop init stamps
                         # it again); the binding provenance must not keep
                         # claiming the landscape/operator chose a project
                         # they never saw (review 2026-09-13 round 2)
-                        try:
-                            from runs import stamp_run_metadata as _stamp_esc
-                            if _stamp_esc({"project": _escalated_project,
-                                           "project_binding": "escalated"}) is None:
-                                log.warning("project binding: %s (escalated) not recorded in run metadata",
-                                            _escalated_project)
-                        except Exception:
-                            log.warning("project binding: %s (escalated) not recorded in run metadata",
-                                        _escalated_project, exc_info=True)
+                        from runs import stamp_run_metadata as _stamp_esc
+
+                        def _stamp_project_pair(_proj, _bind):
+                            try:
+                                if _stamp_esc({"project": _proj, "project_binding": _bind}) is None:
+                                    log.warning("project binding: %s (%s) not recorded in run metadata",
+                                                _proj, _bind)
+                            except Exception:
+                                log.warning("project binding: %s (%s) not recorded in run metadata",
+                                            _proj, _bind, exc_info=True)
+                        _stamp_project_pair(_escalated_project, "escalated")
                         # Preserve the normal run contract (measurement
                         # provenance, handle identity, deferred learning,
                         # callback/context, repo fence) while changing only
@@ -3723,7 +3759,13 @@ def _handle_impl(
                             "loop_reason": "quality_gate_escalate",
                             "parent_loop_id": _pre_escalation_loop_id,
                         })
-                        loop_result = run_agent_loop(message, **_escalate_kwargs)
+                        try:
+                            loop_result = run_agent_loop(message, **_escalate_kwargs)
+                        except BaseException:
+                            # the retry never delivered: the run's project is
+                            # the one holding the delivered work (review r3)
+                            _stamp_project_pair(_pre_escalation_project, _pre_escalation_binding)
+                            raise
                         elapsed = int((time.monotonic() - started_at) * 1000)
                         if getattr(loop_result, "loop_id", ""):
                             _run_loop_ids.append(loop_result.loop_id)
@@ -3755,6 +3797,12 @@ def _handle_impl(
                             _dead_loop_id = getattr(loop_result, "loop_id", "") or ""
                             _dead_rerun_loop = loop_result
                             loop_result = _pre_escalation_loop
+                            # the delivered work is the original loop's: the
+                            # run's project and its provenance follow it, or
+                            # the next continuation (landscape, recall,
+                            # curation all read metadata `project`) would
+                            # bind to the dead retry's workspace (review r3)
+                            _stamp_project_pair(_pre_escalation_project, _pre_escalation_binding)
                             # Parent ships → its contested claims still apply;
                             # its closure verdict (stamped before the gate ran)
                             # stays the run's verdict — no post-escalate

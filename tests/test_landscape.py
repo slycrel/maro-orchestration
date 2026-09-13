@@ -1159,3 +1159,209 @@ class TestTheDecisionFollowsTheGoalItBindsOn:
         assert projects == ["board-reports", "board-reports-escalated"], projects
         meta = _meta(r.handle_id)
         assert (meta["project"], meta["project_binding"]) == ("board-reports-escalated", "escalated")
+
+
+def _escalating_run(monkeypatch, goal, adapter, second_status="done", **kw):
+    """An AGENDA run whose quality gate escalates once: the first loop's
+    closure is non-defending (0.65), the retry's is 0.9. Returns
+    (HandleResult, [projects the loops ran in])."""
+    from unittest.mock import MagicMock
+    from handle import handle
+    from agent_loop import LoopResult, StepOutcome
+    from director import ClosureVerdict
+    import llm
+    monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: adapter)
+    projects = []
+
+    def _fake_run(g, *x, **k):
+        projects.append(k.get("project", ""))
+        status = "done" if len(projects) == 1 else second_status
+        steps = [StepOutcome(index=0, text="s", status="done", result="o", iteration=0)] if status == "done" else []
+        return LoopResult(loop_id=f"lr-{len(projects)}", project=k.get("project", ""), goal=g,
+                          status=status, stuck_reason=None if status == "done" else "budget", steps=steps)
+
+    verdicts = [ClosureVerdict(complete=True, confidence=0.65, gaps=[], summary="weak", checks_run=2, checks_passed=1),
+                ClosureVerdict(complete=True, confidence=0.9, gaps=[], summary="ok", checks_run=2, checks_passed=2)]
+    gate = MagicMock()
+    gate.escalate = True
+    gate.contested_claims = []
+    gate.reason = "weak coverage"
+    with _no_hosted_free(), \
+         patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+         patch("intent.check_goal_clarity", return_value={"clear": True}), \
+         patch("director.verify_goal_completion", side_effect=lambda *a, **k: verdicts.pop(0)), \
+         patch("quality_gate.run_quality_gate", return_value=gate):
+        r = handle(goal, force_lane="agenda", model="cheap", dry_run=False, **kw)
+    return r, projects
+
+
+class TestTheConstraintsSurviveTheTransitions:
+    """Review round 3 (2026-09-13): the binding's constraints must hold
+    through the automatic transitions after it — the sibling allocator, the
+    escalation retry and its revert, the clarified re-decision's origin."""
+
+    def test_the_sibling_allocator_never_returns_the_rejected_base(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        from orch_items import projects_root
+        root = projects_root()
+        root.mkdir(parents=True, exist_ok=True)
+        # a dangling symlink at -2 is not free (exists() would call it absent)
+        (root / "client-a-2").symlink_to(tmp_path / "gone")
+        assert not (root / "client-a-2").exists() and (root / "client-a-2").is_symlink()
+        assert handle_mod._free_project_name("client-a", ("client-a",)) == "client-a-3"
+        # the range exhausted: a random suffix, never the base
+        monkeypatch.setattr(handle_mod, "_PROJECT_SIBLING_CAP", 4)
+        for n in (3, 4):
+            (root / f"client-a-{n}").mkdir()
+        name = handle_mod._free_project_name("client-a", ("client-a",))
+        assert name != "client-a" and name.startswith("client-a-") and not (root / name).exists()
+        assert len(name) == len("client-a-") + 8
+        # even that taken: fail closed
+        import uuid
+        monkeypatch.setattr(uuid, "uuid4", lambda: type("U", (), {"hex": "deadbeefcafe"})())
+        (root / "client-a-deadbeef").mkdir()
+        with pytest.raises(RuntimeError):
+            handle_mod._free_project_name("client-a", ("client-a",))
+        # through the fallback: an excluded slug whose -2 is a dangling link lands in -3
+        goal = "Extend the client report now"
+        from loop_artifacts import resolve_project_slug
+        slug = resolve_project_slug(goal)
+        (root / f"{slug}-2").symlink_to(tmp_path / "gone-too")
+        assert handle_mod._project_for_goal(goal, (slug,)) == (f"{slug}-3", "minted")
+
+    def test_an_escalation_keeps_out_of_the_context_only_project(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        (projects_root() / "board-reports-escalated").mkdir(parents=True)
+        # client A's earlier run escalated into board-reports-escalated; the
+        # judge relates client B's goal to it as context only
+        prior = _finished_run("Refresh the board-reports index page for client A", "Refreshed.",
+                              extra={"project": "board-reports-escalated"})
+        goal = "Refresh the board-reports index page for client B"
+        r, projects = _escalating_run(monkeypatch, goal,
+                                      _NowAndJudge(_related(1, "same page, other client", continues=False)))
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["chosen"] == prior and meta["landscape"]["continues"] is False
+        assert projects[0] == "board-reports"
+        assert projects[1] != "board-reports-escalated" and projects[1].startswith("board-reports-escalated-")
+        assert (meta["project"], meta["project_binding"]) == (projects[1], "escalated")
+
+    def test_a_failed_escalation_leaves_the_run_in_the_delivered_project(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import landscape
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        r, projects = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")),
+                                      second_status="stuck")
+        assert projects == ["board-reports", "board-reports-escalated"]
+        assert r.status == "done" and "did not complete" in (r.result or "")
+        meta = _meta(r.handle_id)
+        assert (meta["project"], meta["project_binding"]) == ("board-reports", "landscape")
+        # the next continuation follows the delivered work, not the dead retry
+        assert landscape.recorded_project(r.handle_id) == "board-reports"
+        # a retry that raises: the pair is restored before the error propagates
+        _setup(monkeypatch, tmp_path / "two")
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        from unittest.mock import MagicMock
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        import llm
+        adapter = _NowAndJudge(_related(1, "carries it forward"))
+        monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: adapter)
+        seen = []
+
+        def _fake_run(g, *x, **k):
+            seen.append(k.get("project", ""))
+            if len(seen) == 2:
+                raise RuntimeError("retry blew up")
+            return LoopResult(loop_id="lr-1", project=k.get("project", ""), goal=g, status="done", stuck_reason=None,
+                              steps=[StepOutcome(index=0, text="s", status="done", result="o", iteration=0)])
+
+        gate = MagicMock()
+        gate.escalate = True
+        gate.contested_claims = []
+        gate.reason = "weak"
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=ClosureVerdict(complete=True, confidence=0.65, gaps=[], summary="weak",
+                                               checks_run=2, checks_passed=1)), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            try:
+                r2 = handle(GOAL_FOLLOW_UP, force_lane="agenda", model="cheap", dry_run=False)
+            except RuntimeError:
+                r2 = None
+        assert seen == ["board-reports", "board-reports-escalated"]
+        from runs import runs_root
+        run_dirs = [d for d in runs_root().iterdir() if (d / "metadata.json").exists()]
+        metas = [json.loads((d / "metadata.json").read_text()) for d in run_dirs]
+        mine = [m for m in metas if m.get("prompt") == GOAL_FOLLOW_UP or m.get("project_binding")]
+        assert mine and all((m["project"], m["project_binding"]) == ("board-reports", "landscape") for m in mine), mine
+
+    def test_a_fresh_re_decision_with_no_caller_origin_clears_the_first_parent_in_one_write(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        from landscape import apply, decide
+        a = _finished_run(GOAL_QUARTERLY, "Revenue rose.")
+        b = _finished_run(GOAL_FOLLOW_UP, finished=False)
+        first = apply(b, None, decide(GOAL_FOLLOW_UP, handle_id=b, adapter=_Judge(_related(1))))
+        assert first["parent_handle_id"] == a
+        assert _meta(b)["origin"]["parent_handle_id"] == a
+        fresh = decide(GOAL_FOLLOW_UP, handle_id=b, adapter=_Judge(json.dumps({"relation": "fresh", "reason": "no"})))
+        # without `replace` an empty origin is not written (the first-decision contract) ...
+        assert apply(b, None, fresh) is None and _meta(b)["origin"]["parent_handle_id"] == a
+        # ... with it the parent goes in the same write as the record
+        writes = []
+        real = runs.stamp_run_metadata_for
+
+        def spy(hid, fields):
+            writes.append(dict(fields))
+            return real(hid, fields)
+
+        monkeypatch.setattr(runs, "stamp_run_metadata_for", spy)
+        assert apply(b, None, fresh, replace=True) is None
+        assert len(writes) == 1 and writes[0]["origin"] == {} and writes[0]["landscape"]["relation"] == "fresh"
+        assert _meta(b)["origin"] == {} and _meta(b)["landscape"]["relation"] == "fresh"
+        # a write that fails is a decision that was not made — it raises, nothing derived is published
+        monkeypatch.setattr(runs, "stamp_run_metadata_for", lambda *x, **kw: None)
+        with pytest.raises(RuntimeError):
+            apply(b, None, fresh, replace=True)
+
+    def test_a_clarified_goal_with_no_caller_origin_drops_the_first_parent(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        from orch_items import projects_root
+        import llm
+        (projects_root() / "client-a").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Client A: revenue rose.", extra={"project": "client-a"})
+        fresh = json.dumps({"relation": "fresh", "run": 0, "reason": "other work"})
+        adapter = _NowAndJudge([_related(1, "carries it forward"), fresh])
+        monkeypatch.setattr(llm, "build_adapter", lambda *x, **k: adapter)
+        channel = MagicMock()
+        channel.ask.return_value = "Not that report — a new one for client B."
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=lambda g, *x, **k: LoopResult(
+                 loop_id="l", project=k.get("project", ""), goal=g, status="done", stuck_reason=None,
+                 steps=[StepOutcome(index=0, text="s", status="done", result="o", iteration=0)])), \
+             patch("intent.check_goal_clarity", return_value={"clear": False, "question": "Which?"}), \
+             patch("director.verify_goal_completion",
+                   return_value=ClosureVerdict(complete=True, confidence=0.9, gaps=[],
+                                               summary="verified", checks_run=2, checks_passed=2)), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            r = handle(GOAL_FOLLOW_UP, force_lane="agenda", dry_run=False, channel=channel)
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["relation"] == "fresh"
+        assert "parent_handle_id" not in (meta.get("origin") or {}), meta.get("origin")
+        assert meta["project_binding"] == "minted" and meta["project"] != "client-a"
