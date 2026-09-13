@@ -29,6 +29,7 @@ import re
 
 import sys
 import time
+import threading
 import uuid
 
 from typing import List, TYPE_CHECKING
@@ -311,6 +312,8 @@ _PROJECT_SIBLING_CAP = 999
 # marker (review 2026-09-13 round 7). Process-local by nature — a process
 # death loses it, and the transition-orphan sweep then reverts.
 _UNSETTLED_TRANSITIONS: dict = {}
+# review r22: owners and drainers must compare and remove atomically.
+_UNSETTLED_LOCK = threading.Lock()
 
 
 def _free_project_name(base: str, exclude: "tuple[str, ...]", mission: str) -> str:
@@ -1060,7 +1063,9 @@ def handle(
                 # sweeps then work from disk.
                 _owed_obligation = None
                 try:
-                    _obligation = {k: v for k, v in dict(_UNSETTLED_TRANSITIONS.get(_hid) or {}).items()
+                    with _UNSETTLED_LOCK:
+                        _prior = _UNSETTLED_TRANSITIONS.get(_hid)
+                    _obligation = {k: v for k, v in dict(_prior or {}).items()
                                    if k != "verdict_pending"}
                     _obligation["_finalize"] = True
                     # review r20: the live owner still owes its final close and tell.
@@ -1077,7 +1082,10 @@ def handle(
                         log.error("finalize write for %s not recorded; kept for the "
                                   "maintenance retry", _hid)
                     else:
-                        _UNSETTLED_TRANSITIONS.pop(_hid, None)
+                        # review r22: a later publication belongs to its own writer.
+                        with _UNSETTLED_LOCK:
+                            if _UNSETTLED_TRANSITIONS.get(_hid) is _prior:
+                                _UNSETTLED_TRANSITIONS.pop(_hid, None)
                     _vp_meta = {}
                     _meta_loop_ids: list = []
                     try:
@@ -1232,7 +1240,8 @@ def handle(
                 finally:
                     # review r21: repair must wait for the owner's close and tell.
                     if _owed_obligation is not None:
-                        _UNSETTLED_TRANSITIONS[_hid] = _owed_obligation
+                        with _UNSETTLED_LOCK:
+                            _UNSETTLED_TRANSITIONS[_hid] = _owed_obligation
                 # Tail cost lane (2026-08-13): the drains' LLM calls (lesson
                 # extraction, crystallization, promotion validation, evolver)
                 # join the loop's cost rows via the same scope.
@@ -3914,7 +3923,8 @@ def _handle_impl(
                                     log.warning("project binding: %s (%s) write %d raised",
                                                 _proj, _bind, _attempt, exc_info=True)
                             if _transition is not None and _transition.get("settled_at"):
-                                _UNSETTLED_TRANSITIONS[handle_id] = dict(_fields)
+                                with _UNSETTLED_LOCK:
+                                    _UNSETTLED_TRANSITIONS[handle_id] = dict(_fields)
                                 log.error("project transition %s → %s settlement (%s) not recorded; "
                                           "retried at the finalize, else recovery reverts to the "
                                           "delivered project", _transition.get("from"),

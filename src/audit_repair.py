@@ -19,6 +19,7 @@ import logging
 import math
 import os
 import time
+import threading
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -694,6 +695,13 @@ def _pending_settlements() -> Optional[dict]:
     return pending if isinstance(pending, dict) else None
 
 
+def _pending_lock():
+    import sys
+    mod = sys.modules.get("handle")
+    lock = getattr(mod, "_UNSETTLED_LOCK", None) if mod is not None else None
+    return lock if lock is not None else threading.Lock()
+
+
 def reconcile_kept_write(existing: dict, kept: dict) -> dict:
     """A kept write against the store's LOCKED snapshot `existing` — the
     fields still owed, or {} when the store already carries the outcome.
@@ -774,7 +782,7 @@ def _story_payload(handle_id: str, run_dir: Path, meta: Optional[dict], *, by: s
     return payload
 
 
-def _drain_pending(pending: dict) -> tuple:
+def _drain_pending(pending: dict, lock=None) -> tuple:
     """Write this process's kept finalize writes — decided AND published
     from one locked snapshot (`reconcile_kept_write` inside
     `runs.revise_run_metadata_for`); a store that cannot be read or
@@ -788,11 +796,25 @@ def _drain_pending(pending: dict) -> tuple:
     repair pidfile. Returns (retried, dropped)."""
     from runs import (revise_run_metadata_for, run_dir,
                       finalized_without_verdict, record_finalized_without_verdict)
+    if lock is None:
+        lock = _pending_lock()
+
+    def remove_drained(hid, kept):
+        # review r22: I/O may outlive this entry; never consume its replacement.
+        with lock:
+            if pending.get(hid) is kept:
+                pending.pop(hid, None)
+                return
+        log.info("kept write for %s replaced while draining — the newer obligation stays for the next drain", hid)
+
     retried = dropped = 0
-    for hid in list(pending.keys()):
-        kept = pending.get(hid)
+    with lock:
+        ids = list(pending.keys())
+    for hid in ids:
+        with lock:
+            kept = pending.get(hid)
         if not isinstance(kept, dict) or not kept:
-            pending.pop(hid, None)
+            remove_drained(hid, kept)
             continue
         before = None
         if kept.get("_finalize"):
@@ -817,7 +839,7 @@ def _drain_pending(pending: dict) -> tuple:
             log.warning("kept-write drain: kept write for %s still not "
                         "readable/writable — retrying next time", hid)
             continue
-        pending.pop(hid, None)
+        remove_drained(hid, kept)
         if not written:
             dropped += 1
             log.warning("kept-write drain: kept write for %s dropped — the store "
@@ -859,7 +881,7 @@ def drain_kept_writes() -> dict:
     if acquired.status != "acquired":
         return {"status": acquired.status, "retried": 0, "dropped": 0}
     try:
-        retried, dropped = _drain_pending(pending)
+        retried, dropped = _drain_pending(pending, _pending_lock())
         return {"status": "completed", "retried": retried, "dropped": dropped}
     finally:
         try:
@@ -927,7 +949,7 @@ def sweep_transition_orphans(
                 "error": acquired.error}
     stamped = considered = retried = dropped = 0
     try:
-        retried, dropped = _drain_pending(pending)
+        retried, dropped = _drain_pending(pending, _pending_lock())
         now = time.time()
         for run_dir in candidates:
             if stamped >= max(1, int(limit)):

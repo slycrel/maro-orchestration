@@ -219,9 +219,33 @@ class TestDockerfile:
 class TestLayers:
     def test_tag_keeps_the_base_revision_tail(self, ws):
         import container_exec as ce
-        tag = er.image_tag("Yahoo Mail!", 1)
+        tag = er.image_tag("yahoo-mail", 1)
         assert tag == f"maro-executor:p-yahoo-mail-l1-{ce.CLAUDE_CLI_VERSION}-r{ce.IMAGE_REVISION}"
         assert ce._IMAGE_TAG_RE.match(tag), "verbs-baked detection must still read the revision"
+
+        other = er.image_tag("Yahoo Mail!", 1)
+        assert ce._IMAGE_TAG_RE.match(other) and other != tag
+
+    def test_r22_distinct_identities_get_distinct_layers(self, ws, fake_build):
+        assert er.project_slug("weve-used-chrome-on-the") == "weve-used-chrome-on-the"
+        er.add_grants("board-reports", ["apt:private-tool"])
+        assert er.build_layer("board-reports", er.evaluate(REQ)).ok
+        assert er.build_layer(" board-reports ", er.evaluate(REQ)).ok
+        assert er.layer_dir("board-reports") != er.layer_dir(" board-reports ")
+        assert er.image_tag("board-reports", 1) != er.image_tag(" board-reports ", 1)
+        assert er.load_manifest("board-reports")["project"] == "board-reports"
+        assert er.load_manifest(" board-reports ")["project"] == " board-reports "
+        assert er.load_manifest(" board-reports ")["grants"] == []
+
+    def test_r22_a_foreign_manifest_lends_no_grants(self, ws, fake_build, caplog):
+        empty = er.load_manifest("mine")
+        assert er.build_layer("other", er.evaluate(REQ)).ok
+        foreign = er.load_manifest("other")
+        foreign["grants"] = ["apt:private-tool"]
+        er.save_manifest("mine", foreign)
+        assert er.load_manifest("mine") == empty
+        assert er.effective_image("mine") is None
+        assert "mine" in caplog.text and "other" in caplog.text
 
     def test_build_advances_the_manifest_and_writes_the_ledger(self, ws, fake_build):
         v = er.evaluate(REQ)

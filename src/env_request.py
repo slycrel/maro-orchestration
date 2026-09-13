@@ -37,6 +37,7 @@ Design: `docs/ENV_REQUEST_DESIGN.md`.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -294,7 +295,12 @@ def _workspace_root() -> Path:
 
 def project_slug(project: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", str(project or "").strip().lower()).strip("-")
-    return (s or "default")[:40].strip("-") or "default"
+    slug = (s or "default")[:40].strip("-") or "default"
+    if not project or project == slug:
+        return slug
+    # review r22: normalized spellings must not share layers or grants.
+    digest = hashlib.sha1(str(project).encode("utf-8")).hexdigest()[:8]
+    return f"{slug}-{digest}"
 
 
 def layer_dir(project: str) -> Path:
@@ -330,7 +336,13 @@ def load_manifest(project: str) -> Dict[str, Any]:
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
             if isinstance(d, dict):
-                return d
+                recorded = d.get("project")
+                # review r22: a copied manifest cannot lend another identity's grants.
+                if isinstance(recorded, str) and recorded and recorded != project:
+                    log.warning("env_request: manifest for %r records a different project %r",
+                                project, recorded)
+                else:
+                    return d
         except (OSError, json.JSONDecodeError) as exc:
             log.warning("env_request: manifest unreadable for %s: %s", project, exc)
     return {"project": project, "base": "", "layer": 0, "image": "",

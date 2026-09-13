@@ -6815,6 +6815,22 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   navigator's menu PICK stays normalized: it is an answer, not yet an
   identity). Recorded, not changed: an obligation held privately is
   lost with the process (as before — only a death loses it).
+  Round 22 (codex-written): the kept-write drain captured the entry
+  under a handle id, did its I/O, then popped WHATEVER entry sat under
+  that id — an escalation's failed settlement being drained on another
+  thread while the owner's finalize failed its write and its r21
+  `finally` published the replacement obligation under the same id
+  lost that obligation with the host alive (marker active, no sweep
+  selecting it: the very case r21 promised only a death could cause);
+  the registry now has a lock (`handle._UNSETTLED_LOCK`) held by every
+  publication and removal, the drain removes only the exact object it
+  drained (a replaced entry waits for the next drain), and the
+  finalize's success pop removes only the entry it read; the
+  env-request layer slug folded distinct verbatim identities
+  (`" board-reports "` vs `"board-reports"`) onto one layer directory,
+  image and grant list — a canonical identity keeps its plain slug
+  (both live layers unchanged), any other gets `<slug>-<sha1[:8]>`,
+  and a manifest recording a different project lends nothing.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the

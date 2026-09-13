@@ -3534,3 +3534,131 @@ def test_r21_finalize_keeps_obligation_private_until_close_and_tell(monkeypatch,
     assert _meta(hid)["story_owed_by"] == "repair"
     assert _meta(hid)["verdict_pending"]["resolved_at"]
     assert hid not in handle_mod._UNSETTLED_TRANSITIONS
+
+
+def test_r22_a_drain_removes_only_the_entry_it_drained(monkeypatch, tmp_path):
+    import threading
+    import runs
+    import audit_repair
+    _setup(monkeypatch, tmp_path)
+    active = {"since": "2026-09-13T00:00:00+00:00",
+              "from": "board-reports", "to": "board-reports-escalated"}
+    hid = _finished_run(GOAL_QUARTERLY, extra={
+        "project": "board-reports-escalated", "project_binding": "escalated",
+        "project_transition": active, "goal_achieved": True,
+        "goal_verdict_source": "closure", "verdict_pending": {"since": active["since"]}})
+    settlement = {"project": "board-reports-escalated", "project_binding": "escalated",
+                  "project_transition": {**active, "settled_at": active["since"], "outcome": "adopted"}}
+    pending = {hid: settlement}
+    replacement = {"_finalize": True, "_by": "owner"}
+    lock = threading.Lock()
+    real_revise = runs.revise_run_metadata_for
+
+    def replacing(h, fn):
+        written = real_revise(h, fn)
+        with lock:
+            if pending.get(h) is settlement:
+                pending[h] = replacement
+        return written
+
+    monkeypatch.setattr(runs, "revise_run_metadata_for", replacing)
+    audit_repair._drain_pending(pending, lock)
+    assert pending.get(hid) is replacement
+    retried, dropped = audit_repair._drain_pending(pending, lock)
+    assert retried == 1
+    assert _meta(hid)["story_owed_by"] == "repair"
+    assert _meta(hid)["verdict_pending"]["resolved_at"]
+
+
+def test_r22_the_owner_replacement_survives_an_in_flight_drain(monkeypatch, tmp_path):
+    import threading
+    import runs
+    import notify
+    import observe
+    import audit_repair
+    import handle as handle_mod
+    from orch_items import projects_root
+    _setup(monkeypatch, tmp_path)
+    (projects_root() / "board-reports").mkdir(parents=True)
+    _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+    monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {})
+    monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+    monkeypatch.setattr(notify, "tell", lambda *a, **kw: True)
+    real_revise = runs.revise_run_metadata_for
+    real_stamp = runs.stamp_run_metadata
+    real_close = runs.close_run
+    real_finalize = runs.finalize_run
+    owner_in_close = threading.Event()
+    release = threading.Event()
+    drain_wrote = threading.Event()
+    owner_done = threading.Event()
+    ids, results, drains = [], [], []
+
+    def refusing_stamp(fields):
+        # review r22: let the transition start so its failed settlement is published.
+        if (threading.current_thread() is owner
+                and (fields.get("project_transition") or {}).get("settled_at")):
+            return None
+        return real_stamp(fields)
+
+    def interleaved_revise(hid, fn):
+        if threading.current_thread() is owner:
+            return None
+        written = real_revise(hid, fn)
+        if threading.current_thread() is drain:
+            drain_wrote.set()
+            assert owner_done.wait(10)
+        return written
+
+    def refusing_final_close(hid, **kwargs):
+        if threading.current_thread() is owner and "finalized_at" in (kwargs.get("extra") or {}):
+            return None
+        return real_finalize(hid, **kwargs)
+
+    def blocking_close(hid, **kwargs):
+        if kwargs.get("final") and threading.current_thread() is owner:
+            ids.append(hid)
+            owner_in_close.set()
+            assert release.wait(10)
+        return real_close(hid, **kwargs)
+
+    def run_owner():
+        results.append(_escalating_run(
+            monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward"))))
+
+    monkeypatch.setattr(runs, "stamp_run_metadata", refusing_stamp)
+    monkeypatch.setattr(runs, "revise_run_metadata_for", interleaved_revise)
+    monkeypatch.setattr(runs, "close_run", blocking_close)
+    monkeypatch.setattr(runs, "finalize_run", refusing_final_close)
+    owner = threading.Thread(target=run_owner, daemon=True)
+    drain = threading.Thread(target=lambda: drains.append(audit_repair.drain_kept_writes()), daemon=True)
+    owner.start()
+    try:
+        assert owner_in_close.wait(10)
+        hid = ids[0]
+        settlement = handle_mod._UNSETTLED_TRANSITIONS[hid]
+        assert settlement["project_transition"]["settled_at"]
+        drain.start()
+        assert drain_wrote.wait(10)
+        release.set()
+        owner.join(10)
+        assert not owner.is_alive()
+        owner_done.set()
+        drain.join(10)
+        assert not drain.is_alive()
+    finally:
+        owner_in_close.set()
+        release.set()
+        drain_wrote.set()
+        owner_done.set()
+        owner.join(10)
+        if drain.ident is not None:
+            drain.join(10)
+    assert results and drains
+    assert not _meta(hid).get("finalized_at")
+    # review r22: finalize also carries the settlement it captured before close.
+    replacement = {**settlement, "_finalize": True, "_by": "owner"}
+    assert handle_mod._UNSETTLED_TRANSITIONS.get(hid) == replacement
+    assert audit_repair.drain_kept_writes()["retried"] == 1
+    assert _meta(hid)["story_owed_by"] == "repair"
+    assert _meta(hid)["verdict_pending"]["resolved_at"]
