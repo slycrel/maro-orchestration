@@ -551,6 +551,7 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
         if _live is not None:
             _lvl, _ldetail = auth_liveness_verdict(_live)
             result["container_auth_liveness"] = _lvl
+            result["container_auth_liveness_detail"] = _ldetail
             if verbose and _lvl != "ok":
                 print(f"[heartbeat] container auth liveness {_lvl}: {_ldetail}",
                       file=sys.stderr)
@@ -834,6 +835,22 @@ def run_heartbeat(
     if not dry_run:
         try:
             _sw = stranded_state_sweep(verbose=verbose)
+            # The liveness verdict is an observation, not a recovery —
+            # the recorder only returned it (review round 5, 2026-09-13:
+            # the non-verbose heartbeat dropped the warning on the floor,
+            # and the health narration rode goal-run closure only, so an
+            # idle box never heard it). Surface it as a check and run the
+            # health lane's edge-triggered narration for this one probe.
+            _lvl = str(_sw.get("container_auth_liveness") or "")
+            if _lvl and _lvl != "ok":
+                report.checks["container_auth"] = (
+                    f"{'fail' if _lvl == 'expired' else 'warn'}: "
+                    f"{_sw.get('container_auth_liveness_detail') or _lvl}")
+                try:
+                    from system_health import run_health_probes
+                    run_health_probes(only=("container_auth",))
+                except Exception as _hp_exc:
+                    log.debug("container auth health narration failed: %s", _hp_exc)
             if any(_sw.values()):
                 _clones = _sw.get("swept_clones") or {}
                 report.checks["stranded_sweep"] = (

@@ -680,11 +680,17 @@ def _run_steps_dag(
 
     def _run_one(step_idx: int) -> tuple:
         if _halt["reason"]:
-            return step_idx, {
+            _not_started = {
                 "status": "blocked",
                 "stuck_reason": f"not started — environmental pause: {_halt['reason']}",
                 "result": "", "tokens_in": 0, "tokens_out": 0,
             }
+            # Commit it (review round 5): a coordinator that hit its deadline
+            # has stopped consuming futures, and its synthetic "dag timeout"
+            # row would otherwise stand for a step that never ran.
+            with results_lock:
+                results[step_idx] = _not_started
+            return step_idx, _not_started
         step_text = steps[step_idx - 1]
         # Build completed_context from direct dep results (already done when we start)
         dep_ctx: List[str] = []
@@ -762,13 +768,15 @@ def _run_steps_dag(
 
             if _timed_out:
                 for _f, _idx in list(active.items()):
-                    if _idx not in results:
+                    with results_lock:
+                        if _idx in results:
+                            continue
                         results[_idx] = {
                             "status": "blocked",
                             "stuck_reason": f"dag timeout ({_fanout_timeout}s)",
                             "result": "", "tokens_in": 0, "tokens_out": 0,
                         }
-                        log.warning("dag step %d timed out after %ds", _idx, _fanout_timeout)
+                    log.warning("dag step %d timed out after %ds", _idx, _fanout_timeout)
                 break
 
             completed_idx = active.pop(_completed_f)

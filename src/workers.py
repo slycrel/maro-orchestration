@@ -75,6 +75,12 @@ class WorkerResult:
     # refused ticket). Same vocabulary as step outcomes' `error_class`;
     # "" when not an adapter failure or unclassifiable.
     error_class: str = ""
+    # The draft a REFUSED revision was revising (review round 5,
+    # 2026-09-13): the revision call overwrote the ticket's result, so an
+    # environmental refusal there erased the paid-for draft from the
+    # paused directive's report. Unaccepted work, carried verbatim; "" on
+    # every other path (an accepted revision supersedes its draft).
+    unaccepted_draft: str = ""
 
 
 # ---------------------------------------------------------------------------

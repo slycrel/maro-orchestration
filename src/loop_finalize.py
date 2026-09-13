@@ -341,7 +341,13 @@ def _build_result_and_finalize(
             log.debug("partial result write failed: %s", exc)
 
     if ctx.verbose:
-        print(f"[maro] {result.summary()}", file=sys.stderr, flush=True)
+        # Never fatal (review round 5, 2026-09-13): this summary precedes
+        # the durable stamps below; a closed stderr must not cost the run
+        # its metadata (the pause_reason handle_queue resumes on).
+        try:
+            print(f"[maro] {result.summary()}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
     # World-facts slice 2: land the run's declared facts (anecdotal →
     # candidate knowledge nodes, hypotheses → observe_pattern). Before

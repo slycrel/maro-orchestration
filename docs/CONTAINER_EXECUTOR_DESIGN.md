@@ -352,6 +352,39 @@ local suites were green — the new credentials reader is now triaged in the
 manifest (the old `_reseed_probe` line-framer retired) and the three bare
 `[:N]` cuts on rationale strings use `context_budget.clip`.
 
+*Review round 5 (2026-09-13, codex skeptic + QA, whole chunk) found two
+HIGHs in branch twins of the round-4 fixes and three carry-through gaps;
+fixed before landing.* (xvi) **The rate-limit retry twin of the first
+casualty.** A containerized call that was rate-limited and whose *retry*
+died of the expired session broke out of the retry loop and raised the
+generic "claude rate-limited after N retries" error — past the breaker,
+past the round-4 class marker: host `/login` remedy, no pause, and the
+healthy HOST subprocess circuit tripped. A retry that dies of something
+other than a rate limit now falls through to the generic failure path
+(breaker, class marker, real detail); only a still-rate-limited or
+capped-out retry raises the rate-limit error. (xvii) **Never-fatal output
+had two more siblings:** the director's `_log` (both pause branches ran it
+before the typed result, report or log existed) and the sequential loop's
+pause print plus the finalize summary print (both precede the metadata
+stamp the resume test reads). All guarded. (xviii) **DAG post-deadline
+twin** of the round-4 fan-out reconcile: a queued root's early "not
+started" return was never committed, so the coordinator's synthetic "dag
+timeout" row stood for a step that never ran — the worker now commits it
+under the lock. (xix) **A refused revision erased its draft:** the revision
+call overwrote the ticket's result, so the paused directive's report and
+log lost the paid-for draft — carried as `unaccepted_draft`, rendered in
+the pause report as unaccepted work. (xx) **The non-verbose heartbeat
+dropped the expiry warning** (recorded, but only printed under verbose)
+and the health narration rode goal-run closure only — an idle box never
+heard it. The heartbeat now surfaces it as a `container_auth` check and
+runs `run_health_probes(only=("container_auth",))` — the same
+edge-triggered, deduplicated narration, one probe, no cycle advance, no
+per-tick Telegram (health status untouched). Side-find outside the chunk:
+`tests/test_hermes_dispatch.py` wrote a run dir into the LIVE workspace
+because `deploy/hermes/dispatch.py` pops every workspace var at import
+(`c1234567-patient-yarrow`, 2026-09-07; left in place — run data is never
+auto-deleted); the test now isolates after the load.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

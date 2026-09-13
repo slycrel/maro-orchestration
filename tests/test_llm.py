@@ -2562,6 +2562,44 @@ class TestContainerExecutorWrap:
         else:
             assert info.error_class != "container_auth"
 
+    @pytest.mark.parametrize("second", ["auth", "rate"])
+    def test_a_retry_that_dies_of_auth_is_the_container_story(self, monkeypatch, tmp_path, second):
+        # Review round 5: a container call was rate-limited, its retry came
+        # back "OAuth session expired" — the retry loop broke out and raised
+        # the generic "claude rate-limited after N retries" error, skipping
+        # the breaker and the class marker: host /login remedy, no pause,
+        # host circuit tripped. Control: a retry that is STILL rate-limited
+        # keeps the rate-limit error.
+        import container_exec as ce
+        import notify
+        from llm_errors import classify_error
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        auth = self._mock_auth_failure(container_executed=True)
+        seq = [limited, auth if second == "auth" else limited, limited]
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 2
+        with patch("llm._run_subprocess_safe", side_effect=seq) as run:
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        if second == "auth":
+            assert run.call_count == 2
+            assert "rate-limited" not in str(ei.value)
+            assert getattr(ei.value, "container_auth_owned", False) is True
+            info = classify_error(ei.value, backend="subprocess")
+            assert info.error_class == "container_auth" and info.failover is False
+            assert ce.auth_breaker_snapshot() is not None, "the breaker must trip"
+        else:
+            assert run.call_count == 3
+            assert "rate-limited after 2 retries" in str(ei.value)
+            assert ce.auth_breaker_snapshot() is None
+
     def test_failover_stands_down_for_container_owned_auth_error(self, monkeypatch):
         # One container auth death must not trip the process-wide subprocess
         # circuit (healthy HOST calls would reroute to the next, paid,

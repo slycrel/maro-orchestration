@@ -1491,8 +1491,13 @@ def _execute_main_loop(
             ctx.stamp_pause(_env_pause)
             log.warning("environmental pause (%s): %s", _env_pause, stuck_reason)
             if verbose:
-                print(f"[maro] paused ({_env_pause}): {stuck_reason}",
-                      file=sys.stderr, flush=True)
+                # Never fatal (review round 5): a closed stderr here escaped
+                # the loop before finalization wrote the pause to metadata.
+                try:
+                    print(f"[maro] paused ({_env_pause}): {stuck_reason}",
+                          file=sys.stderr, flush=True)
+                except Exception:
+                    pass
             break
 
         step_status = outcome["status"]

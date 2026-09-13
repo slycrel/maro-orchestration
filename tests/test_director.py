@@ -3976,6 +3976,58 @@ class TestEnvironmentalRefusalStopsDispatch:
         result = run_director("research and build a report", dry_run=False, adapter=object())
         assert len(calls) == 2 and len(reviews) == 1, (calls, reviews)
         assert result.pause_reason == "container-auth-expired" and result.report.startswith("⏸")
+        # Round 5: the refused revision overwrote the ticket's result and
+        # erased the paid-for draft from the paused directive's report.
+        assert len(result.worker_results) == 1
+        assert result.worker_results[0].status == "blocked"
+        assert result.worker_results[0].unaccepted_draft == "draft"
+        assert "(draft — its revision was refused" in result.report and "\ndraft" in result.report
+        import json as _json
+        logs = list(tmp_path.rglob(f"director-{result.director_id}-log.json"))
+        assert len(logs) == 1, logs
+        assert _json.loads(logs[0].read_text(encoding="utf-8"))["worker_results"][0][
+            "unaccepted_draft_length"] == 5
+
+    @pytest.mark.parametrize("branch", ["ticket", "revision"])
+    def test_pause_report_survives_a_closed_stderr(self, monkeypatch, tmp_path, branch):
+        # Round 5: verbose progress output ran right after the refusal; a
+        # closed stderr raised BrokenPipeError out of run_director before
+        # the typed result, its report or the durable log existed.
+        import io, sys
+        from workers import WorkerResult
+        import director as _director_mod
+        from director import ReviewDecision, Ticket
+        _setup(monkeypatch, tmp_path)
+        class _Broken(io.TextIOBase):
+            def write(self, s):
+                raise BrokenPipeError("stderr closed")
+            def flush(self):
+                raise BrokenPipeError("stderr closed")
+            def close(self):
+                pass  # no flush at GC — the failure under test is the write
+        calls = []
+        def _dispatch(worker_type, task, *, context="", **kw):
+            calls.append(task)
+            if branch == "revision" and len(calls) == 1:
+                return WorkerResult(worker_type=worker_type, ticket=task, status="done", result="draft")
+            monkeypatch.setattr(sys, "stderr", _Broken())
+            return WorkerResult(worker_type=worker_type, ticket=task, status="blocked", result="",
+                                stuck_reason="LLM call failed (container_auth): re-seed the volume",
+                                blocked_origin="adapter", error_class="container_auth")
+        monkeypatch.setattr(_director_mod, "dispatch_worker", _dispatch)
+        monkeypatch.setattr(_director_mod, "_review_worker_output", lambda **kw: (
+            ReviewDecision(accepted=False, reason="thin", revision_request="more"), (0, 0)))
+        monkeypatch.setattr(_director_mod, "_produce_spec",
+                            lambda directive, adapter, dry_run, _log: (
+                                "spec", [Ticket(ticket_id="t1", worker_type="research", task="find it"),
+                                         Ticket(ticket_id="t2", worker_type="research", task="more")], (0, 0)))
+        monkeypatch.setattr(_director_mod, "_challenge_spec", lambda *a, **k: ("spec", (0, 0)), raising=False)
+        result = run_director("research and build a report", dry_run=False, adapter=object(), verbose=True)
+        assert len(calls) == (2 if branch == "revision" else 1)
+        assert result.pause_reason == "container-auth-expired"
+        assert result.report.startswith("⏸ Directive paused (container-auth-expired)")
+        assert result.log_path, "the durable log must still be written"
+        assert len(list(tmp_path.rglob(f"director-{result.director_id}-log.json"))) == 1
 
     def test_skip_director_carries_the_loop_pause(self, monkeypatch, tmp_path):
         import director as _director_mod

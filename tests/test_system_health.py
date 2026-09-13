@@ -659,6 +659,29 @@ class TestContainerAuthProbe:
         run_health_probes()
         assert len(_events(SUBSYSTEM_RECOVERED)) == 1
 
+    def test_only_runs_the_named_probe_and_keeps_the_cycle(self, monkeypatch, _tmp_health):
+        # Round 5: the heartbeat narrates the container-auth warning through
+        # this machinery for ONE probe; the streak probes must not run off
+        # their goal-run cadence and the cycle counter must not advance.
+        import json as _json
+        streak = []
+        def _streak(prior):
+            streak.append(1)
+            return OK, "fine", {}
+        monkeypatch.setattr(sh, "DECLARED_PROCESSES", [
+            _decl(_streak, name="streaky"),
+            _decl(_seq_probe([SILENT, OK]), name="container_auth")])
+        run_health_probes()
+        assert streak == [1]
+        assert _json.loads(_tmp_health.read_text())["cycle"] == 1
+        assert len(_events(SUBSYSTEM_SILENT)) == 1
+        summary = run_health_probes(only=("container_auth",))
+        assert summary["ran"] == 1 and streak == [1]
+        snap = _json.loads(_tmp_health.read_text())
+        assert snap["cycle"] == 1 and snap["processes"]["container_auth"]["status"] == OK
+        assert len(_events(SUBSYSTEM_RECOVERED)) == 1
+        assert snap["processes"]["streaky"]["status"] == OK, "untouched entries survive"
+
     def test_session_with_time_left_stays_ok_and_names_the_date(self, monkeypatch):
         self._patch(monkeypatch, "on", None)
         self._liveness(monkeypatch, 20)

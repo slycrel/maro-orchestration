@@ -343,8 +343,15 @@ def run_director(
              director_id, directive[:60], dry_run, skip_if_simple)
 
     def _log(msg: str):
+        # Never fatal (review round 5, 2026-09-13): a closed stderr raised
+        # BrokenPipeError out of the pause branches before the typed
+        # result, its report or the durable log existed. Presentation
+        # never stands between an outcome and its consequences.
         if verbose:
-            print(f"[maro:director:{director_id}] {msg}", file=sys.stderr, flush=True)
+            try:
+                print(f"[maro:director:{director_id}] {msg}", file=sys.stderr, flush=True)
+            except Exception:
+                pass
 
     _log(f"directive={directive!r}")
 
@@ -582,6 +589,7 @@ def run_director(
                     context=context,
                     revision_of=ticket.ticket_id,
                 )
+                _draft = result
                 result = dispatch_worker(
                     revised_ticket.worker_type,
                     revised_ticket.task,
@@ -601,6 +609,8 @@ def run_director(
                 _env_pause = _worker_environmental_pause(result)
                 if _env_pause:
                     director_pause_reason = _env_pause
+                    if _draft.result and not result.result:
+                        result.unaccepted_draft = _draft.result
                     log.warning("director: revision of ticket %s refused by the environment "
                                 "(%s) — directive paused", ticket.ticket_id, _env_pause)
                     _log(f"environmental pause: {_env_pause} — dispatch stopped")
@@ -644,7 +654,10 @@ def run_director(
             director_pause_reason, (_refused.stuck_reason if _refused else "") or "",
             f"{max(len(tickets) - len(worker_results), 0)} of {len(tickets)} ticket(s) not dispatched",
             [f"**{r.worker_type} (done)**\n{r.result}" for r in worker_results
-             if r.status == "done" and r.result])
+             if r.status == "done" and r.result]
+            + [f"**{r.worker_type} (draft — its revision was refused by the environment; "
+               f"not accepted)**\n{r.unaccepted_draft}"
+               for r in worker_results if getattr(r, "unaccepted_draft", "")])
         _log("paused — deterministic report, no compile call")
     else:
         _log("compiling final report...")
@@ -1144,6 +1157,8 @@ def _write_director_log(
                     # Round 3: a blocked worker's own diagnosis, durable.
                     "error_class": getattr(r, "error_class", "") or "",
                     "stuck_reason": _clip(r.stuck_reason or "", 200),
+                    # Round 5: the draft a refused revision was revising.
+                    "unaccepted_draft_length": len(getattr(r, "unaccepted_draft", "") or ""),
                     "tokens_in": r.tokens_in,
                     "tokens_out": r.tokens_out,
                 }

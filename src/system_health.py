@@ -42,7 +42,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -537,8 +537,15 @@ DECLARED_PROCESSES: List[ProcessDeclaration] = [
 # Probe cycle
 # ---------------------------------------------------------------------------
 
-def run_health_probes(*, verbose: bool = False) -> Dict[str, Any]:
+def run_health_probes(*, verbose: bool = False,
+                      only: Optional[Iterable[str]] = None) -> Dict[str, Any]:
     """Run all declared probes, persist the snapshot, narrate transitions.
+
+    ``only`` (review round 5, 2026-09-13) restricts the cycle to the named
+    processes — the heartbeat narrates the container-auth expiry warning
+    through this same edge-triggered machinery without running the streak
+    probes off their goal-run cadence. A partial cycle shares the lock,
+    the snapshot and the narrated= state; it does not advance ``cycle``.
 
     Rides loop_finalize beside run_skill_maintenance. Never raises; each
     probe is individually shielded (a broken probe reports UNKNOWN, it
@@ -571,7 +578,10 @@ def run_health_probes(*, verbose: bool = False) -> Dict[str, Any]:
                 processes = {}
                 snapshot["processes"] = processes
 
+            _only = set(only) if only is not None else None
             for decl in DECLARED_PROCESSES:
+                if _only is not None and decl.name not in _only:
+                    continue
                 prior = processes.get(decl.name)
                 prior = prior if isinstance(prior, dict) else {}
                 try:
@@ -616,7 +626,8 @@ def run_health_probes(*, verbose: bool = False) -> Dict[str, Any]:
                     print(f"[health] {decl.name}: {status} — {evidence}")
 
             snapshot["updated_at"] = datetime.now(timezone.utc).isoformat()
-            snapshot["cycle"] = int(snapshot.get("cycle", 0) or 0) + 1
+            if _only is None:
+                snapshot["cycle"] = int(snapshot.get("cycle", 0) or 0) + 1
             _write_snapshot(snapshot)
 
         # Narrate only after the snapshot recording narrated= persisted:

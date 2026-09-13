@@ -269,6 +269,38 @@ def test_run_heartbeat_sheriff_unavailable():
     assert report.health_status == "critical"
 
 
+@pytest.mark.parametrize("level", ["warn", "expired", "ok"])
+def test_nonverbose_heartbeat_surfaces_the_expiry_verdict(monkeypatch, tmp_path, level):
+    """Review round 5 (2026-09-13): the sweep recorded the container-auth
+    expiry verdict but the non-verbose heartbeat rendered only recovery
+    counts, and the health narration rode goal-run closure — an idle box
+    never heard the warning. Now: a heartbeat check plus the health lane's
+    edge-triggered narration for that one probe. Control: ok is silent."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import container_exec as ce
+    import system_health as sh
+    monkeypatch.setattr(ce, "refresh_auth_liveness", lambda: {"refresh_expires_at": 1.0})
+    monkeypatch.setattr(ce, "auth_liveness_verdict",
+                        lambda rec: (level, f"session {level}: refresh token expires 2026-09-15"))
+    probed = []
+    monkeypatch.setattr(sh, "run_health_probes", lambda **kw: probed.append(kw) or {})
+    with patch("heartbeat.check_system_health", return_value=_make_mock_health()), \
+         patch("heartbeat.check_all_projects", return_value=[]), \
+         patch("heartbeat.write_heartbeat_state"), \
+         patch("heartbeat._log_heartbeat"), \
+         patch("heartbeat._is_interactive_session_active", return_value=True):
+        report = run_heartbeat(dry_run=False, verbose=False, escalate=False)
+    if level == "ok":
+        assert "container_auth" not in report.checks and probed == []
+    else:
+        expect = "fail" if level == "expired" else "warn"
+        assert report.checks["container_auth"] == (
+            f"{expect}: session {level}: refresh token expires 2026-09-15")
+        assert probed == [{"only": ("container_auth",)}]
+        assert report.health_status == "healthy", "no per-tick Telegram alert for a warning"
+
+
 # ---------------------------------------------------------------------------
 # CLI integration
 # ---------------------------------------------------------------------------

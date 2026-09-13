@@ -2955,6 +2955,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 _wait = getattr(self, "_rate_limit_wait", 60)
                 _retry_success = False
                 _capped_out = False
+                _still_rate_limited = True
                 for _attempt in range(_RATE_LIMIT_MAX_RETRIES):
                     if _RATE_LIMIT_TOTAL_CAP > 0 and _total_slept + _wait > _RATE_LIMIT_TOTAL_CAP:
                         log.warning(
@@ -2991,17 +2992,29 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     if result.returncode == 0:
                         _retry_success = True
                         break
-                    # Check if still rate-limited
+                    # Check if still rate-limited — the entry's own
+                    # predicate (structured event first, phrases as backup).
                     _retry_combined = result.stdout.lower()
-                    if "hit your limit" not in _retry_combined and "rate limit" not in _retry_combined:
-                        # Non-rate-limit error — stop retrying
+                    if not (_parse_stream_json(result.stdout)["rate_limited"]
+                            or "hit your limit" in _retry_combined
+                            or "rate limit" in _retry_combined):
+                        # The retry died of something ELSE (an expired
+                        # container session, a crash). That is not a
+                        # rate-limit story: it falls through to the generic
+                        # failure path below — the auth breaker, the
+                        # container class marker, the real detail. Review
+                        # round 5 (2026-09-13): it raised "claude
+                        # rate-limited after N retries: OAuth session
+                        # expired", skipped the breaker, classified as a
+                        # HOST login failure and tripped the host circuit.
+                        _still_rate_limited = False
                         break
                     # Still rate-limited — continue loop with longer wait
                 if _retry_success:
                     self._rate_limit_wait = 60  # reset backoff counter on success
                 else:
                     self._rate_limit_wait = _wait  # persist longer wait for next call
-                if not _retry_success:
+                if not _retry_success and _still_rate_limited:
                     if result.returncode != 0:
                         if _capped_out:
                             raise RuntimeError(

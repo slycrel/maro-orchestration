@@ -270,6 +270,12 @@ def test_read_rec_resolves_handle_for_a_job_still_in_flight(tmp_path, monkeypatc
     live SMS ask and the code died). Resolve from run metadata meanwhile."""
     import runs
     mod = _load_dispatch(tmp_path, monkeypatch)
+    # Isolate the run store AFTER the load: dispatch.py pops every workspace
+    # var at import (its production sanitization), so the conftest
+    # tmp_path workspace was gone and this test wrote c1234567 into the
+    # LIVE workspace (found 2026-09-13 — the leaked dir then made the first
+    # assertion fail on this box while CI's fresh box passed).
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path / "ws"))
     mod.DISPATCH_DIR.mkdir(parents=True, exist_ok=True)
     rec = {"job_id": "task-inflight-1", "status": "running", "handle_id": None}
     mod._rec_path("task-inflight-1").write_text(json.dumps(rec))

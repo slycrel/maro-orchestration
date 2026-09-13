@@ -353,6 +353,46 @@ class TestContainerAuthPauseEndToEnd:
         meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
         assert meta.get("pause_reason") == PAUSE_ERR_CONTAINER_AUTH
 
+    def test_sequential_pause_persists_with_a_closed_stderr(self, monkeypatch, tmp_path):
+        # Round 5: the sequential pause branch printed unguarded after the
+        # in-memory stamp; a closed stderr escaped the loop before
+        # finalization wrote the pause to metadata.
+        import io, sys
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        fake = tmp_path / "claude"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+        import runs
+        import loop_planning
+        import loop_execute
+        from agent_loop import run_agent_loop
+        from stop_verdicts import PAUSE_ERR_CONTAINER_AUTH
+        monkeypatch.setattr(loop_planning, "_decompose", lambda *a, **k: ["list the newest five"])
+        monkeypatch.setattr(loop_planning, "_shape_steps", lambda steps, **k: list(steps))
+        class _Broken(io.TextIOBase):
+            def write(self, s):
+                raise BrokenPipeError("stderr closed")
+            def flush(self):
+                raise BrokenPipeError("stderr closed")
+            def close(self):
+                pass  # no flush at GC — the failure under test is the write
+        def _worker(**kwargs):
+            monkeypatch.setattr(sys, "stderr", _Broken())
+            return {"status": "blocked", "error_class": "container_auth",
+                    "stuck_reason": "LLM call failed (container_auth): re-seed",
+                    "user_action": "re-seed the maro-claude-auth volume",
+                    "result": "", "tokens_in": 0, "tokens_out": 0}
+        monkeypatch.setattr(loop_execute, "_execute_step", _worker)
+        rd = runs.create_run_dir("cauth0002", prompt="read the inbox")
+        with runs.scoped_run_dir(rd):
+            result = run_agent_loop("read the inbox", dry_run=False, max_steps=3,
+                                    handle_id="cauth0002", verbose=True)
+        assert result.status == "interrupted" and result.pause_reason == PAUSE_ERR_CONTAINER_AUTH
+        meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+        assert meta.get("pause_reason") == PAUSE_ERR_CONTAINER_AUTH
+
 
 class TestContainerAuthPauseThroughTheRealWrapper:
     """The LITERAL production composition (review 2026-09-13 HIGH): worker
@@ -718,6 +758,28 @@ class TestSchedulersStopOnEnvironmentalPause:
         monkeypatch.setattr(loop_parallel, "_run_in_step_worktree", lambda label, fn: fn())
         out = loop_parallel._run_steps_parallel(goal="g", steps=["a", "b"], adapter=None,
                                                 ancestry_context="", tools=[], verbose=False, max_workers=1)
+        assert executed == [1]
+        assert out[0]["error_class"] == "container_auth" and out[0]["tokens_in"] == 7
+        assert out[1]["stuck_reason"].startswith("not started"), out[1]
+
+    def test_dag_refusal_after_the_deadline_marks_the_queued_root_not_started(self, monkeypatch):
+        # Round 5: the fan-out reconcile (round 4) had no DAG twin — the
+        # queued root's early "not started" return was never committed, so
+        # the coordinator's synthetic "dag timeout" row stood for a step
+        # that never ran.
+        import time as _t
+        import loop_parallel
+        monkeypatch.setenv("MARO_STEP_TIMEOUT", "1")
+        executed = []
+        def slow(**kw):
+            executed.append(kw["step_num"])
+            _t.sleep(1.3)
+            return dict(self._AUTH, tokens_in=7)
+        monkeypatch.setattr(loop_parallel, "_execute_step", slow)
+        monkeypatch.setattr(loop_parallel, "_run_in_step_worktree", lambda label, fn: fn())
+        out = loop_parallel._run_steps_dag(goal="g", steps=["a", "b"], deps={1: set(), 2: set()},
+                                           adapter=None, ancestry_context="", tools=[],
+                                           verbose=False, max_workers=1)
         assert executed == [1]
         assert out[0]["error_class"] == "container_auth" and out[0]["tokens_in"] == 7
         assert out[1]["stuck_reason"].startswith("not started"), out[1]
