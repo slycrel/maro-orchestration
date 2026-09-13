@@ -132,6 +132,21 @@ def _write_escalation_file(event_type: str, payload: dict) -> None:
     locked_append(escalations_path(), json.dumps(entry, default=str))
 
 
+def hook_configured(event_type: str) -> bool:
+    """True when a notify.command lane is configured AND it subscribes to
+    `event_type` — i.e. a False from `emit` means a configured recipient
+    received nothing, not "no channel" (review 2026-09-13 r13: the
+    finalize recorded delivery on either)."""
+    try:
+        command = str(_config_get("notify.command", "") or "").strip()
+        if not command:
+            return False
+        events = _config_get("notify.events", DEFAULT_EVENTS) or DEFAULT_EVENTS
+        return event_type in events
+    except Exception:
+        return False
+
+
 def emit(event_type: str, payload: dict, *, run_dir: Optional[str] = None) -> bool:
     """Fire a notification event. Returns True if the hook command ran cleanly.
 

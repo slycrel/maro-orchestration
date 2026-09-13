@@ -2679,7 +2679,8 @@ class TestFinalizationIsNotDelivery:
         runs.stamp_run_metadata_for(hid, {"lane": "agenda", "finalized_at": "2026-09-13T00:10:00+00:00"})
         stamps, events = [], []
         monkeypatch.setattr(memory_ledger, "stamp_outcome_verdict",
-                            lambda lid, **kw: stamps.append((lid, kw.get("goal_verdict_source"), kw.get("goal_achieved"))))
+                            lambda lid, **kw: (stamps.append((lid, kw.get("goal_verdict_source"), kw.get("goal_achieved"))),
+                                               memory_ledger.OutcomeVerdictStampResult("updated"))[1])
         monkeypatch.setattr(captains_log, "log_event", lambda kind, **kw: events.append((kind, kw.get("subject"))))
         monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {hid: {"_finalize": True}})
         # a ledger that cannot be stamped defers the whole obligation — the
@@ -2691,7 +2692,8 @@ class TestFinalizationIsNotDelivery:
         assert hid in handle_mod._UNSETTLED_TRANSITIONS and not _meta(hid)["verdict_pending"].get("resolved_at")
         # the ledger back: ledger row + event FIRST, then the marker
         monkeypatch.setattr(memory_ledger, "stamp_outcome_verdict",
-                            lambda lid, **kw: stamps.append((lid, kw.get("goal_verdict_source"), kw.get("goal_achieved"))))
+                            lambda lid, **kw: (stamps.append((lid, kw.get("goal_verdict_source"), kw.get("goal_achieved"))),
+                                               memory_ledger.OutcomeVerdictStampResult("updated"))[1])
         res = drain_kept_writes()
         assert res == {"status": "completed", "retried": 1, "dropped": 0}, res
         assert stamps == [("lr-1", VERDICT_SOURCE_NEVER_STAMPED, None)], stamps
@@ -2736,3 +2738,138 @@ class TestFinalizationIsNotDelivery:
                 handle_task({**task, "origin": {"parent_handle_id": hid, "source": "task_store"}}, dry_run=True)
             assert seen.get("handle_id") == hid
             assert seen.get("project") == expected, (recorded, seen.get("project"))
+
+
+class TestTheStoryIsItsOwnObligation:
+    """Review round 13 (2026-09-13): telling the run's story is an
+    obligation independent of the verdict marker — a finalized run with
+    no delivery record is told by its own sweep whatever the marker's
+    state; delivery is the hook running cleanly or no hook being owed,
+    never the attempt; the ledger's typed failure defers the drain; the
+    heartbeat runs the untold sweep in its own scope."""
+
+    def test_a_finalized_run_with_no_delivery_record_is_told_by_its_sweep(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import os
+        from datetime import datetime, timezone, timedelta
+        import runs
+        import notify
+        from audit_repair import sweep_untold_finalizes, sweep_verdict_orphans
+        emitted = []
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: emitted.append((kind, payload.get("handle_id"))) or True)
+        monkeypatch.setattr(notify, "hook_configured", lambda kind: False)
+        now = datetime.now(timezone.utc)
+        old = (now - timedelta(hours=2)).isoformat()
+        resolved = {"since": old, "loop_id": "lr-1", "notified_early": True, "resolved_at": old}
+        # (a) the process died between the final close and the emit: marker RESOLVED, no record
+        dead_untold = _finished_run(GOAL_QUARTERLY, "A.", extra={
+            "loop_ids": ["lr-1"], "verdict_pending": dict(resolved), "goal_verdict_source": "closure",
+            "goal_achieved": True, "finalized_at": old})
+        # (b) told already
+        told = _finished_run(GOAL_QUARTERLY + " b", "B.", extra={
+            "verdict_pending": dict(resolved), "finalized_at": old, "final_notified_at": old})
+        # (c) a live finalize still in its curation (young, owner alive)
+        young_alive = _finished_run(GOAL_QUARTERLY + " c", "C.", extra={
+            "verdict_pending": dict(resolved), "finalized_at": now.isoformat()})
+        # (d) aged with a live owner: the record failed after a clean emit — told again (accepted)
+        aged_alive = _finished_run(GOAL_QUARTERLY + " d", "D.", extra={
+            "verdict_pending": {**resolved, "notified_early": False}, "finalized_at": old})
+        # (e) early-closed only (no final close): not this sweep's
+        early_only = _finished_run(GOAL_QUARTERLY + " e", "E.", extra={"verdict_pending": dict(resolved)})
+        runs.stamp_run_metadata_for(dead_untold, {"pid": _dead_pid()})
+        for hid in (told, young_alive, aged_alive, early_only):
+            runs.stamp_run_metadata_for(hid, {"pid": os.getpid()})
+        res = sweep_untold_finalizes(grace_s=3600)
+        assert res == {"status": "completed", "told": 2, "considered": 3}, res
+        assert sorted(emitted) == sorted([("run_verdict", dead_untold), ("run_completed", aged_alive)]), emitted
+        for hid in (dead_untold, aged_alive):
+            m = _meta(hid)
+            assert m["final_notified_at"] and m["final_notified_by"] == "untold_finalize_sweep"
+        for hid in (young_alive, early_only):
+            assert "final_notified_at" not in _meta(hid)
+        assert _meta(told)["final_notified_at"] == old
+        # nothing owed twice
+        assert sweep_untold_finalizes(grace_s=3600)["told"] == 0 and len(emitted) == 2
+        # the verdict sweep records what IT tells, the same way
+        crash = _finished_run(GOAL_QUARTERLY + " f", "F.", extra={
+            "loop_ids": ["lr-6"], "verdict_pending": {"since": old, "loop_id": "lr-6", "notified_early": True},
+            "goal_verdict_source": "closure", "goal_achieved": True})
+        runs.stamp_run_metadata_for(crash, {"pid": _dead_pid()})
+        assert sweep_verdict_orphans(grace_s=0)["stamped"] == 1
+        m = _meta(crash)
+        assert m["verdict_pending"]["resolved_at"] and m["final_notified_by"] == "verdict_orphan_sweep"
+        assert emitted[-1] == ("run_verdict", crash)
+
+    def test_delivery_is_the_hook_running_cleanly_or_no_hook_owed(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        import notify
+        from audit_repair import sweep_untold_finalizes
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        # a CONFIGURED hook that fails: the attempt is not the story
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: False)
+        monkeypatch.setattr(notify, "hook_configured", lambda kind: True)
+        r, _ = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        meta = _meta(r.handle_id)
+        assert meta["finalized_at"] and meta["verdict_pending"]["resolved_at"]
+        assert "final_notified_at" not in meta
+        # the sweep retries it — still failing, still owed
+        runs.stamp_run_metadata_for(r.handle_id, {"pid": _dead_pid()})
+        assert sweep_untold_finalizes(grace_s=0) == {"status": "completed", "told": 0, "considered": 1}
+        assert "final_notified_at" not in _meta(r.handle_id)
+        # the hook back: told and recorded
+        emitted = []
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: emitted.append(kind) or True)
+        assert sweep_untold_finalizes(grace_s=0)["told"] == 1 and emitted
+        assert _meta(r.handle_id)["final_notified_by"] == "untold_finalize_sweep"
+        # no hook at all: the journal row is the channel — told at the finalize
+        _setup(monkeypatch, tmp_path / "two")
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: False)
+        monkeypatch.setattr(notify, "hook_configured", lambda kind: False)
+        r2, _ = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert _meta(r2.handle_id)["final_notified_at"]
+
+    def test_the_ledgers_typed_failure_defers_the_drain(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        import memory_ledger
+        import captains_log
+        import handle as handle_mod
+        from memory_ledger import OutcomeVerdictStampResult
+        from audit_repair import drain_kept_writes
+        marker = {"since": "2026-09-13T00:00:00+00:00", "loop_id": "lr-1", "notified_early": True}
+        hid = _finished_run(GOAL_QUARTERLY, "A.", extra={"loop_ids": ["lr-1"], "verdict_pending": dict(marker)})
+        runs.stamp_run_metadata_for(hid, {"lane": "agenda", "finalized_at": "2026-09-13T00:10:00+00:00"})
+        monkeypatch.setattr(captains_log, "log_event", lambda kind, **kw: None)
+        monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {hid: {"_finalize": True}})
+        results = {"status": "write_failed"}
+        monkeypatch.setattr(memory_ledger, "stamp_outcome_verdict",
+                            lambda lid, **kw: OutcomeVerdictStampResult(results["status"]))
+        assert drain_kept_writes() == {"status": "completed", "retried": 0, "dropped": 0}
+        assert hid in handle_mod._UNSETTLED_TRANSITIONS and not _meta(hid)["verdict_pending"].get("resolved_at")
+        results["status"] = "invalid"
+        assert drain_kept_writes()["retried"] == 0 and hid in handle_mod._UNSETTLED_TRANSITIONS
+        results["status"] = "missing"  # a valid absence: no row to make honest
+        assert drain_kept_writes()["retried"] == 1
+        assert _meta(hid)["verdict_pending"]["resolved_at"]
+
+    def test_the_heartbeat_runs_the_untold_sweep_in_its_own_scope(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import audit_repair
+        import heartbeat as hb
+        calls = []
+
+        def boom(**kw):
+            raise OverflowError("malformed record")
+
+        monkeypatch.setattr(audit_repair, "sweep_verdict_orphans", boom)
+        monkeypatch.setattr(audit_repair, "sweep_transition_orphans", boom)
+        monkeypatch.setattr(audit_repair, "sweep_untold_finalizes",
+                            lambda **kw: calls.append(kw) or {"status": "completed", "told": 2, "considered": 2})
+        result = hb.stranded_state_sweep()
+        assert calls and calls[0].get("limit") == 5
+        assert result.get("untold_finalizes_told") == 2

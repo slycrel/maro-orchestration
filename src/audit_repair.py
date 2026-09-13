@@ -927,6 +927,110 @@ def sweep_transition_orphans(
             pass
 
 
+def sweep_untold_finalizes(
+    *, grace_s: float = _ORPHAN_GRACE_S, limit: int = 20,
+) -> dict:
+    """Tell the story of a finalized run whose finalize never recorded
+    telling it. The final close stamps `finalized_at`; the finalize's emit
+    comes AFTER (curation, then the notify) and records `final_notified_at`
+    only when the hook ran cleanly or no hook is owed. A run with the
+    first and not the second is untold: the process died between the
+    close and the emit, or a configured hook failed — and its verdict
+    marker is usually RESOLVED by then, so the verdict sweep never
+    revisits it (review 2026-09-13 r13). The obligation is the story,
+    independent of the marker.
+
+    Gates: a live owner pid within the grace is a finalize still in its
+    curation — leave it; a dead owner, or an aged one (a record that
+    failed to stamp after a clean emit — a repeated story is the accepted
+    direction, a missing one is not) is told here. Routed like the
+    finalize: the early answer reached the user → `run_verdict`, else the
+    full `run_completed`; the payload is the saved run card. Serialized
+    under the repair pidfile."""
+    from proc_lock import acquire_pidfile
+    from runs import runs_root, stamp_run_metadata_for
+
+    def _untold(meta: dict) -> bool:
+        return bool(meta.get("ended_at") and meta.get("finalized_at")
+                    and not meta.get("final_notified_at"))
+
+    root = runs_root()
+    candidates = []
+    if root.is_dir():
+        for run_dir in root.iterdir():
+            if not run_dir.is_dir():
+                continue
+            meta = _read_metadata(run_dir)
+            if meta is None or not _untold(meta):
+                continue
+            candidates.append(run_dir)
+    if not candidates:
+        return {"status": "completed", "told": 0, "considered": 0}
+    acquired = acquire_pidfile(
+        _REPAIR_LOCK, payload={"command": "untold-finalize-sweep"})
+    if acquired.status == "busy":
+        return {"status": "busy", "told": 0}
+    if acquired.status == "unavailable":
+        return {"status": "unavailable", "told": 0, "error": acquired.error}
+    told = considered = 0
+    try:
+        from notify import emit, hook_configured
+        now = time.time()
+        for run_dir in candidates:
+            if told >= max(1, int(limit)):
+                break
+            meta = _read_metadata(run_dir)
+            if meta is None or not _untold(meta):
+                continue
+            considered += 1
+            handle_id = str(meta.get("handle_id") or run_dir.name.split("-", 1)[0])
+            try:
+                since = datetime.fromisoformat(
+                    str(meta.get("finalized_at", "")).replace("Z", "+00:00"))
+                age_s = now - since.timestamp()
+            except (TypeError, ValueError):
+                age_s = grace_s + 1
+            if age_s <= grace_s:
+                try:
+                    _pid = int(meta.get("pid") or 0)
+                except (TypeError, ValueError):
+                    _pid = 0
+                if _pid > 0 and _pid_alive(_pid):
+                    continue  # its finalize is still telling it
+            card = None
+            try:
+                card = json.loads((run_dir / "run_card.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                card = None
+            payload = dict(card) if isinstance(card, dict) else {
+                "handle_id": handle_id, "status": str(meta.get("status") or "")}
+            payload.setdefault("handle_id", handle_id)
+            vp = meta.get("verdict_pending")
+            vp = vp if isinstance(vp, dict) else {}
+            reached = bool(vp.get("notified_early")
+                           and (not vp.get("hook_configured") or vp.get("hook_delivered")))
+            kind = "run_verdict" if reached else "run_completed"
+            delivered = emit(kind, payload, run_dir=str(run_dir))
+            if not delivered and hook_configured(kind):
+                log.warning("untold-finalize sweep: configured notify hook did not "
+                            "deliver %s for %s — still owed", kind, handle_id)
+                continue
+            if stamp_run_metadata_for(handle_id, {
+                    "final_notified_at": datetime.now(timezone.utc).isoformat(),
+                    "final_notified_by": "untold_finalize_sweep"}) is None:
+                log.warning("untold-finalize sweep: told %s for %s but could not record "
+                            "it — it may be told again", kind, handle_id)
+            told += 1
+            log.info("untold-finalize sweep: told %s for %s (finalized %.0fs ago)",
+                     kind, handle_id, age_s)
+        return {"status": "completed", "told": told, "considered": considered}
+    finally:
+        try:
+            acquired.handle.close()
+        except Exception:
+            pass
+
+
 def sweep_verdict_orphans(
     *, grace_s: float = _ORPHAN_GRACE_S, limit: int = 20,
 ) -> dict:
@@ -1066,15 +1170,24 @@ def sweep_verdict_orphans(
                 if not notify:
                     return
                 try:
-                    from notify import emit
+                    from notify import emit, hook_configured
                     reached = bool(
                         vp.get("notified_early")
                         and (not vp.get("hook_configured")
                              or vp.get("hook_delivered")))
                     payload = dict(card or {"handle_id": handle_id})
                     payload.setdefault("handle_id", handle_id)
-                    emit("run_verdict" if reached else "run_completed",
-                         payload, run_dir=str(run_dir))
+                    kind = "run_verdict" if reached else "run_completed"
+                    delivered = emit(kind, payload, run_dir=str(run_dir))
+                    if delivered or not hook_configured(kind):
+                        # recorded like the finalize's own telling, so the
+                        # untold-finalize sweep does not repeat it (r13)
+                        stamp_run_metadata_for(handle_id, {
+                            "final_notified_at": datetime.now(timezone.utc).isoformat(),
+                            "final_notified_by": "verdict_orphan_sweep"})
+                    else:
+                        log.warning("verdict-orphan sweep: configured notify hook did "
+                                    "not deliver %s for %s — still owed", kind, handle_id)
                 except Exception:
                     log.debug("verdict-orphan sweep: owed notify failed for "
                               "%s", handle_id, exc_info=True)

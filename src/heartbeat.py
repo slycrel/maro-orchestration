@@ -458,6 +458,18 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
                      _pt_orphans.get("stamped", 0), _pt_orphans.get("retried", 0))
     except Exception:
         log.debug("heartbeat: transition-orphan sweep failed", exc_info=True)
+    # Its own scope: a finalized run whose story was never told — the
+    # process died between the final close and its emit, or a configured
+    # hook failed — has a RESOLVED marker by then, so neither sweep above
+    # revisits it (review 2026-09-13 round 13).
+    try:
+        from audit_repair import sweep_untold_finalizes
+        _untold = sweep_untold_finalizes(limit=5)
+        if _untold.get("told"):
+            result["untold_finalizes_told"] = _untold["told"]
+            log.info("heartbeat: untold-finalize sweep told %s run(s)", _untold["told"])
+    except Exception:
+        log.debug("heartbeat: untold-finalize sweep failed", exc_info=True)
 
     # Dead-run sweep: a worker killed mid-flight (operator kill, OOM, reboot)
     # never reaches finalize_run; stamp it `stranded` from its dead pid so the

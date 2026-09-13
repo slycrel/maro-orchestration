@@ -1304,11 +1304,16 @@ def record_finalized_without_verdict(handle_id: str, meta: dict, *, status: str)
     for _lid in _loop_ids:
         try:
             from memory_ledger import stamp_outcome_verdict
-            stamp_outcome_verdict(
+            res = stamp_outcome_verdict(
                 _lid,
                 goal_achieved=None,
                 goal_verdict_source=VERDICT_SOURCE_NEVER_STAMPED,
             )
+            # the API reports storage failure as a typed result, not a
+            # raise (`write_failed`); `missing` is a valid absence — no
+            # row to make honest (review r13)
+            if getattr(res, "status", None) not in ("updated", "missing"):
+                ok = False
         except Exception:
             ok = False
     return ok

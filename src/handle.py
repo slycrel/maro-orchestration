@@ -1170,29 +1170,43 @@ def handle(
                         _payload["answer_changed"] = bool(
                             _loop_replaced and _final_sha
                             and _final_sha != _vp_meta.get("answer_sha", ""))
-                        _notify_emit(
-                            "run_verdict", _payload,
+                        _kind = "run_verdict"
+                        _delivered = _notify_emit(
+                            _kind, _payload,
                             run_dir=str(_run_dir_notify(_hid)),
                         )
                     else:
-                        _notify_emit(
-                            "run_completed",
+                        _kind = "run_completed"
+                        _delivered = _notify_emit(
+                            _kind,
                             _card or {"handle_id": _hid, "status": _status},
                             run_dir=str(_run_dir_notify(_hid)),
                         )
-                    # The story was told (or there was no channel to tell
-                    # it on — emit handles both): record it, so a repair
-                    # sweep that resolves a marker this finalize could not
-                    # write does not tell it again. `finalized_at` is the
-                    # final CLOSE, which precedes this emit — it is not
-                    # delivery evidence (review r12). A stamp that fails
-                    # errs toward a repeated notify, never a missing one.
+                    # The story was TOLD when the hook ran cleanly, or when
+                    # there is no hook owed for this event (the journal
+                    # row is the whole channel then); a CONFIGURED hook
+                    # that failed leaves it owed — the untold-finalize
+                    # sweep retries it (review r13: an attempt is not an
+                    # acknowledgment). Recorded so a repair sweep does not
+                    # tell it again; `finalized_at` is the final CLOSE,
+                    # which precedes this emit — not delivery evidence
+                    # (review r12). A record that fails to stamp errs
+                    # toward a repeated notify, never a missing one.
                     try:
-                        from runs import stamp_run_metadata_for as _srm_told
-                        _srm_told(_hid, {"final_notified_at": datetime.now(
-                            timezone.utc).isoformat()})
+                        from notify import hook_configured as _hook_for
+                        _told = bool(_delivered) or not _hook_for(_kind)
                     except Exception:
-                        pass
+                        _told = bool(_delivered)
+                    if _told:
+                        try:
+                            from runs import stamp_run_metadata_for as _srm_told
+                            _srm_told(_hid, {"final_notified_at": datetime.now(
+                                timezone.utc).isoformat()})
+                        except Exception:
+                            pass
+                    else:
+                        log.warning("configured notify hook did not deliver %s for %s; "
+                                    "the untold-finalize sweep retries it", _kind, _hid)
                 except Exception:
                     pass
                 # Tail cost lane (2026-08-13): the drains' LLM calls (lesson

@@ -6633,7 +6633,22 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   unreadable pre-read does not gate the write and the call is made
   after it, best-effort); the queued RESUME forwards the recorded
   project only when it is a non-blank string (`str()` had manufactured
-  a directory name from a malformed record). Direction recorded: a
+  a directory name from a malformed record). Round 13: telling the
+  run's story is its OWN obligation, independent of the verdict marker
+  — `audit_repair.sweep_untold_finalizes` (heartbeat, third
+  independent scope) tells a finalized run with no delivery record
+  (`finalized_at` without `final_notified_at`: the process died between
+  the final close and its emit, or a configured hook failed — the
+  marker is usually RESOLVED by then, so the verdict sweep never
+  revisited it), routed like the finalize (early answer reached →
+  `run_verdict`, else `run_completed`, payload = the saved card), with
+  a live owner within the grace left alone (a finalize still in its
+  curation); delivery = the hook ran cleanly OR no hook is owed
+  (`notify.hook_configured`), never the attempt — the finalize and the
+  verdict sweep's epilogue record `final_notified_at` only then (a
+  configured hook that failed leaves the story owed); the ledger's
+  typed `write_failed`/`invalid` results defer the drain (`missing` is
+  a valid absence). Direction recorded: a
   settlement that fails in the run AND at the finalize is kept for the
   sweep's retry in the same process; only a process death loses it, and
   then the sweep reverts even an adopted retry — the retry's adoption
