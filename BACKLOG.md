@@ -6620,8 +6620,20 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   landscape for its life); `handle()` drains this process's kept
   writes on entry (`audit_repair.drain_kept_writes`, not on dry runs);
   a drained write refreshes the run card and reports like the disk
-  path does (the saved card had stayed `done-verdict-pending`).
-  Direction recorded: a
+  path does (the saved card had stayed `done-verdict-pending`). Round
+  12: finalization is not delivery — the final close (`finalized_at`)
+  PRECEDES the finalize's notify, so the sweep's notify is keyed on the
+  finalize's own delivery record (`final_notified_at`, stamped after
+  its emit; a stamp that fails errs toward a repeated notify, never a
+  missing one); a drained finalize obligation over an AGENDA run with
+  no verdict makes the honest call the close's tripwire had waited on
+  (`runs.record_finalized_without_verdict`, now shared with close_run:
+  ledger row never-stamped + DONE_WITHOUT_VERDICT event, ledger BEFORE
+  the marker; a ledger stamp that raises defers the write; an
+  unreadable pre-read does not gate the write and the call is made
+  after it, best-effort); the queued RESUME forwards the recorded
+  project only when it is a non-blank string (`str()` had manufactured
+  a directory name from a malformed record). Direction recorded: a
   settlement that fails in the run AND at the finalize is kept for the
   sweep's retry in the same process; only a process death loses it, and
   then the sweep reverts even an adopted retry — the retry's adoption

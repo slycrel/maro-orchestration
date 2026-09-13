@@ -2541,6 +2541,7 @@ class TestRecoveryHasAConsumerInEveryProcess:
         finalized = _finished_run(GOAL_QUARTERLY, "A.", extra={
             "loop_ids": ["lr-1"], "verdict_pending": dict(young), "goal_verdict_source": "closure",
             "goal_achieved": True, "finalized_at": datetime.now(timezone.utc).isoformat(),
+            "final_notified_at": datetime.now(timezone.utc).isoformat(),
             "project": "board-reports-escalated", "project_binding": "escalated", "project_transition": active})
         # the same shape WITHOUT the final close: an early-closed run whose tail still runs
         early = _finished_run(GOAL_QUARTERLY + " again", "B.", extra={
@@ -2555,7 +2556,9 @@ class TestRecoveryHasAConsumerInEveryProcess:
         # the provisional retry project is not the record: reverted in the same write
         assert (m["project"], m["project_binding"]) == ("board-reports", "landscape")
         assert m["project_transition"]["outcome"] == "reverted" and landscape.run_settled(m) is True
-        # its story was told by the finalize — the sweep owes no notify
+        # its story was told by the finalize (`final_notified_at`) — the
+        # sweep owes no notify; see TestFinalizationIsNotDelivery for the
+        # finalized run whose story was NOT told
         assert emitted == [], emitted
         e = _meta(early)
         assert not e["verdict_pending"].get("resolved_at")
@@ -2612,3 +2615,124 @@ class TestRecoveryHasAConsumerInEveryProcess:
         assert sweep_transition_orphans(grace_s=10 ** 9)["dropped"] == 1
         assert cards == [hid] and len(reports) == 1
         assert drain_kept_writes() == {"status": "completed", "retried": 0, "dropped": 0}
+
+
+class TestFinalizationIsNotDelivery:
+    """Review round 12 (2026-09-13): `finalized_at` is the final close,
+    which precedes the finalize's notify — the sweep's notify is keyed on
+    the finalize's own delivery record; a drained marker over an
+    unverdicted run makes the honest call the close's tripwire waited
+    on; a RESUME never manufactures a project from a malformed record."""
+
+    def test_a_finalized_run_owes_its_notify_until_the_finalize_sent_it(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import os
+        from datetime import datetime, timezone
+        import runs
+        import notify
+        from audit_repair import sweep_verdict_orphans
+        emitted = []
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: emitted.append((kind, payload.get("handle_id"))) or True)
+        now = datetime.now(timezone.utc).isoformat()
+        young = {"since": now, "loop_id": "lr-1", "notified_early": True}
+        # the final close landed, the process died before the finalize's emit
+        untold = _finished_run(GOAL_QUARTERLY, "A.", extra={
+            "loop_ids": ["lr-1"], "verdict_pending": dict(young), "goal_verdict_source": "closure",
+            "goal_achieved": True, "finalized_at": now})
+        # the finalize's emit ran; only its marker write had failed
+        told = _finished_run(GOAL_QUARTERLY + " again", "B.", extra={
+            "loop_ids": ["lr-2"], "verdict_pending": {**young, "loop_id": "lr-2"}, "goal_verdict_source": "closure",
+            "goal_achieved": True, "finalized_at": now, "final_notified_at": now})
+        for hid in (untold, told):
+            runs.stamp_run_metadata_for(hid, {"pid": os.getpid()})
+        res = sweep_verdict_orphans(grace_s=3600)
+        assert res["status"] == "completed" and res["stamped"] == 2, res
+        for hid in (untold, told):
+            assert _meta(hid)["verdict_pending"]["resolved_at"]
+        assert emitted == [("run_verdict", untold)], emitted
+
+    def test_the_finalize_records_that_it_told_the_story(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import notify
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        emitted = []
+        monkeypatch.setattr(notify, "emit", lambda kind, payload, **kw: emitted.append(kind) or True)
+        r, _ = _escalating_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        meta = _meta(r.handle_id)
+        assert "run_completed" in emitted or "run_verdict" in emitted
+        assert meta["final_notified_at"] >= meta["finalized_at"] > meta["verdict_pending"]["resolved_at"][:0]
+
+    def test_a_drained_marker_without_a_verdict_is_recorded_unverdicted(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        import landscape
+        import memory_ledger
+        import captains_log
+        import handle as handle_mod
+        from stop_verdicts import VERDICT_SOURCE_NEVER_STAMPED
+        from audit_repair import drain_kept_writes
+        marker = {"since": "2026-09-13T00:00:00+00:00", "loop_id": "lr-1", "notified_early": True}
+        # an AGENDA run closure never judged; its finalize could not resolve the marker
+        hid = _finished_run(GOAL_QUARTERLY, "A.", extra={"loop_ids": ["lr-1"], "verdict_pending": dict(marker)})
+        runs.stamp_run_metadata_for(hid, {"lane": "agenda", "finalized_at": "2026-09-13T00:10:00+00:00"})
+        stamps, events = [], []
+        monkeypatch.setattr(memory_ledger, "stamp_outcome_verdict",
+                            lambda lid, **kw: stamps.append((lid, kw.get("goal_verdict_source"), kw.get("goal_achieved"))))
+        monkeypatch.setattr(captains_log, "log_event", lambda kind, **kw: events.append((kind, kw.get("subject"))))
+        monkeypatch.setattr(handle_mod, "_UNSETTLED_TRANSITIONS", {hid: {"_finalize": True}})
+        # a ledger that cannot be stamped defers the whole obligation — the
+        # marker stays active, the entry stays kept
+        monkeypatch.setattr(memory_ledger, "stamp_outcome_verdict",
+                            lambda lid, **kw: (_ for _ in ()).throw(OSError("ledger locked")))
+        res = drain_kept_writes()
+        assert res == {"status": "completed", "retried": 0, "dropped": 0}, res
+        assert hid in handle_mod._UNSETTLED_TRANSITIONS and not _meta(hid)["verdict_pending"].get("resolved_at")
+        # the ledger back: ledger row + event FIRST, then the marker
+        monkeypatch.setattr(memory_ledger, "stamp_outcome_verdict",
+                            lambda lid, **kw: stamps.append((lid, kw.get("goal_verdict_source"), kw.get("goal_achieved"))))
+        res = drain_kept_writes()
+        assert res == {"status": "completed", "retried": 1, "dropped": 0}, res
+        assert stamps == [("lr-1", VERDICT_SOURCE_NEVER_STAMPED, None)], stamps
+        assert events and events[-1][0] == captains_log.DONE_WITHOUT_VERDICT and events[-1][1] == hid
+        m = _meta(hid)
+        assert m["verdict_pending"]["resolved_at"] and landscape.run_settled(m) is True
+        # a judged run is not re-recorded
+        judged = _finished_run(GOAL_QUARTERLY + " again", "B.", extra={
+            "loop_ids": ["lr-2"], "verdict_pending": {**marker, "loop_id": "lr-2"},
+            "goal_verdict_source": "closure", "goal_achieved": True})
+        runs.stamp_run_metadata_for(judged, {"lane": "agenda"})
+        handle_mod._UNSETTLED_TRANSITIONS[judged] = {"_finalize": True}
+        stamps.clear()
+        assert drain_kept_writes()["retried"] == 1 and stamps == []
+        assert _meta(judged)["verdict_pending"]["resolved_at"]
+
+    def test_a_resume_does_not_manufacture_a_project_from_a_malformed_record(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        from handle_queue import handle_task
+        seen = {}
+
+        class _R:
+            loop_id = "resumeloop2"
+            status = "done"
+
+        def _fake_loop(goal, **kwargs):
+            seen.update(kwargs)
+            return _R()
+
+        task = {"job_id": "task-test-cont2", "lane": "agenda", "source": "loop_continuation",
+                "reason": "CONTINUATION of: finish the mission", "continuation_depth": 1,
+                "origin": {"parent_handle_id": "", "source": "task_store"}}
+        for n, (recorded, expected) in enumerate([(17, None), (True, None), (["board-reports"], None),
+                                                   ("   ", None), (" board-reports ", "board-reports")]):
+            hid = f"parentbad{n}"
+            runs.create_run_dir(hid, prompt=GOAL_FOLLOW_UP)
+            runs.stamp_run_metadata_for(hid, {"status": "interrupted", "pause_reason": "budget_exhausted",
+                                              "project": recorded})
+            seen.clear()
+            with patch("agent_loop.run_agent_loop", side_effect=_fake_loop):
+                handle_task({**task, "origin": {"parent_handle_id": hid, "source": "task_store"}}, dry_run=True)
+            assert seen.get("handle_id") == hid
+            assert seen.get("project") == expected, (recorded, seen.get("project"))

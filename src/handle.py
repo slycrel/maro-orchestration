@@ -1180,6 +1180,19 @@ def handle(
                             _card or {"handle_id": _hid, "status": _status},
                             run_dir=str(_run_dir_notify(_hid)),
                         )
+                    # The story was told (or there was no channel to tell
+                    # it on — emit handles both): record it, so a repair
+                    # sweep that resolves a marker this finalize could not
+                    # write does not tell it again. `finalized_at` is the
+                    # final CLOSE, which precedes this emit — it is not
+                    # delivery evidence (review r12). A stamp that fails
+                    # errs toward a repeated notify, never a missing one.
+                    try:
+                        from runs import stamp_run_metadata_for as _srm_told
+                        _srm_told(_hid, {"final_notified_at": datetime.now(
+                            timezone.utc).isoformat()})
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 # Tail cost lane (2026-08-13): the drains' LLM calls (lesson

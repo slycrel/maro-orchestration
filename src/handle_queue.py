@@ -175,7 +175,13 @@ def handle_task(
                     # re-derive a goal slug and stamp it over the binding
                     # (review 2026-09-13 round 8); a legacy record with no
                     # project keeps today's derivation
-                    project=str(_parent_meta.get("project") or "") or None,
+                    # only a recorded STRING is a project identity; anything
+                    # else is a malformed record — `str()` would manufacture
+                    # a directory name from it (review r12) — and today's
+                    # derivation decides (None)
+                    project=(_parent_meta.get("project").strip()
+                             if isinstance(_parent_meta.get("project"), str)
+                             and _parent_meta.get("project").strip() else None),
                 )
             finally:
                 # Drain-batch hygiene the old scoped_run_dir(None) provided:

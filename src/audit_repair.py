@@ -733,15 +733,39 @@ def _drain_pending(pending: dict) -> tuple:
     """Write this process's kept finalize writes — decided AND published
     from one locked snapshot (`reconcile_kept_write` inside
     `runs.revise_run_metadata_for`); a store that cannot be read or
-    written keeps the obligation (review r10). Caller holds the repair
-    pidfile. Returns (retried, dropped)."""
-    from runs import revise_run_metadata_for, run_dir
+    written keeps the obligation (review r10). A finalize obligation over
+    a marker whose run carries NO verdict first makes the honest call the
+    close's tripwire waited on (`runs.record_finalized_without_verdict`:
+    the ledger row stamped never-stamped, the DONE_WITHOUT_VERDICT event)
+    — ledger BEFORE the marker, as the verdict sweep does; a ledger stamp
+    that raises defers the write (review r12: the drain resolved the
+    marker and nothing ever recorded the absence). Caller holds the
+    repair pidfile. Returns (retried, dropped)."""
+    from runs import (revise_run_metadata_for, run_dir,
+                      finalized_without_verdict, record_finalized_without_verdict)
     retried = dropped = 0
     for hid in list(pending.keys()):
         kept = pending.get(hid)
         if not isinstance(kept, dict) or not kept:
             pending.pop(hid, None)
             continue
+        before = None
+        if kept.get("_finalize"):
+            try:
+                before = _read_metadata(run_dir(str(hid)))
+            except Exception:
+                before = None
+            # an unreadable pre-read does not gate the write (the decision
+            # is the locked snapshot's — review r10); the honest call is
+            # then made after the write, best-effort, as close_run's is
+            vp = before.get("verdict_pending") if before else None
+            if (isinstance(vp, dict) and not vp.get("resolved_at")
+                    and finalized_without_verdict({**before, "verdict_pending": None})):
+                if not record_finalized_without_verdict(
+                        str(hid), before, status=str(before.get("status") or "")):
+                    log.warning("kept-write drain: unverdicted-ledger stamp for %s "
+                                "failed — retrying next time", hid)
+                    continue
         written = revise_run_metadata_for(
             str(hid), lambda existing, _k=kept: reconcile_kept_write(existing, _k))
         if written is None:
@@ -758,6 +782,15 @@ def _drain_pending(pending: dict) -> tuple:
         retried += 1
         log.info("kept-write drain: kept write for %s written (%s)",
                  hid, ", ".join(sorted(written)))
+        if before is None and "verdict_pending" in written:
+            try:
+                after = _read_metadata(run_dir(str(hid)))
+                if after and finalized_without_verdict(after):
+                    record_finalized_without_verdict(
+                        str(hid), after, status=str(after.get("status") or ""))
+            except Exception:
+                log.debug("kept-write drain: post-write unverdicted record for %s "
+                          "failed", hid, exc_info=True)
         try:
             _refresh_run_surfaces(str(hid), run_dir(str(hid)), by="kept-write drain")
         except Exception:
@@ -961,9 +994,13 @@ def sweep_verdict_orphans(
             # finalized run is a failed resolving write — recover it now,
             # whatever process hosts it and however young the marker
             # (review r11: a long-lived host that never sweeps kept its
-            # finished run out of the landscape for its life). Its user
-            # story was told by the finalize itself — no notify here.
+            # finished run out of the landscape for its life). Whether its
+            # user story was told is a SEPARATE record — `final_notified_at`,
+            # stamped by the finalize after its emit; the final close
+            # precedes that emit, so `finalized_at` is not delivery evidence
+            # (review r12) — and the epilogue notifies unless it is there.
             _finalized = bool(meta.get("finalized_at"))
+            _told = bool(meta.get("final_notified_at"))
             try:
                 since = datetime.fromisoformat(
                     str(vp.get("since", "")).replace("Z", "+00:00"))
@@ -1069,7 +1106,7 @@ def sweep_verdict_orphans(
                                 handle_id)
                     continue
                 stamped += 1
-                _finish(notify=not _finalized)
+                _finish(notify=not _told)
                 continue
             loop_id = str(vp.get("loop_id") or "")
             if not loop_id:
@@ -1113,7 +1150,7 @@ def sweep_verdict_orphans(
                             "for %s — retrying next sweep", handle_id)
                 continue
             stamped += 1
-            _finish(notify=not _finalized)
+            _finish(notify=not _told)
             log.info("verdict-orphan sweep: %s stamped %s (marker aged %.0fs)",
                      handle_id, VERDICT_SOURCE_PENDING_ORPHANED, age_s)
         return {"status": "completed", "stamped": stamped,
