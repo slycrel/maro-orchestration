@@ -1209,12 +1209,12 @@ class TestTheConstraintsSurviveTheTransitions:
         # a dangling symlink at -2 is not free (exists() would call it absent)
         (root / "client-a-2").symlink_to(tmp_path / "gone")
         assert not (root / "client-a-2").exists() and (root / "client-a-2").is_symlink()
-        assert handle_mod._free_project_name("client-a", ("client-a",)) == "client-a-3"
+        assert handle_mod._free_project_name("client-a", ("client-a",), "Extend client A's report") == "client-a-3"
         assert (root / "client-a-3").is_dir(), "the name is reserved, not merely observed"
         # the range exhausted: a random suffix, never the base
         monkeypatch.setattr(handle_mod, "_PROJECT_SIBLING_CAP", 4)
         (root / "client-a-4").mkdir()
-        name = handle_mod._free_project_name("client-a", ("client-a",))
+        name = handle_mod._free_project_name("client-a", ("client-a",), "Extend client A's report")
         assert name != "client-a" and name.startswith("client-a-") and (root / name).is_dir()
         assert len(name) == len("client-a-") + 8
         # even that taken: fail closed
@@ -1222,7 +1222,7 @@ class TestTheConstraintsSurviveTheTransitions:
         monkeypatch.setattr(uuid, "uuid4", lambda: type("U", (), {"hex": "deadbeefcafe"})())
         (root / "client-a-deadbeef").mkdir()
         with pytest.raises(RuntimeError):
-            handle_mod._free_project_name("client-a", ("client-a",))
+            handle_mod._free_project_name("client-a", ("client-a",), "Extend client A's report")
         # through the fallback: an excluded slug whose -2 is a dangling link lands in -3
         goal = "Extend the client report now"
         from loop_artifacts import resolve_project_slug
@@ -1490,8 +1490,8 @@ class TestTheDecisionIsATransaction:
         from orch_items import projects_root
         root = projects_root()
         # two pending runs that both saw -2 vacant get two names
-        first = handle_mod._free_project_name("client-a", ("client-a",))
-        second = handle_mod._free_project_name("client-a", ("client-a",))
+        first = handle_mod._free_project_name("client-a", ("client-a",), "Extend client A's report")
+        second = handle_mod._free_project_name("client-a", ("client-a",), "Extend client A's report")
         assert (first, second) == ("client-a-2", "client-a-3")
         assert (root / first).is_dir() and (root / second).is_dir()
         # through the binding: two same-opening goals under a context-only verdict land apart
@@ -1510,7 +1510,7 @@ class TestTheDecisionIsATransaction:
         from orch_items import projects_root
         for bad in ("../outside", "/tmp/x", "a/b", " padded ", ""):
             with pytest.raises(ValueError):
-                handle_mod._free_project_name(bad, ())
+                handle_mod._free_project_name(bad, (), "a goal")
         assert not (tmp_path / "outside-2").exists() and not (projects_root() / "outside-2").exists()
         # an escalation of a path-shaped OPERATOR project stays beside it (the override), never elsewhere
         (projects_root() / "board-reports").mkdir(parents=True)
@@ -1521,3 +1521,140 @@ class TestTheDecisionIsATransaction:
         meta = _meta(r.handle_id)
         assert (meta["project"], meta["project_binding"]) == ("../outside-escalated", "escalated")
         assert not any(p.name.startswith("outside-escalated-") for p in tmp_path.iterdir())
+
+
+class TestTheBindingReadsASettledWorld:
+    """Review round 5 (2026-09-13): the landscape decides over runs whose
+    verdict is final, binds to the project the judge saw, reserves a
+    sibling WITH its mission, and is not un-made by its own reporting."""
+
+    def test_a_run_whose_verdict_is_still_owed_is_not_yet_a_candidate(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        import landscape
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        (projects_root() / "board-reports-escalated").mkdir(parents=True)
+        # the answer-first early close: status done, ended_at stamped, the
+        # verdict owed — and the gate's escalation has moved the project
+        pending = {"since": "2026-09-13T00:00:00+00:00", "loop_id": "lr-1"}
+        prior = _finished_run(GOAL_QUARTERLY, "Revenue rose.",
+                              extra={"project": "board-reports-escalated", "verdict_pending": pending})
+        assert landscape.candidates(GOAL_FOLLOW_UP) == ([], 0, 0)
+        assert landscape.verdict_settled({"verdict_pending": pending}) is False
+        # a forged or broken marker cannot hold a finished run out forever
+        for shape in ("true", 1, [], {"since": "x", "resolved_at": "2026-09-13T00:01:00+00:00"}):
+            assert landscape.verdict_settled({"verdict_pending": shape}) is True, shape
+        assert landscape.verdict_settled({}) is True
+        # through the handle: a follow-up during the window runs fresh,
+        # and never lands in the provisional retry workspace
+        r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        meta = _meta(r.handle_id)
+        assert meta["landscape"]["relation"] == "fresh" and meta["landscape"]["rule"] == "no_candidates"
+        assert kw["project"] not in ("board-reports", "board-reports-escalated")
+        assert meta["project_binding"] == "minted"
+        # the finalize resolves the marker (the retry failed; the pair is
+        # restored): the run settles and the next follow-up continues it
+        runs.stamp_run_metadata_for(prior, {"project": "board-reports",
+                                            "verdict_pending": {**pending, "resolved_at": "2026-09-13T00:05:00+00:00"}})
+        cands, scanned, _ = landscape.candidates(GOAL_FOLLOW_UP, exclude_handle_id=r.handle_id)
+        assert scanned == 1 and [c["handle_id"] for c in cands] == [prior] and cands[0]["project"] == "board-reports"
+        r2, kw2 = _agenda_run(monkeypatch, GOAL_FOLLOW_UP + " and headcount",
+                              _NowAndJudge(json.dumps({"relation": "related", "run": prior, "continues": True,
+                                                       "reason": "carries it forward"})))
+        meta2 = _meta(r2.handle_id)
+        assert meta2["landscape"]["chosen"] == prior
+        assert (kw2["project"], meta2["project_binding"]) == ("board-reports", "landscape")
+
+    def test_the_binding_follows_the_snapshot_the_judge_decided_over(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs
+        import landscape
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        (projects_root() / "board-reports-escalated").mkdir(parents=True)
+        prior = _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        rec = landscape.decide(GOAL_FOLLOW_UP, handle_id="h1", adapter=_Judge(_related(1, "carries it forward")))
+        assert rec["chosen"] == prior and rec["candidates"][0]["project"] == "board-reports"
+        # the run's metadata moves under the decision: the binding does not
+        runs.stamp_run_metadata_for(prior, {"project": "board-reports-escalated"})
+        assert landscape.recorded_project(prior) == "board-reports-escalated"
+        assert landscape.chosen_project(rec) == "board-reports"
+        ctx_only = landscape.decide(GOAL_FOLLOW_UP, handle_id="h2",
+                                    adapter=_Judge(_related(1, "other client", continues=False)))
+        assert landscape.context_only_project(ctx_only) == "board-reports-escalated"  # what THIS judge saw
+        runs.stamp_run_metadata_for(prior, {"project": "board-reports"})
+        assert landscape.context_only_project(ctx_only) == "board-reports-escalated"
+        # the snapshot is still subject to containment: gone, or a link out
+        import shutil
+        shutil.rmtree(projects_root() / "board-reports")
+        assert landscape.chosen_project(rec) == ""
+        (projects_root() / "board-reports").symlink_to(tmp_path)
+        assert landscape.chosen_project(rec) == ""
+        # a record without a snapshot (hand-built, or template 3) reads the run
+        (projects_root() / "board-reports").unlink()
+        (projects_root() / "board-reports").mkdir()
+        bare = {"relation": "related", "chosen": prior, "continues": True}
+        assert landscape.chosen_project(bare) == "board-reports"
+        old = {**bare, "candidates": [{"handle_id": prior, "goal": GOAL_QUARTERLY, "similarity": 0.9, "status": "done"}]}
+        assert landscape.chosen_project(old) == "board-reports"
+        # a snapshot that recorded NO project stays empty even if the run gained one
+        none = {**bare, "candidates": [{"handle_id": prior, "project": ""}]}
+        assert landscape.chosen_project(none) == "" and landscape.context_only_project({**none, "continues": False}) == ""
+
+    def test_a_reserved_sibling_records_its_mission(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        from loop_artifacts import resolve_project_slug, _recorded_mission
+        from orch_items import projects_root, ensure_project
+        goal_a = "Tell me about the book Systemantics"
+        goal_b = "Tell me about the book Notes on the Synthesis of Form"
+        goal_c = "Tell me about the book Chaos by James Gleick"
+        base = resolve_project_slug(goal_a)
+        assert base == "tell-me-about-the-book"
+        ensure_project(base, goal_a)
+        # goal B's run steps aside from the base (the judge said context only)
+        reserved = handle_mod._free_project_name(base, (base,), goal_b)
+        assert reserved == f"{base}-2" and (projects_root() / reserved).is_dir()
+        assert _recorded_mission(reserved) == goal_b
+        # an unrelated goal that opens the same way does not inherit the reservation
+        assert resolve_project_slug(goal_c) == f"{base}-3"
+        # ... while goal B itself re-enters its own project
+        assert resolve_project_slug(goal_b) == reserved
+        # the mission is the loop's own (goal[:80]), so loop init is a no-op over it
+        long_goal = "Tell me about the book " + "x" * 100
+        r2 = handle_mod._free_project_name(base, (base,), long_goal)
+        assert _recorded_mission(r2) == long_goal[:80]
+        # a reservation without its mission is refused
+        for bad in ("", "   "):
+            with pytest.raises(ValueError):
+                handle_mod._free_project_name(base, (base,), bad)
+        assert not (projects_root() / f"{base}-4").exists()
+        # through the binding: goal C after the reservations lands apart from them all
+        pc = handle_mod._project_for_goal(goal_c, (base,))
+        assert pc == (f"{base}-4", "minted") and pc[0] not in (reserved, r2)
+
+    def test_a_diagnostic_that_fails_after_the_commit_leaves_the_decision_whole(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        prior = _finished_run(GOAL_QUARTERLY, "Revenue rose.", extra={"project": "board-reports"})
+        real_info = handle_mod.log.info
+        raised = []
+
+        def broken_info(msg, *a, **k):
+            if isinstance(msg, str) and msg.startswith("landscape:"):
+                raised.append(msg)
+                raise BrokenPipeError("stderr closed")
+            return real_info(msg, *a, **k)
+
+        monkeypatch.setattr(handle_mod.log, "info", broken_info)
+        r, kw = _agenda_run(monkeypatch, GOAL_FOLLOW_UP, _NowAndJudge(_related(1, "carries it forward")))
+        assert raised, "the diagnostic ran and failed"
+        meta = _meta(r.handle_id)
+        # persisted, installed, and driving the run — all three agree
+        assert meta["landscape"]["relation"] == "related" and meta["landscape"]["chosen"] == prior
+        assert meta["origin"]["parent_handle_id"] == prior
+        assert (kw["project"], meta["project"], meta["project_binding"]) == ("board-reports", "board-reports", "landscape")
+        assert "## Related prior run" in (kw.get("ancestry_context_extra") or "")

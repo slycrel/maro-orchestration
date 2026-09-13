@@ -44,7 +44,16 @@ PROMPT_VER = 4          # template 3 + `continues` and each candidate's project 
 # shown to the judge as the candidate's outcome — a failed prior is
 # landscape information too (same as the Go engine, whose watermark covers
 # delivered and delivery-failed runs). A run still running, or one whose
-# status is not a word the lifecycle writes, is not.
+# status is not a word the lifecycle writes, is not. Neither is a run whose
+# VERDICT IS STILL OWED: the answer-first early close publishes `done`
+# with an ACTIVE `verdict_pending` marker before the quality gate has run,
+# and the gate may still escalate — moving the run's project to a
+# provisional retry destination and its answer to the retry's. A decision
+# made over that window would bind a continuation to a workspace that the
+# revert of a failed retry then abandons (review 2026-09-13 round 5). The
+# run settles when the finalize (or the crash-orphan sweep) resolves the
+# marker; until then it is landscape information the way a running run is:
+# not yet.
 TERMINAL_STATUSES = frozenset({
     "done", "complete", "completed",             # success
     "partial", "restart", "incomplete",           # partial
@@ -143,6 +152,17 @@ def _read_meta(rd: Path) -> Optional[dict]:
     return meta if isinstance(meta, dict) else None
 
 
+def verdict_settled(meta: dict) -> bool:
+    """False while a run's `verdict_pending` marker is ACTIVE (a dict with
+    no `resolved_at`): its status is published, its verdict — and with it
+    its project and answer — is not yet final. Any other shape (no marker,
+    a resolved one, a malformed one) is settled: the marker is the ONLY
+    signal of an owed verdict, and a forged or broken one must not hold a
+    finished run out of the landscape forever."""
+    vp = (meta or {}).get("verdict_pending")
+    return not (isinstance(vp, dict) and not vp.get("resolved_at"))
+
+
 def candidates(goal: str, *, exclude_handle_id: str = "") -> Tuple[List[dict], int, int]:
     """Scan the workspace's finished runs for the top-K at or above the floor,
     by similarity then by handle (deterministic). Returns (candidates,
@@ -182,6 +202,8 @@ def _candidates(goal: str, *, exclude_handle_id: str = "") -> Tuple[List[dict], 
         prompt = str(meta.get("prompt") or "")
         status = str(meta.get("status") or "").strip().lower()
         if not prompt or status not in TERMINAL_STATUSES or not meta.get("ended_at") or meta.get("dry_run"):
+            continue
+        if not verdict_settled(meta):
             continue
         scanned += 1
         sim = similarity(goal, prompt)
@@ -377,24 +399,40 @@ def apply(handle_id: str, origin: Optional[dict], rec: Dict[str, Any], *, replac
     return out or None
 
 
+def _chosen_project_as_judged(rec: Dict[str, Any]) -> str:
+    """The chosen run's project AS THE JUDGE SAW IT — the candidate snapshot
+    the decision carries — falling back to the run's metadata only for a
+    record without one (a hand-built record, a template-3 record from
+    before candidates carried their project). The decision was made over
+    the snapshot; the binding follows the decision, not whatever the run's
+    metadata says by the time the handle reads it again (review 2026-09-13
+    round 5: an escalation in flight rewrites `project` provisionally)."""
+    chosen = str(rec.get("chosen") or "")
+    for c in rec.get("candidates") or []:
+        if isinstance(c, dict) and str(c.get("handle_id") or "") == chosen and "project" in c:
+            return project_name(c.get("project"))
+    return recorded_project(chosen)
+
+
 def chosen_project(rec: Dict[str, Any]) -> str:
     """The project of the run the landscape chose AND judged the goal to
     continue (`continues`: a rerun, or a related run whose work the goal
     carries forward — not a tangent that is merely useful context): the
-    deliverable lands where the prior work is. "" when fresh, when the
-    judge did not say the goal continues that run, when the chosen run
-    recorded no valid project name, or when that project is not a
-    directory inside the projects root (a symlink pointing out of the root
-    is not a project: `is_dir()` alone would follow it — the same
-    containment guard the navigator's binder keeps). The handle then falls
-    back to the goal-text shortcuts."""
+    deliverable lands where the prior work is. Read from the candidate
+    snapshot the judge decided over (see `_chosen_project_as_judged`). ""
+    when fresh, when the judge did not say the goal continues that run,
+    when the chosen run recorded no valid project name, or when that
+    project is not a directory inside the projects root (a symlink
+    pointing out of the root is not a project: `is_dir()` alone would
+    follow it — the same containment guard the navigator's binder keeps).
+    The handle then falls back to the goal-text shortcuts."""
     if rec.get("relation") not in ("related", "rerun") or not rec.get("chosen"):
         return ""
     if rec.get("continues") is not True:
         return ""
     try:
         from orch_items import projects_root
-        project = recorded_project(str(rec["chosen"]))
+        project = _chosen_project_as_judged(rec)
         if not project:
             return ""
         if not (projects_root() / project).is_dir() or not project_inside_root(project):
@@ -412,12 +450,14 @@ def context_only_project(rec: Dict[str, Any]) -> str:
     (the named shortcut, the minted slug — which reuses an existing slug
     for a goal that opens the same way) out of this project: a verdict of
     "context only" must not be undone one layer down (review 2026-09-13
-    round 2). "" when fresh, when the goal continues the run, or when the
-    run recorded no valid project name."""
+    round 2). Read from the same candidate snapshot as `chosen_project`:
+    the exclusion names the project the judge considered. "" when fresh,
+    when the goal continues the run, or when the run recorded no valid
+    project name."""
     if rec.get("relation") != "related" or not rec.get("chosen") or rec.get("continues") is True:
         return ""
     try:
-        return recorded_project(str(rec["chosen"]))
+        return _chosen_project_as_judged(rec)
     except Exception:
         return ""
 

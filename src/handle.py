@@ -308,21 +308,28 @@ _PROJECT_MATCH_MIN_LEN = 6
 _PROJECT_SIBLING_CAP = 999
 
 
-def _free_project_name(base: str, exclude: "tuple[str, ...]" = ()) -> str:
+def _free_project_name(base: str, exclude: "tuple[str, ...]", mission: str) -> str:
     """The first `base-2`, `base-3`… that is not excluded and is FREE, and
     RESERVED for the caller: the directory is created here, exclusively
     (`mkdir` without exist_ok is the atomic claim — two pending runs that
     both observed `-2` vacant would otherwise both bind it and the second
-    would inherit the first's work; the loop's `ensure_project` is
-    idempotent over an existing empty directory). A dangling symlink counts
-    as taken (`exists()` reports it absent; mkdir would hit the link). Past
-    the cap a random suffix is tried once; if even that is taken the
-    binding fails closed — the excluded or unsafe base is never returned.
-    `base` must be a valid project NAME: suffixing cannot repair a
-    path-shaped identity (review 2026-09-13 rounds 3–4)."""
+    would inherit the first's work), and the project is initialised with
+    `mission` (the goal, as the loop's own `ensure_project` records it —
+    that call is idempotent over it). A reservation must carry its mission:
+    the older slug resolver (`resolve_project_slug`) treats a generic-slug
+    sibling with NO recorded mission as matching any subject, so an empty
+    reserved directory would be handed to the next unrelated goal that
+    opens the same way (review 2026-09-13 round 5). A dangling symlink
+    counts as taken (`exists()` reports it absent; mkdir would hit the
+    link). Past the cap a random suffix is tried once; if even that is
+    taken the binding fails closed — the excluded or unsafe base is never
+    returned. `base` must be a valid project NAME: suffixing cannot repair
+    a path-shaped identity (review 2026-09-13 rounds 3–4)."""
     from landscape import project_name
     if not project_name(base):
         raise ValueError(f"not a project name: {base!r}")
+    if not (mission or "").strip():
+        raise ValueError("a reserved project needs its mission")
     import orch_items as _oi
     root = _oi.projects_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -335,6 +342,11 @@ def _free_project_name(base: str, exclude: "tuple[str, ...]" = ()) -> str:
             target.mkdir()
         except FileExistsError:
             return False
+        # the same mission text loop_init / mission.py record (goal[:80]);
+        # a failure here propagates: a claimed directory without its
+        # mission is the hole above, and the loop's own init would fail
+        # on the same store
+        _oi.ensure_project(name, mission[:80])
         return True
 
     for n in range(2, _PROJECT_SIBLING_CAP + 1):
@@ -409,7 +421,7 @@ def _project_for_goal(message: str, exclude: "tuple[str, ...]" = ()) -> "tuple[s
     slug = resolve_project_slug(message)
     if slug in exclude or not project_inside_root(slug):
         base = slug
-        slug = _free_project_name(base, exclude)
+        slug = _free_project_name(base, exclude, message)
         log.info("project fallback: %r steps aside to %r (%s)", base, slug,
                  "context only" if base in exclude else "not a project inside the root")
     return slug, "minted"
@@ -1418,17 +1430,25 @@ def _handle_impl(
         origin = _new_origin
         _related_ctx, _landscape_project, _context_only_project = _new_ctx, _new_project, _new_context_only
         _landscape_decided = True
-        log.info("landscape: %s (%s) %d candidate(s) of %d scanned%s",
-                 _land.get("relation"), _land.get("rule"),
-                 len(_land.get("candidates") or []), _land.get("scanned", 0),
-                 f" → follows {_land['chosen']}" if _land.get("chosen") else "")
-        if verbose:
-            print(f"[maro:{handle_id}] landscape: {_land.get('relation')} "
-                  f"({_land.get('rule')}; {len(_land.get('candidates') or [])} "
-                  f"candidate(s) of {_land.get('scanned', 0)} scanned)"
-                  + (f" — follows run {_land['chosen']}: {_land.get('reason', '')}"
-                     if _land.get("chosen") else ""),
-                  file=sys.stderr, flush=True)
+        # The decision is committed above. What follows is reporting: an
+        # exception here (a closed stderr, a logging handler that fails)
+        # must not reach the stage-failed handler, which would record the
+        # run as FRESH over a decision that is recorded, installed, and
+        # driving the run (review 2026-09-13 round 5).
+        try:
+            log.info("landscape: %s (%s) %d candidate(s) of %d scanned%s",
+                     _land.get("relation"), _land.get("rule"),
+                     len(_land.get("candidates") or []), _land.get("scanned", 0),
+                     f" → follows {_land['chosen']}" if _land.get("chosen") else "")
+            if verbose:
+                print(f"[maro:{handle_id}] landscape: {_land.get('relation')} "
+                      f"({_land.get('rule')}; {len(_land.get('candidates') or [])} "
+                      f"candidate(s) of {_land.get('scanned', 0)} scanned)"
+                      + (f" — follows run {_land['chosen']}: {_land.get('reason', '')}"
+                         if _land.get("chosen") else ""),
+                      file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
     if not (origin or {}).get("parent_handle_id"):
         try:
@@ -3773,7 +3793,7 @@ def _handle_impl(
                                         _escalated_project)
                         elif _escalated_project in _esc_exclude or not _esc_inside(_escalated_project):
                             _esc_base = _escalated_project
-                            _escalated_project = _free_project_name(_esc_base, _esc_exclude)
+                            _escalated_project = _free_project_name(_esc_base, _esc_exclude, message)
                             log.info("escalation: %r steps aside to %r", _esc_base, _escalated_project)
                         # the run's project changes here (loop init stamps
                         # it again); the binding provenance must not keep

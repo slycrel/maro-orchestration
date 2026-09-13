@@ -6510,10 +6510,31 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   (two pending same-opening goals both saw `-2` vacant); the allocator
   refuses a path-shaped base (`ValueError`) and an escalation of a
   path-shaped OPERATOR project stays beside it as given (the override),
-  logged. Recorded, not changed: a project deleted
+  logged. Round 5: the landscape reads a SETTLED world — a run whose
+  `verdict_pending` marker is ACTIVE (the answer-first early close
+  published `done` before the quality gate; an escalation may still move
+  its project to a provisional `-escalated` retry that a failed retry's
+  revert abandons) is not a candidate until the finalize or the orphan
+  sweep resolves it (`landscape.verdict_settled`); the bound project and
+  the context-only exclusion come from the candidate SNAPSHOT the judge
+  decided over (`landscape.candidates[i].project`), the run's metadata
+  only for a record without one — the stamped record now explains the
+  binding; a reserved sibling is initialised WITH its mission
+  (`ensure_project(name, goal[:80])`, the loop's own text — the older
+  `resolve_project_slug` reads a generic-slug sibling with no mission as
+  matching any subject, so an empty reservation was handed to the next
+  unrelated same-opening goal; a mission-less reservation is refused);
+  the post-commit diagnostics (`log.info`, the verbose print) cannot
+  reach the stage-failed handler, which would have recorded a committed
+  decision as fresh. Recorded, not changed: a project deleted
   between selection and loop init is recreated empty by
   `ensure_project` (deletion is manual and opt-in here — data-retention
-  decree — and the window is seconds).
+  decree — and the window is seconds); a follow-up arriving in the
+  verdict-pending window runs fresh with `no_candidates` (the window is
+  the gate's runtime; a crash-orphaned marker is resolved by the sweep
+  after its grace); a settled run's project is never re-stamped by the
+  system, so snapshot and metadata differ only when something outside
+  it moved the project.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the
