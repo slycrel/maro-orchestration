@@ -12,13 +12,13 @@ status: living
 |---|---|---|---|
 | **19** (30d: +0) | 26 | 6 | 37% |
 
-- ledger last updated 7d ago — the count above is current enough to read as real.
+- ledger last updated 0d ago — the count above is current enough to read as real.
 
 **Throughput and fan-out**
 
-- 30 commits in 7d, 386 in 30d
-- **Actionable Stack** open boxes: **79** (30d: +38)
-- net new open items per 10 commits: **+0.98** — findings are outrunning closure
+- 67 commits in 7d, 419 in 30d
+- **Actionable Stack** open boxes: **79** (30d: +37)
+- net new open items per 10 commits: **+0.88** — findings are outrunning closure
 - ⚠ this delta counts one SECTION, so an archive pass or a re-org moves it without any work changing hands. Read the rate as a coarse direction, never as a score.
 
 **Actionable Stack, by kind** — the three things it contains, which look identical on the page

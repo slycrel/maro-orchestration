@@ -141,15 +141,19 @@ def hook_owed(event_type: str) -> Optional[bool]:
     acknowledged a story the configured recipient never got)."""
     try:
         from config import get as _get, load_faults
-        command = str(_get("notify.command", "") or "").strip()
+        section = _get("notify", None)
         # review r17: the loader's defaults do not prove no hook is owed.
         if load_faults():
             return None
+        # review r18: a malformed override does not prove the hook is absent.
+        if section is None:
+            return False
+        if not isinstance(section, dict):
+            return None
+        command = str(section.get("command", "") or "").strip()
         if not command:
             return False
-        events = _get("notify.events", DEFAULT_EVENTS)
-        if load_faults():
-            return None
+        events = section.get("events", DEFAULT_EVENTS)
         if events is None or events == "" or events == []:
             events = DEFAULT_EVENTS
         if isinstance(events, str) or not isinstance(events, (list, tuple, set, frozenset)):
@@ -225,6 +229,18 @@ def tell(event_type: str, payload: dict, *, run_dir: Optional[str] = None) -> bo
     return bool(journal_ok) if owed is False else bool(hook_ok)
 
 
+def answer_text(payload: dict) -> str:
+    """Return the first non-empty answer carried by a notification."""
+    if not isinstance(payload, dict):
+        return ""
+    # review r18: delivery qualification and journal text must name the same answer.
+    for key in ("result_excerpt", "answer_summary", "summary"):
+        text = str(payload.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def _journal(event_type: str, payload: dict) -> bool:
     """The structured event row for polling substrates — always, even
     with no hook. Returns the writer's word (False on a torn row or any
@@ -236,7 +252,7 @@ def _journal(event_type: str, payload: dict) -> bool:
         from observe import write_event
         # 300 is a deliberate event-lane projection cap (write_event's rows
         # are PIPE_BUF-bounded downstream) — announced, not silent.
-        _excerpt = str(payload.get("result_excerpt", payload.get("summary", "")))
+        _excerpt = answer_text(payload)
         _detail = _cb_clip(_excerpt, 300)
         if event_type == "run_completed" and (
                 "goal_achieved" in payload or payload.get("goal_verdict_source")):
@@ -292,6 +308,13 @@ def _emit(event_type: str, payload: dict, *, run_dir: Optional[str],
             _write_escalation_file(event_type, payload)
         except Exception:
             log.warning("escalation file write failed for %s", event_type, exc_info=True)
+
+    # review r18: an unreadable override must never send to an inherited recipient.
+    from config import load_config, load_faults
+    load_config()
+    if load_faults():
+        log.warning("notify configuration unreadable for %s; hook skipped", event_type)
+        return False
 
     # 2) The hook command, if the substrate registered one.
     command = str(_config_get("notify.command", "") or "").strip()

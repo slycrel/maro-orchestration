@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -139,15 +140,16 @@ def _workspace_config_path() -> Path:
     return workspace_root() / "config.yml"
 
 
-_load_faults: list[str] = []
+_config_lock = threading.Lock()
 
 
 def load_faults() -> list[str]:
     """Paths that failed to load on the most recent uncached config read."""
-    return list(_load_faults)
+    with _config_lock:
+        return list(_config_cache[2]) if _config_cache is not None else []
 
 
-def _load_yaml(path: Path) -> dict:
+def _load_yaml(path: Path, faults: list[str]) -> dict:
     """Load a YAML file. Returns {} if missing/malformed."""
     import yaml
     try:
@@ -164,7 +166,7 @@ def _load_yaml(path: Path) -> dict:
     # review r17: a file that exists but cannot be read, parsed, or is not
     # a mapping is a FAULT, remembered for `load_faults()` — defaulting
     # must not turn an unreadable hook into "no hook owed".
-    _load_faults.append(str(path))
+    faults.append(str(path))
     return {}
 
 
@@ -173,8 +175,9 @@ def _load_yaml(path: Path) -> dict:
 # Tests and worker subprocesses routinely swap MARO_WORKSPACE/OPENCLAW_WORKSPACE
 # at runtime; a path-blind cache leaks the prior workspace's merged config into
 # the new one.
-_config_cache: Optional[dict] = None
-_config_cache_key: Optional[tuple] = None
+# review r18: publish data, identity, and local faults together so readers
+# cannot clear another load's fault and cache its partial configuration.
+_config_cache: Optional[tuple[dict, tuple, tuple[str, ...]]] = None
 
 
 def _mtime(path: Path) -> float:
@@ -192,31 +195,32 @@ def load_config(*, reload: bool = False) -> dict:
     an operator's config edit without needing a restart). Pass reload=True
     to force a re-read regardless.
     """
-    global _config_cache, _config_cache_key
-    user_path = _user_config_path()
-    workspace_path = _workspace_config_path()
-    cache_key = (str(user_path), str(workspace_path), _mtime(user_path), _mtime(workspace_path))
+    global _config_cache
+    with _config_lock:
+        user_path = _user_config_path()
+        workspace_path = _workspace_config_path()
+        cache_key = (str(user_path), str(workspace_path), _mtime(user_path), _mtime(workspace_path))
 
-    if _config_cache is not None and not reload and _config_cache_key == cache_key:
-        return _config_cache
+        if (_config_cache is not None and not reload
+                and _config_cache[1] == cache_key and not _config_cache[2]):
+            return _config_cache[0]
 
-    _load_faults.clear()
-    user = _load_yaml(user_path)
-    workspace = _load_yaml(workspace_path)
+        faults: list[str] = []
+        user = _load_yaml(user_path, faults)
+        workspace = _load_yaml(workspace_path, faults)
 
-    # Shallow merge: workspace keys override user keys.
-    # Nested dicts are merged one level deep (e.g. model.default_tier).
-    merged = dict(user)
-    for k, v in workspace.items():
-        if isinstance(v, dict) and isinstance(merged.get(k), dict):
-            merged[k] = {**merged[k], **v}
-        else:
-            merged[k] = v
+        # Shallow merge: workspace keys override user keys.
+        # Nested dicts are merged one level deep (e.g. model.default_tier).
+        merged = dict(user)
+        for k, v in workspace.items():
+            if isinstance(v, dict) and isinstance(merged.get(k), dict):
+                merged[k] = {**merged[k], **v}
+            else:
+                merged[k] = v
 
-    # review r17: retry faults even when a repaired file keeps its mtime.
-    _config_cache = None if _load_faults else merged
-    _config_cache_key = None if _load_faults else cache_key
-    return merged
+        # review r17: retry faults even when a repaired file keeps its mtime.
+        _config_cache = (merged, cache_key, tuple(faults))
+        return merged
 
 
 def get(key: str, default: Any = None) -> Any:

@@ -2982,7 +2982,7 @@ def _handle_impl(
                                                        status="done")
                     _early_answer = str(
                         (_card_early or {}).get("answer_summary", "") or "")
-                    from notify import tell as _notify_early
+                    from notify import tell as _notify_early, answer_text
                     _delivered = _notify_early(
                         "run_completed",
                         _card_early or {"handle_id": _hid_early,
@@ -2994,10 +2994,9 @@ def _handle_impl(
                     # is not an answer received. Keep the attempt marker,
                     # but route the finalize and repairs to a full completion.
                     _vp_marker["notified_early"] = True
-                    _vp_marker["early_told"] = bool(
-                        _delivered and isinstance(_card_early, dict)
-                        and (_card_early.get("answer_summary")
-                             or _card_early.get("result_excerpt")))
+                    # review r18: only qualify the answer the journal actually carries.
+                    _vp_marker["early_told"] = bool(_delivered) and bool(
+                        answer_text(_card_early))
                     _vp_marker["hook_delivered"] = bool(_delivered)
                     try:
                         from config import get as _nc_get

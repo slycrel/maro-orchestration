@@ -3300,6 +3300,12 @@ class TestEverySenderKeepsTheSameWord:
         cfg = {}
 
         def get(k, d=None):
+            if k == "notify" and cfg:
+                command = cfg.get("notify.command")
+                if isinstance(command, Exception):
+                    raise command
+                return {key.removeprefix("notify."): value
+                        for key, value in cfg.items()}
             if k in cfg:
                 v = cfg[k]
                 if isinstance(v, Exception):

@@ -5713,7 +5713,7 @@ class TestVerdictFollowup:
         _real_get = config_mod.get
         monkeypatch.setattr(
             config_mod, "get",
-            lambda k, d=None: ("some-notify-cmd" if k == "notify.command"
+            lambda k, d=None: ({"command": "some-notify-cmd"} if k == "notify"
                                else _real_get(k, d)))
         events = []
         self._drive(monkeypatch, tmp_path, events, emit_returns=False)
@@ -5780,6 +5780,76 @@ class TestVerdictFollowup:
         assert vp["notified_early"] is True
         assert vp["early_told"] is False
         assert meta.get("final_notified_at")
+
+    def test_r18_summary_only_early_answer_reaches_journal_and_routes_verdict(
+            self, monkeypatch, tmp_path):
+        import json
+        import observe
+        import run_curation
+        import runs
+
+        def excerpt_result(rd, meta, card):
+            pass
+
+        def synthesize_answer(rd, meta, card):
+            card["answer_summary"] = "Revenue rose 12%."
+
+        # review r18: registry functions mutate cards; exercise a real summary-only card.
+        replacements = {"excerpt_result": excerpt_result,
+                        "synthesize_answer": synthesize_answer}
+        monkeypatch.setattr(run_curation, "CURATORS", [
+            replacements.get(fn.__name__, fn) for fn in run_curation.CURATORS])
+        rows = []
+        monkeypatch.setattr(
+            observe, "write_event",
+            lambda kind, **kw: rows.append((kind, kw)) or True)
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events, emit_returns=False)
+        early = next(p for kind, p in events if kind == "run_completed")
+        assert not early.get("result_excerpt")
+        assert early["answer_summary"] == "Revenue rose 12%."
+        row = next(p for kind, p in rows if kind == "run_completed")
+        assert "Revenue rose 12%." in row["detail"]
+        meta = json.loads(
+            (runs.run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["verdict_pending"]["early_told"] is True
+        names = [kind for kind, _ in events]
+        assert names.count("run_completed") == 1
+        assert "run_verdict" in names
+
+    def test_r18_blank_summary_early_card_downgrades_to_full_completion(
+            self, monkeypatch, tmp_path):
+        # review r18: the early sender's eligibility is the journal's
+        # projection, not a truthiness test of the raw field — a
+        # whitespace-only answer_summary carries nothing, so the marker
+        # must stay early_told False and the full completion must follow.
+        import json
+        import observe
+        import run_curation
+        import runs
+
+        def excerpt_result(rd, meta, card):
+            pass
+
+        def synthesize_answer(rd, meta, card):
+            card["answer_summary"] = "   "
+
+        replacements = {"excerpt_result": excerpt_result,
+                        "synthesize_answer": synthesize_answer}
+        monkeypatch.setattr(run_curation, "CURATORS", [
+            replacements.get(fn.__name__, fn) for fn in run_curation.CURATORS])
+        monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events, emit_returns=False)
+        early = next(p for kind, p in events if kind == "run_completed")
+        assert not early.get("result_excerpt")
+        assert early["answer_summary"] == "   "
+        meta = json.loads(
+            (runs.run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["verdict_pending"]["early_told"] is False
+        names = [kind for kind, _ in events]
+        assert names.count("run_completed") == 2
+        assert "run_verdict" not in names
 
     def test_non_done_terminal_keeps_synchronous_ordering(
             self, monkeypatch, tmp_path):

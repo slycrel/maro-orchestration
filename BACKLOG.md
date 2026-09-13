@@ -6734,6 +6734,31 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   after its grace); a settled run's project is never re-stamped by the
   system, so snapshot and metadata differ only when something outside
   it moved the project.
+  Round 18 (second codex-written fix, reviewed): the loader's fault
+  list was process-shared — two concurrent loads (scheduler `handle()`
+  threads) could clear each other's fault and cache a partial config as
+  clean, permanently; config now holds one lock for the whole load and
+  publishes `(merged, key, faults)` as one snapshot (`load_faults()` is
+  the published snapshot's; a faulted snapshot never hits); a malformed
+  NESTED `notify` section (`notify: [..]`, `notify: 17`) over a valid
+  user hook had read as "no hook" (dotted `get` defaulted through the
+  list) — `hook_owed` now reads the section and returns None for a
+  non-mapping; `_emit` still executed an INHERITED user-level hook when
+  the workspace override was unreadable, and `tell` took that success
+  as the acknowledgment — the hook is skipped while any fault stands;
+  the early sender qualified `answer_summary` while the journal row
+  carried only `result_excerpt`/`summary` (a summary-only card told
+  "pending" then a verdict, the answer in neither) — one
+  `notify.answer_text` projection now feeds both the row and
+  `early_told`. Review corrections: codex left four single-argument
+  `_load_yaml` tests broken (only ran its `-k` slice), and its handle
+  test passed with the OLD handle code — a blank-summary card test now
+  pins the sender's side. Recorded, not changed: `load_faults()` before
+  any load in the process is empty; the lock is held across file I/O
+  (every config read waits behind a slow disk); a faulted snapshot is
+  re-read on every `get` (no backoff); `hook_owed` and `_emit` load at
+  different instants (a file changing between them is a new snapshot);
+  other `config.get` callers still silently default on a fault.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the

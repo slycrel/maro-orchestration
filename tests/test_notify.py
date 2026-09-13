@@ -258,3 +258,69 @@ def test_run_card_excerpt_truncates_long_results(workspace):
     card3 = curate_run("hidexc03")
     assert card3["result_excerpt"].startswith("y" * 2000)
     assert "truncated: first 2000 of 2500" in card3["result_excerpt"]
+
+
+@pytest.mark.parametrize("section", ["[command, some-hook]", "17"])
+def test_r18_malformed_notify_section_is_unknown(workspace, monkeypatch, section):
+    import config
+    import observe
+    user = config._user_config_path()
+    user.parent.mkdir(parents=True, exist_ok=True)
+    user.write_text("notify: {command: some-hook}\n")
+    ws = config._workspace_config_path()
+    ws.write_text(f"notify: {section}\n")
+    called = []
+    monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+    monkeypatch.setattr(notify_mod.subprocess, "run", lambda *a, **kw: called.append(a))
+    config.load_config(reload=True)
+    assert config.load_faults() == []
+    assert notify_mod.hook_owed("run_completed") is None
+    assert notify_mod.tell("run_completed", {"handle_id": "x"}) is False
+    assert called == []
+    ws.write_text("notify: {}\n")
+    config.load_config(reload=True)
+    assert notify_mod.hook_owed("run_completed") is True
+
+
+def test_r18_faulted_override_never_runs_inherited_hook(workspace, monkeypatch):
+    import config
+    import observe
+    from types import SimpleNamespace
+    user = config._user_config_path()
+    user.parent.mkdir(parents=True, exist_ok=True)
+    user.write_text("notify: {command: user-hook}\n")
+    ws = config._workspace_config_path()
+    ws.write_text("notify: {command: ws-hook, events: [run_completed]}\n")
+    real_read = Path.read_text
+    unreadable = True
+
+    def read(path, *args, **kwargs):
+        if path == ws and unreadable:
+            raise OSError("workspace unreadable")
+        return real_read(path, *args, **kwargs)
+
+    called = []
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        notify_mod.subprocess, "run",
+        lambda command, **kw: called.append(command) or SimpleNamespace(returncode=0))
+    config.load_config(reload=True)
+    assert notify_mod.hook_owed("run_completed") is None
+    assert notify_mod.tell("run_completed", {"handle_id": "x"}) is False
+    assert called == []
+    unreadable = False
+    assert notify_mod.tell("run_completed", {"handle_id": "x"}) is True
+    assert called == ["ws-hook"]
+
+
+def test_r18_summary_only_answer_reaches_journal(workspace, monkeypatch):
+    import observe
+    rows = []
+    monkeypatch.setattr(
+        observe, "write_event", lambda kind, **kw: rows.append((kind, kw)) or True)
+    assert notify_mod.tell("run_completed", {
+        "handle_id": "x", "status": "done", "goal_achieved": None,
+        "verdict_pending": True, "answer_summary": "Revenue rose 12%.",
+    }) is True
+    assert rows[0][1]["detail"].endswith("; Revenue rose 12%.")
