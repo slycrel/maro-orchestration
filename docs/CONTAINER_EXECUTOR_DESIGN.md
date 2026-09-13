@@ -174,6 +174,33 @@ not probed"), so the first casualty of every expiry is a real run. Re-seed
 recipe unchanged: interactive `/login` inside the container (`stty cols
 400` first so the URL survives the TUI wrap).
 
+**`require` on the runtime box (2026-09-13, Jeremy: "let's add the require
+lane then test it with a re-auth").** Flipped `executor.container: require`
+in the live config while the breaker was still tripped and proved the
+refusal path first (`resolve_container_run(executor=True)` →
+`ContainerUnavailable: executor.container=require but the container lane is
+unavailable: container auth breaker tripped (...)`) — no host degrade
+possible any more. Jeremy re-seeded the volume by interactive `/login`
+(07:17Z; note `claude /login` always starts a fresh login and never checks
+for an existing one, so a second invocation prompts again — harmless, Ctrl-C
+out). The breaker cleared on its own at the next resolve (credentials file
+live-shaped and newer than the trip; state file removed), a direct
+`claude -p` probe in the image answered, and run 520e1b8c (the same IMAP
+inbox check as 154ec06a) executed all seven executor calls in
+`maro-exec-520e1b8c-<pid>-{0..6}` containers: uid 1001, project-layer
+image `p-weve-used-chrome-on-the-l3`, auth volume mounted, `YAHOO_*` names
+arriving through the container env (no `secrets.env` hand-off file in the
+run's scratch — the host path was never taken). Same deliverable as the
+host-lane run (32 messages, five newest) at $2.70. Best evidence for the
+wall: step 2's worker went looking for the store and the sops/age tooling
+(the project's own `docs/mail_yahoo.md`, written by the 09-12 host-lane
+worker, still describes a "sops fallback") and found neither — the
+container mounts no `~/.maro/secrets` and ships no `sops`/`age`. Wording
+is a fence; the container is the wall. Residuals unchanged: typed pause
+`container-auth-expired` (today `require` surfaces as `ContainerUnavailable`
+→ the generic environmental pause), and an auth liveness probe so the
+monthly expiry is caught before a run is.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to
@@ -308,7 +335,7 @@ can only land inside a mount. SECURITY_MODEL Part 1's honest sentence
 
 | Key | Default | Notes |
 |---|---|---|
-| `executor.container` | `off` | `off` / `on` / `require`. OFF everywhere until burn-in on the runtime box; the flip (fresh-install default especially) is **Jeremy's call** after burn-in evidence. `require` refuses executor calls when docker is unavailable instead of degrading. |
+| `executor.container` | `off` | `off` / `on` / `require`. OFF everywhere until burn-in on the runtime box; the flip (fresh-install default especially) is **Jeremy's call** after burn-in evidence. `require` refuses executor calls when docker is unavailable instead of degrading. **Runtime box runs `require` since 2026-09-13** (Jeremy's call after the 09-12 host-lane degrade beside the secrets store). |
 | `executor.container_image` | `maro-executor:<pinned>` | |
 | `executor.container_network` | `bridge` | See below. |
 | `executor.container_extra_mounts` | `[]` | ro reference mounts. |
