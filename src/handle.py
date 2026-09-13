@@ -1051,6 +1051,7 @@ def handle(
                     # settled" for every reader (review 2026-09-13 round 7)
                     _pending_pt = _UNSETTLED_TRANSITIONS.get(_hid) if _hid else None
                     _fin_fields: dict = dict(_pending_pt or {})
+                    _fin_fields.pop("verdict_pending", None)
                     if _vp_meta and not _vp_meta.get("resolved_at"):
                         _resolved = dict(_vp_meta)
                         _resolved["resolved_at"] = datetime.now(
@@ -1059,15 +1060,22 @@ def handle(
                     if _fin_fields:
                         from runs import stamp_run_metadata_for as _srm_resolve
                         if _srm_resolve(_hid, _fin_fields) is None:
-                            if _pending_pt:
-                                # KEPT, not dropped: the transition-orphan
-                                # sweep drains it from this process with the
-                                # intended outcome once the store is back
-                                # (review r8); only a death loses it, and
-                                # the sweep then reverts from disk
-                                log.error("project transition settlement for %s not recorded at "
-                                          "the finalize either; kept for the maintenance retry", _hid)
-                        elif _pending_pt:
+                            # KEPT WHOLE, not dropped: the finalize's write
+                            # is ONE obligation — the settlement AND the
+                            # marker's resolution — and the transition
+                            # sweep drains it from this process once the
+                            # store is back (review r8/r9: keeping the
+                            # settlement alone left the marker active, and
+                            # the verdict sweep skips a living owner, so a
+                            # healthy worker's run stayed out of the
+                            # landscape for the worker's life); only a
+                            # death loses it, and the sweeps then work from
+                            # disk
+                            _UNSETTLED_TRANSITIONS[_hid] = dict(_fin_fields)
+                            log.error("finalize write for %s not recorded (%s); kept for "
+                                      "the maintenance retry", _hid,
+                                      ", ".join(sorted(_fin_fields)))
+                        else:
                             _UNSETTLED_TRANSITIONS.pop(_hid, None)
                 except Exception:
                     _vp_meta = {}

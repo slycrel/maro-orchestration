@@ -6576,10 +6576,27 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   catches `OverflowError`/`ValueError` (a pid that cannot exist aborted
   the whole sweep); `handle_queue`'s RESUME passes the run's recorded
   `project` to the loop (it passed none, so loop init re-derived the
-  slug from the goal over the landscape binding). Convention recorded:
-  the verdict sweep treats `PermissionError` on `os.kill` as alive and
-  a recycled pid as alive — a recycled pid delays by one sweep, a
-  false-dead would settle under a live worker. Direction recorded: a
+  slug from the goal over the landscape binding). Round 9: the finalize
+  keeps its WHOLE failed write — the settlement AND the verdict marker's
+  resolution — as the pending obligation (round 8 kept the settlement
+  alone, so the drain left the marker active and the verdict sweep,
+  which skips a living owner, never resolved it: a healthy worker's run
+  stayed out of the landscape for the worker's life; a marker-only
+  finalize failure is kept the same way); the drain reconciles a kept
+  write with the store first (a settlement the disk already carries —
+  another process's sweep reverted it, or the RESUME lane ran a later
+  transition under the same handle id — is dropped, a marker already
+  resolved is not re-resolved; `dropped` in the result) and a handle
+  whose kept write still fails is left out of the disk pass (the disk
+  fallback published the opposite settlement in the same sweep and the
+  next drain flipped it back). Convention recorded (round 8 had it
+  backwards): the verdict sweep treats `PermissionError` on `os.kill`
+  as NOT the run's process, the codebase's `_pid_alive` convention —
+  every worker on a workspace runs as the workspace's user, so a pid we
+  cannot signal is a system process that took the number; the other
+  reading would leave the run unresolved, and out of the landscape, for
+  that process's life. Premise: a workspace shared by workers under
+  different users is not a deployment Maro has. Direction recorded: a
   settlement that fails in the run AND at the finalize is kept for the
   sweep's retry in the same process; only a process death loses it, and
   then the sweep reverts even an adopted retry — the retry's adoption
