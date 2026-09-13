@@ -341,7 +341,7 @@ class TestContainerAuthPauseEndToEnd:
             return {"status": "blocked", "error_class": "container_auth",
                     "stuck_reason": "LLM call failed (container_auth): re-seed",
                     "user_action": "re-seed the maro-claude-auth volume",
-                    "result": "", "tokens_in": 0, "tokens_out": 0}
+                    "result": "[partial output before kill]\nlisted two", "tokens_in": 7, "tokens_out": 0}
         monkeypatch.setattr(loop_execute, "_execute_step", _worker)
         rd = runs.create_run_dir("cauth0001", prompt="read the inbox")
         with runs.scoped_run_dir(rd):
@@ -352,6 +352,10 @@ class TestContainerAuthPauseEndToEnd:
         assert result.pause_reason == PAUSE_ERR_CONTAINER_AUTH
         meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
         assert meta.get("pause_reason") == PAUSE_ERR_CONTAINER_AUTH
+        # Round 8: the refused step is a step this run paid for — recorded,
+        # not dropped by the pause's early exit (steps=0 before).
+        assert len(result.steps) == 1 and result.steps[0].status == "blocked"
+        assert result.steps[0].tokens_in == 7 and "before kill" in result.steps[0].result
 
     def test_sequential_pause_persists_with_a_closed_stderr(self, monkeypatch, tmp_path):
         # Round 5: the sequential pause branch printed unguarded after the
@@ -718,6 +722,46 @@ class TestToolSearchRecallRefusal:
         outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
                                completed_context=[], adapter=adapter, tools=[], project_dir=str(tmp_path))
         assert adapter.calls == 1 and outcome["status"] == "blocked"
+
+    def test_the_first_call_advertises_tool_search_for_a_deferred_llmtool(self, monkeypatch, tmp_path):
+        # Round 8: the injector read dict keys off LLMTool objects —
+        # AttributeError, swallowed — so tool_search was never advertised
+        # on the first call and the repaired re-call was unreachable
+        # through the intended contract. Whole pipeline: stub → tool_search
+        # advertised as an LLMTool → model calls it → re-call → done.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import tool_search
+        from llm import LLMResponse, LLMTool, ToolCall
+        from step_exec import execute_step
+        seen = {}
+
+        class _Adapter:
+            model_key = "t"; backend = "subprocess"; calls = 0
+            def complete(self, messages, **kwargs):
+                self.calls += 1
+                seen[self.calls] = [(t.name, t.parameters.get("properties", {})) for t in kwargs["tools"]]
+                if self.calls == 1:
+                    return LLMResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "imap"})])
+                return LLMResponse(content="", tool_calls=[ToolCall(name="complete_step",
+                                                                    arguments={"result": "r", "summary": "ok"})])
+
+        monkeypatch.setattr(tool_search, "resolve_deferred_tools",
+                            lambda query, *a, **k: [{"name": "imap_read", "description": "d",
+                                                     "parameters": {"type": "object", "properties": {"folder": {"type": "string"}}}}])
+        stub = LLMTool(name="imap_read", description="[deferred] read mail", parameters={"type": "object", "properties": {}})
+        done = LLMTool(name="complete_step", description="c", parameters={"type": "object", "properties": {}})
+        adapter = _Adapter()
+        outcome = execute_step(goal="g", step_text="s", step_num=1, total_steps=1,
+                               completed_context=[], adapter=adapter, tools=[stub, done], project_dir=str(tmp_path))
+        assert adapter.calls == 2 and outcome["status"] == "done", outcome
+        names1 = [n for n, _ in seen[1]]
+        assert "tool_search" in names1 and names1.count("tool_search") == 1
+        assert ("imap_read", {"folder": {"type": "string"}}) in seen[2]
+        # dict callers keep the dict shape; a list with no stub gets nothing
+        out = tool_search.inject_tool_search_if_needed([{"name": "x", "description": "[deferred] y", "parameters": {"type": "object", "properties": {}}}])
+        assert isinstance(out[-1], dict) and out[-1]["name"] == "tool_search"
+        assert tool_search.inject_tool_search_if_needed([done]) == [done]
+        assert tool_search.inject_tool_search_if_needed([stub, tool_search.inject_tool_search_if_needed([stub])[-1]])[-1].name == "tool_search"
 
     def test_a_killed_recall_keeps_its_partial_output(self, monkeypatch, tmp_path):
         # Round 7: the timeout class was outside the round-3 allow-list, so a

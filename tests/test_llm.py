@@ -2700,6 +2700,68 @@ class TestContainerExecutorWrap:
         assert "Completed the rate limit configuration change." in resp.content
         assert a._rate_limit_wait == 60, "success resets the backoff"
 
+    @pytest.mark.parametrize("envelope", ["result", "errors"])
+    def test_a_zero_exit_with_an_explicit_error_result_is_a_failure(self, monkeypatch, tmp_path, envelope):
+        # Review round 8: the failure path required rc != 0; an explicit
+        # `is_error: true` terminal result on a zero exit became an EMPTY
+        # ordinary response — past the breaker, the classifier, the pause.
+        # The payload is ground truth in both directions.
+        import container_exec as ce
+        import notify
+        from llm import _terminal_failure
+        from llm_errors import classify_error
+        body = {"type": "result", "subtype": "error_during_execution", "is_error": True}
+        if envelope == "result":
+            body["result"] = "OAuth session expired · Please run /login"
+        else:
+            body["errors"] = ["OAuth session expired · Please run /login"]
+        assert _terminal_failure(json.dumps(body)) is True
+        assert _terminal_failure(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok"})) is False
+        assert _terminal_failure("plain text") is False
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=0, stderr="", container_executed=True, stdout=json.dumps(body))) as run:
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 1
+        assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+        assert ce.auth_breaker_snapshot() is not None
+        # control: a zero exit with a success payload is still a success
+        ok = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done"})
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=0, stderr="", container_executed=True, stdout=ok)):
+            with pytest.raises(RuntimeError):  # the breaker is tripped now → typed refusal, no launch
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        ce.clear_auth_breaker() if hasattr(ce, "clear_auth_breaker") else None
+
+    def test_a_zero_exit_error_result_during_a_retry_is_a_failure_too(self, monkeypatch, tmp_path):
+        import container_exec as ce
+        import notify
+        from llm_errors import classify_error
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        err0 = MagicMock(returncode=0, stderr="", container_executed=True, stdout=json.dumps(
+            {"type": "result", "subtype": "error_during_execution", "is_error": True,
+             "errors": ["OAuth session expired · Please run /login"]}))
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 3
+        with patch("llm._run_subprocess_safe", side_effect=[limited, err0, limited]) as run:
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 2
+        assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+
     def test_a_retry_that_times_out_is_not_replayed(self, monkeypatch, tmp_path):
         # Review round 6: TimeoutExpired inside the retry loop `continue`d —
         # a killed executor step (which may have acted) was launched again

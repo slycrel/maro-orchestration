@@ -239,3 +239,29 @@ def test_adapter_failure_carries_the_structured_error_class():
     res = dispatch_worker("research", "look at the inbox", adapter=_Refusing())
     assert res.status == "blocked" and res.blocked_origin == "adapter"
     assert res.error_class == "container_auth"
+
+def test_worker_kill_preserves_partial_output_and_usage(monkeypatch, tmp_path):
+    # Review round 8: the worker lane copied the error class but returned
+    # result="" and zero tokens — a runaway kill's measured ingest and the
+    # only record of what the ticket did before dying were dropped.
+    from workers import dispatch_worker
+    from llm_errors import kill_evidence
+    exc = RuntimeError("token runaway: killed at 100000 input tokens")
+    exc.maro_partial_output = "partial work already performed"
+    exc.fresh_input_tokens = 100000
+    exc.estimated_cost_usd = 1.25
+    assert kill_evidence(exc) == ("[partial output before kill]\npartial work already performed", 100000, 1.25)
+    assert kill_evidence(RuntimeError("plain")) == ("", 0, 0.0)
+    bad = RuntimeError("x"); bad.fresh_input_tokens = "many"; bad.estimated_cost_usd = None
+    assert kill_evidence(bad) == ("", 0, 0.0)
+    class _Adapter:
+        model_key = "t"; backend = "subprocess"
+        def complete(self, messages, **kwargs):
+            raise exc
+    import container_exec as ce
+    monkeypatch.setattr(ce, "enforce_backend_container_contract", lambda *a, **k: None)
+    r = dispatch_worker("research", "find it", context="", adapter=_Adapter(), dry_run=False)
+    assert r.status == "blocked" and r.blocked_origin == "adapter"
+    assert r.result == "[partial output before kill]\npartial work already performed"
+    assert r.tokens_in == 100000
+

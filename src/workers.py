@@ -300,19 +300,25 @@ def dispatch_worker(
             purpose="worker-ticket",  # EDGE 6: agentic seam, was unlabeled in call records
         )
     except Exception as exc:
+        _ecls, _partial, _fresh = "", "", 0
         try:
-            from llm_errors import classify_error as _cls
+            from llm_errors import classify_error as _cls, kill_evidence as _kev
             _ecls = str(_cls(exc).error_class or "")
+            # Round 8: the same evidence step outcomes keep — a kill's
+            # partial output (the only record of what the ticket did) and
+            # a runaway's measured ingest (the spend the brake accounts for).
+            _partial, _fresh, _ = _kev(exc)
         except Exception:
-            _ecls = ""
+            pass
         return WorkerResult(
             worker_type=worker_type,
             ticket=ticket,
             status="blocked",
-            result="",
+            result=_partial,
             stuck_reason=f"LLM call failed: {exc}",
             blocked_origin="adapter",
             error_class=_ecls,
+            tokens_in=_fresh,
         )
 
     if resp.tool_calls:

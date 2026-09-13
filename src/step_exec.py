@@ -1371,12 +1371,13 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[st
     stringifying it away (BACKEND_RESILIENCE_DESIGN §2) and any spend the
     step already incurred (a runaway kill's own ingest is ADDED to that —
     round 3: replacing it undercounted the re-call). Never raises."""
+    from llm_errors import kill_evidence
+    _partial, _fresh, _fresh_cost = kill_evidence(exc)
     if partial_result is None:
         # A killed subprocess's partial output (llm.py attaches it on
         # timeout/runaway kills) is the only record of what the step did
         # before dying — the tail, not "", becomes the blocked result.
-        _p = str(getattr(exc, "maro_partial_output", "") or "")
-        partial_result = f"[partial output before kill]\n{_p[-2000:]}" if _p else ""
+        partial_result = _partial
     try:
         from llm_errors import classify_error, is_actionable
         _einfo = classify_error(exc)
@@ -1399,11 +1400,9 @@ def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[st
         # it consumed a lot. Recording it as a zero-token step would hide
         # the spend from run totals, cost reports and skill telemetry —
         # exactly the accounting the brake exists to protect.
-        _fresh = getattr(exc, "fresh_input_tokens", None)
-        if _fresh is not None:
-            _blocked["tokens_in"] = int(tokens_in or 0) + int(_fresh)
-            _blocked["provider_cost_usd"] = float(provider_cost_usd or 0.0) + float(
-                getattr(exc, "estimated_cost_usd", 0.0) or 0.0)
+        if getattr(exc, "fresh_input_tokens", None) is not None:
+            _blocked["tokens_in"] = int(tokens_in or 0) + _fresh
+            _blocked["provider_cost_usd"] = float(provider_cost_usd or 0.0) + _fresh_cost
         return _blocked
     except Exception:
         return {

@@ -439,6 +439,36 @@ lock before appending the captain's-log line, so an older cycle's SILENT
 could land after a newer cycle's RECOVERED with nothing left to correct
 it; the narration now runs while the lock is held.
 
+*Review round 8 (2026-09-13, codex skeptic + QA, whole chunk) found one
+older HIGH beside round 7's and three carry-through gaps; fixed before
+landing. Two findings were declined by doctrine.* (xxxi) **The first-call
+injector rejected the production type.** `inject_tool_search_if_needed`
+read dict keys off the `LLMTool` objects `execute_step` hands it —
+`AttributeError`, swallowed by the caller — so `tool_search` was never
+advertised on the first call and round 7's repaired re-call was
+unreachable through the intended contract. The injector now reads either
+shape and appends `tool_search` in the same shape; the whole pipeline
+(stub → advertised → called → re-call → done) is the test. (xxxii) **The
+payload is ground truth in both directions.** A zero exit with an explicit
+`is_error: true` terminal result became an empty ordinary response, past
+the breaker and the classifier; `_terminal_failure` routes it into the
+failure path, initial call and retry alike (no evidence the installed CLI
+emits that pairing — the invariant is cheap). (xxxiii) **The sequential
+pause records the refused step** (and, by the same branch, an operator-ask
+pause): its `break` skipped the normal append, so a paused run reported
+`steps=0` with tokens on the books. (xxxiv) **Worker kills keep their
+evidence.** `dispatch_worker`'s except copied the class but returned
+`result=""` and zero tokens; `llm_errors.kill_evidence` now serves both
+outcome builders (partial output framed, runaway ingest counted).
+*Declined:* (a) "RESUME re-executes completed peers" — the continuation
+lane is continuation-by-context, not checkpoint restore, by the 2026-08-02
+decree (same identity, the parent's artifacts and context ride the
+continuation goal); the parallel path's outcomes reach the run report
+before the early return. A checkpoint-restore resume would be its own
+arc. (b) "a failed narration is acknowledged forever" — the accepted
+trade documented at the narration site (write-then-narrate; a lost line
+leaves the snapshot showing SILENT); an outbox is not this chunk.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

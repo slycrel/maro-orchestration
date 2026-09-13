@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple
 
 # The six classes (+ FATAL for everything unmatched).
 RETRY_BACKOFF = "retry_backoff"        # transient — same-backend ladder
@@ -287,6 +287,27 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
                    failover=any(p in msg for p in _SERVER_ERR))
 
     return _mk(FATAL)
+
+
+def kill_evidence(exc: BaseException) -> Tuple[str, int, float]:
+    """What a killed/refused adapter call leaves behind, read ONCE for every
+    outcome builder (review round 8, 2026-09-13: the worker lane copied the
+    class but dropped the partial output and the runaway's measured
+    ingest that step outcomes keep). Returns (partial_result_text,
+    fresh_input_tokens, estimated_cost_usd): the partial output is the
+    only record of what the call did before dying (the tail, framed);
+    the runaway fields are the spend the brake exists to account for."""
+    _p = str(getattr(exc, "maro_partial_output", "") or "")
+    partial = f"[partial output before kill]\n{_p[-2000:]}" if _p else ""
+    try:
+        fresh = int(getattr(exc, "fresh_input_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        fresh = 0
+    try:
+        cost = float(getattr(exc, "estimated_cost_usd", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        cost = 0.0
+    return partial, fresh, cost
 
 
 def is_actionable(info: ErrorInfo) -> bool:

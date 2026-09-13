@@ -2216,6 +2216,17 @@ def _terminal_error_text(obj: Optional[dict]) -> str:
     return ""
 
 
+def _terminal_failure(stdout: str) -> bool:
+    """Did the CLI's terminal result object say `is_error: true`? The payload
+    is ground truth in BOTH directions (review round 8, 2026-09-13): a
+    non-zero exit with a success payload is success (`_extract_success_result`),
+    and a zero exit with an explicit error result is a failure — before
+    this it became an empty ordinary response, past the breaker and the
+    classifier."""
+    obj = _extract_result_object(stdout)
+    return isinstance(obj, dict) and obj.get("is_error") is True
+
+
 def _rate_limited_failure(stdout: str) -> bool:
     """Is this failed CLI response a rate-limit story (worth a backoff
     retry)? Structured rate_limit_event first, the two phrases as backup —
@@ -2969,7 +2980,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     result.returncode,
                 )
 
-        if result.returncode != 0 and _rc_payload is None:
+        if (result.returncode != 0 or _terminal_failure(result.stdout)) and _rc_payload is None:
             # stdout holds the merged stdout+stderr stream from the subprocess.
             merged = result.stdout.strip()
             detail = merged[:300] or "(no output)"
@@ -3040,10 +3051,12 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         # exhaustion the stale rate-limit text as the cause.
                         self._rate_limit_wait = _wait
                         raise _subprocess_timeout_error("claude", _texc, _timeout)
-                    if result.returncode == 0 or _extract_success_result(result.stdout) is not None:
-                        # Payload-first, like the initial call (round 7): a
-                        # non-zero exit with a complete success result IS
-                        # success — checked before any rate-limit reading.
+                    if (_extract_success_result(result.stdout) is not None
+                            or (result.returncode == 0 and not _terminal_failure(result.stdout))):
+                        # Payload-first, like the initial call (rounds 7–8):
+                        # a non-zero exit with a complete success result IS
+                        # success, a zero exit with an explicit error result
+                        # is NOT — both read before any rate-limit reading.
                         _retry_success = True
                         break
                     # Check if still rate-limited — the entry's own predicate.
@@ -3080,7 +3093,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             # Re-check after retries: a retry can also exit non-zero with a
             # usable success payload.
             _rc_payload = _extract_success_result(result.stdout)
-            if result.returncode != 0 and _rc_payload is None:
+            if (result.returncode != 0 or _terminal_failure(result.stdout)) and _rc_payload is None:
                 # Dump debug info to /tmp for post-mortem diagnosis
                 try:
                     import tempfile, os as _os

@@ -1489,6 +1489,31 @@ def _execute_main_loop(
             stuck_reason = (outcome.get("stuck_reason")
                             or f"environmental pause: {_env_pause}")
             ctx.stamp_pause(_env_pause)
+            # The refused step is still a step this run paid for (review
+            # round 8, 2026-09-13: this `break` skipped the normal append
+            # below, so a paused run reported steps=0 with tokens on the
+            # books — the parallel path records its blocked member; the
+            # sequential sibling did not). Recorded blocked, with its
+            # accounting and whatever it produced before the refusal.
+            try:
+                step_outcomes.append(step_from_decompose(
+                    step_text, item_index,
+                    status="blocked",
+                    result=str(outcome.get("result", "") or ""),
+                    iteration=iteration,
+                    tokens_in=outcome.get("tokens_in", 0),
+                    tokens_out=outcome.get("tokens_out", 0),
+                    cache_read_tokens=outcome.get("cache_read_tokens", 0),
+                    provider_cost_usd=float(outcome.get("provider_cost_usd", 0.0) or 0.0),
+                    elapsed_ms=step_elapsed,
+                    confidence=outcome.get("confidence", ""),
+                    call_record=outcome.get("call_record", ""),
+                    executor_session_id=outcome.get("executor_session_id", ""),
+                    executor_session_resumed=bool(outcome.get("executor_session_resumed", False)),
+                    started_ts=_step_started_ts,
+                ))
+            except Exception as _rec_exc:
+                log.warning("paused step %d not recorded: %s", item_index, _rec_exc)
             log.warning("environmental pause (%s): %s", _env_pause, stuck_reason)
             if verbose:
                 # Never fatal (review round 5): a closed stderr here escaped
