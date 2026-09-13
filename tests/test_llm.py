@@ -4786,3 +4786,129 @@ def test_a_conversion_failure_after_paid_retries_keeps_the_evidence(monkeypatch,
     launches, exc2, ev2 = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(0, _R17_SUCCESS))
     assert exc2 is boom2 and ev2["cost"] == pytest.approx(0.62)
     assert classify_error(exc2, backend="subprocess").error_class == "fatal"
+
+
+# ---------------------------------------------------------------------------
+# Review round 21 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+def test_a_host_circuit_trip_does_not_block_the_container_lane(monkeypatch, tmp_path):
+    # Round 21: FailoverAdapter's process-wide "subprocess" circuit is the
+    # HOST credential domain's, but every later executor call under
+    # `require` was skipped by it too — refused with the host's /login
+    # story, never reaching the resolver, never stamping the container-auth
+    # pause, never rechecking the re-seed.
+    import container_exec as ce
+    import llm as _llm
+    from llm import FailoverAdapter
+    from llm_errors import classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for, PAUSE_ERR_CONTAINER_AUTH
+    _r16_container_lane(monkeypatch, tmp_path)
+    _llm._BACKEND_CIRCUIT.clear()
+    host_dead = MagicMock(returncode=1, stderr="", container_executed=False, stdout=_R16_AUTH)
+    # 1. a HOST call dies of the host's expired session: the host circuit trips
+    with patch("llm._run_subprocess_safe", return_value=host_dead) as run:
+        with pytest.raises(Exception) as e1:
+            FailoverAdapter([ClaudeSubprocessAdapter()]).complete([LLMMessage("user", "plan")], executor=False)
+    assert run.call_count == 1 and classify_error(e1.value, backend="subprocess").error_class == "auth_actionable"
+    assert _llm._circuit_open("subprocess") is not None
+    # 2. an executor call with the CONTAINER breaker tripped reaches the resolver: the typed pause
+    ce.note_container_failure(_R16_OAUTH)
+    with patch("llm._run_subprocess_safe", return_value=host_dead) as run:
+        with pytest.raises(Exception) as e2:
+            FailoverAdapter([ClaudeSubprocessAdapter()]).complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 0, "the resolver refuses before any launch"
+    assert classify_error(e2.value, backend="subprocess").error_class == "container_auth"
+    assert environmental_pause_for(_blocked_outcome_from_exc(e2.value)) == PAUSE_ERR_CONTAINER_AUTH
+    # 3. a healthy container session serves the executor call despite the open host circuit
+    ce.clear_auth_breaker("round-21 control"); ce.reset_container_caches()
+    assert _llm._circuit_open("subprocess") is not None
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(0, _R17_SUCCESS)) as run:
+        resp = FailoverAdapter([ClaudeSubprocessAdapter()]).complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1 and resp.content == "Finished the task."
+    # 4. negative control: a plain HOST call is still skipped by the open circuit
+    with patch("llm._run_subprocess_safe", return_value=host_dead) as run:
+        with pytest.raises(Exception) as e4:
+            FailoverAdapter([ClaudeSubprocessAdapter()]).complete([LLMMessage("user", "plan")], executor=False)
+    assert run.call_count == 0 and classify_error(e4.value, backend="subprocess").error_class == "auth_actionable"
+    _llm._BACKEND_CIRCUIT.clear()
+
+
+def test_an_overdeep_side_document_does_not_hide_the_auth_terminal(monkeypatch, tmp_path):
+    # Round 21: the framer caught ValueError only; on Python 3.12 the
+    # recursive decoder raised RecursionError out of the terminal
+    # extraction, ahead of every verdict — an auth terminal behind a
+    # 10,000-deep side document became an unclassified, unpaid failure.
+    import json as _json
+    from llm import _extract_result_object, _iter_stream_documents
+    deep = "[" * 10000 + "]" * 10000
+    capture = deep + "\n" + _R16_AUTH
+    # the real decoder (this interpreter may accept the depth; either way the terminal frames)
+    assert _extract_result_object(capture) is not None and "OAuth" in _json.dumps(_extract_result_object(capture))
+    _r16_blocked_story(monkeypatch, tmp_path, capture)
+    # the must-detect fixture: the decoder that raises on depth
+    real = _json.JSONDecoder.raw_decode
+
+    def _raising(self, s, idx=0):
+        if s.startswith("[[[[", idx):
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(self, s, idx)
+    monkeypatch.setattr(_json.JSONDecoder, "raw_decode", _raising)
+    with pytest.raises(RecursionError):
+        _json.JSONDecoder().raw_decode(deep, 0)
+    docs = list(_iter_stream_documents(capture))
+    assert len(docs) == 1 and docs[0].get("type") == "result"
+    import container_exec as ce
+    ce.clear_auth_breaker("round-21 second story"); ce.reset_container_caches()
+    _r16_blocked_story(monkeypatch, tmp_path, capture)
+
+
+def test_a_paid_terminal_failure_then_a_permitted_failover_keeps_all_usage(monkeypatch, tmp_path):
+    # Round 21: the adapter attached the failed hop's evidence, but the
+    # wrapper abandoned that exception when the next backend succeeded —
+    # the response carried the fallback's usage only, and worker/director
+    # totals undercounted the run.
+    import llm as _llm
+    from llm import FailoverAdapter
+    from llm_errors import call_usage_evidence, classify_error
+    _llm._BACKEND_CIRCUIT.clear()
+    billing = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                          "result": "", "errors": ["Your credit balance is too low to access the API."],
+                          "usage": {"input_tokens": 37, "output_tokens": 9, "cache_read_input_tokens": 100},
+                          "total_cost_usd": 0.12})
+    fallback = MagicMock()
+    fallback.backend = "anthropic"; fallback.model_key = "fb"; fallback.container_capable = False
+    fallback.complete = MagicMock(return_value=LLMResponse(content="fallback completed", input_tokens=10,
+                                                            output_tokens=2, cost_usd=0.03))
+    import notify
+    monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=billing)) as run:
+        resp = FailoverAdapter([ClaudeSubprocessAdapter(), fallback]).complete([LLMMessage("user", "plan")])
+    assert run.call_count == 1 and fallback.complete.call_count == 1
+    assert resp.content == "fallback completed"
+    # 10 + (37 fresh + 100 cache); 2 + 9; 100; $0.03 + $0.12
+    assert (resp.input_tokens, resp.output_tokens, resp.cache_read_tokens) == (147, 11, 100)
+    assert resp.cost_usd == pytest.approx(0.15)
+    # the failed-then-failed twin: the final exception carries every hop's spend, once
+    _llm._BACKEND_CIRCUIT.clear()
+    dead = MagicMock()
+    dead.backend = "anthropic"; dead.model_key = "fb"; dead.container_capable = False
+    boom = RuntimeError("HTTP 402 Payment Required")
+    boom.fresh_input_tokens = 5; boom.estimated_cost_usd = 0.01
+    dead.complete = MagicMock(side_effect=boom)
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=billing)):
+        with pytest.raises(Exception) as ei:
+            FailoverAdapter([ClaudeSubprocessAdapter(), dead]).complete([LLMMessage("user", "plan")])
+    assert classify_error(ei.value, backend="anthropic").error_class == "billing_actionable"
+    ev = call_usage_evidence(ei.value)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cache_read"]) == (42, 9, 100) and ev["cost"] == pytest.approx(0.13)
+    # negative control: a single-hop success carries only its own usage
+    _llm._BACKEND_CIRCUIT.clear()
+    ok = MagicMock(); ok.backend = "anthropic"; ok.model_key = "fb"; ok.container_capable = False
+    ok.complete = MagicMock(return_value=LLMResponse(content="solo", input_tokens=10, output_tokens=2, cost_usd=0.03))
+    r2 = FailoverAdapter([ok]).complete([LLMMessage("user", "plan")])
+    assert (r2.input_tokens, r2.output_tokens, r2.cache_read_tokens, r2.cost_usd) == (10, 2, 0, 0.03)
+    _llm._BACKEND_CIRCUIT.clear()

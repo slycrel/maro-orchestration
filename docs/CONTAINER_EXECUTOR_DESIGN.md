@@ -936,6 +936,49 @@ result). Pinned: the odd terminal converts to content with its usage;
 a forced conversion failure after a paid attempt keeps 137/29/5/$0.62
 and both partials; a replay-shaped message stays `fatal`.
 
+*Review round 21 (2026-09-13, codex skeptic + QA, whole chunk): two
+HIGHs (the host circuit blocking the container lane; a RecursionError
+escaping the framer), two shared MEDs (failover accounting; the
+skip-director bill); all fixed.* (lxxxiv) **The container lane rides
+its own breaker, not the host circuit.** `FailoverAdapter`'s
+process-wide `"subprocess"` circuit is the HOST credential domain's
+(`~/.claude`), but every later executor call under `require` was
+skipped by it too: a host OAuth death refused each executor call with
+the host's `/login` story for fifteen minutes — never reaching
+`resolve_container_run`, never stamping `container-auth-expired`,
+never rechecking the re-seed. An executor call under `on`/`require`
+on a container-capable adapter now ignores the host circuit (logged);
+the seeded volume's session is its own domain and the container
+breaker refuses at resolve time. Pinned end to end: host call dies →
+circuit open → executor call with the container breaker tripped
+reaches the resolver (zero launches, `container_auth`, the typed
+pause) → a healthy container session serves the next executor call →
+a plain host call is still skipped. (lxxxv) **The framer survives a
+document too deep to decode.** `_iter_stream_documents` caught
+`ValueError` only; on Python 3.12 (CI) the recursive decoder raised
+`RecursionError` out of the terminal extraction, ahead of every
+verdict — an auth terminal behind a 10,000-deep side document became
+an unclassified, unpaid failure. The framer now skips such a document
+(one warning) and later documents on their own lines still frame.
+Pinned with the real decoder and a must-detect decoder that raises on
+depth: the auth terminal still frames, and the blocked story holds.
+(lxxxvi) **A permitted failover keeps every hop's spend.** The adapter
+attached the failed hop's evidence, but the wrapper abandoned that
+exception when the next backend succeeded — the response carried the
+fallback's usage only. The walk now keeps its failed hops and folds
+their validated evidence ONCE into the eventual response (input =
+fresh + cache reads, output, cache reads, cost) or into the final
+exception (every earlier hop's, added to the last one's own). Pinned:
+a $0.12 / 37+100 / 9 terminal billing failure then a $0.03 / 10 / 2
+fallback → 147 / 11 / 100 / $0.15; the failed-then-failed twin's
+exception carries 42 / 9 / 100 / $0.13; a single hop carries only its
+own. (lxxxvii) **The skip-director bill.** The direct-loop branch
+copied tokens and the pause but left `cost_usd`/`cache_read_tokens`
+at zero although its steps carry both; `director.main --format json`
+omitted the fields `cli._cmd_director` gained in round 20. Both
+fixed; pinned through the real `run_director(skip_if_simple=True)`
+with a paid paused step and both JSON renderers.
+
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
 Image r3 bakes the maro **package** (never keys): `COPY src/` to

@@ -4192,3 +4192,40 @@ def test_a_refused_revision_keeps_the_drafts_bill_in_the_durable_log(monkeypatch
         _cli._cmd_director(ns)
     out = json.loads(buf.getvalue())
     assert out["cost_usd"] == pytest.approx(0.12) and out["cache_read_tokens"] == 100
+
+
+def test_skip_director_carries_the_direct_loops_bill_and_both_json_renderers_agree(monkeypatch, tmp_path):
+    # Review round 21: the skip-director branch copied tokens and the pause
+    # but left the new cost/cache fields at zero, and director.main's JSON
+    # omitted them (cli._cmd_director carried them since round 20).
+    import director as _director_mod
+    from loop_types import LoopResult, StepOutcome
+    _setup(monkeypatch, tmp_path)
+    import agent_loop
+    monkeypatch.setattr(_director_mod, "_is_simple_directive", lambda d: True)
+    step = StepOutcome(index=0, text="read the inbox", status="blocked", result="partial", iteration=0,
+                       tokens_in=137, tokens_out=9, cache_read_tokens=100, provider_cost_usd=0.12)
+    monkeypatch.setattr(agent_loop, "run_agent_loop", lambda *a, **k: LoopResult(
+        loop_id="l", project="", goal="g", status="interrupted", steps=[step], total_tokens_in=137,
+        total_tokens_out=9, elapsed_ms=1, stuck_reason="env", pause_reason="container-auth-expired"))
+    result = run_director("read the inbox", dry_run=True, skip_if_simple=True)
+    assert result.pause_reason == "container-auth-expired" and result.tokens_in == 137
+    assert result.cost_usd == pytest.approx(0.12) and result.cache_read_tokens == 100
+    # both JSON renderers carry the bill
+    import io, contextlib
+    import cli as _cli
+    monkeypatch.setattr(_director_mod, "run_director", lambda *a, **k: result)
+    outs = []
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _director_mod.main(["read", "the", "inbox", "--format", "json"])
+    outs.append(json.loads(buf.getvalue()))
+    buf = io.StringIO()
+    ns = type("NS", (), {"format": "json", "directive": ["x"], "dry_run": False, "project": None,
+                         "verbose": False})()
+    with contextlib.redirect_stdout(buf):
+        _cli._cmd_director(ns)
+    outs.append(json.loads(buf.getvalue()))
+    for out in outs:
+        assert out["cost_usd"] == pytest.approx(0.12) and out["cache_read_tokens"] == 100
+        assert out["pause_reason"] == "container-auth-expired"

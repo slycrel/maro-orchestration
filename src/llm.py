@@ -727,6 +727,36 @@ class FailoverAdapter(LLMAdapter):
             except ImportError:
                 _exec_container_mode = ""
         _exec_require = _exec_container_mode == "require"
+        # An executor call under `on`/`require` runs on the CONTAINER lane,
+        # whose credentials are its own (the seeded volume, not the host's
+        # ~/.claude) and whose breaker refuses at resolve time. The host
+        # circuit is the host credential domain's (review round 21,
+        # 2026-09-13: a host OAuth death tripped the shared "subprocess"
+        # key and every later executor call was refused with the host's
+        # /login story — never reaching the resolver, never stamping the
+        # container-auth pause, never rechecking the re-seed).
+        _container_lane_call = bool(kwargs.get("executor")) and _exec_container_mode in ("on", "require")
+        # Evidence of the hops this walk paid for and moved past (round 21):
+        # folded once into the eventual response or the final exception,
+        # so a permitted billing/auth failover never erases spend.
+        _failed_hops: List[BaseException] = []
+
+        def _hops_evidence(exclude: Optional[BaseException] = None):
+            from llm_errors import call_usage_evidence as _cue, evidence_attr as _ea
+            tot = {"fresh_in": 0, "out": 0, "cache_read": 0, "cost": 0.0}
+            parts: List[str] = []
+            for _h in _failed_hops:
+                if _h is exclude:
+                    continue
+                _hev = _cue(_h)
+                tot["fresh_in"] += _hev["tokens_in"]
+                tot["out"] += _hev["tokens_out"]
+                tot["cache_read"] += _hev["cache_read"]
+                tot["cost"] += _hev["cost"]
+                _pt = str(_ea(_h, "maro_partial_output", "") or "")
+                if _pt:
+                    parts.append(_pt)
+            return tot, "\n".join(parts)
         # Snapshot at entry: a trip recorded DURING this walk protects future
         # complete() calls, not later adapters in this one — the walk already
         # moves past the failed adapter on its own.
@@ -738,6 +768,12 @@ class FailoverAdapter(LLMAdapter):
             self._current_idx = idx
             _tripped = (_circuit_open(getattr(adapter, "backend", ""))
                         if getattr(adapter, "backend", "") in _open_at_entry else None)
+            if (_tripped is not None and _container_lane_call
+                    and getattr(adapter, "container_capable", False)):
+                log.info("FailoverAdapter: %s host circuit open (%s) — the executor call "
+                         "rides the container lane's own breaker",
+                         getattr(adapter, "backend", "?"), _tripped.error_class)
+                _tripped = None
             if _tripped is not None:
                 # Deterministically dead (billing/auth) — calling it again
                 # would only burn the retry ladder and re-alert.
@@ -860,9 +896,20 @@ class FailoverAdapter(LLMAdapter):
                             _meter["spent_usd"] += _call_cost
                     except Exception:
                         pass
+                if _failed_hops:
+                    try:
+                        _tot, _ = _hops_evidence()
+                        # `input_tokens` is TOTAL input (cache reads included).
+                        result.input_tokens = (getattr(result, "input_tokens", 0) or 0) + _tot["fresh_in"] + _tot["cache_read"]
+                        result.output_tokens = (getattr(result, "output_tokens", 0) or 0) + _tot["out"]
+                        result.cache_read_tokens = (getattr(result, "cache_read_tokens", 0) or 0) + _tot["cache_read"]
+                        result.cost_usd = float(getattr(result, "cost_usd", 0.0) or 0.0) + _tot["cost"]
+                    except Exception:
+                        log.warning("FailoverAdapter: failed hops' spend not folded into the response", exc_info=True)
                 return result
             except Exception as exc:
                 last_exc = exc
+                _failed_hops.append(exc)
                 # UU-1: record the FAILED attempt before anything else — a
                 # killed/timed-out call used to leave zero bytes in
                 # build/calls/ (record-mode rode the success path only), so
@@ -916,6 +963,10 @@ class FailoverAdapter(LLMAdapter):
                     # wrap in BackendError so every surface downstream (CLI
                     # stderr, run metadata, notify) renders the fix instead of
                     # a traceback (BACKEND_RESILIENCE_DESIGN §2).
+                    if len(_failed_hops) > 1:
+                        _tot, _part = _hops_evidence(exclude=exc)
+                        if any(_tot.values()) or _part:
+                            _add_call_evidence(exc, _tot, _part)
                     if not isinstance(exc, BackendError) and is_actionable(_info):
                         _wrapped = BackendError(_info)
                         if _container_owned:
@@ -955,6 +1006,11 @@ class FailoverAdapter(LLMAdapter):
                 except Exception:
                     pass
         if last_exc is not None:
+            # (a failed hop followed only by skipped adapters)
+            if len(_failed_hops) > 1:
+                _tot, _part = _hops_evidence(exclude=last_exc)
+                if any(_tot.values()) or _part:
+                    _add_call_evidence(last_exc, _tot, _part)
             raise last_exc
         if _skipped_incapable:
             # Every adapter that wasn't circuit-open was skipped for the
@@ -2224,6 +2280,15 @@ def _iter_stream_documents(text: str) -> Iterator[dict]:
         try:
             data, end = decoder.raw_decode(text, start)  # `end` is absolute
         except ValueError:  # JSONDecodeError and any other decode failure
+            continue
+        except RecursionError:
+            # A document nested past the decoder's depth (review round 21,
+            # 2026-09-13: on Python 3.12 the recursive parser raised OUT of
+            # the terminal extraction, ahead of every verdict — an auth
+            # terminal behind a 10,000-deep side document became an
+            # unclassified, unpaid failure). Skip it; later documents on
+            # their own lines still frame.
+            log.warning("claude stream: a document too deep to decode was skipped")
             continue
         skip_until = end
         tail_nl = text.find("\n", end)

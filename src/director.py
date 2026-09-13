@@ -409,6 +409,10 @@ def run_director(
                 project=loop_result.project,
                 tokens_in=loop_result.total_tokens_in,
                 tokens_out=loop_result.total_tokens_out,
+                # Round 21: the direct loop's bill rides too (its steps
+                # carry both; the constructor left the new fields at zero).
+                cost_usd=sum(float(getattr(s, "provider_cost_usd", 0.0) or 0.0) for s in loop_result.steps),
+                cache_read_tokens=sum(int(getattr(s, "cache_read_tokens", 0) or 0) for s in loop_result.steps),
                 elapsed_ms=elapsed,
                 pause_reason=str(getattr(loop_result, "pause_reason", "") or ""),
             )
@@ -2240,6 +2244,8 @@ def main(argv=None):
             "report": result.report,
             "tokens_in": result.tokens_in,
             "tokens_out": result.tokens_out,
+            "cost_usd": float(getattr(result, "cost_usd", 0.0) or 0.0),
+            "cache_read_tokens": int(getattr(result, "cache_read_tokens", 0) or 0),
             "elapsed_ms": result.elapsed_ms,
             "pause_reason": result.pause_reason,
         }, indent=2))
