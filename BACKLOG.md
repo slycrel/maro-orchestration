@@ -68,6 +68,21 @@ rule, not at a fixpoint. Two things to revisit, in this order:
    `execution` field and the run-wide `started_at..ended_at` scan window.
    Design pass first (one round), then build.
 
+### Resumed run never re-curated: 944a67f7 answered → resumed → done, card still shows no deliverables (2026-09-16) — MEDIUM, item-2 class
+Run 944a67f7-clever-wren (the PCD/Jev design goal) paused for clarification,
+was answered 09:44Z, resumed as task-…-0e592588 and finished 10:15Z with five
+design docs in `projects/saw-this-in-discord-and/` (PCD_SCHEMA_DESIGN.md etc.).
+Its metadata reads `status: done`, `ended_at: 10:15Z` — but `finalized_at:
+09:17Z` (the pre-pause attempt), `curated_at: None`, `execution: None`, no
+`artifact/`, no verdict. The resumed attempt advanced `ended_at` and never ran
+finalize/curation, so the card says "done" with nothing to show and the
+project dir holds the only copy. Same class as the r31 residue (per-attempt
+provenance): the resume path needs the finalize → curate → render tail the
+first attempt gets. Verify with `locate_deliverables` on this run: with
+`execution: None` and an aware `started_at` it takes the legacy narrow window,
+so the 10:15 files are also outside its scan. Read-only diagnosis; fix is a
+code chunk (2–3 review rounds under the new budget).
+
 ### PCD + Formal Methods — constrained decision layer for Maro planner (Jeremy ask, 2026-09-16; research in flight)
 
 Two related research dispatches are running:
