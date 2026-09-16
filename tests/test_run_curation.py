@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import errno  # review r28: simulate a sidecar-only ENOSPC preservation failure.
+import os  # review r29: sidecar names include the preserving process id.
 import sys
 from pathlib import Path
 
@@ -216,17 +217,41 @@ def test_r28_a_failed_sidecar_declines_the_publish(workspace, monkeypatch):
     card_path = rd / "run_card.json"
     original = b"corrupt card that must survive"
     card_path.write_bytes(original)
-    real_write_bytes = Path.write_bytes
+    import file_lock
+    real_atomic_write = file_lock.atomic_write
 
-    def _no_sidecar_space(path, data):
+    def _no_sidecar_space(path, data, **kwargs):
         if ".unreadable-" in path.name:
             raise OSError(errno.ENOSPC, "no space for sidecar")
-        return real_write_bytes(path, data)
+        return real_atomic_write(path, data, **kwargs)
 
-    monkeypatch.setattr(Path, "write_bytes", _no_sidecar_space)
+    # review r29: preservation failures now flow through the atomic writer.
+    monkeypatch.setattr(file_lock, "atomic_write", _no_sidecar_space)
     assert refresh_run_card_classification("r28-nospace", run_dir=rd) is None
     assert card_path.read_bytes() == original
     assert not list(rd.glob("run_card.json.unreadable-*"))
+
+
+def test_r29_the_sidecar_is_written_atomically(workspace, monkeypatch):
+    # review r29: unreadable bytes use fsynced temp-and-replace publication,
+    # and simultaneous processes cannot choose the same sidecar name.
+    import file_lock
+    import run_curation
+    rd = _finish("r29-atomic", "Preserve atomically", "done", achieved=False)
+    calls = []
+
+    def _record_atomic(path, content, **kwargs):
+        calls.append((path, content, kwargs))
+
+    monkeypatch.setattr(file_lock, "atomic_write", _record_atomic)
+    assert run_curation._park_unreadable_card(
+        rd / "run_card.json", "tainted \udcff") is True
+    assert len(calls) == 1
+    sidecar, content, kwargs = calls[0]
+    assert sidecar.name.endswith(f"-{os.getpid()}")
+    assert ".unreadable-" in sidecar.name
+    assert content == "tainted \udcff"
+    assert kwargs == {"errors": "surrogateescape"}
 
 
 def test_classification_refresh_merge_keeps_maintenance_keys(workspace):
@@ -1535,7 +1560,8 @@ def test_locate_deliverables_and_answer_excerpt(workspace):
     rd = create_run_dir(
         "h000delv", prompt="what should I install?", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-x", "goal_achieved": True},
+        extra_metadata={"project": "proj-x", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-x"
     pdir.mkdir(parents=True)
@@ -1586,17 +1612,20 @@ def test_r27_locate_deliverables_skips_a_thin_run(workspace):
     assert not (rd / "artifact" / "FINAL_REPORT.md").exists()
 
 
-@pytest.mark.parametrize("extra, lane, expect_scan", [
-    ({}, "now", False),
+@pytest.mark.parametrize("extra, lane, started_at, expect_scan", [
+    ({}, "now", "2026-09-01T00:00:00+00:00", False),
     ({"project": "r28-bound", "project_binding": "landscape"},
-     "agenda", False),
-    ({"project": "r28-loop", "execution": "loop"}, "agenda", True),
-    ({}, "agenda", True),
-], ids=["now", "bound-paused", "loop", "legacy"])
+     "agenda", "2026-09-16T16:00:00+00:00", False),
+    ({"project": "r28-loop", "execution": "loop"},
+     "agenda", "2026-09-16T16:00:00+00:00", True),
+    ({}, "agenda", "2026-09-01T00:00:00+00:00", True),
+    # review r29: failed provenance stamps do not turn a modern run legacy.
+    ({}, "agenda", "2026-09-16T16:00:00+00:00", False),
+], ids=["now", "bound-paused", "loop", "legacy", "modern-no-stamps"])
 def test_r28_locate_deliverables_needs_execution_provenance(
-        workspace, extra, lane, expect_scan):
-    # review r28: only a proven loop (or a pre-provenance legacy record) may
-    # claim a project file as this run's deliverable.
+        workspace, extra, lane, started_at, expect_scan):
+    # review r29: only a proven loop or a record started before the provenance
+    # rollout may claim a project file as this run's deliverable.
     import orch_items
     import run_curation
     from agent_loop import _goal_to_slug
@@ -1612,6 +1641,7 @@ def test_r28_locate_deliverables_needs_execution_provenance(
     (pdir / "FINAL_REPORT.md").write_text(
         "Fresh neighboring report", encoding="utf-8")
     meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+    meta["started_at"] = started_at
     card = {}
     run_curation.locate_deliverables(rd, meta, card)
     copied = rd / "artifact" / "FINAL_REPORT.md"
@@ -1782,7 +1812,8 @@ def test_locate_deliverables_recency_beats_size(workspace):
     create_run_dir(
         "h000recn", prompt="evaluate the thread", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-recency", "goal_achieved": True},
+        extra_metadata={"project": "proj-recency", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-recency"
     (pdir / "artifacts").mkdir(parents=True)
@@ -1816,7 +1847,8 @@ def test_locate_deliverables_serves_all_candidates(workspace):
     rd = create_run_dir(
         "h000srvall", prompt="steal what's useful", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-serveall", "goal_achieved": True},
+        extra_metadata={"project": "proj-serveall", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-serveall"
     pdir.mkdir(parents=True)
@@ -1855,7 +1887,8 @@ def test_locate_deliverables_collision_first_wins(workspace):
     rd = create_run_dir(
         "h000colld", prompt="summarize findings", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-collide", "goal_achieved": True},
+        extra_metadata={"project": "proj-collide", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-collide"
     (pdir / "drafts").mkdir(parents=True)
@@ -1945,6 +1978,7 @@ def test_primary_loop_deliverable_outranks_posthoc_audit_note(workspace):
         model="cheap",
         extra_metadata={
             "project": "proj-ploop", "goal_achieved": True,
+            "execution": "loop",  # review r29: positive loop fixture.
             "loops": [
                 {"loop_id": "aaa", "loop_reason": "initial",
                  "created_at": "2026-08-05T17:48:00+00:00"},
@@ -1990,7 +2024,8 @@ def test_truncated_llm_answer_preserves_full_copy(workspace, monkeypatch):
     rd = create_run_dir(
         "h00full", prompt="summarize the findings", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-full", "goal_achieved": True},
+        extra_metadata={"project": "proj-full", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     import orch_items
     pdir = orch_items.projects_root() / "proj-full"
@@ -2020,7 +2055,8 @@ def test_locate_deliverables_records_what_it_drops(workspace):
     rd = create_run_dir(
         "h000omit", prompt="summarize findings", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-omit", "goal_achieved": True},
+        extra_metadata={"project": "proj-omit", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-omit"
     (pdir / "drafts").mkdir(parents=True)
@@ -2049,7 +2085,8 @@ def test_locate_deliverables_over_cap_is_recorded(workspace):
     create_run_dir(
         "h000cap", prompt="produce many reports", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-cap", "goal_achieved": True},
+        extra_metadata={"project": "proj-cap", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-cap"
     pdir.mkdir(parents=True)
@@ -2069,7 +2106,8 @@ def test_r26_deliverable_uses_verbatim_project_directory(workspace):
     from orch_items import project_dir
     rd = create_run_dir(
         "h000r21", prompt="report for the board", lane="agenda",
-        extra_metadata={"project": " board-reports ", "goal_achieved": True})
+        extra_metadata={"project": " board-reports ", "goal_achieved": True,
+                        "execution": "loop"})  # review r29: positive loop fixture.
     for slug, body in [(" board-reports ", "Recorded project's report"),
                        ("board-reports", "Another project's report")]:
         pdir = project_dir(slug)
@@ -2309,7 +2347,9 @@ def test_r26_a_slow_synthesis_does_not_starve_the_finalize(workspace, monkeypatc
     # review r26: synthesis sleeps outside run_card.json.lock.
     hid = "r26-slow"
     rd = create_run_dir(hid, prompt="Summarize report", lane="agenda",
-                        extra_metadata={"project": "r26-project", "goal_achieved": True})
+                        extra_metadata={"project": "r26-project", "goal_achieved": True,
+                                        # review r29: synthesis needs proven loop output.
+                                        "execution": "loop"})
     from orch_items import project_dir
     pdir = project_dir("r26-project")
     pdir.mkdir(parents=True)

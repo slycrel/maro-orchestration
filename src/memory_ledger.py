@@ -888,7 +888,7 @@ def _may_placeholder_repair(row: dict) -> bool:
 
     Known placeholder sources remain repairable even with their normal verdict
     timestamps/history; an absent or empty source is repairable only when no
-    other truthy verdict-operation evidence exists.
+    other verdict-operation evidence exists.  # review r29: zero is evidence.
     """
     # review r27: exclusion-only and malformed exclusion markers are judged provenance.
     from stop_verdicts import VERDICT_PLACEHOLDER_SOURCES
@@ -896,11 +896,20 @@ def _may_placeholder_repair(row: dict) -> bool:
     _placeholder_source = (
         isinstance(source, str) and source in VERDICT_PLACEHOLDER_SOURCES)
     _sourceless = source is None or source == ""
-    # review r28: a real verdict operation always supplies a source, so these
-    # fields beside an empty source are malformed judged provenance.
-    _sourceless_clean = _sourceless and not any(
-        row.get(field) for field in (
-            "goal_verdict_at", "goal_verdict_confidence", "verdict_history"))
+    # review r29: zero confidence is still stamped verdict evidence. Empty
+    # history is only a schema-shaped placeholder and proves no operation.
+    _has_verdict_evidence = (
+        any(
+            field in row and row.get(field) is not None
+            for field in ("goal_verdict_at", "goal_verdict_confidence")
+        )
+        or (
+            "verdict_history" in row
+            and isinstance(row.get("verdict_history"), list)
+            and bool(row.get("verdict_history"))
+        )
+    )
+    _sourceless_clean = _sourceless and not _has_verdict_evidence
     source_ok = _placeholder_source or _sourceless_clean
     exclusion_ok = ("verdict_excluded" not in row
                     or row.get("verdict_excluded") is False)

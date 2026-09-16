@@ -119,6 +119,8 @@ def test_r27_a_placeholder_stamp_declines_an_exclusion_only_row(
 @pytest.mark.parametrize("field, value", [
     ("goal_verdict_at", "2026-09-16T00:00:00+00:00"),
     ("goal_verdict_confidence", 0.91),
+    # review r29: zero is a valid confidence, not absence.
+    ("goal_verdict_confidence", 0.0),
     ("verdict_history", [{"goal_achieved": False}]),
 ])
 def test_r28_a_placeholder_stamp_declines_a_sourceless_judged_shape(
@@ -139,3 +141,15 @@ def test_r28_a_placeholder_stamp_declines_a_sourceless_judged_shape(
         only_unjudged=True)
     assert result.status == "superseded"
     assert path.read_text(encoding="utf-8") == original
+
+    if field == "goal_verdict_confidence" and value == 0.0:
+        # review r29: an explicitly empty history remains a repairable control;
+        # it records no verdict operation by itself.
+        control = {"loop_id": "r29-empty-history", "goal_achieved": None,
+                   "goal_verdict_source": "", "verdict_history": []}
+        path.write_text(json.dumps(control) + "\n", encoding="utf-8")
+        repaired = ml.stamp_outcome_verdict(
+            control["loop_id"], goal_achieved=None,
+            goal_verdict_source=VERDICT_SOURCE_PENDING_ORPHANED,
+            only_unjudged=True)
+        assert repaired.status == "updated"

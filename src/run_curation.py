@@ -363,6 +363,9 @@ _DELIVERABLE_NAME_HINTS = ("final_report", "report", "summary", "shortlist",
                            "verdict")
 # How many ranked deliverables get copied into <run>/artifact/ for serving.
 _SERVED_ARTIFACTS_CAP = 12
+# review r29: provenance gating is versioned by rollout time, not by whether
+# best-effort metadata fields happened to survive their writes.
+_EXECUTION_PROVENANCE_SINCE = "2026-09-16T16:00:00+00:00"
 
 
 def _parse_ts(iso: str) -> Optional[float]:
@@ -407,11 +410,17 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     names then size ranked. The top pick is COPIED into <run>/artifact/ so
     the viz server (which serves runs_root only) can serve it and completion
     messages can link the actual report."""
-    # review r28: scan only positive loop provenance, retaining behavior for
-    # records predating both execution and landscape project-binding stamps.
+    # review r29: thin is always non-loop execution, including old records.
+    if meta.get("execution") == "thin":
+        return
+    # review r29: legacy is a time property. Modern or unparseable records
+    # need affirmative loop provenance even if both best-effort stamps failed.
+    _started_ts = _parse_ts(str(meta.get("started_at") or "").strip())
+    _cutoff_ts = _parse_ts(_EXECUTION_PROVENANCE_SINCE)
     _legacy = (
-        "execution" not in meta
-        and "project_binding" not in meta
+        _started_ts is not None
+        and _cutoff_ts is not None
+        and _started_ts < _cutoff_ts
         and meta.get("lane") != "now"
     )
     if meta.get("execution") != "loop" and not _legacy:
@@ -1795,9 +1804,15 @@ def _park_unreadable_card(card_path: Path, old: str, *, empty: bool = False) -> 
     from datetime import datetime, timezone
     sidecar = card_path.with_name(
         card_path.name + ".unreadable-"
-        + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
+        + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        # review r29: a pid disambiguates simultaneous preservers whose
+        # timestamp resolution collides across processes.
+        + f"-{os.getpid()}")
     try:
-        sidecar.write_bytes(old.encode("utf-8", "surrogateescape"))
+        # review r29: preserve via the repository's fsynced temp-and-replace
+        # writer so success never exposes a partial sidecar.
+        from file_lock import atomic_write
+        atomic_write(sidecar, old, errors="surrogateescape")
         kept = f"old bytes preserved at {sidecar.name}"
         preserved = True
     except OSError:

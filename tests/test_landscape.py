@@ -1216,6 +1216,83 @@ class TestTheDecisionFollowsTheGoalItBindsOn:
             assert kwargs["preset_steps"] == expected_steps
             assert all("client B" not in step for step in kwargs["preset_steps"])
 
+    @pytest.mark.parametrize("reply", [
+        None,
+        "   ",
+        RuntimeError("channel unavailable"),
+    ], ids=["timeout", "blank", "exception"])
+    def test_r29_an_unanswered_live_clarification_pauses(
+            self, monkeypatch, tmp_path, reply):
+        # review r29: every live non-answer takes the same durable pause path
+        # as an absent channel; no unclear goal reaches the loop.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle
+        from stop_verdicts import PAUSE_OP_CLARIFICATION
+        adapter = MagicMock()
+        adapter.model_key = "cheap"
+        channel = MagicMock()
+        if isinstance(reply, Exception):
+            channel.ask.side_effect = reply
+        else:
+            channel.ask.return_value = reply
+        loop_calls = []
+
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop",
+                   side_effect=lambda *a, **k: loop_calls.append((a, k))), \
+             patch("intent.check_goal_clarity", return_value={
+                 "clear": False, "question": "Which client?"}):
+            result = handle(
+                "Update report", force_lane="agenda", dry_run=False,
+                channel=channel, adapter=adapter, fresh=True)
+
+        assert result.status == "clarification_needed"
+        assert loop_calls == []
+        meta = _meta(result.handle_id)
+        assert meta["clarification_question"] == "Which client?"
+        assert meta["pause_reason"] == PAUSE_OP_CLARIFICATION
+        assert meta["project"] == result.project
+        assert meta["project_binding"] in {"named", "minted"}
+
+    def test_r29_the_rewrite_cannot_erase_the_clarification(
+            self, monkeypatch, tmp_path):
+        # review r29: BLE rewrites only the submitted base; the live answer is
+        # reattached verbatim to both execution and downstream goal handling.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        adapter = MagicMock()
+        adapter.model_key = "cheap"
+        channel = MagicMock()
+        channel.ask.return_value = "client B"
+        goals = []
+
+        def _fake_loop(goal, **kwargs):
+            goals.append(goal)
+            return LoopResult(
+                loop_id="r29-rewrite", project=kwargs.get("project", ""),
+                goal=goal, status="done", stuck_reason=None,
+                steps=[StepOutcome(index=0, text="step", status="done",
+                                   result="output", iteration=0)],
+            )
+
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=_fake_loop), \
+             patch("intent.check_goal_clarity", return_value={
+                 "clear": False, "question": "Which client?"}), \
+             patch("intent.rewrite_imperative_goal",
+                   return_value="Deliver the report."):
+            result = handle(
+                "Update report", force_lane="agenda", dry_run=False,
+                channel=channel, adapter=adapter, fresh=True)
+
+        assert goals == ["Deliver the report.\n\nAdditional context: client B"]
+        meta = _meta(result.handle_id)
+        assert meta["goal_after_rewrite"] == "Deliver the report."
+        assert meta["goal"].endswith("Additional context: client B")
+
     def test_r28_a_clarified_run_takes_no_rerun_brief(
             self, monkeypatch, tmp_path):
         # review r28: a live answer invalidates raw-input identity; the clear

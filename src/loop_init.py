@@ -410,9 +410,9 @@ def _initialize_loop(
     # a disambiguated one. Stamp it so nothing has to guess.
     try:
         from runs import stamp_run_metadata
-        # review r28: curation scans projects only with positive loop provenance;
-        # mode:thin never enters loop_init, so its earlier `thin` marker cannot be overwritten.
-        stamp_run_metadata({"project": ctx.project, "execution": "loop"})
+        # review r29: project identity is useful even when admission refuses
+        # the run, but execution provenance belongs only to admitted work.
+        stamp_run_metadata({"project": ctx.project})
     except Exception:
         log.debug("project metadata stamp failed", exc_info=True)
 
@@ -485,6 +485,20 @@ def _initialize_loop(
                 )
     except ImportError as _gate_exc:
         log.debug("admission gate unavailable: %s", _gate_exc)
+
+    # review r29: every path that proceeds to steps (held slot, intentionally
+    # ungated/no-slot, worktree, or unavailable gate) stamps provenance only
+    # after the refused-busy return above is no longer reachable.
+    try:
+        from runs import stamp_run_metadata
+        if stamp_run_metadata({"execution": "loop"}) is None:
+            raise OSError("metadata stamp returned no path")
+    except Exception:
+        log.warning(
+            "execution provenance not recorded for %s — its deliverables will not be curated",
+            ctx.loop_id,
+            exc_info=True,
+        )
 
     # Run-lifetime lease: a per-loop flock held from here until process
     # death. Checkpoints only carry an in_flight pid while a step executes,

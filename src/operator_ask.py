@@ -722,8 +722,20 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
                 "error": f"run {handle_id} has no operator question to answer"}
     retried = None
     if rec.get("status") == STATUS_ANSWERED:
-        retried = _last_resume_failed(handle_id, since=str(rec.get("answered_at") or ""),
-                                      job_ids=[str(j) for j in (rec.get("resume_job_ids") or [])])
+        # review r29: the answer stamp precedes enqueue, so an answered record
+        # with no resume ids is the durable footprint of a never-queued resume.
+        _resume_ids = [str(j) for j in (rec.get("resume_job_ids") or []) if str(j)]
+        retried = (
+            None  # review r29: live delivery has no resume by design and is final.
+            if rec.get("delivery") == "live"
+            else (
+                _last_resume_failed(
+                    handle_id, since=str(rec.get("answered_at") or ""),
+                    job_ids=_resume_ids,
+                )
+                if _resume_ids else "never-queued"
+            )
+        )
         if not retried:
             return {"status": "error",
                     "error": f"run {handle_id} was already answered at {rec.get('answered_at')}"}
@@ -793,15 +805,29 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
         "clarification_answer": text[:2000],
     }
     if _is_clarification:
-        # review r28: mirror the live path's exact base text before appending context.
-        _base_goal = str(meta.get("goal") or meta.get("prompt") or "")
+        # review r29: retries replace the prior answer against an immutable
+        # clarification base instead of appending context to an enriched goal.
+        _base_goal = str(
+            meta.get("clarification_base_goal")
+            or meta.get("goal")
+            or meta.get("prompt")
+            or ""
+        )
+        _answer_stamp["clarification_base_goal"] = _base_goal
         _answer_stamp["goal"] = f"{_base_goal}\n\nAdditional context: {text}"
     try:
         from runs import stamp_run_metadata_for
-        # review r28: answer provenance and clarified goal publish atomically in one stamp.
-        stamp_run_metadata_for(handle_id, _answer_stamp)
+        # review r29: answer durability is the prerequisite for scheduling a
+        # continuation; a None result is the writer's non-raising failure form.
+        _stamped = stamp_run_metadata_for(handle_id, _answer_stamp)
+        if _stamped is None:
+            raise OSError("metadata stamp returned no path")
     except Exception as exc:
         log.warning("answer: metadata stamp failed: %s", exc)
+        return {
+            "status": "error", "handle_id": handle_id,
+            "error": "the answer could not be recorded; retry",
+        }
     try:
         from task_store import enqueue
         from ancestry import Origin

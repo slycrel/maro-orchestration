@@ -1115,10 +1115,10 @@ def test_run_agent_loop_fan_out_dry_run():
     assert result.status in ("done", "dry_run", "stuck")
 
 
-def test_r28_loop_project_stamp_carries_execution_provenance(
+def test_r29_loop_project_and_execution_stamps_follow_admission(
         monkeypatch, tmp_path):
-    # review r28: curation's positive gate depends on project and execution
-    # being declared together by the loop initializer.
+    # review r29: project identity precedes admission, while loop provenance
+    # is a later, separate declaration that only an admitted run may carry.
     _setup_workspace(monkeypatch, tmp_path)
     import runs
     stamps = []
@@ -1130,7 +1130,37 @@ def test_r28_loop_project_stamp_carries_execution_provenance(
         "Produce the R28 report", project="r28-loop-project",
         dry_run=True, verbose=False,
     )
-    assert {"project": "r28-loop-project", "execution": "loop"} in stamps
+    assert {"project": "r28-loop-project"} in stamps
+    assert {"execution": "loop"} in stamps
+    assert stamps.index({"project": "r28-loop-project"}) < stamps.index(
+        {"execution": "loop"})
+
+
+def test_r29_a_refused_busy_run_carries_no_execution_provenance(
+        monkeypatch, tmp_path):
+    # review r29: a refused run keeps its resolved project for diagnosis but
+    # cannot claim the active loop's deliverable-scanning provenance.
+    _setup_workspace(monkeypatch, tmp_path)
+    import interrupt
+    import runs
+    stamps = []
+    monkeypatch.setattr(
+        runs, "stamp_run_metadata",
+        lambda fields: stamps.append(dict(fields)) or tmp_path / "metadata.json",
+    )
+
+    def _busy(*args, **kwargs):
+        raise interrupt.LoopBusy(
+            "r29-busy-project", {"loop_id": "active-loop", "pid": 1234})
+
+    monkeypatch.setattr(interrupt, "acquire_project_slot", _busy)
+    result = run_agent_loop(
+        "Produce the R29 report", project="r29-busy-project",
+        dry_run=True, verbose=False,
+    )
+    assert result.status == "refused_busy"
+    assert {"project": "r29-busy-project"} in stamps
+    assert not any(stamp.get("execution") == "loop" for stamp in stamps)
 
 
 def test_run_agent_loop_fan_out_dependency_falls_back_sequential():

@@ -7010,6 +7010,38 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   loop init is another actor in a single-user workspace (premise stands);
   a logging handler raising is not a real vector (logging never re-raises)
   but the guard covers the class. Round 29 = codex confirming round.
+  Round 29 (codex-written fixes, orchestrator-reviewed; 3 verified HIGH +
+  5 MED, failure-path twins of the r28 fixes): `execution: loop` was
+  stamped BEFORE admission, so a `refused_busy` run carried loop provenance
+  and could curate the ACTIVE run's report → the `project` stamp stays
+  pre-admission, `execution: loop` is stamped only once the refused-busy
+  return is unreachable, and its failure is a warning; `operator_ask.answer`
+  ignored a None from the answer stamp (resume queued over a stale record)
+  and an enqueue failure after the stamp left the run `answered` with no
+  resume, refused forever → a failed stamp returns an error and never
+  enqueues; an answered record with no `resume_job_ids` is retryable
+  (`never-queued`; live-delivered answers stay final); a live-channel
+  TIMEOUT, blank reply or `ask()` exception fell through the clarity
+  `except` into executing the UNCLEAR goal (only the no-channel path
+  paused) → one `_pause_for_clarification()` helper serves no-channel,
+  timeout, blank and channel-error alike (BEHAVIOUR CHANGE: a Hermes/
+  Telegram question that times out now pauses durably for `maro answer`
+  instead of running the ambiguous goal; revert = the one `if not _reply`
+  line). MEDs: retries rendered the goal from the already-enriched text
+  (duplicated / accumulated answers) → immutable `clarification_base_goal`
+  stamped at the first answer; `_may_placeholder_repair` used truthiness
+  (confidence 0.0 read as absent) → key presence, non-None, non-empty
+  history; the sidecar was a plain `write_bytes` → `file_lock.atomic_write`
+  (fsync + replace) with the pid in the name; "legacy" was inferred from
+  MISSING fields (two failed stamps re-enabled the neighbour scan) →
+  legacy is a TIME property (`_EXECUTION_PROVENANCE_SINCE`, the rollout of
+  `execution: loop`); the BLE rewrite could paraphrase away the live
+  clarification → BLE rewrites the submitted goal and the exact
+  "Additional context" suffix is re-appended after. Direction recorded:
+  the queued clarification publishes `goal` but keeps the pause-time
+  project/binding (the queued path cannot re-judge; a later scan may pair
+  the clarified goal with that project — an LLM re-decision at answer/
+  RESUME time is a separate item). Round 30 = codex confirming round.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the

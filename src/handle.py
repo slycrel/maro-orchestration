@@ -2256,6 +2256,47 @@ def _handle_impl(
         )
         # review r28: exact-input rerun identity is invalid after a live reply changes intent.
         _clarified = False
+        # review r29: keep live clarification outside the BLE input so a
+        # mechanical rewrite cannot paraphrase or erase the operator's answer.
+        _clarification_suffix = ""
+
+        def _pause_for_clarification(question: str) -> HandleResult:
+            """Bind and durably pause every clarification path without an answer."""
+            # review r29: no channel, timeout, blank input, and channel errors
+            # all share the same durable pause and returned binding.
+            try:
+                _bind_project()
+            except Exception as exc:
+                log.warning(
+                    "clarification: project binding failed, pausing unbound: %s",
+                    exc,
+                )
+            try:
+                from runs import stamp_run_metadata as _stamp_q
+                from stop_verdicts import PAUSE_OP_CLARIFICATION
+                _stamp_q({
+                    "clarification_question": question,
+                    "pause_reason": PAUSE_OP_CLARIFICATION,
+                })
+            except Exception:
+                pass
+            elapsed = int((time.monotonic() - started_at) * 1000)
+            return HandleResult(
+                handle_id=handle_id,
+                lane="agenda",
+                lane_confidence=confidence,
+                classification_reason=reason + " [clarity check: ambiguous]",
+                message=message,
+                status="clarification_needed",
+                result=(
+                    f"Before starting, I need to clarify one thing:\n\n"
+                    f"{question}\n\n"
+                    f"*(Add `yolo: true` to user/CONFIG.md to skip this check.)*"
+                ),
+                project=_agenda_project,
+                elapsed_ms=elapsed,
+            )
+
         if not dry_run and not _yolo:
             try:
                 from intent import check_goal_clarity
@@ -2274,109 +2315,88 @@ def _handle_impl(
                     if verbose:
                         print(f"[maro:{handle_id}] clarity check: UNCLEAR — {_q}", file=sys.stderr, flush=True)
                     if channel is not None:
-                        # Ask via channel and wait for reply — then continue with enriched goal
-                        _reply = channel.ask(_q)
-                        if _reply:
-                            message = f"{message}\n\nAdditional context: {_reply}"
-                            # review r28: a reply changes exact-text identity for downstream recall.
-                            _clarified = True
-                            # review r27: scans must see clarified user intent, not the submitted fragment.
-                            try:
-                                from runs import stamp_run_metadata as _stamp_clarified_goal
-                                _stamp_clarified_goal({"goal": message})
-                            except Exception:
-                                pass
-                            # review r27: do not re-stamp after BLE; goal_after_rewrite owns that transform.
-                            if _landscape_decided:
-                                # the landscape judged the goal AS SUBMITTED;
-                                # the reply may name other work ("this is for
-                                # client B") — decide again over the clarified
-                                # goal before anything binds on the first verdict
-                                _re_decided = False
-                                try:
-                                    _decide_landscape(message)
-                                    _re_decided = True
-                                except Exception as _re_exc:
-                                    # the first decision was about a goal that
-                                    # no longer exists: nothing it derived may
-                                    # drive the clarified one. The run goes on
-                                    # FRESH (the stage-failed policy) — the
-                                    # goal-text fallback binds the project, the
-                                    # caller's origin stands, no prior context
-                                    # rides in (review r4).
-                                    log.warning("landscape: re-decision over the clarified goal failed, "
-                                                "running fresh: %s", _re_exc)
-                                    origin = dict(_origin_as_given) if _origin_as_given else None
-                                    _related_ctx = _landscape_project = _context_only_project = ""
-                                    try:
-                                        from runs import stamp_run_metadata_for as _stamp_land_fresh
-                                        _stamp_land_fresh(handle_id, {
-                                            "landscape": {"rule": "judge_unreadable", "relation": "fresh",
-                                                          "reason": f"re-decision failed: {str(_re_exc)[:200]}"},
-                                            "origin": dict(_origin_as_given or {})})
-                                    except Exception:
-                                        pass
-                                if _re_decided:
-                                    # reporting, outside the failure handler:
-                                    # a diagnostic that raises must not turn a
-                                    # committed re-decision into a fresh
-                                    # record (review r6)
-                                    try:
-                                        log.info("landscape: re-decided over the clarified goal")
-                                    except Exception:
-                                        pass
-                        # Fall through to continue execution
-                    else:
-                        # No channel — return clarification_needed (CLI path).
-                        # review r27: queued answers inherit this recorded direction; unlike
-                        # the live-channel path, they cannot re-judge and move the binding.
-                        # review r28: an unavailable binder must not turn UNCLEAR into execution.
+                        # review r29: channel failure is an unanswered
+                        # clarification, not failure of the clarity check.
                         try:
-                            _bind_project()
-                        except Exception as exc:
+                            _reply = (channel.ask(_q) or "").strip()
+                        except Exception as _ask_exc:
                             log.warning(
-                                "clarification: project binding failed, pausing unbound: %s",
-                                exc,
+                                "clarification: live channel failed, pausing: %s",
+                                _ask_exc,
                             )
-                        # Stamp the question into run metadata: the HandleResult
-                        # is ephemeral on queue/dispatch paths, and a
-                        # clarification_needed record without its question is
-                        # undiagnosable from the other side of the wire.
+                            return _pause_for_clarification(_q)
+                        if not _reply:
+                            return _pause_for_clarification(_q)
+                        _clarification_suffix = f"\n\nAdditional context: {_reply}"
+                        message = message + _clarification_suffix
+                        # review r28: a reply changes exact-text identity for downstream recall.
+                        _clarified = True
+                        # review r27: scans must see clarified user intent, not the submitted fragment.
                         try:
-                            from runs import stamp_run_metadata as _stamp_q
-                            from stop_verdicts import PAUSE_OP_CLARIFICATION
-                            _stamp_q({
-                                "clarification_question": _q,
-                                "pause_reason": PAUSE_OP_CLARIFICATION,
-                            })
+                            from runs import stamp_run_metadata as _stamp_clarified_goal
+                            _stamp_clarified_goal({"goal": message})
                         except Exception:
                             pass
-                        elapsed = int((time.monotonic() - started_at) * 1000)
-                        return HandleResult(
-                            handle_id=handle_id,
-                            lane="agenda",
-                            lane_confidence=confidence,
-                            classification_reason=reason + " [clarity check: ambiguous]",
-                            message=message,
-                            status="clarification_needed",
-                            result=(
-                                f"Before starting, I need to clarify one thing:\n\n"
-                                f"{_q}\n\n"
-                                f"*(Add `yolo: true` to user/CONFIG.md to skip this check.)*"
-                            ),
-                            # review r28: the pause reports the same binding metadata records.
-                            project=_agenda_project,
-                            elapsed_ms=elapsed,
-                        )
+                        # review r27: do not re-stamp after BLE; goal_after_rewrite owns that transform.
+                        if _landscape_decided:
+                            # the landscape judged the goal AS SUBMITTED;
+                            # the reply may name other work ("this is for
+                            # client B") — decide again over the clarified
+                            # goal before anything binds on the first verdict
+                            _re_decided = False
+                            try:
+                                _decide_landscape(message)
+                                _re_decided = True
+                            except Exception as _re_exc:
+                                # the first decision was about a goal that
+                                # no longer exists: nothing it derived may
+                                # drive the clarified one. The run goes on
+                                # FRESH (the stage-failed policy) — the
+                                # goal-text fallback binds the project, the
+                                # caller's origin stands, no prior context
+                                # rides in (review r4).
+                                log.warning("landscape: re-decision over the clarified goal failed, "
+                                            "running fresh: %s", _re_exc)
+                                origin = dict(_origin_as_given) if _origin_as_given else None
+                                _related_ctx = _landscape_project = _context_only_project = ""
+                                try:
+                                    from runs import stamp_run_metadata_for as _stamp_land_fresh
+                                    _stamp_land_fresh(handle_id, {
+                                        "landscape": {"rule": "judge_unreadable", "relation": "fresh",
+                                                      "reason": f"re-decision failed: {str(_re_exc)[:200]}"},
+                                        "origin": dict(_origin_as_given or {})})
+                                except Exception:
+                                    pass
+                            if _re_decided:
+                                # reporting, outside the failure handler:
+                                # a diagnostic that raises must not turn a
+                                # committed re-decision into a fresh
+                                # record (review r6)
+                                try:
+                                    log.info("landscape: re-decided over the clarified goal")
+                                except Exception:
+                                    pass
+                    else:
+                        return _pause_for_clarification(_q)
             except Exception:
-                pass  # clarity check must never block execution
+                # review r29: only a failed clarity CHECK degrades to
+                # execution; unanswered questions return above.
+                pass
 
         # BLE rewriter — strip prescribed execution steps, keep outcome intent (non-blocking)
         # Bitter Lesson Engineering: embed the "what", let the AI own the "how".
         if not dry_run:
             try:
                 from intent import rewrite_imperative_goal
-                _rewritten = rewrite_imperative_goal(message, adapter=adapter)
+                # review r29: BLE sees the submitted goal, while the exact
+                # live answer is appended after any rewrite.
+                _rewrite_input = (
+                    message[:-len(_clarification_suffix)]
+                    if _clarification_suffix
+                    and message.endswith(_clarification_suffix)
+                    else message
+                )
+                _rewritten = rewrite_imperative_goal(_rewrite_input, adapter=adapter)
                 # The rewrite left no record at all: metadata.prompt keeps the
                 # raw input, so a rewritten goal and an untouched one were
                 # indistinguishable afterwards. (The atlas used to infer this
@@ -2386,12 +2406,12 @@ def _handle_impl(
                     from run_trace import record_edge as _rec
                     _rec("route.clarity", "route.rewrite",
                          handle_id=handle_id,
-                         rewritten=bool(_rewritten != message),
-                         goal_before=message if _rewritten != message else "",
-                         goal_after=_rewritten if _rewritten != message else "")
+                         rewritten=bool(_rewritten != _rewrite_input),
+                         goal_before=_rewrite_input if _rewritten != _rewrite_input else "",
+                         goal_after=_rewritten if _rewritten != _rewrite_input else "")
                 except Exception:
                     pass
-                if _rewritten != message:
+                if _rewritten != _rewrite_input:
                     if verbose:
                         print(f"[maro:{handle_id}] BLE rewrite: imperative goal → outcome goal", file=sys.stderr, flush=True)
                     try:
@@ -2399,7 +2419,9 @@ def _handle_impl(
                         _srm({"goal_rewritten": True, "goal_after_rewrite": _rewritten})
                     except Exception:
                         pass
-                    message = _rewritten
+                # review r29: this assignment also protects the suffix when
+                # the base goal did not require rewriting.
+                message = _rewritten + _clarification_suffix
             except Exception:
                 pass  # rewrite failures must never block a run
 

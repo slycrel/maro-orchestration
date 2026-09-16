@@ -405,6 +405,75 @@ class TestAnswer:
         assert oa.answer("efgh5678", "deny")["status"] == "queued"
         assert _meta(env_rd)["goal"] == "Install the dependency"
 
+    def test_r29_a_failed_answer_stamp_does_not_enqueue(
+            self, ws, monkeypatch):
+        # review r29: continuation scheduling is conditional on the answer
+        # and clarified goal first becoming durable.
+        rd = self._paused(ws, monkeypatch)
+        import runs
+        import task_store
+        before_meta = _meta(rd)
+        before_jobs = {task["job_id"] for task in task_store.list_tasks()}
+        monkeypatch.setattr(runs, "stamp_run_metadata_for", lambda *a, **k: None)
+
+        result = oa.answer("abcd1234", "client B")
+
+        assert result == {
+            "status": "error", "handle_id": "abcd1234",
+            "error": "the answer could not be recorded; retry",
+        }
+        assert _meta(rd) == before_meta
+        assert {task["job_id"] for task in task_store.list_tasks()} == before_jobs
+
+    def test_r29_an_answer_whose_enqueue_failed_can_be_answered_again(
+            self, ws, monkeypatch):
+        # review r29: the answer-only durable state is explicitly retryable
+        # because it has no resume job id.
+        rd = self._paused(ws, monkeypatch)
+        import task_store
+        real_enqueue = task_store.enqueue
+        calls = {"n": 0}
+
+        def _fail_once(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("queue unavailable")
+            return real_enqueue(**kwargs)
+
+        monkeypatch.setattr(task_store, "enqueue", _fail_once)
+        first = oa.answer("abcd1234", "client B")
+        second = oa.answer("abcd1234", "client B")
+
+        assert first["status"] == "error"
+        assert second["status"] == "queued"
+        assert second["retried_after"] == "never-queued"
+        assert _meta(rd)["operator_ask"]["resume_job_ids"] == [second["job_id"]]
+
+    def test_r29_a_corrected_answer_replaces_the_previous_context(
+            self, ws, monkeypatch):
+        # review r29: retries always render from the first clarification base,
+        # so corrected context replaces rather than accumulates.
+        import runs
+        import task_store
+        rd = _mk_run("abcd1234", prompt="Raw update report")
+        with runs.scoped_run_dir(rd):
+            runs.stamp_run_metadata({
+                "goal": "Update report",
+                "clarification_question": "Which client?",
+                "pause_reason": "awaiting-clarification",
+            })
+
+        first = oa.answer("abcd1234", "client B")
+        task_store.claim(first["job_id"])
+        task_store.complete(first["job_id"], result_status="failed")
+        second = oa.answer("abcd1234", "client C")
+
+        assert second["status"] == "queued"
+        meta = _meta(rd)
+        assert meta["goal"] == "Update report\n\nAdditional context: client C"
+        assert "client B" not in meta["goal"]
+        assert meta["clarification_base_goal"] == "Update report"
+
     def test_queue_routes_the_answer_as_a_resume_with_the_answer_in_context(self, ws, monkeypatch):
         """handle_queue's strict-affirmative test (typed pause, no verdict) →
         RESUME: the parent run dir re-pinned, the identity kept, and the
