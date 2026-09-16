@@ -2053,3 +2053,42 @@ def test_r24_the_refresh_publishes_the_metadata_at_publication(workspace, monkey
     assert written["goal_achieved"] is False
     assert "verdict_pending" not in written
     assert card == written
+
+
+def test_r25_a_torn_utf8_record_declines_the_refresh(workspace):
+    rd = _finish("r25-torn", "Real verdict", "done", achieved=False)
+    assert refresh_run_card_classification("r25-torn", run_dir=rd) is not None
+    original = (rd / "run_card.json").read_bytes()
+    # a crash mid-write cuts a multi-byte sequence: invalid UTF-8, not JSON
+    (rd / "metadata.json").write_bytes(b'{"status": "done", "prompt": "caf\xc3')
+    assert refresh_run_card_classification("r25-torn", run_dir=rd) is None
+    assert (rd / "run_card.json").read_bytes() == original
+
+
+def test_r25_the_first_card_is_published_from_the_metadata_under_the_lock(workspace, monkeypatch):
+    import file_lock
+    hid = "r25-first"
+    rd = _finish(hid, "Real verdict", "done")
+    vp = {"since": "2020-01-01T00:00:00+00:00"}
+    runs.stamp_run_metadata_for(hid, {"verdict_pending": vp})
+    (rd / "run_card.json").unlink(missing_ok=True)  # no card yet: the first refresh writes it
+    real_rmw = file_lock.locked_rmw
+    injected = []
+
+    def publish(path, fn, *args, **kwargs):
+        if path == rd / "run_card.json" and not injected:
+            injected.append(True)
+            assert runs.stamp_run_metadata_for(hid, {
+                "verdict_pending": {**vp, "resolved_at": "owner-time"},
+                "goal_achieved": False, "goal_verdict_source": "closure",
+            }) is not None
+        return real_rmw(path, fn, *args, **kwargs)
+
+    monkeypatch.setattr(file_lock, "locked_rmw", publish)
+    card = refresh_run_card_classification(hid, run_dir=rd)
+    assert injected, "the first card must go through the locked read-build-write"
+    written = json.loads((rd / "run_card.json").read_text())
+    assert written["success_class"] == "done-not-achieved"
+    assert "verdict_pending" not in written
+    assert card == written
+    assert not list(rd.glob("run_card.json.unreadable-*")), "no card is not an unreadable card"

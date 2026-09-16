@@ -939,7 +939,7 @@ def stamp_outcome_verdict(
             goal_verdict_confidence = None
         else:
             goal_verdict_confidence = _conf
-    from stop_verdicts import VERDICT_SOURCE_NEVER_STAMPED, VERDICT_SOURCE_PENDING_ORPHANED
+    from stop_verdicts import VERDICT_PLACEHOLDER_SOURCES
     path = _outcomes_path()
 
     attempts = max(1, int(max_attempts))
@@ -967,9 +967,10 @@ def stamp_outcome_verdict(
             row = json.loads(lines[target_idx])
             # review r24: a stale repair must not erase a judged exclusion.
             source = row.get("goal_verdict_source")
+            # review r25: the whole placeholder family yields to a placeholder
+            # (run_errored / closure_skipped_no_steps are not verdicts either).
             if (only_unjudged and isinstance(source, str) and source
-                    and source not in {VERDICT_SOURCE_NEVER_STAMPED,
-                                       VERDICT_SOURCE_PENDING_ORPHANED}):
+                    and source not in VERDICT_PLACEHOLDER_SOURCES):
                 updated["superseded"] = True
                 return old
             # Re-stamp honesty (Jeremy decree 2026-08-10: corrections may

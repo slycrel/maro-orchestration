@@ -6883,6 +6883,24 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   the r23 8-hex identity digest collided among ordinary name
   populations (the ownership check then refused the second project
   forever) — 16 hex now, the refusal kept as the collision's fate.
+  Round 25 (SAME-MODEL FALLBACK — codex capped until 2026-09-20;
+  sonnet/medium reviewers, fixes by the orchestrator): no HIGH. Three
+  MEDs fixed: the r23 strict metadata reader caught `OSError` and
+  `JSONDecodeError` but not `UnicodeDecodeError`, so a torn UTF-8
+  record (a write cut mid-multibyte) crashed the refresh instead of
+  declining it — now declined like any other unreadable record; the
+  r24 `only_unjudged` guard yielded only to `closure_never_stamped` /
+  `verdict_pending_orphaned`, so a placeholder stamp declined a
+  `run_errored` or `closure_skipped_no_steps` row as if it were a
+  judgment — the four-member placeholder family is now one
+  `VERDICT_PLACEHOLDER_SOURCES` set and any member yields to a
+  placeholder; the refresh's FIRST card (no `run_card.json` yet) was
+  built and written outside the r24 locked read-build-write — the
+  no-card branch is gone and the first card takes the same lock
+  (`locked_rmw(..., default="")`, an empty body reads as no card).
+  LOWs recorded, not fixed: the unlocked truthiness check at handle
+  entry (best-effort by design), `tell` re-deriving `hook_owed`,
+  a vestigial `hook_configured`, redundant manifest reads.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the

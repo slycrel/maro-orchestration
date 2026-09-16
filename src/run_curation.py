@@ -135,7 +135,10 @@ def _read_meta_strict(rd: Path) -> Optional[dict]:
     # review r23: unreadable metadata must not erase a card's real verdict.
     try:
         meta = json.loads((rd / "metadata.json").read_text())
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # review r25: a crash-torn UTF-8 sequence is unreadable too — it
+        # must decline (warned) like any other failed read, not raise
+        # into whichever caller's blanket except happens to catch it.
         return None
     return meta if isinstance(meta, dict) else None
 
@@ -1775,15 +1778,9 @@ def refresh_run_card_classification(
     if rd is None or not rd.is_dir():
         return None
     card_path = rd / "run_card.json"
-    if not card_path.is_file():
-        meta = _read_meta_strict(rd)
-        if meta is None:
-            log.warning("refresh_run_card_classification: metadata unreadable for run %s", rd.name)
-            return None
-        rebuilt = _build_run_card(handle_id, rd, meta)
-        _write_run_card(rd, rebuilt)
-        return rebuilt
-
+    # review r25: the FIRST card goes through the same locked read-build-write
+    # as a refresh of an existing one — two first-time refreshes otherwise
+    # each built from their own read and the later blind write won.
     from file_lock import locked_rmw
     refreshed = {"card": None, "unreadable": False}
 
@@ -1804,7 +1801,9 @@ def refresh_run_card_classification(
         # silent. loads_clean additionally refuses byte-tainted-but-valid
         # content that plain json.loads would launder into \udcXX escapes.
         try:
-            card = loads_clean(old)
+            # no card yet (locked_rmw hands us the empty default) — nothing to
+            # preserve, nothing to sidecar (review r25)
+            card = {} if not old.strip() else loads_clean(old)
             if not isinstance(card, dict):
                 raise ValueError("run_card.json is not a JSON object")
         except (ValueError, TypeError):
@@ -1835,7 +1834,7 @@ def refresh_run_card_classification(
         refreshed["card"] = card
         return json.dumps(card, indent=2)
 
-    locked_rmw(card_path, _merge)
+    locked_rmw(card_path, _merge, default="")
     if refreshed["unreadable"]:
         log.warning("refresh_run_card_classification: metadata unreadable for run %s", rd.name)
     return refreshed["card"]
