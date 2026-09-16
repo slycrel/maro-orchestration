@@ -239,6 +239,35 @@ def test_clarity_judges_goal_as_submitted_and_question_is_persisted(monkeypatch,
     assert card["clarification_question"] == "Which thread should I reference?"
 
 
+def test_r31_empty_unclear_question_survives_a_later_failure(monkeypatch, tmp_path):
+    # review r31: an empty generated question falls back before diagnostics can raise.
+    _setup(monkeypatch, tmp_path)
+    real_stderr = sys.stderr
+
+    class _RaisingStderr:
+        def write(self, text):
+            if "clarity check: UNCLEAR" in text:
+                raise OSError("stderr unavailable")
+            return real_stderr.write(text)
+
+        def flush(self):
+            return real_stderr.flush()
+
+    with patch("intent.check_goal_clarity",
+               return_value={"clear": False, "question": ""}), \
+         patch("handle.sys.stderr", _RaisingStderr()):
+        result = handle(
+            "Update the report", force_lane="agenda", dry_run=False,
+            adapter=MagicMock(), verbose=True,
+        )
+
+    assert result.status == "clarification_needed"
+    assert "Could you clarify the goal?" in result.result
+    run_dir = next((tmp_path / "runs").glob(f"{result.handle_id}*"))
+    meta = json.loads((run_dir / "metadata.json").read_text())
+    assert meta["clarification_question"] == "Could you clarify the goal?"
+
+
 def test_handle_build_loop_source_skips_quality_gate(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     monkeypatch.setenv("MARO_YOLO", "true")

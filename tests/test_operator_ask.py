@@ -533,6 +533,63 @@ class TestAnswer:
         assert "client B" in goal and "APAC" in goal
         assert "EMEA" not in goal
 
+    def test_r31_a_second_production_question_keeps_the_enriched_goal(
+            self, ws, monkeypatch):
+        # review r31: handle_queue replays the raw prompt, but the run owns the enriched base.
+        import runs
+        rd = _mk_run("abcd1234", prompt="Update report")
+        with runs.scoped_run_dir(rd):
+            oa.pause_for_ask(
+                {**ASK, "question": "Which client?"}, handle_id="abcd1234",
+                goal="Update report")
+        assert oa.answer("abcd1234", "client B")["status"] == "queued"
+
+        with runs.scoped_run_dir(rd):
+            oa.pause_for_ask(
+                {**ASK, "question": "Which region?"}, handle_id="abcd1234",
+                goal="Update report")
+        assert oa.answer("abcd1234", "APAC")["status"] == "queued"
+
+        goal = _meta(rd)["goal"]
+        assert "client B" in goal and "APAC" in goal
+
+    def test_r31_env_request_runs_after_the_metadata_lock(self, ws, monkeypatch):
+        # review r31: environment mutation is slow external work, never a locked callback.
+        import threading
+        import runs
+        import env_request
+        import task_store
+        rd = _mk_run("abcd1234", prompt="Install the dependency")
+        with runs.scoped_run_dir(rd):
+            runs.stamp_run_metadata({
+                "goal": "Install the dependency",
+                "pause_reason": "awaiting-clarification",
+                "operator_ask": {
+                    "question": "Allow apt:x?", "status": "pending",
+                    "kind": "env_request", "source": "worker",
+                },
+            })
+
+        def _apply(rec, text):
+            result = []
+            probe = threading.Thread(target=lambda: result.append(
+                runs.stamp_run_metadata_for("abcd1234", {"r31_probe": "x"})))
+            probe.start()
+            probe.join(2)
+            assert not probe.is_alive(), "metadata lock was held during apply_answer"
+            assert result and result[0] is not None
+            return "allow", "The orchestrator allowed apt:x."
+
+        monkeypatch.setattr(env_request, "apply_answer", _apply)
+        result = oa.answer("abcd1234", "allow")
+
+        assert result["status"] == "queued"
+        rec = _meta(rd)["operator_ask"]
+        assert rec["decision"] == "allow"
+        assert rec["outcome"] == "The orchestrator allowed apt:x."
+        task = next(t for t in task_store.list_tasks() if t["job_id"] == result["job_id"])
+        assert rec["outcome"] in task["reason"]
+
     def test_r29_a_corrected_answer_replaces_the_previous_context(
             self, ws, monkeypatch):
         # review r29: retries always render from the first clarification base,
@@ -932,13 +989,118 @@ class TestLive:
             runs.stamp_run_metadata({
                 "operator_ask": {**CODE_ASK, "status": "pending", "live": True},
             })
-        monkeypatch.setattr(runs, "stamp_run_metadata_for", lambda *a, **k: None)
+        monkeypatch.setattr(runs, "revise_run_metadata_for", lambda *a, **k: None)
 
         result = oa.answer("abcd1234", "654321")
 
         assert result["status"] == "error"
         assert not (scratch / oa.ANSWER_NAME).exists()
         assert _meta(rd)["operator_ask"]["status"] == "pending"
+
+    def test_r31_live_window_closing_during_claim_queues_the_answer(
+            self, ws, monkeypatch):
+        # review r31: the locked pause wins over an unlocked live-window observation.
+        import runs
+        import task_store
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        with runs.scoped_run_dir(rd):
+            runs.stamp_run_metadata({
+                "operator_ask": {**CODE_ASK, "status": "pending", "live": True},
+            })
+        real_revise = runs.revise_run_metadata_for
+        first = True
+
+        def _close_then_revise(handle_id, revise):
+            nonlocal first
+            if first:
+                first = False
+                runs.stamp_run_metadata_for(
+                    handle_id, {"pause_reason": "awaiting-clarification"})
+            return real_revise(handle_id, revise)
+
+        monkeypatch.setattr(runs, "revise_run_metadata_for", _close_then_revise)
+        result = oa.answer("abcd1234", "654321")
+
+        assert result["status"] == "queued"
+        assert not (scratch / oa.ANSWER_NAME).exists()
+        rec = _meta(rd)["operator_ask"]
+        assert rec.get("delivery") != "live"
+        assert rec["resume_job_ids"] == [result["job_id"]]
+        assert any(t["job_id"] == result["job_id"] for t in task_store.list_tasks())
+
+    def test_r31_two_live_responders_deliver_exactly_once(self, ws, monkeypatch):
+        # review r31: both responders read pending, then the locked claim chooses one.
+        import threading
+        import runs
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        with runs.scoped_run_dir(rd):
+            runs.stamp_run_metadata({
+                "operator_ask": {**CODE_ASK, "status": "pending", "live": True},
+            })
+        real_read = oa._read_meta
+        barrier = threading.Barrier(2)
+        count_lock = threading.Lock()
+        reads = 0
+
+        def _read_together(path):
+            nonlocal reads
+            meta = real_read(path)
+            with count_lock:
+                reads += 1
+                wait = reads <= 2
+            if wait:
+                barrier.wait(5)
+            return meta
+
+        monkeypatch.setattr(oa, "_read_meta", _read_together)
+        results = []
+        threads = [
+            threading.Thread(target=lambda value=value: results.append(
+                oa.answer("abcd1234", value)))
+            for value in ("111111", "222222")
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5)
+
+        assert sorted(result["status"] for result in results) == ["delivered", "error"]
+        winner = _meta(rd)["operator_ask"]["answer"]
+        assert winner in {"111111", "222222"}
+        assert json.loads((scratch / oa.ANSWER_NAME).read_text())["answer"] == winner
+
+    def test_r31_live_file_failure_rolls_back_for_retry(self, ws, monkeypatch):
+        # review r31: metadata cannot remain terminal when worker-file publication fails.
+        import runs
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        with runs.scoped_run_dir(rd):
+            runs.stamp_run_metadata({
+                "operator_ask": {**CODE_ASK, "status": "pending", "live": True},
+            })
+        real_write = oa._write_answer_file
+        calls = 0
+
+        def _fail_once(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("disk full")
+            return real_write(*args, **kwargs)
+
+        monkeypatch.setattr(oa, "_write_answer_file", _fail_once)
+        first = oa.answer("abcd1234", "654321")
+
+        assert first["status"] == "error" and "retry" in first["error"]
+        rec = _meta(rd)["operator_ask"]
+        assert rec["status"] == "pending" and "answer" not in rec
+        assert not (scratch / oa.ANSWER_NAME).exists()
+        assert oa.answer("abcd1234", "654321")["status"] == "delivered"
 
     def test_watch_announces_once_and_answer_is_delivered_to_the_file(self, ws, monkeypatch):
         import runs

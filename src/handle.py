@@ -2329,7 +2329,8 @@ def _handle_impl(
                 except Exception:
                     pass
                 if not _clarity.get("clear"):
-                    _q = _clarity.get("question", "Could you clarify the goal?")
+                    # review r31: an empty model question still preserves the UNCLEAR verdict.
+                    _q = _clarity.get("question") or "Could you clarify the goal?"
                     _unclear_question = _q  # review r30: only a failed CHECK may degrade to execution.
                     if verbose:
                         print(f"[maro:{handle_id}] clarity check: UNCLEAR — {_q}", file=sys.stderr, flush=True)

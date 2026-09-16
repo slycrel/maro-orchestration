@@ -412,9 +412,17 @@ def _initialize_loop(
         from runs import stamp_run_metadata
         # review r30: RESUME re-enters loop_init, so a refused re-attempt must
         # demote a stale successful-attempt marker before admission.
-        stamp_run_metadata({"project": ctx.project, "execution": "pending"})
+        if stamp_run_metadata({"project": ctx.project, "execution": "pending"}) is None:
+            # review r31: best-effort failure is observable before admission can refuse.
+            log.warning(
+                "attempt provenance not recorded for %s — a stale execution marker may survive a refused attempt",
+                ctx.project,
+            )
     except Exception:
-        log.debug("project metadata stamp failed", exc_info=True)
+        log.warning(
+            "attempt provenance not recorded for %s — a stale execution marker may survive a refused attempt",
+            ctx.project, exc_info=True,
+        )
 
     # Admission gate: atomically claim the per-project slot (flock, held for
     # the process's lifetime). Two runs on one project stomp each other's

@@ -1667,6 +1667,7 @@ def test_r28_locate_deliverables_needs_execution_provenance(
         "Fresh neighboring report", encoding="utf-8")
     meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
     meta["started_at"] = started_at
+    assert meta.get("ended_at") is None  # review r31: an active run's None end stays unbounded.
     card = {}
     run_curation.locate_deliverables(rd, meta, card)
     copied = rd / "artifact" / "FINAL_REPORT.md"
@@ -2193,6 +2194,123 @@ def test_locate_deliverables_over_cap_is_recorded(workspace):
     omitted = card["served_artifacts_omitted"]
     assert len(omitted) == 2
     assert all(o["reason"] == "over-cap" for o in omitted)
+
+
+@pytest.mark.parametrize("ended_at, scans", [
+    ("2026-09-16T12:00:00", False),
+    ("2026-09-16T12:00:00+00:00", True),
+    # review r31: the run-dir writer stores None until the run closes; a
+    # still-running or crashed run keeps the recorded unbounded scan.
+    (None, True),
+    ("", True),
+], ids=["naive", "aware", "none", "empty"])
+def test_r31_deliverable_end_requires_an_aware_timestamp(
+        workspace, monkeypatch, ended_at, scans):
+    # review r31: present naive ends fail closed; aware ends retain their bound.
+    import artifact_check
+    import run_curation
+    pdir = workspace / "project"
+    pdir.mkdir()
+    seen = []
+    monkeypatch.setattr(run_curation, "_project_dir_for", lambda meta: pdir)
+    monkeypatch.setattr(
+        artifact_check, "files_modified_since",
+        lambda *args, **kwargs: seen.append(kwargs.get("until_ts")) or [],
+    )
+    run_curation.locate_deliverables(
+        workspace / "run",
+        {"execution": "loop", "started_at": "2026-09-16T11:00:00+00:00",
+         "ended_at": ended_at},
+        {},
+    )
+    assert bool(seen) is scans
+    if scans and ended_at:
+        assert seen[0] == datetime.fromisoformat(ended_at).timestamp()
+    elif scans:
+        assert seen[0] is None
+
+
+def test_r31_vanished_candidate_does_not_abort_other_deliverables(
+        workspace, monkeypatch):
+    # review r31: ranking and card construction consume the discovery stat cache.
+    import artifact_check
+    import run_curation
+    rd = workspace / "run"
+    rd.mkdir()
+    pdir = workspace / "project"
+    pdir.mkdir()
+    vanished = pdir / "FINAL_REPORT.md"
+    survivor = pdir / "OTHER_REPORT.md"
+    vanished.write_text("vanish")
+    survivor.write_text("survive")
+    monkeypatch.setattr(run_curation, "_project_dir_for", lambda meta: pdir)
+    monkeypatch.setattr(
+        artifact_check, "files_modified_since",
+        lambda *args, **kwargs: [vanished.name, survivor.name],
+    )
+    real_stat = Path.stat
+    deleted = False
+
+    def _delete_after_first_discovery(path, *args, **kwargs):
+        nonlocal deleted
+        if path == survivor and not deleted:
+            deleted = True
+            vanished.unlink()
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _delete_after_first_discovery)
+    card = {}
+    run_curation.locate_deliverables(
+        rd, {"execution": "loop", "started_at": "2020-01-01T00:00:00+00:00"}, card)
+
+    assert any(item["path"] == str(survivor) for item in card["deliverables"])
+    assert all(item["path"] != str(vanished) for item in card["deliverables"])
+    assert any(path.endswith("OTHER_REPORT.md") for path in card["served_artifacts"])
+    assert deleted
+
+
+def test_r31_changed_or_symlinked_deliverables_are_not_served(
+        workspace, monkeypatch):
+    # review r31: source identity and the run window are revalidated after copying.
+    import artifact_check
+    import run_curation
+    rd = workspace / "run"
+    rd.mkdir()
+    pdir = workspace / "project"
+    pdir.mkdir()
+    report = pdir / "FINAL_REPORT.md"
+    report.write_text("original")
+    link = pdir / "LINKED_REPORT.md"
+    link.symlink_to(report)
+    ended = datetime.now(timezone.utc).timestamp() + 10
+    monkeypatch.setattr(run_curation, "_project_dir_for", lambda meta: pdir)
+    monkeypatch.setattr(
+        artifact_check, "files_modified_since",
+        lambda *args, **kwargs: [report.name, link.name],
+    )
+    real_copy = run_curation.shutil.copy2
+
+    def _rewrite_after_copy(src, dst, *args, **kwargs):
+        out = real_copy(src, dst, *args, **kwargs)
+        if Path(src) == report:
+            report.write_text("rewritten after check")
+            os.utime(report, (ended + 10, ended + 10))
+        return out
+
+    monkeypatch.setattr(run_curation.shutil, "copy2", _rewrite_after_copy)
+    card = {}
+    run_curation.locate_deliverables(
+        rd,
+        {"execution": "loop", "started_at": "2020-01-01T00:00:00+00:00",
+         "ended_at": datetime.fromtimestamp(ended, timezone.utc).isoformat()},
+        card,
+    )
+
+    assert not card.get("served_artifacts")
+    assert not card.get("deliverables")
+    assert {item["reason"] for item in card["served_artifacts_omitted"]} == {
+        "changed-after-check"}
+    assert not (rd / "artifact" / link.name).exists()
 
 
 def test_r26_deliverable_uses_verbatim_project_directory(workspace):

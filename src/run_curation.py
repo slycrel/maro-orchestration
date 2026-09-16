@@ -40,6 +40,7 @@ import json
 import logging
 import os  # review r27: atomic served-artifact replacement closes temporary file descriptors.
 import shutil
+import stat  # review r31: one discovery stat classifies regular deliverable files.
 import tempfile  # review r27: deliverables stage in the destination directory before publish.
 from datetime import datetime, timezone  # review r30: sidecar time is a freezeable naming input.
 from uuid import uuid4  # review r30: same-process sidecars need per-call identity.
@@ -445,24 +446,26 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     started = str(meta.get("started_at") or "").strip()
     if pdir is None or not started:
         return
+    _ended_ts = None
+    _ended_raw = str(meta.get("ended_at") or "").strip()  # review r31: None/"" = still running or crashed = unbounded (recorded).
+    if _ended_raw:
+        _ended_ts = _aware_ts(_ended_raw)
+        if _ended_ts is None:
+            # review r31: an explicit but unsafe end never opens an unbounded scan.
+            log.info("curation: refusing deliverable scan with invalid ended_at for %s", rd)
+            return
     try:
         from artifact_check import files_modified_since
-        changed = files_modified_since(pdir, started, limit=100)
+        changed = files_modified_since(
+            pdir, started, limit=100, until_ts=_ended_ts)
     except Exception:
         return
     candidates: List[Path] = []
-    _ended_ts = _parse_ts(str(meta.get("ended_at") or "").strip())  # review r30: every parseable end bounds files.
+    candidate_stats: Dict[Path, os.stat_result] = {}
     for rel in changed:
         p = pdir / rel
-        # review r30: later neighboring loops do not belong to this run's window.
-        if _ended_ts is not None:
-            try:
-                if p.stat().st_mtime > _ended_ts:
-                    continue
-            except OSError:
-                continue
         name = p.name
-        if (not p.is_file() or name in _DELIVERABLE_EXCLUDE
+        if (p.is_symlink() or name in _DELIVERABLE_EXCLUDE
                 or name.startswith(".") or name.endswith(".lock")):
             continue
         # step-N-output.txt / step-N-transcript.json are execution logs the
@@ -473,11 +476,15 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
         if p.suffix.lower() not in (".md", ".txt", ".json", ".csv", ".html"):
             continue
         try:
-            if p.stat().st_size == 0:
+            snapshot = p.stat()
+            # review r31: rank and cards share this single validated discovery snapshot.
+            if (not stat.S_ISREG(snapshot.st_mode) or snapshot.st_size == 0
+                    or (_ended_ts is not None and snapshot.st_mtime > _ended_ts)):
                 continue
         except OSError:
             continue
         candidates.append(p)
+        candidate_stats[p] = snapshot
     if not candidates:
         return
 
@@ -505,11 +512,8 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
         name = p.name.lower()
         hinted = any(h in name for h in _DELIVERABLE_NAME_HINTS)
         is_prose = p.suffix.lower() in (".md", ".txt")
-        try:
-            st = p.stat()
-            size, mtime = st.st_size, st.st_mtime
-        except OSError:
-            size, mtime = 0, 0.0
+        snapshot = candidate_stats[p]
+        size, mtime = snapshot.st_size, snapshot.st_mtime
         post_hoc = bool(recovery_start is not None and mtime >= recovery_start)
         # Recency before size: the run's final synthesis lands LAST, not
         # largest. calm-echo 2026-07-17: an early wrong draft (5.3KB,
@@ -518,9 +522,6 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
         return (not hinted, not is_prose, post_hoc, -mtime, -size)
 
     candidates.sort(key=_rank)
-    card["deliverables"] = [
-        {"path": str(p), "bytes": p.stat().st_size} for p in candidates[:3]
-    ]
     # Copy ALL ranked candidates, not just the top pick: 83a2c805
     # (2026-08-05) — the audit loop's AUDIT_NOTE outranked steal_list.md
     # on recency, so the run's actual deliverable never reached the served
@@ -529,19 +530,35 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     served: List[str] = []
     served_sources: Dict[str, str] = {}
     omitted: List[Dict[str, str]] = []
+    validated: List[Path] = []
     try:
         dest_dir = rd / "artifact"
         dest_dir.mkdir(parents=True, exist_ok=True)
         taken: set = set()
         for i, p in enumerate(candidates):
+            snapshot = candidate_stats[p]
+            try:
+                current = os.stat(p)
+                unchanged = (
+                    (current.st_ino, current.st_size, current.st_mtime)
+                    == (snapshot.st_ino, snapshot.st_size, snapshot.st_mtime)
+                    and (_ended_ts is None or current.st_mtime <= _ended_ts)
+                )
+            except OSError:
+                unchanged = False
+            if not unchanged:
+                omitted.append({"path": str(p), "reason": "changed-after-check"})
+                continue
             # No silent caps (adversarial review 2026-08-06 R2-5): the cap
             # and first-wins collision rule both stand — but what they drop
             # is recorded, so "all ranked deliverables" reads honestly as
             # "all served, N omitted" instead of pretending completeness.
             if i >= _SERVED_ARTIFACTS_CAP:
+                validated.append(p)
                 omitted.append({"path": str(p), "reason": "over-cap"})
                 continue
             if p.name in taken:
+                validated.append(p)
                 omitted.append({"path": str(p),
                                 "reason": "basename-collision"})
                 continue
@@ -553,6 +570,15 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
                 os.close(_tmp_fd)
                 _tmp_path = Path(_tmp_name)
                 shutil.copy2(p, _tmp_path)
+                current = os.stat(p)
+                if ((current.st_ino, current.st_size, current.st_mtime)
+                        != (snapshot.st_ino, snapshot.st_size, snapshot.st_mtime)
+                        or (_ended_ts is not None and current.st_mtime > _ended_ts)):
+                    # review r31: only a copy of the discovery inode/window may be served.
+                    omitted.append({"path": str(p), "reason": "changed-after-check"})
+                    _tmp_path.unlink(missing_ok=True)
+                    _tmp_path = None
+                    continue
                 os.replace(_tmp_path, dest_dir / p.name)
             except Exception:
                 log.debug("deliverable copy failed for %s", p, exc_info=True)
@@ -561,14 +587,23 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
                         _tmp_path.unlink(missing_ok=True)
                     except OSError:
                         pass
+                if not any(o["path"] == str(p) for o in omitted):
+                    omitted.append({"path": str(p), "reason": "copy-failed"})  # review r31: an honest reason for a copy that raised.
                 continue
             taken.add(p.name)
+            validated.append(p)
             served.append(f"{rd.name}/artifact/{p.name}")
             # Source path per served name: the attribution join key. A
             # basename alone credits every same-named writer (R2-6).
             served_sources[p.name] = str(p)
     except Exception:
         log.debug("artifact dir setup failed for %s", rd, exc_info=True)
+    # review r31: discarded copies cannot survive in the user-facing ranking.
+    if validated:
+        card["deliverables"] = [
+            {"path": str(p), "bytes": candidate_stats[p].st_size}
+            for p in validated[:3]
+        ]
     if served:
         card["deliverable_link_path"] = served[0]
         card["served_artifacts"] = served

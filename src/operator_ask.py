@@ -426,14 +426,21 @@ def pause_for_ask(ask: Dict[str, Any], *, handle_id: str, goal: str,
         record.update({"live": False, "deadline": deadline_for(now),
                        "status": STATUS_PENDING, "live_window_closed_at": _iso(now)})
     try:
-        from runs import stamp_run_metadata
-        stamp_run_metadata({
+        from runs import current_run_dir, stamp_run_metadata
+        # review r31: a resumed loop's published goal outranks its raw loop
+        # argument (handle_queue replays `prompt`); the pause is stamped on
+        # the CURRENT run dir like every other in-run annotation — the
+        # loop's handle_id may be empty.
+        _rd = current_run_dir()
+        _published = _read_meta(_rd) if _rd is not None else {}
+        base = str(_published.get("goal") or "") or goal
+        if stamp_run_metadata({
             META_KEY: record,
             "clarification_question": record["question"],
             "pause_reason": PAUSE_OP_CLARIFICATION,
-            # review r30: each question owns the already-enriched goal it extends.
-            "clarification_base_goal": goal,
-        })
+            "clarification_base_goal": base,
+        }) is None:
+            log.warning("ask: run metadata stamp failed for %s", handle_id)
     except Exception as exc:
         log.warning("ask: run metadata stamp failed: %s", exc)
     try:
@@ -779,17 +786,32 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
         # The worker is waiting on the answer file right now — no resume.
         # A live window that closed with the step is converted to a pause
         # by the loop (pause_reason set), which routes below instead.
-        rec = dict(rec)
-        rec.update({"status": STATUS_ANSWERED, "answer": text[:2000],
-                    "answered_at": _iso(now), "answer_source": source,
-                    "delivery": "live"})
+        live_answered_at = _iso(now)
+        live_question = question
+
+        def _claim_live(existing: Dict[str, Any]) -> Dict[str, Any]:
+            snapshot_rec = existing.get(META_KEY)
+            if not isinstance(snapshot_rec, dict):
+                return {}
+            if (not snapshot_rec.get("live")
+                    or snapshot_rec.get("status") != STATUS_PENDING
+                    or existing.get("pause_reason")
+                    or existing.get("goal_verdict_source")
+                    or str(snapshot_rec.get("question") or "") != live_question):
+                return {}
+            claimed_rec = dict(snapshot_rec)
+            claimed_rec.update({
+                "status": STATUS_ANSWERED, "answer": text[:2000],
+                "answered_at": live_answered_at, "answer_source": source,
+                "delivery": "live",
+            })
+            # review r31: the locked snapshot, not the initial read, owns live delivery.
+            return {META_KEY: claimed_rec, "clarification_answer": text[:2000]}
+
         try:
-            from runs import stamp_run_metadata_for
-            # review r30: a reply file is observable delivery, so its metadata
-            # prerequisite must succeed before the file is published.
-            _live_stamped = stamp_run_metadata_for(
-                handle_id, {META_KEY: rec, "clarification_answer": text[:2000]})
-            if _live_stamped is None:
+            from runs import revise_run_metadata_for
+            live_claimed = revise_run_metadata_for(handle_id, _claim_live)
+            if live_claimed is None:
                 raise OSError("metadata stamp returned no path")
         except Exception as exc:
             log.warning("answer: live metadata stamp failed: %s", exc)
@@ -797,15 +819,54 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
                 "status": "error", "handle_id": handle_id,
                 "error": "the answer could not be recorded; retry",
             }
-        ap = _write_answer_file(rd / "scratch", {"answer": text, "answered_at": _iso(now),
-                                                  "source": source})
-        try:
-            from run_trace import record_edge
-            record_edge("ask.live", "answer.delivered", handle_id=handle_id, source=source)
-        except Exception:
-            pass
-        return {"status": "delivered", "handle_id": handle_id, "question": question,
-                "answer_file": str(ap or ""), "late": False}
+        if not live_claimed:
+            # review r31: a just-closed live window becomes the queued answer path.
+            meta = _read_meta(rd)
+            fresh_rec = meta.get(META_KEY)
+            if not meta.get("pause_reason") or not isinstance(fresh_rec, dict):
+                return {"status": "error", "handle_id": handle_id,
+                        "error": f"run {handle_id} was already answered at "
+                                 f"{fresh_rec.get('answered_at') if isinstance(fresh_rec, dict) else rec.get('answered_at')}"}
+            rec = fresh_rec
+            question = str(rec.get("question") or question)
+            goal = str(meta.get("prompt") or meta.get("goal") or "").strip()
+        else:
+            try:
+                ap = _write_answer_file(
+                    rd / "scratch",
+                    {"answer": text, "answered_at": live_answered_at, "source": source},
+                )
+            except Exception as exc:
+                log.warning("answer: live answer-file delivery failed: %s", exc)
+
+                def _rollback_live(existing: Dict[str, Any]) -> Dict[str, Any]:
+                    snapshot_rec = existing.get(META_KEY)
+                    if (not isinstance(snapshot_rec, dict)
+                            or snapshot_rec.get("status") != STATUS_ANSWERED
+                            or not snapshot_rec.get("live")
+                            or snapshot_rec.get("delivery") != "live"
+                            or snapshot_rec.get("answered_at") != live_answered_at):
+                        return {}
+                    pending_rec = dict(snapshot_rec)
+                    for key in ("answer", "answered_at", "answer_source", "delivery"):
+                        pending_rec.pop(key, None)
+                    pending_rec["status"] = STATUS_PENDING
+                    # review r31: failed file publication rolls back only its own live claim.
+                    return {META_KEY: pending_rec, "clarification_answer": ""}
+
+                rollback = revise_run_metadata_for(handle_id, _rollback_live)
+                error = "the answer could not be delivered; retry"
+                if rollback is None:
+                    log.warning("answer: live rollback failed for %s", handle_id)
+                    error += "; record answered but undelivered"
+                return {"status": "error", "handle_id": handle_id, "error": error}
+            try:
+                from run_trace import record_edge
+                record_edge("ask.live", "answer.delivered", handle_id=handle_id, source=source)
+            except Exception:
+                pass
+            return {"status": "delivered", "handle_id": handle_id, "question": question,
+                    "answer_file": str(ap or ""), "late": False}
     late = False
     dl = str(rec.get("deadline") or "")
     if dl:
@@ -862,16 +923,6 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
             # review r30: a retry supersedes the failed attempt's queue id.
             "resume_job_ids": [job_id],
         })
-        outcome = ""
-        if str(snapshot_rec.get("kind") or "") == "env_request":
-            try:
-                import env_request as _er
-                verb, outcome = _er.apply_answer(snapshot_rec, claim_text)
-                snapshot_rec["decision"] = verb or "unclear"
-                snapshot_rec["outcome"] = outcome[:1000]
-            except Exception as exc:
-                outcome = f"the orchestrator's answer could not be applied: {exc}"
-                log.warning("answer: env_request apply failed: %s", exc)
         fields: Dict[str, Any] = {
             META_KEY: snapshot_rec,
             "clarification_answer": claim_text[:2000],
@@ -889,7 +940,8 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
             fields["clarification_base_goal"] = base
             fields["goal"] = f"{base}\n\nAdditional context: {claim_text}"
         claim_state.update({
-            "rec": snapshot_rec, "text": claim_text, "outcome": outcome,
+            "rec": snapshot_rec, "text": claim_text,
+            "kind": str(snapshot_rec.get("kind") or ""),
             "goal": str(existing.get("prompt") or existing.get("goal") or "").strip(),
             "question": str(snapshot_rec.get("question") or ""),
             "retried": snapshot_retry,
@@ -921,7 +973,29 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
     text = str(claim_state["text"])
     goal = str(claim_state["goal"])
     question = str(claim_state["question"])
-    outcome_text = str(claim_state["outcome"])
+    outcome_text = ""
+    if claim_state.get("kind") == "env_request":
+        try:
+            import env_request as _er
+            verb, outcome_text = _er.apply_answer(claim_state["rec"], text)
+            decision = verb or "unclear"
+
+            def _record_env_outcome(existing: Dict[str, Any]) -> Dict[str, Any]:
+                snapshot_rec = existing.get(META_KEY)
+                if not isinstance(snapshot_rec, dict):
+                    return {}
+                updated_rec = dict(snapshot_rec)
+                updated_rec["decision"] = decision
+                updated_rec["outcome"] = outcome_text[:1000]
+                # review r31: environment application runs outside the metadata lock.
+                return {META_KEY: updated_rec}
+
+            env_recorded = revise_run_metadata_for(handle_id, _record_env_outcome)
+            if not env_recorded:
+                log.warning("answer: env_request outcome not recorded for %s", handle_id)
+        except Exception as exc:
+            outcome_text = f"the orchestrator's answer could not be applied: {exc}"
+            log.warning("answer: env_request apply failed: %s", exc)
     retried = claim_state.get("retried")
     try:
         from task_store import enqueue

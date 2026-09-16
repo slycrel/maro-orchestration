@@ -1196,6 +1196,24 @@ def test_r30_a_refused_resume_demotes_stale_loop_provenance(
     assert not any(stamp == {"execution": "loop"} for stamp in stamps)
 
 
+def test_r31_failed_pre_admission_provenance_warns_and_continues(
+        monkeypatch, tmp_path, caplog):
+    # review r31: the non-raising metadata failure form is still operator-visible.
+    _setup_workspace(monkeypatch, tmp_path)
+    import logging
+    import runs
+    monkeypatch.setattr(runs, "stamp_run_metadata", lambda fields: None)
+    caplog.set_level(logging.WARNING, logger="maro.loop")
+
+    result = run_agent_loop(
+        "Produce the R31 report", project="r31-loop-project",
+        dry_run=True, verbose=False,
+    )
+
+    assert result.status in ("done", "dry_run", "stuck")
+    assert "attempt provenance not recorded for r31-loop-project" in caplog.text
+
+
 def test_run_agent_loop_fan_out_dependency_falls_back_sequential():
     """When steps have dependencies, fan-out gate blocks parallel path (sequential used)."""
     dependent_steps = [

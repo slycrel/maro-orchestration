@@ -7067,6 +7067,44 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   `atomic_write(durable=True)` fsyncs the directory. Round 31 = codex
   confirming round; STOP RULE: if r31 still finds HIGHs, land only the
   cheap verified fixes and escalate the round budget.
+  Round 31 (codex sol/high skeptic + architect on 6a09e8bd; 6 distinct
+  HIGH + 4 MED, failure-path twins of the r30 fixes; STOP RULE applied —
+  cheap verified fixes landed, NO round 32, the two design-class HIGHs
+  are queued as their own item below): the live answer branch decided
+  on the unlocked snapshot and stamped unconditionally (a worker whose
+  window closed, or two live responders, were "delivered" to no reader)
+  → a `revise_run_metadata_for` claim on the locked snapshot; declined +
+  pause_reason now set → falls through to the queued resume; a failed
+  answer file after the live claim left the record answered/live and
+  final → conditional rollback to pending + retry error; the r30 claim
+  closure called `env_request.apply_answer` (grants + docker build)
+  INSIDE the metadata lock (the lock contract forbids subprocesses) →
+  the closure is pure, the environment decision applies after the lock
+  and is merged best-effort; a second production clarification stamped
+  the loop's RAW goal as the base (handle_queue executes `prompt`) and
+  the second answer lost the first → base = the run's published `goal`
+  when present; the ended_at bound TOCTOU (stat, then copy by pathname)
+  → symlinks skipped, one stat snapshot per candidate, re-stat after the
+  copy, mismatch → omitted `changed-after-check`, card built from what
+  was validated; `files_modified_since` capped at 100 BEFORE any upper
+  bound → `until_ts` filters before the cap; naive `ended_at` → no scan;
+  a vanished candidate no longer aborts the curator; an empty UNCLEAR
+  question now defaults instead of defeating the pause guard; the
+  pre-admission `pending` stamp failure is warned.
+  OPEN (design item, not fixed — round 31 HIGHs S1/A3, S5/A5, A6): (a)
+  `pause_for_ask`, `watch_live` and `env_request.pause_for_request`
+  still return `pending` and notify the operator when their stamp
+  returns None (the question is then unanswerable: "has no operator
+  question") — needs ONE checked pause API whose three callers do not
+  notify/return paused on a failed write, and a loop contract for the
+  failure; (b) attempt provenance is one scalar `execution` field and
+  one run-wide `started_at..ended_at` interval — a RESUME whose pending
+  demotion fails keeps the prior `loop`, and the gap between separated
+  attempts (a neighbour writing in between) is inside the scan window —
+  needs per-attempt records (loop_id, project, start, end) and a scan
+  over their union. Refuted again: the symlink swap of a validated
+  project dir between binding and loop_init (single-user premise,
+  rounds 18–26).
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the
