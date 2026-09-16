@@ -251,8 +251,12 @@ def _report_create_failure(lock_path: Path, exc: Exception) -> None:
 
 
 def atomic_write(path: Path, content: str, *, encoding: str = "utf-8",
-                 errors: str = "strict") -> None:
+                 errors: str = "strict", durable: bool = False) -> None:
     """Crash-safe full rewrite: mkstemp in path's dir, write, fsync, os.replace.
+
+    ``durable=True`` also fsyncs the parent directory after replacement.
+    # review r30: callers that order later destructive publication need the
+    # directory entry, not only the temp file's contents, on stable storage.
 
     A reader (or a crash mid-write) sees either the old complete file or the
     new complete file — never a partial. Does NOT take the .lock file; pair
@@ -296,6 +300,13 @@ def atomic_write(path: Path, content: str, *, encoding: str = "utf-8",
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp_name, path)
+        if durable:
+            # review r30: make the replacement directory entry durable too.
+            dir_fd = os.open(path.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
     except BaseException:
         try:
             os.unlink(tmp_name)

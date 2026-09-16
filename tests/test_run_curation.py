@@ -11,6 +11,7 @@ import json
 import errno  # review r28: simulate a sidecar-only ENOSPC preservation failure.
 import os  # review r29: sidecar names include the preserving process id.
 import sys
+from datetime import datetime, timezone  # review r30: fixture windows carry explicit aware ends.
 from pathlib import Path
 
 import pytest
@@ -248,10 +249,30 @@ def test_r29_the_sidecar_is_written_atomically(workspace, monkeypatch):
         rd / "run_card.json", "tainted \udcff") is True
     assert len(calls) == 1
     sidecar, content, kwargs = calls[0]
-    assert sidecar.name.endswith(f"-{os.getpid()}")
+    # review r30: pid is followed by a per-call disambiguator.
+    assert f"-{os.getpid()}-" in sidecar.name
     assert ".unreadable-" in sidecar.name
     assert content == "tainted \udcff"
-    assert kwargs == {"errors": "surrogateescape"}
+    assert kwargs == {"errors": "surrogateescape", "durable": True}
+
+
+def test_r30_sidecar_names_are_unique_per_call(workspace, monkeypatch):
+    # review r30: identical clock ticks and pids still preserve both bodies.
+    import run_curation
+
+    class _FrozenDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            from datetime import datetime
+            return datetime(2026, 9, 16, 18, 0, tzinfo=tz)
+
+    monkeypatch.setattr(run_curation, "datetime", _FrozenDateTime)
+    card = workspace / "run_card.json"
+    assert run_curation._park_unreadable_card(card, "first body")
+    assert run_curation._park_unreadable_card(card, "second body")
+    sidecars = sorted(workspace.glob("run_card.json.unreadable-*"))
+    assert len(sidecars) == 2
+    assert {path.read_text() for path in sidecars} == {"first body", "second body"}
 
 
 def test_classification_refresh_merge_keeps_maintenance_keys(workspace):
@@ -1615,13 +1636,17 @@ def test_r27_locate_deliverables_skips_a_thin_run(workspace):
 @pytest.mark.parametrize("extra, lane, started_at, expect_scan", [
     ({}, "now", "2026-09-01T00:00:00+00:00", False),
     ({"project": "r28-bound", "project_binding": "landscape"},
-     "agenda", "2026-09-16T16:00:00+00:00", False),
+     "agenda", "2026-09-16T16:20:00+00:00", False),
     ({"project": "r28-loop", "execution": "loop"},
-     "agenda", "2026-09-16T16:00:00+00:00", True),
+     "agenda", "2026-09-16T16:20:00+00:00", True),
     ({}, "agenda", "2026-09-01T00:00:00+00:00", True),
     # review r29: failed provenance stamps do not turn a modern run legacy.
-    ({}, "agenda", "2026-09-16T16:00:00+00:00", False),
-], ids=["now", "bound-paused", "loop", "legacy", "modern-no-stamps"])
+    ({}, "agenda", "2026-09-16T16:20:00+00:00", False),
+    # review r30: legacy classification requires an aware time and the corrected cutoff.
+    ({}, "agenda", "2026-09-16T09:00:00", False),
+    ({}, "agenda", "2026-09-16T16:10:00+00:00", True),
+], ids=["now", "bound-paused", "loop", "legacy", "modern-no-stamps",
+        "naive-not-legacy", "aware-before-cutoff"])
 def test_r28_locate_deliverables_needs_execution_provenance(
         workspace, extra, lane, started_at, expect_scan):
     # review r29: only a proven loop or a record started before the provenance
@@ -1647,6 +1672,60 @@ def test_r28_locate_deliverables_needs_execution_provenance(
     copied = rd / "artifact" / "FINAL_REPORT.md"
     assert ("deliverables" in card) is expect_scan
     assert copied.exists() is expect_scan
+
+
+def test_r30_files_modified_after_the_run_ended_are_not_its_deliverables(
+        workspace):
+    # review r30: deliverable ownership is bounded by both ends of the attempt.
+    import orch_items
+    import run_curation
+    from datetime import datetime, timezone
+    rd = create_run_dir(
+        "r30-window", prompt="Windowed report", lane="agenda", model="cheap",
+        extra_metadata={"project": "r30-window", "execution": "loop"})
+    pdir = orch_items.projects_root() / "r30-window"
+    pdir.mkdir(parents=True)
+    inside = pdir / "FINAL_REPORT.md"
+    later = pdir / "LATER_REPORT.md"
+    inside.write_text("belongs to this run", encoding="utf-8")
+    later.write_text("belongs to the next run", encoding="utf-8")
+    start = datetime(2026, 9, 16, 18, 0, tzinfo=timezone.utc).timestamp()
+    end = start + 60
+    os.utime(inside, (start + 30, start + 30))
+    os.utime(later, (end + 30, end + 30))
+    meta = json.loads((rd / "metadata.json").read_text())
+    meta["started_at"] = datetime.fromtimestamp(start, timezone.utc).isoformat()
+    meta["ended_at"] = datetime.fromtimestamp(end, timezone.utc).isoformat()
+    card = {}
+
+    run_curation.locate_deliverables(rd, meta, card)
+
+    # review r30: inspect the curator's structured path entries.
+    names = {Path(item["path"]).name for item in card["deliverables"]}
+    assert "FINAL_REPORT.md" in names
+    assert "LATER_REPORT.md" not in names
+    assert (rd / "artifact" / "FINAL_REPORT.md").exists()
+    assert not (rd / "artifact" / "LATER_REPORT.md").exists()
+
+
+def test_r30_a_legacy_thin_prompt_is_not_scanned(workspace):
+    # review r30: mode:thin predates the explicit execution marker.
+    import orch_items
+    import run_curation
+    rd = create_run_dir(
+        "r30-thin-legacy", prompt="mode:thin inspect service",
+        lane="agenda", model="cheap", extra_metadata={"project": "r30-thin"})
+    pdir = orch_items.projects_root() / "r30-thin"
+    pdir.mkdir(parents=True)
+    (pdir / "FINAL_REPORT.md").write_text("neighbor output", encoding="utf-8")
+    meta = json.loads((rd / "metadata.json").read_text())
+    meta["started_at"] = "2026-09-01T00:00:00+00:00"
+    card = {}
+
+    run_curation.locate_deliverables(rd, meta, card)
+
+    assert "deliverables" not in card
+    assert not (rd / "artifact" / "FINAL_REPORT.md").exists()
 
 
 def test_synthesize_answer_llm_path(workspace, monkeypatch, tmp_path):
@@ -1826,6 +1905,9 @@ def test_locate_deliverables_recency_beats_size(workspace):
     os.utime(early, (now + 1, now + 1))
     os.utime(late, (now + 901, now + 901))
     finalize_run("h000recn", status="done")
+    # review r30: synthetic future mtimes remain inside this fixture's run window.
+    runs.stamp_run_metadata_for("h000recn", {
+        "ended_at": datetime.fromtimestamp(now + 902, timezone.utc).isoformat()})
     card = curate_run("h000recn")
 
     names = [Path(d["path"]).name for d in card["deliverables"]]
@@ -1861,6 +1943,9 @@ def test_locate_deliverables_serves_all_candidates(workspace):
     os.utime(older, (now + 1, now + 1))
     os.utime(newer, (now + 601, now + 601))
     finalize_run("h000srvall", status="done")
+    # review r30: synthetic future mtimes remain inside this fixture's run window.
+    runs.stamp_run_metadata_for("h000srvall", {
+        "ended_at": datetime.fromtimestamp(now + 602, timezone.utc).isoformat()})
     card = curate_run("h000srvall")
 
     # Both real deliverables land in the served tree.
@@ -1900,6 +1985,9 @@ def test_locate_deliverables_collision_first_wins(workspace):
     os.utime(loser, (now + 1, now + 1))
     os.utime(winner, (now + 601, now + 601))
     finalize_run("h000colld", status="done")
+    # review r30: synthetic future mtimes remain inside this fixture's run window.
+    runs.stamp_run_metadata_for("h000colld", {
+        "ended_at": datetime.fromtimestamp(now + 602, timezone.utc).isoformat()})
     card = curate_run("h000colld")
 
     served = (rd / "artifact" / "notes.md").read_text()
@@ -2000,6 +2088,9 @@ def test_primary_loop_deliverable_outranks_posthoc_audit_note(workspace):
     recovery = datetime.fromisoformat("2026-08-06T17:00:00+00:00").timestamp()
     os.utime(audit, (recovery + 60, recovery + 60))
     finalize_run("h00ploop", status="done")
+    # review r30: the synthetic primary mtime remains inside this fixture's window.
+    runs.stamp_run_metadata_for("h00ploop", {
+        "ended_at": datetime.fromtimestamp(now + 2, timezone.utc).isoformat()})
     card = curate_run("h00ploop")
 
     names = [Path(d["path"]).name for d in card["deliverables"]]
@@ -2068,6 +2159,9 @@ def test_locate_deliverables_records_what_it_drops(workspace):
     os.utime(loser, (now + 1, now + 1))
     os.utime(winner, (now + 601, now + 601))
     finalize_run("h000omit", status="done")
+    # review r30: synthetic future mtimes remain inside this fixture's run window.
+    runs.stamp_run_metadata_for("h000omit", {
+        "ended_at": datetime.fromtimestamp(now + 602, timezone.utc).isoformat()})
     card = curate_run("h000omit")
 
     assert card["served_artifact_sources"]["notes.md"] == str(winner)

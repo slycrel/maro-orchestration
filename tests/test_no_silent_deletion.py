@@ -65,6 +65,10 @@ ALLOWED_DELETION_SITES = {
         "2026-09-13)",
     ("file_lock.py", "atomic_write"):
         "ephemeral: temp-file swap inside the atomic-write primitive",
+    # review r30: unique live-answer staging is removed only when publication fails.
+    ("operator_ask.py", "_write_answer_file"):
+        "ephemeral: same-directory live-answer temp created by this call; "
+        "removed only when its atomic replace fails",
     ("path_rewrite.py", "rewrite_file"):
         "ephemeral: removes only its own .maro-rewrite.tmp when the "
         "atomic swap fails; the file being rewritten is never unlinked",

@@ -41,6 +41,8 @@ import logging
 import os  # review r27: atomic served-artifact replacement closes temporary file descriptors.
 import shutil
 import tempfile  # review r27: deliverables stage in the destination directory before publish.
+from datetime import datetime, timezone  # review r30: sidecar time is a freezeable naming input.
+from uuid import uuid4  # review r30: same-process sidecars need per-call identity.
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -365,7 +367,7 @@ _DELIVERABLE_NAME_HINTS = ("final_report", "report", "summary", "shortlist",
 _SERVED_ARTIFACTS_CAP = 12
 # review r29: provenance gating is versioned by rollout time, not by whether
 # best-effort metadata fields happened to survive their writes.
-_EXECUTION_PROVENANCE_SINCE = "2026-09-16T16:00:00+00:00"
+_EXECUTION_PROVENANCE_SINCE = "2026-09-16T16:20:00+00:00"  # review r30: after marker commit.
 
 
 def _parse_ts(iso: str) -> Optional[float]:
@@ -373,6 +375,18 @@ def _parse_ts(iso: str) -> Optional[float]:
     try:
         from datetime import datetime
         return datetime.fromisoformat(iso).timestamp()
+    except Exception:
+        return None
+
+
+def _aware_ts(iso: str) -> Optional[float]:
+    """Timestamp only when its timezone is explicit.  # review r30: legacy is host-independent."""
+    try:
+        from datetime import datetime
+        parsed = datetime.fromisoformat(iso)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.timestamp()
     except Exception:
         return None
 
@@ -415,13 +429,15 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
         return
     # review r29: legacy is a time property. Modern or unparseable records
     # need affirmative loop provenance even if both best-effort stamps failed.
-    _started_ts = _parse_ts(str(meta.get("started_at") or "").strip())
-    _cutoff_ts = _parse_ts(_EXECUTION_PROVENANCE_SINCE)
+    _started_ts = _aware_ts(str(meta.get("started_at") or "").strip())
+    _cutoff_ts = _aware_ts(_EXECUTION_PROVENANCE_SINCE)
     _legacy = (
         _started_ts is not None
         and _cutoff_ts is not None
         and _started_ts < _cutoff_ts
         and meta.get("lane") != "now"
+        # review r30: pre-marker thin prompts were still non-loop execution.
+        and not str(meta.get("prompt") or "").lstrip().lower().startswith("mode:thin")
     )
     if meta.get("execution") != "loop" and not _legacy:
         return
@@ -435,8 +451,16 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     except Exception:
         return
     candidates: List[Path] = []
+    _ended_ts = _parse_ts(str(meta.get("ended_at") or "").strip())  # review r30: every parseable end bounds files.
     for rel in changed:
         p = pdir / rel
+        # review r30: later neighboring loops do not belong to this run's window.
+        if _ended_ts is not None:
+            try:
+                if p.stat().st_mtime > _ended_ts:
+                    continue
+            except OSError:
+                continue
         name = p.name
         if (not p.is_file() or name in _DELIVERABLE_EXCLUDE
                 or name.startswith(".") or name.endswith(".lock")):
@@ -1801,18 +1825,19 @@ def _park_unreadable_card(card_path: Path, old: str, *, empty: bool = False) -> 
             "in %s — rebuilt from run data; maintenance-owned keys were not recoverable",
             card_path.parent.name)
         return True  # review r28: empty files contain no old bytes to preserve.
-    from datetime import datetime, timezone
     sidecar = card_path.with_name(
         card_path.name + ".unreadable-"
         + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         # review r29: a pid disambiguates simultaneous preservers whose
         # timestamp resolution collides across processes.
-        + f"-{os.getpid()}")
+        + f"-{os.getpid()}"
+        + f"-{uuid4().hex[:8]}"  # review r30: threads share pid and clock tick.
+    )
     try:
         # review r29: preserve via the repository's fsynced temp-and-replace
         # writer so success never exposes a partial sidecar.
         from file_lock import atomic_write
-        atomic_write(sidecar, old, errors="surrogateescape")
+        atomic_write(sidecar, old, errors="surrogateescape", durable=True)  # review r30: sidecar survives card replacement.
         kept = f"old bytes preserved at {sidecar.name}"
         preserved = True
     except OSError:

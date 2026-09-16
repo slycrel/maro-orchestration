@@ -122,6 +122,9 @@ def test_r27_a_placeholder_stamp_declines_an_exclusion_only_row(
     # review r29: zero is a valid confidence, not absence.
     ("goal_verdict_confidence", 0.0),
     ("verdict_history", [{"goal_achieved": False}]),
+    # review r30: malformed present histories are evidence, never absence.
+    ("verdict_history", {"goal_achieved": False}),
+    ("verdict_history", "judged"),
 ])
 def test_r28_a_placeholder_stamp_declines_a_sourceless_judged_shape(
         monkeypatch, tmp_path, field, value):

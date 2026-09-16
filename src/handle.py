@@ -1523,6 +1523,7 @@ def _handle_impl(
     # review r27: the binding helper can run at the pre-execution clarification exit.
     _agenda_project = ""
     _project_binding = ""
+    _binding_goal = message  # review r30: project naming uses intent before BLE paraphrase.
     _landscape_decided = False
     _origin_as_given = dict(origin) if origin else None
 
@@ -1630,7 +1631,8 @@ def _handle_impl(
                 _agenda_project, _project_binding = _parent_project, "parent"
             else:
                 _agenda_project, _project_binding = _project_for_goal(
-                    message, (_context_only_project,) if _context_only_project else ())
+                    _binding_goal or message,
+                    (_context_only_project,) if _context_only_project else ())
         if _context_only_project and _project_binding in ("named", "minted"):
             log.info("project binding: %s (%s) keeps out of %s (context only)",
                      _agenda_project, _project_binding, _context_only_project)
@@ -2271,16 +2273,31 @@ def _handle_impl(
                     "clarification: project binding failed, pausing unbound: %s",
                     exc,
                 )
+            _pause_recorded = False  # review r30: never claim a pause that is absent on disk.
             try:
                 from runs import stamp_run_metadata as _stamp_q
                 from stop_verdicts import PAUSE_OP_CLARIFICATION
-                _stamp_q({
+                _pause_recorded = _stamp_q({
                     "clarification_question": question,
                     "pause_reason": PAUSE_OP_CLARIFICATION,
-                })
+                    # review r30: the current enriched goal belongs to this question.
+                    "clarification_base_goal": message,
+                }) is not None
             except Exception:
-                pass
+                _pause_recorded = False
             elapsed = int((time.monotonic() - started_at) * 1000)
+            if not _pause_recorded:
+                # review r30: an unrecorded clarification cannot be answered later.
+                log.warning("clarification: pause could not be recorded for %s", handle_id)
+                return HandleResult(
+                    handle_id=handle_id, lane="agenda",
+                    lane_confidence=confidence,
+                    classification_reason=reason + " [clarity pause write failed]",
+                    message=message, status="error",
+                    result=(f"Before starting I need to clarify: {question}, but the "
+                            "pause could not be recorded; please re-submit the goal"),
+                    project=_agenda_project, elapsed_ms=elapsed,
+                )
             return HandleResult(
                 handle_id=handle_id,
                 lane="agenda",
@@ -2298,6 +2315,7 @@ def _handle_impl(
             )
 
         if not dry_run and not _yolo:
+            _unclear_question = ""  # review r30: preserve an UNCLEAR verdict across later diagnostics.
             try:
                 from intent import check_goal_clarity
                 _clarity = check_goal_clarity(message, adapter=adapter)
@@ -2312,6 +2330,7 @@ def _handle_impl(
                     pass
                 if not _clarity.get("clear"):
                     _q = _clarity.get("question", "Could you clarify the goal?")
+                    _unclear_question = _q  # review r30: only a failed CHECK may degrade to execution.
                     if verbose:
                         print(f"[maro:{handle_id}] clarity check: UNCLEAR — {_q}", file=sys.stderr, flush=True)
                     if channel is not None:
@@ -2379,9 +2398,14 @@ def _handle_impl(
                     else:
                         return _pause_for_clarification(_q)
             except Exception:
-                # review r29: only a failed clarity CHECK degrades to
-                # execution; unanswered questions return above.
+                # review r30: failures after UNCLEAR still take its durable pause.
+                if _unclear_question:
+                    return _pause_for_clarification(_unclear_question)
                 pass
+
+        # review r30: bind named projects from the clarification-enriched,
+        # prefix-stripped text, before BLE is allowed to erase literal names.
+        _binding_goal = message
 
         # BLE rewriter — strip prescribed execution steps, keep outcome intent (non-blocking)
         # Bitter Lesson Engineering: embed the "what", let the AI own the "how".

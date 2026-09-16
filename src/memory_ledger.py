@@ -905,8 +905,9 @@ def _may_placeholder_repair(row: dict) -> bool:
         )
         or (
             "verdict_history" in row
-            and isinstance(row.get("verdict_history"), list)
-            and bool(row.get("verdict_history"))
+            # review r30: exactly [] alone means no operation; malformed or
+            # populated values are evidence and therefore fail closed.
+            and row.get("verdict_history") != []
         )
     )
     _sourceless_clean = _sourceless and not _has_verdict_evidence

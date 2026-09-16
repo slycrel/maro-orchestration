@@ -1293,6 +1293,113 @@ class TestTheDecisionFollowsTheGoalItBindsOn:
         assert meta["goal_after_rewrite"] == "Deliver the report."
         assert meta["goal"].endswith("Additional context: client B")
 
+    def test_r30_the_rewrite_cannot_erase_a_named_binding(
+            self, monkeypatch, tmp_path):
+        # review r30: literal project identity is resolved from pre-rewrite intent.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        from orch_items import projects_root
+        (projects_root() / "board-reports").mkdir(parents=True)
+        adapter = MagicMock()
+        adapter.model_key = "cheap"
+        calls = []
+
+        def _loop(goal, **kwargs):
+            calls.append((goal, kwargs))
+            return LoopResult(
+                loop_id="r30-binding", project=kwargs.get("project", ""),
+                goal=goal, status="done", stuck_reason=None,
+                steps=[StepOutcome(index=0, text="step", status="done",
+                                   result="output", iteration=0)],
+            )
+
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=_loop), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("intent.rewrite_imperative_goal", return_value="Deliver the report."):
+            result = handle(
+                "Update board-reports", force_lane="agenda", dry_run=False,
+                adapter=adapter, fresh=True)
+
+        assert calls[0][0] == "Deliver the report."
+        assert calls[0][1]["project"] == "board-reports"
+        meta = _meta(result.handle_id)
+        assert result.project == "board-reports"
+        assert (meta["project"], meta["project_binding"]) == (
+            "board-reports", "named")
+
+    def test_r30_an_unrecordable_pause_is_an_error_not_execution(
+            self, monkeypatch, tmp_path):
+        # review r30: clarification_needed is returned only for a durable pause.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle
+        import runs
+        real_stamp = runs.stamp_run_metadata
+        loop_calls = []
+
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop",
+                   side_effect=lambda *a, **k: loop_calls.append((a, k))), \
+             patch("intent.check_goal_clarity", return_value={
+                 "clear": False, "question": "Which client?"}), \
+             patch("runs.stamp_run_metadata", return_value=None):
+            failed = handle(
+                "Update report", force_lane="agenda", dry_run=False,
+                adapter=MagicMock(), fresh=True)
+
+        assert failed.status == "error"
+        assert "pause could not be recorded" in failed.result
+        assert loop_calls == []
+
+        # review r30: the successful-write control preserves the normal pause.
+        monkeypatch.setattr(runs, "stamp_run_metadata", real_stamp)
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop",
+                   side_effect=lambda *a, **k: loop_calls.append((a, k))), \
+             patch("intent.check_goal_clarity", return_value={
+                 "clear": False, "question": "Which client?"}):
+            recorded = handle(
+                "Update report", force_lane="agenda", dry_run=False,
+                adapter=MagicMock(), fresh=True)
+        assert recorded.status == "clarification_needed"
+        assert loop_calls == []
+        # review r30: the same durable pause owns the goal this question extends.
+        assert _meta(recorded.handle_id)["clarification_base_goal"] == "Update report"
+
+    def test_r30_a_failure_after_the_unclear_verdict_pauses(
+            self, monkeypatch, tmp_path):
+        # review r30: reporting failure cannot turn an UNCLEAR verdict into execution.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle
+        import sys
+        loop_calls = []
+
+        class _FailOnUnclear:
+            def write(self, text):
+                if "UNCLEAR" in text:
+                    raise OSError("stderr closed")
+                return len(text)
+
+            def flush(self):
+                return None
+
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop",
+                   side_effect=lambda *a, **k: loop_calls.append((a, k))), \
+             patch("intent.check_goal_clarity", return_value={
+                 "clear": False, "question": "Which client?"}), \
+             patch.object(sys, "stderr", _FailOnUnclear()):
+            result = handle(
+                "Update report", force_lane="agenda", dry_run=False,
+                adapter=MagicMock(), fresh=True, verbose=True)
+
+        assert result.status == "clarification_needed"
+        assert loop_calls == []
+
     def test_r28_a_clarified_run_takes_no_rerun_brief(
             self, monkeypatch, tmp_path):
         # review r28: a live answer invalidates raw-input identity; the clear

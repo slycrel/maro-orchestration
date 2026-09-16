@@ -50,6 +50,9 @@ import json
 import logging
 import os
 import re
+import tempfile  # review r30: live replies need a unique same-directory publication temp.
+import threading  # review r30: distinguish an in-flight local enqueue from a missing failed one.
+from uuid import uuid4  # review r30: the resume id is claimed durably before queue publication.
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence, Any, Dict, List, Optional
@@ -78,6 +81,11 @@ DEFAULT_TIMEOUT_HOURS = 24.0
 STATUS_PENDING = "pending"
 STATUS_ANSWERED = "answered"
 STATUS_EXPIRED = "expired"
+
+# review r30: a claimed id briefly precedes its task file; concurrent answer
+# threads must not mistake that publication gap for a failed enqueue.
+_ENQUEUES_IN_FLIGHT: set[str] = set()
+_ENQUEUES_IN_FLIGHT_LOCK = threading.Lock()
 
 _Q_CAP = 800
 _TXT_CAP = 600
@@ -423,6 +431,8 @@ def pause_for_ask(ask: Dict[str, Any], *, handle_id: str, goal: str,
             META_KEY: record,
             "clarification_question": record["question"],
             "pause_reason": PAUSE_OP_CLARIFICATION,
+            # review r30: each question owns the already-enriched goal it extends.
+            "clarification_base_goal": goal,
         })
     except Exception as exc:
         log.warning("ask: run metadata stamp failed: %s", exc)
@@ -458,9 +468,18 @@ def _write_answer_file(scratch, payload: Dict[str, Any]) -> Optional[Path]:
     ap = answer_path(str(scratch))
     if ap is None:
         return None
-    tmp = ap.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload), encoding="utf-8")
-    os.replace(tmp, ap)
+    # review r30: fixed .tmp names collide when two live responders publish.
+    fd, tmp_name = tempfile.mkstemp(dir=str(ap.parent), prefix=ap.name + ".tmp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload))
+        os.replace(tmp_name, ap)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return ap
 
 
@@ -683,6 +702,13 @@ def _last_resume_failed(handle_id: str, since: str = "",
     except Exception:
         return None
     if not tasks:
+        if job_ids:
+            # review r30: after the caller has left the enqueue publication
+            # window, a recorded id with no task is a failed enqueue.
+            with _ENQUEUES_IN_FLIGHT_LOCK:
+                if any(str(job_id) in _ENQUEUES_IN_FLIGHT for job_id in job_ids):
+                    return None
+            return "missing"
         return None
     statuses = [str(t.get("result_status") or t.get("status") or "") for t in tasks]
     if all(st in _RESUME_FAILED for st in statuses):
@@ -722,8 +748,8 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
                 "error": f"run {handle_id} has no operator question to answer"}
     retried = None
     if rec.get("status") == STATUS_ANSWERED:
-        # review r29: the answer stamp precedes enqueue, so an answered record
-        # with no resume ids is the durable footprint of a never-queued resume.
+        # review r30: no-id answer records are legacy footprints; new claims
+        # durably carry their intended queue id before enqueue is attempted.
         _resume_ids = [str(j) for j in (rec.get("resume_job_ids") or []) if str(j)]
         retried = (
             None  # review r29: live delivery has no resume by design and is final.
@@ -757,13 +783,22 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
         rec.update({"status": STATUS_ANSWERED, "answer": text[:2000],
                     "answered_at": _iso(now), "answer_source": source,
                     "delivery": "live"})
-        ap = _write_answer_file(rd / "scratch", {"answer": text, "answered_at": _iso(now),
-                                                  "source": source})
         try:
             from runs import stamp_run_metadata_for
-            stamp_run_metadata_for(handle_id, {META_KEY: rec, "clarification_answer": text[:2000]})
+            # review r30: a reply file is observable delivery, so its metadata
+            # prerequisite must succeed before the file is published.
+            _live_stamped = stamp_run_metadata_for(
+                handle_id, {META_KEY: rec, "clarification_answer": text[:2000]})
+            if _live_stamped is None:
+                raise OSError("metadata stamp returned no path")
         except Exception as exc:
             log.warning("answer: live metadata stamp failed: %s", exc)
+            return {
+                "status": "error", "handle_id": handle_id,
+                "error": "the answer could not be recorded; retry",
+            }
+        ap = _write_answer_file(rd / "scratch", {"answer": text, "answered_at": _iso(now),
+                                                  "source": source})
         try:
             from run_trace import record_edge
             record_edge("ask.live", "answer.delivered", handle_id=handle_id, source=source)
@@ -778,56 +813,116 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
             late = now > datetime.fromisoformat(dl)
         except ValueError:
             late = False
-    rec = dict(rec)
-    rec.update({"status": STATUS_ANSWERED, "answer": text[:2000],
-                "answered_at": _iso(now), "answer_source": source,
-                "late": late})
-    outcome_text = ""
-    if str(rec.get("kind") or "") == "env_request":
-        try:
-            import env_request as _er
-            _verb, outcome_text = _er.apply_answer(rec, text)
-            rec["decision"] = _verb or "unclear"
-            rec["outcome"] = outcome_text[:1000]
-        except Exception as exc:
-            outcome_text = f"the orchestrator's answer could not be applied: {exc}"
-            log.warning("answer: env_request apply failed: %s", exc)
-    # review r28: only a queued clarification changes the published goal;
-    # environment decisions and ephemeral code asks are execution context.
-    from stop_verdicts import PAUSE_OP_CLARIFICATION
-    _is_clarification = (
-        meta.get("pause_reason") == PAUSE_OP_CLARIFICATION
-        and str(rec.get("kind") or "") != "env_request"
-        and not asks_for_code(rec)
-    )
-    _answer_stamp = {
-        META_KEY: rec,
-        "clarification_answer": text[:2000],
-    }
-    if _is_clarification:
-        # review r29: retries replace the prior answer against an immutable
-        # clarification base instead of appending context to an enriched goal.
-        _base_goal = str(
-            meta.get("clarification_base_goal")
-            or meta.get("goal")
-            or meta.get("prompt")
-            or ""
+    # review r30: allocate and advertise the exact queue identity in the one
+    # conditional answer claim; no best-effort post-enqueue metadata exists.
+    job_id = uuid4().hex
+    claim_state: Dict[str, Any] = {}
+    claim_recorded = False  # review r30: write failure must not leak an in-flight id.
+    with _ENQUEUES_IN_FLIGHT_LOCK:
+        _ENQUEUES_IN_FLIGHT.add(job_id)
+
+    def _claim(existing: Dict[str, Any]) -> Dict[str, Any]:
+        snapshot_rec = existing.get(META_KEY)
+        if not isinstance(snapshot_rec, dict) and existing.get("clarification_question"):
+            snapshot_rec = {
+                "question": str(existing.get("clarification_question") or ""),
+                "asked_at": str(existing.get("created_at") or ""),
+                "deadline": "", "status": STATUS_PENDING, "source": "clarity-gate",
+            }
+        if not isinstance(snapshot_rec, dict):
+            return {}
+        snapshot_rec = dict(snapshot_rec)
+        snapshot_retry = None
+        if snapshot_rec.get("status") == STATUS_ANSWERED:
+            ids = [str(j) for j in (snapshot_rec.get("resume_job_ids") or []) if str(j)]
+            snapshot_retry = (
+                None if snapshot_rec.get("delivery") == "live"
+                else (_last_resume_failed(
+                    handle_id, since=str(snapshot_rec.get("answered_at") or ""),
+                    job_ids=ids,
+                ) if ids else "never-queued")
+            )
+            if not snapshot_retry:
+                return {}
+        elif snapshot_rec.get("status") not in (STATUS_PENDING, STATUS_EXPIRED):
+            return {}
+        if existing.get("goal_verdict_source"):
+            return {}
+
+        claim_text = text
+        if snapshot_retry and not claim_text:
+            claim_text = str(snapshot_rec.get("answer") or "").strip()
+        if not claim_text:
+            return {}
+        stamped_at = datetime.now(timezone.utc)
+        snapshot_rec.update({
+            "status": STATUS_ANSWERED, "answer": claim_text[:2000],
+            "answered_at": _iso(stamped_at), "answer_source": source,
+            "late": late,
+            # review r30: a retry supersedes the failed attempt's queue id.
+            "resume_job_ids": [job_id],
+        })
+        outcome = ""
+        if str(snapshot_rec.get("kind") or "") == "env_request":
+            try:
+                import env_request as _er
+                verb, outcome = _er.apply_answer(snapshot_rec, claim_text)
+                snapshot_rec["decision"] = verb or "unclear"
+                snapshot_rec["outcome"] = outcome[:1000]
+            except Exception as exc:
+                outcome = f"the orchestrator's answer could not be applied: {exc}"
+                log.warning("answer: env_request apply failed: %s", exc)
+        fields: Dict[str, Any] = {
+            META_KEY: snapshot_rec,
+            "clarification_answer": claim_text[:2000],
+        }
+        from stop_verdicts import PAUSE_OP_CLARIFICATION
+        is_clarification = (
+            existing.get("pause_reason") == PAUSE_OP_CLARIFICATION
+            and str(snapshot_rec.get("kind") or "") != "env_request"
+            and not asks_for_code(snapshot_rec)
         )
-        _answer_stamp["clarification_base_goal"] = _base_goal
-        _answer_stamp["goal"] = f"{_base_goal}\n\nAdditional context: {text}"
+        if is_clarification:
+            # review r30: the pause owns this base; only legacy records derive it.
+            base = str(existing.get("clarification_base_goal")
+                       or existing.get("goal") or existing.get("prompt") or "")
+            fields["clarification_base_goal"] = base
+            fields["goal"] = f"{base}\n\nAdditional context: {claim_text}"
+        claim_state.update({
+            "rec": snapshot_rec, "text": claim_text, "outcome": outcome,
+            "goal": str(existing.get("prompt") or existing.get("goal") or "").strip(),
+            "question": str(snapshot_rec.get("question") or ""),
+            "retried": snapshot_retry,
+        })
+        return fields
+
     try:
-        from runs import stamp_run_metadata_for
-        # review r29: answer durability is the prerequisite for scheduling a
-        # continuation; a None result is the writer's non-raising failure form.
-        _stamped = stamp_run_metadata_for(handle_id, _answer_stamp)
-        if _stamped is None:
+        from runs import revise_run_metadata_for
+        claimed = revise_run_metadata_for(handle_id, _claim)
+        if claimed is None:
             raise OSError("metadata stamp returned no path")
+        if not claimed:
+            return {"status": "error", "handle_id": handle_id,
+                    "error": f"run {handle_id} was already answered at "
+                             f"{rec.get('answered_at')}"}
+        claim_recorded = True
     except Exception as exc:
         log.warning("answer: metadata stamp failed: %s", exc)
         return {
             "status": "error", "handle_id": handle_id,
             "error": "the answer could not be recorded; retry",
         }
+    finally:
+        # Kept through enqueue below by re-adding after this write phase.
+        # review r30: failed/declined claims cannot leave phantom in-flight ids.
+        if not claim_recorded:
+            with _ENQUEUES_IN_FLIGHT_LOCK:
+                _ENQUEUES_IN_FLIGHT.discard(job_id)
+    text = str(claim_state["text"])
+    goal = str(claim_state["goal"])
+    question = str(claim_state["question"])
+    outcome_text = str(claim_state["outcome"])
+    retried = claim_state.get("retried")
     try:
         from task_store import enqueue
         from ancestry import Origin
@@ -841,18 +936,15 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
             reason=_continuation_reason(goal, question, text, outcome_text),
             continuation_depth=1,
             origin=origin,
+            job_id=job_id,  # review r30: queue publication fulfills the durable claim.
         )
     except Exception as exc:
         return {"status": "error", "handle_id": handle_id,
                 "error": f"could not enqueue the resume: {exc}"}
-    try:
-        from runs import stamp_run_metadata_for
-        ids = [str(j) for j in (rec.get("resume_job_ids") or []) if str(j)]
-        ids.append(str(task.get("job_id") or ""))
-        rec["resume_job_ids"] = ids
-        stamp_run_metadata_for(handle_id, {META_KEY: rec})
-    except Exception as exc:
-        log.warning("answer: resume id stamp failed: %s", exc)
+    finally:
+        # review r30: only a missing id after enqueue returns/raises is failed.
+        with _ENQUEUES_IN_FLIGHT_LOCK:
+            _ENQUEUES_IN_FLIGHT.discard(job_id)
     try:
         from run_trace import record_edge
         record_edge("pause.awaiting-clarification", "answer.queued",

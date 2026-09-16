@@ -410,9 +410,9 @@ def _initialize_loop(
     # a disambiguated one. Stamp it so nothing has to guess.
     try:
         from runs import stamp_run_metadata
-        # review r29: project identity is useful even when admission refuses
-        # the run, but execution provenance belongs only to admitted work.
-        stamp_run_metadata({"project": ctx.project})
+        # review r30: RESUME re-enters loop_init, so a refused re-attempt must
+        # demote a stale successful-attempt marker before admission.
+        stamp_run_metadata({"project": ctx.project, "execution": "pending"})
     except Exception:
         log.debug("project metadata stamp failed", exc_info=True)
 

@@ -1130,9 +1130,10 @@ def test_r29_loop_project_and_execution_stamps_follow_admission(
         "Produce the R28 report", project="r28-loop-project",
         dry_run=True, verbose=False,
     )
-    assert {"project": "r28-loop-project"} in stamps
+    # review r30: each attempt first demotes stale provenance to pending.
+    assert {"project": "r28-loop-project", "execution": "pending"} in stamps
     assert {"execution": "loop"} in stamps
-    assert stamps.index({"project": "r28-loop-project"}) < stamps.index(
+    assert stamps.index({"project": "r28-loop-project", "execution": "pending"}) < stamps.index(
         {"execution": "loop"})
 
 
@@ -1159,8 +1160,40 @@ def test_r29_a_refused_busy_run_carries_no_execution_provenance(
         dry_run=True, verbose=False,
     )
     assert result.status == "refused_busy"
-    assert {"project": "r29-busy-project"} in stamps
+    # review r30: refusal retains the freshly demoted pending attempt marker.
+    assert {"project": "r29-busy-project", "execution": "pending"} in stamps
     assert not any(stamp.get("execution") == "loop" for stamp in stamps)
+
+
+def test_r30_a_refused_resume_demotes_stale_loop_provenance(
+        monkeypatch, tmp_path):
+    # review r30: a RESUME that loses admission cannot inherit its prior loop marker.
+    _setup_workspace(monkeypatch, tmp_path)
+    import interrupt
+    import runs
+    stamps = []
+    metadata = {"execution": "loop"}
+
+    def _stamp(fields):
+        stamps.append(dict(fields))
+        metadata.update(fields)
+        return tmp_path / "metadata.json"
+
+    monkeypatch.setattr(runs, "stamp_run_metadata", _stamp)
+    monkeypatch.setattr(
+        interrupt, "acquire_project_slot",
+        lambda *a, **k: (_ for _ in ()).throw(interrupt.LoopBusy(
+            "r30-busy-project", {"loop_id": "active", "pid": 1234})),
+    )
+
+    result = run_agent_loop(
+        "Resume the report", project="r30-busy-project",
+        dry_run=True, verbose=False)
+
+    assert result.status == "refused_busy"
+    assert {"project": "r30-busy-project", "execution": "pending"} in stamps
+    assert metadata["execution"] == "pending"
+    assert not any(stamp == {"execution": "loop"} for stamp in stamps)
 
 
 def test_run_agent_loop_fan_out_dependency_falls_back_sequential():

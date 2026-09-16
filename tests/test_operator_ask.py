@@ -414,7 +414,8 @@ class TestAnswer:
         import task_store
         before_meta = _meta(rd)
         before_jobs = {task["job_id"] for task in task_store.list_tasks()}
-        monkeypatch.setattr(runs, "stamp_run_metadata_for", lambda *a, **k: None)
+        # review r30: the answer prerequisite is now the lock-scoped revision.
+        monkeypatch.setattr(runs, "revise_run_metadata_for", lambda *a, **k: None)
 
         result = oa.answer("abcd1234", "client B")
 
@@ -425,10 +426,10 @@ class TestAnswer:
         assert _meta(rd) == before_meta
         assert {task["job_id"] for task in task_store.list_tasks()} == before_jobs
 
-    def test_r29_an_answer_whose_enqueue_failed_can_be_answered_again(
+    def test_r30_an_enqueue_failure_after_the_claim_is_retryable(
             self, ws, monkeypatch):
-        # review r29: the answer-only durable state is explicitly retryable
-        # because it has no resume job id.
+        # review r30: the missing claimed id identifies a failed publication,
+        # and the replacement claim owns the only remaining id.
         rd = self._paused(ws, monkeypatch)
         import task_store
         real_enqueue = task_store.enqueue
@@ -442,12 +443,95 @@ class TestAnswer:
 
         monkeypatch.setattr(task_store, "enqueue", _fail_once)
         first = oa.answer("abcd1234", "client B")
+        first_id = _meta(rd)["operator_ask"]["resume_job_ids"]
         second = oa.answer("abcd1234", "client B")
 
         assert first["status"] == "error"
+        assert len(first_id) == 1
         assert second["status"] == "queued"
-        assert second["retried_after"] == "never-queued"
+        assert second["retried_after"] == "missing"
         assert _meta(rd)["operator_ask"]["resume_job_ids"] == [second["job_id"]]
+
+    def test_r30_a_legacy_answer_without_resume_ids_is_retryable(
+            self, ws, monkeypatch):
+        # review r30: old answer-only records retain their never-queued retry,
+        # while the replacement uses the new single conditional claim.
+        import runs
+        rd = self._paused(ws, monkeypatch)
+        rec = dict(_meta(rd)["operator_ask"])
+        rec.update({"status": "answered", "answer": "client B",
+                    "answered_at": "2026-09-16T18:00:00+00:00"})
+        rec.pop("resume_job_ids", None)
+        runs.stamp_run_metadata_for("abcd1234", {"operator_ask": rec})
+        monkeypatch.setattr(runs, "stamp_run_metadata_for", lambda *a, **k: None)
+
+        result = oa.answer("abcd1234", "client C")
+
+        assert result["status"] == "queued"
+        assert result["retried_after"] == "never-queued"
+        assert _meta(rd)["operator_ask"]["resume_job_ids"] == [result["job_id"]]
+
+    def test_r30_two_concurrent_answers_enqueue_one_resume(
+            self, ws, monkeypatch):
+        # review r30: the locked conditional claim admits exactly one responder.
+        import threading
+        import task_store
+        rd = self._paused(ws, monkeypatch)
+        real_enqueue = task_store.enqueue
+        entered = threading.Event()
+        release = threading.Event()
+
+        def _held_enqueue(**kwargs):
+            entered.set()
+            assert release.wait(5)
+            return real_enqueue(**kwargs)
+
+        monkeypatch.setattr(task_store, "enqueue", _held_enqueue)
+        results = []
+        first = threading.Thread(
+            target=lambda: results.append(oa.answer("abcd1234", "client B")))
+        first.start()
+        assert entered.wait(5)
+        second = threading.Thread(
+            target=lambda: results.append(oa.answer("abcd1234", "client C")))
+        second.start()
+        second.join(5)
+        release.set()
+        first.join(5)
+        second.join(5)  # review r30: also drain the losing-path thread under regressions.
+
+        assert sorted(result["status"] for result in results) == ["error", "queued"]
+        tasks = task_store.list_tasks()
+        assert len(tasks) == 1
+        assert _meta(rd)["operator_ask"]["resume_job_ids"] == [tasks[0]["job_id"]]
+
+    def test_r30_a_second_question_keeps_the_first_answer(
+            self, ws, monkeypatch):
+        # review r30: every new question snapshots the then-current enriched goal.
+        import runs
+        import task_store
+        rd = _mk_run("abcd1234", prompt="Update report")
+        with runs.scoped_run_dir(rd):
+            oa.pause_for_ask(
+                {**ASK, "question": "Which client?"}, handle_id="abcd1234",
+                goal="Update report")
+        first = oa.answer("abcd1234", "client B")
+        task_store.claim(first["job_id"])
+        task_store.complete(first["job_id"], result_status="interrupted")
+        first_goal = _meta(rd)["goal"]
+        with runs.scoped_run_dir(rd):
+            oa.pause_for_ask(
+                {**ASK, "question": "Which region?"}, handle_id="abcd1234",
+                goal=first_goal)
+        second = oa.answer("abcd1234", "EMEA")
+        task_store.claim(second["job_id"])
+        task_store.complete(second["job_id"], result_status="refused_busy")
+        retry = oa.answer("abcd1234", "APAC")
+
+        assert retry["status"] == "queued"
+        goal = _meta(rd)["goal"]
+        assert "client B" in goal and "APAC" in goal
+        assert "EMEA" not in goal
 
     def test_r29_a_corrected_answer_replaces_the_previous_context(
             self, ws, monkeypatch):
@@ -838,6 +922,24 @@ class TestGrounding:
 # ---------------------------------------------------------------------------
 
 class TestLive:
+    def test_r30_a_failed_live_stamp_delivers_nothing(self, ws, monkeypatch):
+        # review r30: metadata durability precedes publishing the worker reply.
+        import runs
+        rd = _mk_run("abcd1234")
+        scratch = rd / "scratch"
+        scratch.mkdir(exist_ok=True)
+        with runs.scoped_run_dir(rd):
+            runs.stamp_run_metadata({
+                "operator_ask": {**CODE_ASK, "status": "pending", "live": True},
+            })
+        monkeypatch.setattr(runs, "stamp_run_metadata_for", lambda *a, **k: None)
+
+        result = oa.answer("abcd1234", "654321")
+
+        assert result["status"] == "error"
+        assert not (scratch / oa.ANSWER_NAME).exists()
+        assert _meta(rd)["operator_ask"]["status"] == "pending"
+
     def test_watch_announces_once_and_answer_is_delivered_to_the_file(self, ws, monkeypatch):
         import runs
         events = _capture_emit(monkeypatch)

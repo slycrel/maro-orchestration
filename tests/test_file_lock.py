@@ -119,6 +119,22 @@ class TestAtomicWritePerms:
         finally:
             os.umask(old)
 
+    def test_r30_atomic_write_durable_fsyncs_the_directory(
+            self, tmp_path, monkeypatch):
+        # review r30: durable publication syncs both file contents and its directory entry.
+        import os
+        import stat
+        from file_lock import atomic_write
+        syncs = []
+
+        def _record_fsync(fd):
+            syncs.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+
+        monkeypatch.setattr(os, "fsync", _record_fsync)
+        atomic_write(tmp_path / "durable.txt", "value", durable=True)
+
+        assert syncs == [False, True]
+
 
 class TestByteSafeRmw:
     """locked_rmw + atomic_write round-trip bytes that are not valid UTF-8.

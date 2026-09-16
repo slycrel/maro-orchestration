@@ -7042,6 +7042,31 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   project/binding (the queued path cannot re-judge; a later scan may pair
   the clarified goal with that project — an LLM re-decision at answer/
   RESUME time is a separate item). Round 30 = codex confirming round.
+  Round 30 (codex sol/high skeptic + architect on d3cbee0d; 5 HIGH +
+  7 MED, failure-path twins of the r29 fixes; fixes codex-written,
+  orchestrator-verified by read + per-file mutation): the answer stamp
+  and the resume enqueue were two stores with no claim (two responders
+  both passed the already-answered check; an enqueue failure was
+  retryable only because the ids list happened to be empty) → the queue
+  id is allocated first, `revise_run_metadata_for` makes ONE locked
+  conditional claim carrying `resume_job_ids`, enqueue publishes that id,
+  the post-enqueue stamp is gone, a recorded id with no task = `missing`
+  = retryable (a process-local in-flight set covers the publication gap
+  for threads; the cross-process window is recorded, bounded by
+  refused_busy); `_pause_for_clarification` ignored a None stamp →
+  status `error`, never executes an unrecorded unclear goal;
+  `loop_init` left a stale `execution: loop` on a refused RESUME →
+  pre-admission stamps `execution: pending`; `locate_deliverables` had
+  no upper bound → files newer than `ended_at` are not this run's; the
+  BLE paraphrase could erase a literal project name → binding reads the
+  pre-rewrite text. MEDs: every pause stamps `clarification_base_goal`;
+  the live branch stamps before it publishes (mkstemp + replace);
+  cutoff 16:20Z + aware `started_at` required for legacy; a failure
+  after an UNCLEAR verdict still pauses; a malformed `verdict_history`
+  is evidence; uuid sidecar nonce; legacy `mode:thin` not scanned;
+  `atomic_write(durable=True)` fsyncs the directory. Round 31 = codex
+  confirming round; STOP RULE: if r31 still finds HIGHs, land only the
+  cheap verified fixes and escalate the round budget.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the
