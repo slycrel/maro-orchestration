@@ -232,6 +232,7 @@ def _write_iteration_artifacts(
             ctx.loop_id, ctx.goal, ctx.project or "", steps, step_outcomes,
             executor_session=executor_session,
             world_facts=ctx.world_facts.to_list(),
+            regression=ctx.regression.to_list(),
         )
     except Exception as _exc:
         # Affects loop resumability — silent loss means a crashed loop can't restart.

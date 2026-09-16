@@ -323,6 +323,11 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                 # string round-tripped through all three blocked branches —
                 # adversarial review 2026-07-15 caught this one narrowed).
                 ctx.pending_context.extend(list(blk.delivered_contributions))
+                # The sub-steps carry this step's work forward (item index
+                # -1 each); its blocked row below must not read as an unmet
+                # prerequisite to dependents of this plan number.
+                if item_index >= 0:
+                    ctx.gate_superseded.add(item_index)
                 if ctx.verbose:
                     print(
                         f"[maro] step {step_idx} re-decomposed into {len(_sub_shaped)} sub-steps "
@@ -399,6 +404,9 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
         # step's context (adversarial review 2026-07-15).
         ctx.pending_context.extend(list(blk.delivered_contributions))
         replan_count += 1
+        # Split halves carry the work forward — see the re-decompose branch.
+        if item_index >= 0:
+            ctx.gate_superseded.add(item_index)
         if ctx.verbose:
             print(
                 f"[maro] step {step_idx} timed out — split into {len(_decision.split_into)} steps "

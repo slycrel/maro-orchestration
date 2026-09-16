@@ -165,6 +165,19 @@ def _preflight_checks(
                                  len(ctx.world_facts.facts))
                     except Exception as _wf_exc:
                         log.warning("world-fact restore failed: %s", _wf_exc)
+                _ckpt_rg = getattr(_ckpt, "regression", None)
+                if _ckpt_rg:
+                    try:
+                        from regression_ledger import (RegressionLedger as _RGL,
+                                                       regression_enabled as _rg_on)
+                        if not _rg_on():
+                            raise RuntimeError("regression.enabled is off — "
+                                               "checkpoint rows not restored")
+                        ctx.regression = _RGL.from_list(_ckpt_rg)
+                        log.info("checkpoint resume: restored %d regression obligation(s)",
+                                 len(ctx.regression))
+                    except Exception as _rg_exc:
+                        log.warning("regression-obligation restore failed: %s", _rg_exc)
                 # In-flight FS-diff injection ((h) slice 3): if the prior
                 # process died mid-step, tell the re-executed step what the
                 # crashed attempt already touched so it completes idempotently

@@ -2717,6 +2717,8 @@ def _parse_stream_json(text: str) -> dict:
         return out
     uses = []            # ordered [(id, name, input)]
     results_by_id = {}   # id -> {output, is_error}
+    _use_count = {}      # id -> tool_use blocks with that id (a join is only
+    _result_count = {}   # id -> tool_result blocks with that id  positive when both are 1)
     malformed = 0        # events/blocks whose fields are not the protocol's (round 14)
     for ev in _iter_stream_documents(text):
         etype = ev.get("type")
@@ -2728,10 +2730,14 @@ def _parse_stream_json(text: str) -> dict:
             for block in (_content if isinstance(_content, list) else []):
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     _uid = block.get("id")
-                    if _uid is not None and not isinstance(_uid, (str, int)):
-                        malformed += 1  # an unhashable id would break the join below
+                    if _uid is not None and (isinstance(_uid, bool)
+                                             or not isinstance(_uid, (str, int))):
+                        # unhashable would break the join; a bool collides
+                        # with 0/1 as a dict key (True == 1) — both malformed
+                        malformed += 1
                         continue
                     uses.append((_uid, block.get("name", ""), block.get("input")))
+                    _use_count[_uid] = _use_count.get(_uid, 0) + 1
         elif etype == "user":
             _msg = ev.get("message")
             content = _msg.get("content") if isinstance(_msg, dict) else None
@@ -2739,13 +2745,15 @@ def _parse_stream_json(text: str) -> dict:
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
                         _tid = block.get("tool_use_id")
-                        if _tid is not None and not isinstance(_tid, (str, int)):
+                        if _tid is not None and (isinstance(_tid, bool)
+                                                 or not isinstance(_tid, (str, int))):
                             malformed += 1
                             continue
                         results_by_id[_tid] = {
                             "output": _stringify_tool_result(block.get("content")),
                             "is_error": bool(block.get("is_error", False)),
                         }
+                        _result_count[_tid] = _result_count.get(_tid, 0) + 1
         elif etype == "result":
             out["result"] = ev
         elif etype == "rate_limit_event":
@@ -2770,6 +2778,13 @@ def _parse_stream_json(text: str) -> dict:
             "input": inp,
             "output": results_by_id.get(uid, {}).get("output", ""),
             "is_error": results_by_id.get(uid, {}).get("is_error", False),
+            # An unmatched tool_use renders as output "" / is_error False —
+            # silence, not success. Positive-evidence consumers
+            # (regression_ledger.event_passed) require the result was SEEN
+            # and the join UNAMBIGUOUS: a null or repeated id on either side
+            # could hand one tool's output to another.
+            "result_seen": (uid is not None and _use_count.get(uid) == 1
+                            and _result_count.get(uid) == 1),
             "id": uid,
         }
         for (uid, name, inp) in uses

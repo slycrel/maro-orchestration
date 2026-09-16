@@ -195,6 +195,7 @@ def _execute_main_loop(
     resolve_tools_fn,
     tier_order: Dict[str, int],
     parallel_fan_out: int,
+    deps: Optional[Dict[int, Any]] = None,
 ) -> dict:
     """Phase F: the main execute loop.
 
@@ -298,6 +299,7 @@ def _execute_main_loop(
                     ctx.loop_id, goal, ctx.project or "", steps, step_outcomes,
                     executor_session=_executor_session,
                     world_facts=ctx.world_facts.to_list(),
+                    regression=ctx.regression.to_list(),
                 )
             except Exception as _rotation_exc:
                 log.warning("executor session rotation checkpoint failed: %s",
@@ -330,6 +332,19 @@ def _execute_main_loop(
     remaining_steps: List[str] = list(steps)
     remaining_indices: List[int] = list(step_indices)
     step_idx = 0  # global step counter (for numbering, includes injected steps)
+    # Prerequisite gate (step_gate.py): plan numbers resolve positionally
+    # only while the shaped plan is the parsed plan. Checked ONCE; when it
+    # fails every edge is soft for the whole run and the log says why.
+    try:
+        from step_gate import plan_identity_intact as _gate_identity
+        _gate_intact, _gate_identity_reason = _gate_identity(
+            step_indices, deps, resumed=bool(resume_completed))
+    except Exception as _gi_exc:
+        _gate_intact, _gate_identity_reason = False, f"identity check failed: {_gi_exc}"
+    if not _gate_intact and deps:
+        log.warning("prerequisite gate: plan identity not intact (%s) — "
+                    "declared edges are logged, not enforced, for this run",
+                    _gate_identity_reason)
     # §6 injection seam: typed contributions bound for the next step's prompt.
     # Contributors append to the ledger; the merge point below drains it
     # exactly once per delivered step. _delivered_contributions keeps the
@@ -592,6 +607,89 @@ def _execute_main_loop(
         step_text = remaining_steps.pop(0)
         item_index = remaining_indices.pop(0) if remaining_indices else -1
 
+        # Prerequisite gate (step_gate.py, LoopsBench follow-up 2026-09-16):
+        # the plan's own [after:N] edges are an execution contract. A step
+        # whose DECLARED prerequisite ended blocked/skipped is recorded
+        # blocked without an adapter call and the loop moves on, so work
+        # never lands on a foundation that did not. Sequential-default
+        # edges are soft (logged) unless execution.gate_implicit_prerequisites.
+        # Unknown prerequisites (no recorded outcome) never gate.
+        try:
+            from step_gate import (prerequisite_verdict as _gate_verdict,
+                                   gate_implicit_enabled as _gate_implicit,
+                                   gate_result_text as _gate_text)
+            _gate = _gate_verdict(
+                step_text, item_index,
+                deps=deps, step_indices=step_indices,
+                step_outcomes=step_outcomes, plan_steps=steps,
+                gate_implicit=_gate_implicit(),
+                superseded=ctx.gate_superseded,
+                identity_intact=_gate_intact,
+            )
+        except Exception as _gate_exc:
+            # WARNING, not debug: a gate that silently stops gating is the
+            # failure class this chunk exists to remove.
+            log.warning("prerequisite gate skipped for step %d: %s", step_idx + 1, _gate_exc)
+            _gate = None
+        if _gate is not None and not _gate.ready:
+            if _gate.hard:
+                # Same bookkeeping as an executed step: the counters
+                # advance, the row carries the right iteration, NEXT.md
+                # shows the item blocked, and the checkpoint records the
+                # refusal so a resume does not re-try the dependent.
+                iteration += 1
+                step_idx += 1
+                _gate_result = _gate_text(_gate)
+                log.warning("prerequisite gate: step %d (plan %d) not executed — %s",
+                            step_idx, _gate.plan_no, _gate.reason)
+                if ctx.verbose:
+                    print(f"[maro] prerequisite gate: {_gate_result}",
+                          file=sys.stderr, flush=True)
+                step_outcomes.append(step_from_decompose(
+                    step_text, item_index,
+                    status="blocked",
+                    result=_gate_result,
+                    iteration=iteration,
+                    confidence="unverified",
+                    started_ts=datetime.now(timezone.utc).isoformat(),
+                ))
+                if item_index >= 0:
+                    try:
+                        o.mark_item(project, item_index, o.STATE_BLOCKED)
+                    except OSError as _gm_exc:
+                        log.warning("mark_item(BLOCKED) failed for gated %s#%d: %s",
+                                    project, item_index, _gm_exc)
+                try:
+                    from run_trace import record_edge as _gate_edge
+                    _gate_edge("exec.step", "exec.gate", loop_id=ctx.loop_id,
+                               step_idx=step_idx, plan_no=_gate.plan_no,
+                               unmet=[k for k, _s, _t in _gate.unmet],
+                               explicit=bool(_gate.explicit))
+                except Exception as _ge_exc:
+                    log.debug("gate edge not recorded: %s", _ge_exc)
+                try:
+                    from metrics import record_step_cost
+                    record_step_cost(
+                        step_text=step_text, tokens_in=0, tokens_out=0,
+                        status="blocked", goal=ctx.goal,
+                        model=getattr(ctx.adapter, "model_key", ""),
+                        elapsed_ms=0, loop_id=getattr(ctx, "loop_id", "") or "",
+                    )
+                except Exception as _gc_exc:
+                    log.debug("gated-step record_step_cost failed (non-critical): %s", _gc_exc)
+                try:
+                    from checkpoint import write_checkpoint as _gate_ckpt
+                    _gate_ckpt(ctx.loop_id, ctx.goal, ctx.project or "",
+                               steps, step_outcomes,
+                               executor_session=_executor_session,
+                               world_facts=ctx.world_facts.to_list(),
+                               regression=ctx.regression.to_list())
+                except Exception as _gk_exc:
+                    log.warning("gated-step checkpoint write failed: %s", _gk_exc)
+                continue
+            log.info("prerequisite gate (soft): step %d (plan %d) runs despite — %s",
+                     step_idx + 1, _gate.plan_no, _gate.reason)
+
         # Cuts-first boundary expansion (Qix-cuts decree, 2026-07-10): a
         # [boundary] step is a plan-here-later marker from planner cuts-first
         # mode. Expand it into real steps WITH the probe findings in context —
@@ -778,6 +876,18 @@ def _execute_main_loop(
                     if _ms_advice:
                         if "(b)" in _ms_advice.lower():
                             log.info("milestone advisor: skip step %d on advice", _would_be_step_idx)
+                            # Record the skip (step_gate, 2026-09-16): a
+                            # step with NO row is "unknown" to the
+                            # prerequisite gate and its dependents run
+                            # on nothing; a `skipped` row is an unmet edge.
+                            step_outcomes.append(step_from_decompose(
+                                step_text, item_index,
+                                status="skipped",
+                                result="skipped on milestone-advisor advice (b)",
+                                iteration=iteration,
+                                confidence="unverified",
+                                started_ts=datetime.now(timezone.utc).isoformat(),
+                            ))
                             continue  # skip this step
                         elif "(c)" in _ms_advice.lower():
                             # Try to extract rephrased text — advisor should lead with it
@@ -1057,7 +1167,8 @@ def _execute_main_loop(
             _inflight_ckpt(ctx.loop_id, ctx.goal, ctx.project or "",
                            steps, step_outcomes, in_flight_index=step_idx,
                            executor_session=_executor_session,
-                           world_facts=ctx.world_facts.to_list())
+                           world_facts=ctx.world_facts.to_list(),
+                           regression=ctx.regression.to_list())
         except Exception as _if_exc:
             log.debug("in-flight checkpoint write failed (non-fatal): %s", _if_exc)
 
@@ -1127,6 +1238,7 @@ def _execute_main_loop(
                              step_idx, ", ".join(_tr_new))
         except Exception as _tr_exc:
             log.debug("terrain scan skipped: %s", _tr_exc)
+
 
         _sc_report = None
         try:
@@ -2159,6 +2271,29 @@ def _execute_main_loop(
             venue=_step_venue,
             artifact_check=outcome.get("artifact_check", ""),
         ))
+
+        # Regression obligations (regression_ledger.py, 2026-09-16): a step
+        # whose FINAL status is done — after ralph verify, artifact check
+        # and the post-step demotions above — contributes its passing
+        # test-runner commands as obligations closure re-runs. Harvested
+        # here, not at the raw outcome, so a step demoted to blocked never
+        # carries an obligation. The cwd recorded is the one step_exec
+        # stamped beside the transcript (`executor_cwd`: the adapter's own
+        # precedence — explicit project dir, else the run-scoped default);
+        # closure re-runs there, not in its own cwd.
+        if step_status == "done":
+            try:
+                from regression_ledger import regression_enabled as _rg_on
+                if _rg_on() and outcome.get("tool_events"):
+                    _rg_new = ctx.regression.harvest(
+                        outcome.get("tool_events"), step_index=item_index,
+                        step_no=step_idx, iteration=iteration, step_text=step_text,
+                        executor_cwd=outcome.get("executor_cwd") or _proj_artifact_dir or None)
+                    if _rg_new:
+                        log.info("regression obligations step=%d recorded: %s",
+                                 step_idx, "; ".join(_rg_new))
+            except Exception as _rg_exc:
+                log.warning("regression harvest failed for step %d: %s", step_idx, _rg_exc)
 
         # End-of-iteration artifacts: checkpoint, manifest, dead ends, march of nines
         _mon_alert = _write_iteration_artifacts(

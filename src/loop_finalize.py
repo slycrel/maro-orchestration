@@ -285,6 +285,7 @@ def _build_result_and_finalize(
         march_of_nines_alert=march_of_nines_alert,
         pre_flight_review=pf_review,
         had_no_matching_skill=had_no_matching_skill,
+        regression_obligations=ctx.regression.to_list(),
     )
 
     # Write the loop transcript artifact: RESULT.md for a completed loop,

@@ -487,6 +487,7 @@ def run_agent_loop(
                 loop_shared_ctx=_loop_shared_ctx,
                 use_dag=_use_dag,
                 resolve_tools_fn=_resolve_tools,
+                resumed=bool(_resume_completed),
             )
             if _parallel_result is not None:
                 # Record the fan-out itself and the terminal it returns from.
@@ -613,6 +614,7 @@ def run_agent_loop(
                 resolve_tools_fn=_resolve_tools,
                 tier_order=_TIER_ORDER,
                 parallel_fan_out=parallel_fan_out,
+                deps=_deps,
             )
         finally:
             if _disarm_runaway is not None:

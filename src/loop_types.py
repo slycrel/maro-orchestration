@@ -23,6 +23,8 @@ from context_budget import clip  # stdlib-only, same import-safe contract
 from terrain import TerrainMemory
 # world_facts.py: same stdlib-only contract as terrain.py.
 from world_facts import WorldFactLedger
+# regression_ledger.py: same stdlib-only contract.
+from regression_ledger import RegressionLedger
 
 
 def _new_terrain() -> "TerrainMemory":
@@ -31,6 +33,10 @@ def _new_terrain() -> "TerrainMemory":
 
 def _new_world_facts() -> "WorldFactLedger":
     return WorldFactLedger()
+
+
+def _new_regression() -> "RegressionLedger":
+    return RegressionLedger()
 
 log = logging.getLogger("maro.loop")
 
@@ -250,6 +256,9 @@ class LoopResult:
     # data-r2-01: carried out so deferred (post-closure) skill synthesis knows
     # whether this run started with no matching skill — the synthesis trigger.
     had_no_matching_skill: bool = False
+    # Regression obligations harvested during the run (regression_ledger rows)
+    # — handed to closure so it re-runs what the run itself proved.
+    regression_obligations: List[Dict[str, Any]] = field(default_factory=list)
     # Direct CLI closure runs after loop finalization. These declared fields
     # carry its audit decision to output/learning without an untyped side
     # channel or making human-facing warning text the policy predicate.
@@ -518,6 +527,17 @@ class LoopContext:
     # resume/replan sees the facts, not just the surviving steps.
     world_facts: "WorldFactLedger" = field(
         default_factory=lambda: _new_world_facts())
+    # Run-scoped regression obligations (regression_ledger.py, 2026-09-16):
+    # verification commands a DONE step ran and passed, harvested from its
+    # real tool transcript; closure re-runs them and a new failure is a
+    # regression. Rides the checkpoint like world_facts.
+    regression: "RegressionLedger" = field(
+        default_factory=lambda: _new_regression())
+    # Item indices of steps replaced by recovery sub-steps (split /
+    # re-decompose in loop_blocked). Their blocked row records the
+    # replacement, not a failed prerequisite: the prerequisite gate
+    # (step_gate.py) treats them as unknown, never as unmet.
+    gate_superseded: set = field(default_factory=set)
     interrupts_applied: int = 0
     # Human-readable descriptions of interrupts applied at the most recent
     # boundary poll — consumed by the §6a injection-trigger director

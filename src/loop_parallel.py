@@ -329,8 +329,13 @@ def _run_parallel_path(
     loop_shared_ctx: Dict[str, Any],
     use_dag: bool,
     resolve_tools_fn,
+    resumed: bool = False,
 ) -> Optional[LoopResult]:
     """Phase D: Parallel fan-out early return path.
+
+    `resumed`: the plan is a checkpoint suffix re-numbered from 1 while its
+    `[after:N]` tags still name the original plan — the DAG gate then
+    enforces nothing (same rule as `step_gate.plan_identity_intact`).
 
     Returns LoopResult if parallel execution was used, None otherwise
     (caller falls through to sequential execution).
@@ -349,6 +354,8 @@ def _run_parallel_path(
             goal=ctx.goal,
             steps=clean_steps,
             deps=deps,
+            tagged_steps=steps,
+            identity_intact=not resumed,
             adapter=ctx.adapter,
             ancestry_context=_fanout_ancestry,
             tools=[LLMTool(**t) for t in resolve_tools_fn()],
@@ -677,6 +684,8 @@ def _run_steps_dag(
     project_dir: str = "",
     shared_ctx: Optional[Dict[str, Any]] = None,
     incremental_context: str = "",
+    tagged_steps: Optional[List[str]] = None,
+    identity_intact: bool = True,
 ) -> List[dict]:
     """Dep-aware parallel execution — semaphore-gated pool with auto-unblock.
 
@@ -692,10 +701,76 @@ def _run_steps_dag(
     Args:
         steps: Clean step strings (tags stripped by parse_dependencies).
         deps:  1-based step index → set of dep indices (from parse_dependencies).
+        tagged_steps: the same steps WITH their [after:] tags, so the gate
+            below can tell a declared edge from the sequential default.
+
+    Prerequisite gate (step_gate.py, 2026-09-16): a dep that completes
+    blocked/skipped does NOT release its dependents. A dependent whose
+    edge to it was DECLARED (`[after:N]`) — or any edge when
+    execution.gate_implicit_prerequisites is on — is recorded blocked
+    ("not executed — declared prerequisite not met: step N ended
+    blocked") without an adapter call, transitively; a sequential-default
+    edge is logged and released (soft), the same classes the sequential
+    lane applies. Before this, a completed dep was discarded from
+    `remaining_deps` regardless of its outcome and the whole graph ran on
+    a foundation that never landed.
 
     Returns outcomes list in step-index order.
     """
     import threading as _threading
+    from step_gate import (explicit_deps as _explicit_deps,
+                           gate_implicit_enabled as _gate_implicit,
+                           UNMET_STATUSES as _UNMET)
+
+    _tagged = list(tagged_steps) if tagged_steps and len(tagged_steps) == len(steps) else None
+    _declared: Dict[int, set] = {}
+    if _tagged is not None and identity_intact:
+        for _i, _t in enumerate(_tagged, 1):
+            _d = _explicit_deps(_t)
+            if _d:
+                _declared[_i] = set(_d)
+    _gate_all = _gate_implicit() and identity_intact
+    if not identity_intact:
+        # Scheduling ORDER still follows the re-parsed edges (pre-existing:
+        # the DAG lane has always scheduled a resumed suffix by its
+        # re-numbered tags — BACKLOG lead); only the outcome GATE is off.
+        log.warning("dag prerequisite gate: plan identity not intact (resumed suffix) — "
+                    "declared edges do not gate outcomes for this fan-out "
+                    "(scheduling still follows the re-parsed tags)")
+
+    def _gate_dependents(failed_idx: int, failed_status: str) -> None:
+        """Mark every not-yet-started dependent of `failed_idx` blocked when
+        its edge is enforced; recurse so a gated step gates its own
+        dependents. Caller holds no lock; results_lock taken here."""
+        frontier = [(failed_idx, failed_status)]
+        while frontier:
+            dep_idx, dep_status = frontier.pop()
+            for i in range(1, n + 1):
+                if dep_idx not in deps.get(i, set()):
+                    continue
+                with results_lock:
+                    if i in results or i in active.values():
+                        continue
+                    enforced = _gate_all or dep_idx in _declared.get(i, set())
+                    if not enforced:
+                        log.info("dag prerequisite gate (soft): step %d runs despite "
+                                 "step %d ended %s", i, dep_idx, dep_status)
+                        continue
+                    results[i] = {
+                        "status": "blocked",
+                        "stuck_reason": (f"not executed — declared prerequisite not met: "
+                                         f"step {dep_idx} ended {dep_status}"),
+                        "result": "", "tokens_in": 0, "tokens_out": 0,
+                    }
+                log.warning("dag prerequisite gate: step %d not executed — step %d ended %s",
+                            i, dep_idx, dep_status)
+                frontier.append((i, "blocked"))
+            # A gated step never passes through the future path, so nothing
+            # else discards it from its dependents' remaining deps; release
+            # its SOFT dependents here (the coordinator submits after this).
+            if dep_idx != failed_idx:
+                for j in range(1, n + 1):
+                    remaining_deps.get(j, set()).discard(dep_idx)
 
     n = len(steps)
     results: Dict[int, dict] = {}
@@ -848,6 +923,13 @@ def _run_steps_dag(
                 for _g in list(active):
                     _g.cancel()
                 continue
+
+            # A dep that ended blocked/skipped gates its enforced dependents
+            # BEFORE the release below; the soft ones are released as before.
+            with results_lock:
+                _completed_status = str(results.get(completed_idx, {}).get("status", "") or "")
+            if _completed_status in _UNMET:
+                _gate_dependents(completed_idx, _completed_status)
 
             # Unblock tasks whose only remaining dep was the just-completed one
             for step_idx in range(1, n + 1):

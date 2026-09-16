@@ -1345,6 +1345,8 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   The r31 design residue (checked pause API for every producer;
   per-attempt provenance records) is a BACKLOG item, not a round 32.
 
+- **2026-09-16 (LoopsBench is directly relevant — Jeremy: "I think it's directly relevant to maro, and poe-codex agrees"; "Let's do 1 and 2 and lay the proper groundwork for 3 for later"):** the Dependency Planning Gap and the missing automated regression verification from Microsoft's LoopsBench (arXiv:2608.00267, analysed by run 0b0a8fb6) are Maro's gaps too — the planner computed a DAG and a ready-frontier that the sequential lane never consulted, and nothing re-ran what a step had already verified. Built the same day: `step_gate.py` (declared `[after:]` edges hard-gate the sequential lane; sequential-default edges soft unless `execution.gate_implicit_prerequisites`) and `regression_ledger.py` (passing test-runner commands harvested from DONE steps' transcripts, re-run at closure, a hard fail downgrades the verdict). Item 3 (PCD prerequisite field) is groundwork only: `scripts/prereq-census.py` measures 28.5% explicit edges on this box; `docs/PCD_PREREQUISITE_FIELD_DESIGN.md` stages planner-native first, PCD second, with falsifiers. Review under the new 2–3 round budget; "if we can manage to not rabbit hole on reviews I think we can move forwards much quicker."
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:

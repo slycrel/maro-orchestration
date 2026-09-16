@@ -7225,3 +7225,68 @@ both engines (R2 related → R1, R3 rerun → R1, R4 fresh, no call).
 ---
 
 Full history in [BACKLOG_DONE.md](BACKLOG_DONE.md).
+
+### LoopsBench chunk 1 — prerequisite gate + regression obligations: pinned residue (2026-09-16)
+Shipped: `src/step_gate.py` (declared `[after:]` edges hard in the sequential
+lane AND `loop_parallel._run_steps_dag`; sequential default soft unless
+`execution.gate_implicit_prerequisites`) and `src/regression_ledger.py`
+(single-runner shlex grammar, `result_seen`, cwd per row, argv re-run at
+closure with `shell=False`). Round 1 (4 Codex lenses,
+`/tmp/adversarial-review.SADYYh`) → 13 class fixes in one fix diff; round 2
+(Skeptic, fix diff only, `/tmp/adversarial-review.K4zIne`). Accepted residue,
+NOT closed:
+- **Durable plan-node ids** — the gate resolves a tag's plan number
+  POSITIONALLY through `step_indices`; `plan_identity_intact` degrades every
+  edge to soft on resume, on a reshaped plan, or on a duplicate item index
+  (one warning per run). The real fix is a tag that names an ITEM (or a
+  planner-assigned node id carried on the row), so a resumed suffix keeps its
+  edges. Item-3 design (`docs/PCD_PREREQUISITE_FIELD_DESIGN.md`) is where it
+  belongs — a prerequisite field on the PCD is a durable id by construction.
+- **Closure with zero generated checks skips the regression re-run** — the
+  obligations are only run inside the generated-checks branch; a plan whose
+  check generation yields nothing (or is dry-run) never re-runs them. Cheap
+  follow-up: run obligations even when `checks == []`.
+- **Container-lane re-run parity** — closure re-runs on the closure host in
+  the recorded cwd; a run whose steps executed in the container executor
+  (`executor.container: require`) may have the runner only inside the image
+  (reads inconclusive, never fails). Route obligations through the container
+  executor when it was the step's executor.
+- **e2e composition tests** — the round-1 reviewers asked for a literal
+  restart path (blocked dep → gate → closure → director restart) and a CLI
+  closure path with obligations; current tests cover each unit and the loop
+  flow, not the handle/cli composition.
+- **Checkpoint write is not atomic** (pre-existing, out of scope; QA round
+  1): `checkpoint.write_checkpoint` writes in place — a kill mid-write leaves
+  a torn file the resume path then drops. Lead: temp-file + rename like the
+  metadata stamp.
+- **DAG lane does not harvest obligations** — only the sequential lane
+  harvests; fan-out steps' passing runners are not carried to closure.
+- **Checkpoint resume never skips completed rows (PRE-EXISTING, HIGH lead;
+  round-2 Skeptic, `/tmp/adversarial-review.K4zIne`):** `write_checkpoint`
+  stores each row's NEXT.md item index (`StepOutcome.index`) while
+  `Checkpoint.remaining_steps` compares against 1-based plan positions — live
+  checkpoints on this box hold `completed idx = [13, 49, 11, 12, …]` for
+  2–7-step plans, so `resume_from` returns the WHOLE plan and a resumed run
+  re-executes finished steps (and a gated dependent, with every edge soft on
+  resume, can then reach the adapter). Fix: checkpoint a plan-position field
+  beside the item index and select remaining steps by it; add a
+  crash→resume test that asserts a completed step is absent from the queue.
+  Same family as the item-2 "per-attempt provenance" residue.
+- **Recorded cwd is ephemeral under run-worktree / container-clone modes:**
+  finalize removes the successful worktree/clone before closure runs, so
+  the obligation's cwd is gone ⇒ inconclusive (never fail). Rerun before
+  cleanup, or translate to the merged checkout, when the container-lane
+  parity item above is built.
+- **DAG lane schedules a resumed suffix by its re-numbered tags (PRE-EXISTING;
+  round-3 Skeptic, `/tmp/adversarial-review.1QYwnx`):** preflight re-parses
+  `[after:N]` on the checkpoint suffix, so an original `[after:4]` on what is
+  now position 4 self-depends and never runs ("dag: upstream dep did not
+  complete"). The new gate is OFF on resume (`identity_intact=False`), but
+  scheduling order still follows the stale edges. Closes with the durable
+  plan-node ids above (remap tags before scheduling), or by routing a resumed
+  plan through the sequential lane.
+- **Round-3 classifier residue:** family failure summaries are pytest / jest /
+  mocha / go / cargo / "Tests failed"; other runners (tox, make, bun, plain
+  npm scripts) are return-code only — a wrapper that swallows its child's
+  status under one of those is not caught. Extend the summary grammar per
+  runner when a real run shows the shape.

@@ -73,6 +73,8 @@ Pre-flight flags steps that are really sub-goals. At execution time, those steps
 - Checkpoint resume exists but isn't auto-triggered on crash
 - Budget ceiling creates continuation tasks but doesn't auto-enqueue them
 - Parallel fan-out is conservative (heuristic independence check only)
+- Prerequisite gate (`step_gate.py`, 2026-09-16) enforces only DECLARED `[after:]` edges in the sequential lane; the sequential-default edge (71.5% of steps on this box, `scripts/prereq-census.py`) is soft unless `execution.gate_implicit_prerequisites` — closing that is item 3 (`docs/PCD_PREREQUISITE_FIELD_DESIGN.md`)
+- Regression obligations (`regression_ledger.py`) are harvested only in the sequential lane and re-run on the closure host, not through the container executor; a closure plan with zero generated checks skips the re-run
 
 ## File Map
 

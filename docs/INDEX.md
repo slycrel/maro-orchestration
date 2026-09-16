@@ -12,6 +12,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 
 | Question | Doc |
 |---|---|
+| Why prerequisite edges are 71.5% implicit and how a constrained `after` field would close it (PCD item 3 groundwork)? | `PCD_PREREQUISITE_FIELD_DESIGN.md` (dormant-design; census via `scripts/prereq-census.py`) |
 | What is current truth / what won a decision? | `../GOAL_BRAIN.md` (wins on conflict, by decree) |
 | What should I work on next? | `../MILESTONES.md`, then `../BACKLOG.md` |
 | How does the whole system fit together? | `ARCHITECTURE_OVERVIEW.md` (incl. V→R→R doctrine + visibility ladder) |

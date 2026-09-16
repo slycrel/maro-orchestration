@@ -1286,6 +1286,8 @@ def _summarize_tool_events(tool_events: List[dict]) -> List[dict]:
             "output": out_full[:_TRANSCRIPT_OUTPUT_CAP],
             "is_error": bool(te.get("is_error", False)),
         }
+        if "result_seen" in te:
+            entry["result_seen"] = bool(te.get("result_seen"))
         if len(out_full) > _TRANSCRIPT_OUTPUT_CAP:
             entry["output"] += (f"\n…[output truncated: +{len(out_full) - _TRANSCRIPT_OUTPUT_CAP}"
                                 f" chars in the full transcript artifact]")
@@ -1803,6 +1805,17 @@ def execute_step(
         # adapter's own docker-down ContainerUnavailable.
         from container_exec import enforce_backend_container_contract
         enforce_backend_container_contract(adapter, executor=True)
+        # The cwd the executor's shell calls will start in — the adapter's
+        # own precedence (explicit cwd, else the run-scoped default, else
+        # the launch cwd). Stamped on the outcome beside tool_events so a
+        # transcript consumer (regression_ledger) records where a command
+        # RAN, not where it guesses.
+        try:
+            from llm import get_default_subprocess_cwd as _default_cwd
+            _effective_cwd = (_call_kwargs.get("cwd") or _default_cwd()
+                              or os.getcwd())
+        except Exception:
+            _effective_cwd = _call_kwargs.get("cwd") or ""
         # agentic: the worker executor step — tools do the real work (executor=True)
         resp = adapter.complete(
             [
@@ -2067,6 +2080,7 @@ def execute_step(
             _tool_events = getattr(resp, "tool_events", None) or []
             if _tool_events:
                 _outcome["tool_events"] = _summarize_tool_events(_tool_events)
+                _outcome["executor_cwd"] = _effective_cwd
                 _t_handle = _persist_tool_transcript(_tool_events, project_dir, step_num)
                 if _t_handle:
                     _outcome.setdefault("artifacts", {})["tool_transcript"] = _t_handle

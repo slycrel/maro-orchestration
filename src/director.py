@@ -2024,6 +2024,7 @@ def evaluate_closure(
     loop_id: str = "",
     project: str = "",
     prior_verdict: Optional[ClosureVerdict] = None,
+    regression_obligations: Optional[list] = None,
 ) -> DirectorDecision:
     """The closure trigger of the adaptive-execution seam (ADAPTIVE_EXECUTION_
     DESIGN Phase C leftover, unified 2026-07-28).
@@ -2079,6 +2080,7 @@ def evaluate_closure(
         diagnosis=diagnosis,
         loop_id=loop_id,
         project=project,
+        regression_obligations=regression_obligations,
     )
 
     restart_worthy = (

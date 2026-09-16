@@ -3259,6 +3259,8 @@ def _handle_impl(
                         diagnosis=_closure_diag,
                         loop_id=getattr(loop_result, "loop_id", "") or "",
                         project=project or getattr(loop_result, "project", "") or "",
+                        regression_obligations=list(
+                            getattr(loop_result, "regression_obligations", None) or []),
                     )
                 _closure = _closure_decision.closure_verdict
             except Exception as _closure_exc:
@@ -3446,6 +3448,8 @@ def _handle_impl(
                                 loop_id=getattr(loop_result, "loop_id", "") or "",
                                 project=project or getattr(loop_result, "project", "") or "",
                                 prior_verdict=_pre_restart_closure,
+                                regression_obligations=list(
+                                    getattr(loop_result, "regression_obligations", None) or []),
                             )
                         _closure = _reverify_decision.closure_verdict
                         if (
@@ -4269,6 +4273,8 @@ def _handle_impl(
                                         diagnosis=_post_diag,
                                         loop_id=getattr(loop_result, "loop_id", "") or "",
                                         project=project or getattr(loop_result, "project", "") or "",
+                                        regression_obligations=list(
+                                            getattr(loop_result, "regression_obligations", None) or []),
                                     ).closure_verdict
                                 if (
                                     _post_closure is None

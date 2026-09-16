@@ -583,6 +583,8 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
             _cl_adapter,
             loop_id=result.loop_id or "",
             project=result.project or "",
+            regression_obligations=list(
+                getattr(result, "regression_obligations", None) or []),
         ).closure_verdict
     except Exception as _cl_exc:
         print(f"[maro] closure verification unavailable ({_cl_exc}) — "
