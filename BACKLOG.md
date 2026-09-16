@@ -33,6 +33,18 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### PCD + Formal Methods — constrained decision layer for Maro planner (Jeremy ask, 2026-09-16; research in flight)
+
+Two related research dispatches are running:
+1. **PCD local decision prototype** (`task-20260916T091642Z-3becee74`) — evaluate whether Parallel Constrained Decoding (orthogonal decision schemas, ~400ms warm latency on M4/16GB with Qwen2.5 1.5B 4-bit) can improve Maro's planner/decomposer. Target: structured decision plans (tool vs target vs success criteria) that are verifiable before token burn.
+2. **OpenShell formal methods integration** (`task-20260916T093824Z-8f0810f2`) — prototype how Maro could emit structured decision plans that are verifiable by a lightweight SMT/constraint solver (Z3-style), proving containment before execution and returning minimal adjustments on violation. Connects to the daily budget gate experience: binary halts → structured counterexamples.
+
+Shared insight from both: Maro's current free-text planning → parse/validate pipeline conflates tool selection, target identification, and success criteria. A constrained-decision intermediate representation could feed both (a) a local fast scorer for routing, and (b) a formal containment proof against approved policy envelopes.
+
+When M6 Mac Mini arrives (~2026-10-07), evaluate mlx-community quantized models for the local decision layer. Until then: prototype on existing hardware, document schema design, and identify which Maro planning steps are most amenable to orthogonal decision framing.
+
+Related: NVIDIA OpenShell research on Z3 theorem prover for agent policy verification (https://nvidia.github.io/OpenShell-Research/dev-notes/posts/2026-09-10-learning-formal-methods-agent-policy-prover/), Chi Wang's AutoGen/AG2 work on structured decision batches.
+
 ### Planner non-action item types — world facts (Jeremy ask, 2026-08-02; design before build)
 
 Decreed in the §4c decision batch: "we need to add non-action types to
