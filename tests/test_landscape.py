@@ -674,6 +674,36 @@ def _meta(handle_id):
 
 
 class TestTheLandscapeBindsTheProject:
+    def test_r26_a_prefixed_follow_up_still_finds_its_prior(self, monkeypatch, tmp_path):
+        # review r26: `direct:` is execution control, not a landscape token.
+        _setup(monkeypatch, tmp_path)
+        from orch_items import projects_root
+        (projects_root() / "revenue-dash").mkdir(parents=True)
+        prior = _finished_run("Update revenue forecast dashboard", "Updated.",
+                              extra={"project": "revenue-dash"})
+        r, kw = _agenda_run(
+            monkeypatch, "direct: Update chart",
+            _NowAndJudge(_related(1, "continues the dashboard")))
+        meta = _meta(r.handle_id)
+        assert any(c["handle_id"] == prior for c in meta["landscape"]["candidates"])
+        assert meta["landscape"]["chosen"] == prior
+        assert (kw["project"], meta["project"]) == ("revenue-dash", "revenue-dash")
+
+    def test_r26_the_scan_reads_the_stripped_goal_of_a_prefixed_prior(
+            self, monkeypatch, tmp_path):
+        import landscape
+        # review r26: scoring and judge display use the same clean candidate goal.
+        _setup(monkeypatch, tmp_path)
+        prior = _finished_run("direct: Update chart", extra={
+            "goal": "Update revenue forecast dashboard",
+            "project": "revenue-dash",
+        })
+        cands, scanned, below = landscape.candidates("Update revenue forecast dashboard")
+        assert scanned == 1 and below == 0
+        assert cands[0]["handle_id"] == prior
+        assert cands[0]["goal"] == "Update revenue forecast dashboard"
+        assert cands[0]["similarity"] == 1.0
+
     def test_a_related_goal_lands_in_the_chosen_runs_project(self, monkeypatch, tmp_path):
         # BACKLOG #65: the follow-up whose wording names no project must
         # land where the run it continues did its work — the landscape's

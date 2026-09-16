@@ -1450,6 +1450,13 @@ def _handle_impl(
     # execution floor is the MID role default unless the operator opts in).
     _pfx = _apply_prefixes(message)
     message = _pfx.message
+    # review r26: retain raw prompt identity, but persist the semantic goal
+    # prefixes stripped so future landscape scans compare user intent only.
+    try:
+        from runs import stamp_run_metadata as _stamp_stripped_goal
+        _stamp_stripped_goal({"goal": message})
+    except Exception:
+        pass
     # Explicit persona= wins over a prefix-forced persona (full precedence
     # logic + registry validation happens later where PersonaRegistry is in
     # scope) — but the model_tier floor below is resolved now, well before
@@ -1580,7 +1587,8 @@ def _handle_impl(
 
     if not (origin or {}).get("parent_handle_id"):
         try:
-            _decide_landscape(_raw_input)
+            # review r26: routing prefixes must not dilute lexical similarity.
+            _decide_landscape(message)
         except Exception as _land_exc:
             # The decision is recorded even when the stage itself fails: an
             # unreadable landscape is fresh, and the run is not blocked on
@@ -2313,46 +2321,19 @@ def _handle_impl(
         if verbose:
             print(f"[maro:{handle_id}] AGENDA lane — starting loop...", file=sys.stderr, flush=True)
 
-        # mode:thin — use factory_thin loop (stripped scaffolding) instead of
-        # full Mode 2. Kept as an operator-only escape hatch + benchmark
-        # instrument per the 2026-07-21 factory adjudication ("mixed bag");
-        # default tier follows the MID execution-floor decree.
-        if _use_thin_mode and not dry_run:
-            try:
-                from factory_thin import run_factory_thin
-                from conductor import assign_model_by_role
-                _thin_result = run_factory_thin(
-                    message,
-                    model=model or assign_model_by_role("worker"),
-                    verbose=verbose,
-                )
-                elapsed = int((time.monotonic() - started_at) * 1000)
-                _thin_text = _thin_result.final_report or "[no output produced]"
-                if _thin_result.status != "done":
-                    _thin_text += f"\n\n⚠️ Thin loop status: {_thin_result.status}"
-                return HandleResult(
-                    handle_id=handle_id,
-                    lane="agenda",
-                    lane_confidence=confidence,
-                    classification_reason=reason + " [mode:thin]",
-                    message=message,
-                    status=_thin_result.status,
-                    result=_thin_text,
-                    project=project or "",
-                    tokens_in=_thin_result.total_tokens // 2,
-                    tokens_out=_thin_result.total_tokens // 2,
-                    elapsed_ms=elapsed,
-                )
-            except Exception as _thin_exc:
-                log.warning("mode:thin failed, falling back to Mode 2: %s", _thin_exc)
-                # Fall through to run_agent_loop below
-
-        # Resolve persistent identity once for every full AGENDA shape.  It is
-        # both the loop fence and the deterministic goal-family key used by
-        # recall: a semantic rephrase explicitly routed to the same project
-        # must inherit prior decisions/artifact paths without an embedding or
-        # another LLM call.  Stamp it before recall so the next run can join
-        # this one even though metadata was opened before lane classification.
+        # Resolve persistent identity once for every AGENDA shape — including
+        # mode:thin (review r26: the thin branch used to return before this
+        # block, so a thin run carried the landscape relation but no project,
+        # and a later follow-up choosing it landed named/minted; thin
+        # execution takes no project argument, so the continuation identity
+        # lives in metadata and in the returned HandleResult — a minted
+        # fallback may create its project directory, the same accepted
+        # identity side effect as the full loop). It is both the loop fence
+        # and the deterministic goal-family key used by recall: a semantic
+        # rephrase explicitly routed to the same project must inherit prior
+        # decisions/artifact paths without an embedding or another LLM call.
+        # Stamp it before recall so the next run can join this one even
+        # though metadata was opened before lane classification.
         # Project identity, by precedence (2026-09-13): the operator's
         # explicit project (an override, never the design) — or, riding the
         # same argument, the dispatch NAVIGATOR's pick from the recent-
@@ -2396,6 +2377,40 @@ def _handle_impl(
             log.warning("project binding: %s (%s) not recorded in run metadata",
                         _agenda_project, _project_binding, exc_info=True)
         log.info("project binding: %s (%s)", _agenda_project, _project_binding)
+
+        # mode:thin — use factory_thin loop (stripped scaffolding) instead of
+        # full Mode 2. Kept as an operator-only escape hatch + benchmark
+        # instrument per the 2026-07-21 factory adjudication ("mixed bag");
+        # default tier follows the MID execution-floor decree.
+        if _use_thin_mode and not dry_run:
+            try:
+                from factory_thin import run_factory_thin
+                from conductor import assign_model_by_role
+                _thin_result = run_factory_thin(
+                    message,
+                    model=model or assign_model_by_role("worker"),
+                    verbose=verbose,
+                )
+                elapsed = int((time.monotonic() - started_at) * 1000)
+                _thin_text = _thin_result.final_report or "[no output produced]"
+                if _thin_result.status != "done":
+                    _thin_text += f"\n\n⚠️ Thin loop status: {_thin_result.status}"
+                return HandleResult(
+                    handle_id=handle_id,
+                    lane="agenda",
+                    lane_confidence=confidence,
+                    classification_reason=reason + " [mode:thin]",
+                    message=message,
+                    status=_thin_result.status,
+                    result=_thin_text,
+                    project=_agenda_project,
+                    tokens_in=_thin_result.total_tokens // 2,
+                    tokens_out=_thin_result.total_tokens // 2,
+                    elapsed_ms=elapsed,
+                )
+            except Exception as _thin_exc:
+                log.warning("mode:thin failed, falling back to Mode 2: %s", _thin_exc)
+                # Fall through to run_agent_loop below
 
         # pipeline: prefix — user specifies explicit steps as "step1 | step2 | step3".
         # Bypasses LLM decomposition entirely; runs the given steps in order.

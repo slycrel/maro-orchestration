@@ -58,9 +58,9 @@ _NOUNS = (
 )
 
 
-def recorded_project(meta: dict) -> Optional[str]:
+def recorded_project_verbatim(meta: dict) -> Optional[str]:
     """Return a non-blank project string verbatim: the string IS the directory."""
-    # review r21: trimming an identity can select another project's files.
+    # review r26: distinguish this verbatim contract from landscape validation.
     project = meta.get("project")
     return project if isinstance(project, str) and project.strip() else None
 
@@ -574,7 +574,8 @@ def revise_run_metadata_for(handle_id: str, revise) -> Optional[dict]:
             for k, v in fields.items():
                 if v is not None:
                     existing[k] = v
-            out.update(fields)
+                    # review r26: report only fields the merge actually wrote.
+                    out[k] = v
             index_run_dir(rd, existing)
             return json.dumps(existing, indent=2, default=str)
 

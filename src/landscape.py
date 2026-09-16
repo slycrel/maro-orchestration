@@ -237,7 +237,9 @@ def _candidates(goal: str, *, exclude_handle_id: str = "") -> Tuple[List[dict], 
         hid = str(meta.get("handle_id") or rd.name.split("-", 1)[0])
         if exclude_handle_id and hid == exclude_handle_id:
             continue
-        prompt = str(meta.get("prompt") or "")
+        # review r26: new runs store prefix-stripped intent in `goal`; legacy
+        # runs fall back to their raw prompt for both scoring and judge text.
+        prompt = str(meta.get("goal") or meta.get("prompt") or "")
         status = str(meta.get("status") or "").strip().lower()
         if not prompt or status not in TERMINAL_STATUSES or not meta.get("ended_at") or meta.get("dry_run"):
             continue

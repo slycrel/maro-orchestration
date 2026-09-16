@@ -1993,7 +1993,8 @@ def test_locate_deliverables_over_cap_is_recorded(workspace):
     assert all(o["reason"] == "over-cap" for o in omitted)
 
 
-def test_r21_deliverable_uses_verbatim_project_directory(workspace):
+def test_r26_deliverable_uses_verbatim_project_directory(workspace):
+    # review r26: pin the renamed runs-level verbatim identity contract.
     from orch_items import project_dir
     rd = create_run_dir(
         "h000r21", prompt="report for the board", lane="agenda",
@@ -2092,3 +2093,182 @@ def test_r25_the_first_card_is_published_from_the_metadata_under_the_lock(worksp
     assert "verdict_pending" not in written
     assert card == written
     assert not list(rd.glob("run_card.json.unreadable-*")), "no card is not an unreadable card"
+
+
+def test_r26_a_refresh_never_regresses_a_resolved_card(workspace, monkeypatch):
+    import threading
+    import run_curation
+    # review r26: a stale owner build must revalidate after a refresh wins.
+    hid = "r26-race"
+    rd = _finish(hid, "Resolve this verdict", "done")
+    pending = {"since": "2020-01-01T00:00:00+00:00"}
+    runs.stamp_run_metadata_for(hid, {"verdict_pending": pending})
+    entered, release = threading.Event(), threading.Event()
+    real_build = run_curation._build_run_card
+
+    def blocked_build(handle_id, run_dir, meta):
+        if threading.current_thread().name == "r26-owner" and not entered.is_set():
+            entered.set()
+            assert release.wait(3)
+        return real_build(handle_id, run_dir, meta)
+
+    monkeypatch.setattr(run_curation, "_build_run_card", blocked_build)
+    result = {}
+    owner = threading.Thread(
+        name="r26-owner", target=lambda: result.setdefault("card", curate_run(hid)))
+    owner.start()
+    assert entered.wait(2)
+    runs.stamp_run_metadata_for(hid, {
+        "verdict_pending": {**pending, "resolved_at": "owner-time"},
+        "goal_achieved": False, "goal_verdict_source": "closure",
+    })
+    refreshed = refresh_run_card_classification(hid, run_dir=rd)
+    assert refreshed["success_class"] == "done-not-achieved"
+    release.set()
+    owner.join(4)
+    assert not owner.is_alive() and result["card"] is not None
+    written = json.loads((rd / "run_card.json").read_text())
+    assert written["success_class"] == "done-not-achieved"
+    assert "verdict_pending" not in written
+
+
+def test_r26_two_first_card_refreshes_do_not_lose_the_later_metadata(
+        workspace, monkeypatch):
+    import threading
+    import run_curation
+    # review r26: first-card writers use the same optimistic revalidation.
+    hid = "r26-first-race"
+    rd = _finish(hid, "First publication", "done")
+    pending = {"since": "2020-01-01T00:00:00+00:00"}
+    runs.stamp_run_metadata_for(hid, {"verdict_pending": pending})
+    (rd / "run_card.json").unlink(missing_ok=True)
+    monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "0.2")
+    entered, release = threading.Event(), threading.Event()
+    real_build = run_curation._build_run_card
+
+    def blocked_build(handle_id, run_dir, meta):
+        if threading.current_thread().name == "r26-old" and not entered.is_set():
+            entered.set()
+            assert release.wait(3)
+        return real_build(handle_id, run_dir, meta)
+
+    monkeypatch.setattr(run_curation, "_build_run_card", blocked_build)
+    old = threading.Thread(name="r26-old",
+                           target=lambda: refresh_run_card_classification(hid, run_dir=rd))
+    old.start()
+    assert entered.wait(2)
+    runs.stamp_run_metadata_for(hid, {
+        "verdict_pending": {**pending, "resolved_at": "later"},
+        "goal_achieved": False, "goal_verdict_source": "closure",
+    })
+    newer_result = {}
+    newer = threading.Thread(
+        name="r26-new", target=lambda: newer_result.setdefault(
+            "card", refresh_run_card_classification(hid, run_dir=rd)))
+    newer.start()
+    newer.join(1)
+    release.set()
+    old.join(4)
+    newer.join(4)
+    assert newer_result.get("card") is not None
+    written = json.loads((rd / "run_card.json").read_text())
+    assert written["success_class"] == "done-not-achieved"
+    assert "verdict_pending" not in written
+
+
+def test_r26_a_slow_synthesis_does_not_starve_the_finalize(workspace, monkeypatch):
+    import threading
+    import time
+    import config
+    import run_curation
+    # review r26: synthesis sleeps outside run_card.json.lock.
+    hid = "r26-slow"
+    rd = create_run_dir(hid, prompt="Summarize report", lane="agenda",
+                        extra_metadata={"project": "r26-project", "goal_achieved": True})
+    from orch_items import project_dir
+    pdir = project_dir("r26-project")
+    pdir.mkdir(parents=True)
+    (pdir / "FINAL_REPORT.md").write_text("# Report\n\nUseful result\n")
+    finalize_run(hid, status="done")
+    monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "0.3")
+    monkeypatch.setattr(
+        config, "get", lambda k, d=None: True if k == "curation.answer_synthesis" else d)
+    sleeping = threading.Event()
+
+    def slow_answer(*_args, **_kwargs):
+        if threading.current_thread().name == "r26-refresh":
+            sleeping.set()
+            time.sleep(1.0)
+        return "Useful result"
+
+    monkeypatch.setattr(run_curation, "_llm_answer", slow_answer)
+    refresh = threading.Thread(
+        name="r26-refresh", target=lambda: refresh_run_card_classification(hid, run_dir=rd))
+    refresh.start()
+    assert sleeping.wait(2)
+    card = curate_run(hid, run_dir=rd)
+    refresh.join(4)
+    assert isinstance(card, dict) and card["success_class"] == "success"
+
+
+def test_r26_card_builders_never_run_under_the_card_lock(workspace, monkeypatch):
+    from contextlib import contextmanager
+    import file_lock
+    import run_curation
+    # review r26: tripwire every first/existing refresh and curate build.
+    hid = "r26-tripwire"
+    rd = _finish(hid, "Trip lock", "done", achieved=True)
+    (rd / "run_card.json").unlink(missing_ok=True)
+    held = {"value": False}
+    real_locked_write = file_lock.locked_write
+    real_build = run_curation._build_run_card
+
+    @contextmanager
+    def tracking_lock(path, *args, **kwargs):
+        with real_locked_write(path, *args, **kwargs):
+            previous = held["value"]
+            held["value"] = True
+            try:
+                yield
+            finally:
+                held["value"] = previous
+
+    def checked_build(*args, **kwargs):
+        assert not held["value"], "_build_run_card ran under a file lock"
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(file_lock, "locked_write", tracking_lock)
+    monkeypatch.setattr(run_curation, "_build_run_card", checked_build)
+    assert refresh_run_card_classification(hid, run_dir=rd) is not None
+    assert refresh_run_card_classification(hid, run_dir=rd) is not None
+    assert curate_run(hid, run_dir=rd) is not None
+
+
+def test_r26_duplicate_verdict_keys_decline_the_refresh(workspace):
+    # review r26: duplicate verdict keys are ambiguous, never last-key-wins.
+    hid = "r26-duplicate"
+    rd = _finish(hid, "Duplicate verdict", "done", achieved=False)
+    assert refresh_run_card_classification(hid, run_dir=rd) is not None
+    original = (rd / "run_card.json").read_bytes()
+    (rd / "metadata.json").write_text(
+        '{"handle_id":"r26-duplicate","status":"done",'
+        '"goal_achieved":false,"goal_achieved":true}')
+    assert refresh_run_card_classification(hid, run_dir=rd) is None
+    assert (rd / "run_card.json").read_bytes() == original
+
+
+def test_r26_an_empty_existing_card_is_warned_not_silently_replaced(
+        workspace, caplog):
+    import logging
+    # review r26: absence is normal; an existing empty file is corruption.
+    empty_rd = _finish("r26-empty", "Empty", "done", achieved=True)
+    (empty_rd / "run_card.json").write_bytes(b"")
+    with caplog.at_level(logging.WARNING, logger="run_curation"):
+        assert refresh_run_card_classification("r26-empty", run_dir=empty_rd) is not None
+    assert "run_card.json is empty" in caplog.text
+    caplog.clear()
+    absent_rd = _finish("r26-absent", "Absent", "done", achieved=True)
+    (absent_rd / "run_card.json").unlink(missing_ok=True)
+    with caplog.at_level(logging.WARNING, logger="run_curation"):
+        assert refresh_run_card_classification("r26-absent", run_dir=absent_rd) is not None
+    assert "run_card.json is empty" not in caplog.text

@@ -22,7 +22,8 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from ancestry import Origin
-from runs import recorded_project
+# review r26: resumes preserve the exact recorded directory identity.
+from runs import recorded_project_verbatim
 from context_budget import clip, VERDICT_PROSE_CAP
 
 log = logging.getLogger("maro.handle")
@@ -181,7 +182,7 @@ def handle_task(
                     # a directory name from it (review r12) — and today's
                     # derivation decides (None)
                     # review r20: RESUME preserves the run's recorded identity verbatim.
-                    project=recorded_project(_parent_meta),
+                    project=recorded_project_verbatim(_parent_meta),
                 )
             finally:
                 # Drain-batch hygiene the old scoped_run_dir(None) provided:

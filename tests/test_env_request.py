@@ -299,7 +299,8 @@ class TestLayers:
         monkeypatch.setattr(config, "get", lambda k, d=None: False if k == "env.install.enabled" else d)
         assert er.effective_image("p") is None, "disabled → base image"
 
-    def test_current_project_reads_the_run_metadata(self, ws):
+    def test_r26_current_project_reads_the_run_metadata(self, ws):
+        # review r26: current image lookup uses the renamed verbatim contract.
         import runs
         assert er.current_project() is None
         rd = _mk_run("abcd1234", project="yahoo-mail")
@@ -650,3 +651,70 @@ def test_r24_encoded_identities_do_not_share_an_eight_hex_prefix(ws):
     assert er.layer_dir(a) != er.layer_dir(b)
     assert er.image_tag(a, 1) != er.image_tag(b, 1)
     assert all(_IMAGE_TAG_RE.match(er.image_tag(p, 1)) for p in (a, b))
+
+
+def test_r26_concurrent_grants_are_both_kept(ws, monkeypatch):
+    import threading
+    import file_lock
+    # review r26: force both legacy unlocked readers onto the same snapshot;
+    # the fixed transaction naturally serializes and skips this test barrier.
+    real_load = er.load_manifest
+    both_read = threading.Barrier(2)
+
+    def coordinated_load(project):
+        manifest = real_load(project)
+        if not file_lock._get_held():
+            both_read.wait(timeout=3)
+        return manifest
+
+    monkeypatch.setattr(er, "load_manifest", coordinated_load)
+    threads = [
+        threading.Thread(target=er.add_grants, args=("shared", ["apt:a"])),
+        threading.Thread(target=er.add_grants, args=("shared", ["apt:b"])),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(4)
+    assert not any(thread.is_alive() for thread in threads)
+    assert set(real_load("shared")["grants"]) == {"apt:a", "apt:b"}
+
+
+def test_r26_concurrent_builds_never_share_a_layer(ws, monkeypatch):
+    import threading
+    import file_lock
+    # review r26: legacy builders meet at Docker after reserving the same
+    # layer; fixed builders hold the dedicated build lock and serialize.
+    calls = []
+    built = set()
+    both_building = threading.Barrier(2)
+
+    def build(tag, dockerfile, context, timeout_s):
+        calls.append(tag)
+        if not any(path.endswith("build.lock") for path in file_lock._get_held()):
+            both_building.wait(timeout=3)
+        built.add(tag)
+        return True, "built"
+
+    monkeypatch.setattr(er, "_BUILD", build)
+    monkeypatch.setattr(er, "_EXISTS", lambda tag: tag in built)
+    results = []
+
+    def run(verdict):
+        results.append(er.build_layer("shared", verdict))
+
+    threads = [
+        threading.Thread(target=run, args=(er.evaluate({"need": "a", "apt": ["a"]}),)),
+        threading.Thread(target=run, args=(er.evaluate({"need": "b", "apt": ["b"]}),)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    assert not any(thread.is_alive() for thread in threads)
+    assert len(results) == 2 and all(result.ok for result in results)
+    assert len({result.layer for result in results}) == 2
+    assert len(set(calls)) == 2
+    manifest = er.load_manifest("shared")
+    assert manifest["layer"] == 2
+    assert set(manifest["apt"]) == {"a", "b"}

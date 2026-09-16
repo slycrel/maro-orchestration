@@ -6901,6 +6901,56 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   LOWs recorded, not fixed: the unlocked truthiness check at handle
   entry (best-effort by design), `tell` re-deriving `hook_owed`,
   a vestigial `hook_configured`, redundant manifest reads.
+  Round 26 (codex back at gpt-5.6-sol/high — run as BOTH an opus/medium
+  same-model round and an opposite-model codex round; fixes
+  codex-written, orchestrator-reviewed): five verified HIGHs. The worst
+  was a REGRESSION from r24: moving the card rebuild under the
+  `run_card.json` lock put every curator there — `synthesize_answer`'s
+  LLM call (live: `curation.answer_synthesis: true`) and
+  `locate_deliverables`' copies — so a sweep's refresh held the card
+  lock (and the repair pidfile) across a network call while the owner's
+  finalize timed out on its 30 s fail-closed `locked_write`, swallowed
+  the timeout, and shipped a record-only story with no answer; and
+  `curate_run` was still a blind two-write publisher, so the owner's
+  pending snapshot could overwrite a sweep's resolved card (the r11
+  defect through the un-fixed door). Now ONE publication discipline for
+  every card writer (`_publish_pure_card`): build outside the lock from
+  a metadata snapshot, revalidate the snapshot under the lock, merge,
+  write; a moved snapshot rebuilds (3 attempts) then declines — the
+  sweeps come back; maintenance keys merge over the FRESH disk card
+  (`_publish_maintenance`) and never carry stale classification; a
+  tripwire test asserts no builder runs under a file lock. Also fixed:
+  magic prefixes (`direct:`, `team:`, persona/effort words) entered the
+  landscape's Jaccard denominator because the decision ran on the raw
+  input — it now runs on the stripped message, new runs stamp the
+  stripped `goal` in metadata and the scan prefers it over `prompt`;
+  `mode:thin` returned before the project binding (a thin run carried
+  the landscape relation but no project, so a follow-up choosing it
+  landed named/minted) — the binding block now precedes every AGENDA
+  executor; the env manifest had no per-project transaction
+  (`add_grants` load/merge/save unlocked, a FIXED `.json.tmp`, two
+  builders reserving the same layer) — grants are one locked
+  transaction, manifests/Dockerfile/log use unique atomic temps,
+  `layers.jsonl` via `locked_append`, builds serialize on a per-project
+  `build.lock` with the docker build OUTSIDE the manifest lock and the
+  advance committed under it preserving concurrent grants; the ledger's
+  `only_unjudged` guard failed OPEN (a non-str source, or a placeholder
+  source beside a bool `goal_achieved`, yielded: the old bool stayed,
+  `verdict_excluded` was popped, trust went EXCLUDED → FULL) — now only
+  a coherent unjudged row (no bool, source empty or in the placeholder
+  family) yields. MEDs: `_read_meta_strict` parses with `loads_clean`
+  (duplicate `goal_achieved` keys were last-wins) and both readers pin
+  UTF-8; an existing zero-byte card is warned, not silently treated as
+  "no card"; `runs.recorded_project` → `recorded_project_verbatim`
+  (the landscape's validated `recorded_project` shares the old name
+  with the opposite contract); `revise_run_metadata_for` reports only
+  the fields it wrote. DIRECTION: `closure_error` stays outside the
+  placeholder family (a judge that ran and crashed keeps its WHY; both
+  grade neutral); `project_binding` has no reader yet and six values
+  (`escalated` overwrites, the original in
+  `project_transition.from_binding`) — a census script is future work;
+  a corrupt metadata.json now declines `curate_run` too (no card at the
+  finalize → record-only story) rather than curating from `{}`.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the

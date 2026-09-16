@@ -365,26 +365,30 @@ def save_manifest(project: str, m: Dict[str, Any]) -> Path:
     d = layer_dir(project)
     d.mkdir(parents=True, exist_ok=True)
     p = d / "manifest.json"
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(m, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(p)
+    # review r26: unique atomic temp files prevent concurrent temp-name races.
+    from file_lock import atomic_write
+    atomic_write(p, json.dumps(m, indent=2, sort_keys=True) + "\n")
     return p
 
 
 def add_grants(project: str, specs: Sequence[str]) -> Dict[str, Any]:
-    m = load_manifest(project)
-    other = _owned_elsewhere(project)
-    if other is not None:
-        log.warning("env_request: layer directory belongs to %r", other)
+    manifest_path = layer_dir(project) / "manifest.json"
+    from file_lock import locked_write
+    # review r26: grant load/merge/save is one per-project transaction.
+    with locked_write(manifest_path, require=True):
+        m = load_manifest(project)
+        other = _owned_elsewhere(project)
+        if other is not None:
+            log.warning("env_request: layer directory belongs to %r", other)
+            return m
+        have = list(m.get("grants") or [])
+        for s in specs:
+            if s and s not in have:
+                have.append(s)
+        m["grants"] = have
+        m["updated_at"] = _iso(datetime.now(timezone.utc))
+        save_manifest(project, m)
         return m
-    have = list(m.get("grants") or [])
-    for s in specs:
-        if s and s not in have:
-            have.append(s)
-    m["grants"] = have
-    m["updated_at"] = _iso(datetime.now(timezone.utc))
-    save_manifest(project, m)
-    return m
 
 
 def render_dockerfile(base: str, apt: Sequence[str], pip: Sequence[str],
@@ -470,12 +474,36 @@ def _tail(s: str, n: int = 1500) -> str:
 
 
 def build_layer(project: str, verdict: Verdict, *, reason: str = "") -> BuildResult:
+    """Serialize builds for one project without holding its manifest lock."""
+    d = layer_dir(project)
+    d.mkdir(parents=True, exist_ok=True)
+    timeout_s = float(_cfg("env.install.build_timeout_s", 900) or 900)
+    from file_lock import locked_write
+    # review r26: the dedicated build lock may wait for a full Docker build;
+    # once acquired, the builder re-reads the manifest and can return cached.
+    with locked_write(d / "build", timeout_s=max(60.0, timeout_s + 30.0),
+                      require=True):
+        return _build_layer_serialized(project, verdict, reason=reason)
+
+
+def _build_layer_serialized(project: str, verdict: Verdict, *, reason: str = "") -> BuildResult:
     """Add the allowed packages to the project's manifest, render the
     Dockerfile, build the next layer image, record the ledger line. The
     manifest only advances on success; a failed build leaves the previous
     layer current and the failure tail in build.log + the ledger."""
     t0 = time.monotonic()
-    m = load_manifest(project)
+    d = layer_dir(project)
+    manifest_path = d / "manifest.json"
+    from file_lock import atomic_write, locked_append, locked_write
+    # review r26: reserve the next layer from a locked fresh snapshot. The
+    # outer build lock keeps that reservation exclusive while Docker runs.
+    with locked_write(manifest_path, require=True):
+        m = load_manifest(project)
+        other = _owned_elsewhere(project)
+        if other is not None:
+            layer = int(m.get("layer") or 0) + 1
+            return BuildResult(False, "", layer, [], 0.0,
+                               detail=f"layer directory belongs to {other!r}")
     base = _base_image()
     if m.get("base") and m["base"] != base:
         # The operator moved the base image: start the project's layer stack
@@ -495,38 +523,37 @@ def build_layer(project: str, verdict: Verdict, *, reason: str = "") -> BuildRes
             browsers.append(b)
             added.append(f"browser:{b}")
     layer = int(m.get("layer") or 0) + 1
-    other = _owned_elsewhere(project)
-    if other is not None:
-        return BuildResult(False, "", layer, [], 0.0,
-                           detail=f"layer directory belongs to {other!r}")
     tag = image_tag(project, layer)
     if not added and m.get("image") and m.get("base") == base and _EXISTS(str(m["image"])):
         return BuildResult(True, str(m["image"]), int(m["layer"]), [], 0.0, detail="cached")
-    d = layer_dir(project)
-    d.mkdir(parents=True, exist_ok=True)
     df_text = render_dockerfile(base, pkgs["apt"], pkgs["pip"], pkgs["npm"],
                                 project=project, layer=layer, browsers=browsers)
     df = d / "Dockerfile"
-    df.write_text(df_text, encoding="utf-8")
+    # review r26: even diagnostic artifacts use unique atomic temp files.
+    atomic_write(df, df_text)
     timeout_s = float(_cfg("env.install.build_timeout_s", 900) or 900)
     ok, out = _BUILD(tag, df, d, timeout_s)
     secs = round(time.monotonic() - t0, 1)
     try:
-        (d / "build.log").write_text(out or "", encoding="utf-8")
+        atomic_write(d / "build.log", out or "")
     except OSError:
         pass
     if ok:
-        m.update({"project": project, "base": base, "layer": layer, "image": tag,
-                  "browsers": browsers,
-                  "updated_at": _iso(datetime.now(timezone.utc)), **pkgs})
-        save_manifest(project, m)
+        # review r26: commit under the manifest lock and preserve grants that
+        # may have landed while Docker was running outside this short lock.
+        with locked_write(manifest_path, require=True):
+            latest = load_manifest(project)
+            latest.update({"project": project, "base": base, "layer": layer,
+                           "image": tag, "browsers": browsers,
+                           "updated_at": _iso(datetime.now(timezone.utc)), **pkgs})
+            save_manifest(project, latest)
     try:
-        with (d / "layers.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({
-                "at": _iso(datetime.now(timezone.utc)), "layer": layer, "image": tag,
-                "base": base, "added": added, "ok": ok, "seconds": secs,
-                "reason": _cb.clip(reason, 300), "detail": "" if ok else _tail(out, 600),
-            }) + "\n")
+        # review r26: ledger rows cannot interleave with another process.
+        locked_append(d / "layers.jsonl", json.dumps({
+            "at": _iso(datetime.now(timezone.utc)), "layer": layer, "image": tag,
+            "base": base, "added": added, "ok": ok, "seconds": secs,
+            "reason": _cb.clip(reason, 300), "detail": "" if ok else _tail(out, 600),
+        }))
     except OSError:
         pass
     try:
@@ -561,12 +588,13 @@ def current_project() -> Optional[str]:
     """The project of the current run (its metadata), for image resolution
     at docker-run time where no loop context is at hand."""
     try:
-        from runs import current_run_dir, recorded_project
+        from runs import current_run_dir, recorded_project_verbatim
         rd = current_run_dir()
         if rd is None:
             return None
         meta = json.loads((Path(rd) / "metadata.json").read_text(encoding="utf-8"))
-        return recorded_project(meta)
+        # review r26: executor layers follow the recorded directory verbatim.
+        return recorded_project_verbatim(meta)
     except Exception:
         return None
 

@@ -967,12 +967,17 @@ def stamp_outcome_verdict(
             row = json.loads(lines[target_idx])
             # review r24: a stale repair must not erase a judged exclusion.
             source = row.get("goal_verdict_source")
-            # review r25: the whole placeholder family yields to a placeholder
-            # (run_errored / closure_skipped_no_steps are not verdicts either).
-            if (only_unjudged and isinstance(source, str) and source
-                    and source not in VERDICT_PLACEHOLDER_SOURCES):
-                updated["superseded"] = True
-                return old
+            # review r26: only a coherent, genuinely unjudged placeholder row
+            # may yield. Contradictory bool verdicts and malformed/unknown
+            # sources fail closed without touching exclusion provenance.
+            if only_unjudged:
+                achieved = row.get("goal_achieved")
+                source_ok = (source is None or source == "" or
+                             (isinstance(source, str)
+                              and source in VERDICT_PLACEHOLDER_SOURCES))
+                if achieved is not None or not source_ok:
+                    updated["superseded"] = True
+                    return old
             # Re-stamp honesty (Jeremy decree 2026-08-10: corrections may
             # flip a verdict "but be honest about it and note they were
             # failures at run time"): overwriting an existing judged

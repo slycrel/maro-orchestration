@@ -157,6 +157,8 @@ VERDICT_SOURCE_PENDING_ORPHANED = "verdict_pending_orphaned"
 # repair that must not erase a JUDGED verdict may still replace any of
 # these with another — they all carry goal_achieved=None and say only
 # WHY nothing was judged. Keep in step with the four constants above.
+# review r26: closure_error is deliberately absent: its judge ran and crashed,
+# so a repair placeholder must not erase that WHY (both sources grade neutral).
 VERDICT_PLACEHOLDER_SOURCES = frozenset((
     VERDICT_SOURCE_NEVER_STAMPED, VERDICT_SOURCE_RUN_ERRORED,
     VERDICT_SOURCE_NO_STEPS_COMPLETED, VERDICT_SOURCE_PENDING_ORPHANED))

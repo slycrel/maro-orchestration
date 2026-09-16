@@ -400,7 +400,7 @@ class TestEffortModifier:
 class TestModeThinModifier:
     """mode:thin prefix strips keyword and routes to factory_thin loop."""
 
-    def _run(self, monkeypatch, tmp_path, goal):
+    def _run(self, monkeypatch, tmp_path, goal, **handle_kwargs):
         _setup(monkeypatch, tmp_path)
 
         # Patch at module level so `from factory_thin import run_factory_thin` picks it up
@@ -425,7 +425,8 @@ class TestModeThinModifier:
         # Patch build_adapter so no real LLM calls are made
         _stub_build_adapter(monkeypatch)
 
-        result = handle(goal, force_lane="agenda")
+        # review r26: expose handle kwargs so binding variants share the thin fixture.
+        result = handle(goal, force_lane="agenda", **handle_kwargs)
         return result, _called_thin
 
     def test_mode_thin_strips_prefix(self, monkeypatch, tmp_path):
@@ -446,6 +447,54 @@ class TestModeThinModifier:
         _setup(monkeypatch, tmp_path)
         result = handle("research nootropics", dry_run=True)
         assert result.message == "research nootropics"
+
+    def test_r26_mode_thin_records_the_landscape_binding(self, monkeypatch, tmp_path):
+        import json
+        import landscape
+        import runs
+        from orch_items import projects_root
+        # review r26: thin returns only after the chosen prior's project is stamped.
+        _setup(monkeypatch, tmp_path)
+        (projects_root() / "prior-project").mkdir(parents=True)
+        prior = "r26thinprior"
+        runs.create_run_dir(prior, prompt="Update revenue forecast dashboard",
+                            extra_metadata={"project": "prior-project"})
+        runs.stamp_run_metadata_for(prior, {
+            "status": "done", "ended_at": "2026-09-16T00:00:00+00:00"})
+        record = {"relation": "related", "chosen": prior, "continues": True,
+                  "rule": "judge", "reason": "continues",
+                  # review r26: apply validates that the chosen run was considered.
+                  "candidates": [{"handle_id": prior,
+                                  "goal": "Update revenue forecast dashboard",
+                                  "project": "prior-project"}],
+                  "scanned": 1, "below_floor": 0, "truncated": False,
+                  "prompt_version": landscape.PROMPT_VER}
+        monkeypatch.setattr(landscape, "decide", lambda *a, **k: dict(record))
+        import factory_thin
+
+        class _Thin:
+            status = "done"
+            final_report = "thin"
+            total_tokens = 2
+
+        monkeypatch.setattr(factory_thin, "run_factory_thin", lambda *a, **k: _Thin())
+        _stub_build_adapter(monkeypatch)
+        result = handle("mode:thin Update chart", force_lane="agenda")
+        meta = json.loads((runs.run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["project"] == "prior-project"
+        assert meta["project_binding"] == "landscape"
+        assert result.project == "prior-project"
+
+    def test_r26_mode_thin_records_the_operator_binding(self, monkeypatch, tmp_path):
+        import json
+        import runs
+        # review r26: explicit operator identity is stamped before thin returns.
+        result, _ = self._run(monkeypatch, tmp_path, "mode:thin inspect service",
+                              project="ops-x", fresh=True)
+        meta = json.loads((runs.run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["project"] == "ops-x"
+        assert meta["project_binding"] == "operator"
+        assert result.project == "ops-x"
 
 
 # ---------------------------------------------------------------------------

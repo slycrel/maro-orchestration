@@ -126,7 +126,8 @@ def _run_dir_for(handle_id: str) -> Optional[Path]:
 def _read_meta(rd: Path) -> dict:
     p = rd / "metadata.json"
     try:
-        return json.loads(p.read_text())
+        # review r26: metadata is written as UTF-8; make that boundary explicit.
+        return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -134,7 +135,8 @@ def _read_meta(rd: Path) -> dict:
 def _read_meta_strict(rd: Path) -> Optional[dict]:
     # review r23: unreadable metadata must not erase a card's real verdict.
     try:
-        meta = json.loads((rd / "metadata.json").read_text())
+        # review r26: reject duplicate keys as well as torn/non-UTF-8 metadata.
+        meta = loads_clean((rd / "metadata.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         # review r25: a crash-torn UTF-8 sequence is unreadable too — it
         # must decline (warned) like any other failed read, not raise
@@ -372,8 +374,9 @@ def _parse_ts(iso: str) -> Optional[float]:
 
 def _project_dir_for(meta: dict) -> Optional[Path]:
     """Resolve the project dir a run wrote into, '' project → None."""
-    from runs import recorded_project
-    slug = recorded_project(meta)
+    from runs import recorded_project_verbatim
+    # review r26: this caller needs the runs module's verbatim directory identity.
+    slug = recorded_project_verbatim(meta)
     if slug is None:
         try:
             from agent_loop import _goal_to_slug
@@ -1736,11 +1739,156 @@ def maintain_run_card(card: dict, run_dir: Path,
     return card
 
 
-def _write_run_card(rd: Path, card: dict) -> None:
-    from file_lock import atomic_write, locked_write
+_CARD_PUBLISH_ATTEMPTS = 3
+
+
+def _pure_card_keys() -> set:
+    """Keys owned by the pure build, including its fixed envelope."""
+    # review r26: one ownership list drives every preserve-then-rebuild publish.
+    keys = {"handle_id", "nickname", "goal", "lane", "model", "started_at",
+            "ended_at", "_curation"}
+    for fn in CURATORS:
+        keys.update(_SPEC_BY_NAME[fn.__name__].output_keys)
+    return keys
+
+
+def _maintenance_card_keys() -> set:
+    # review r26: maintenance may merge only the keys its phase owns.
+    keys = {"_maintenance"}
+    for fn in MAINTENANCE:
+        keys.update(_SPEC_BY_NAME[fn.__name__].output_keys)
+    return keys
+
+
+def _park_unreadable_card(card_path: Path, old: str, *, empty: bool = False) -> None:
+    """Warn after publication; preserve non-empty unreadable bytes in a sidecar."""
+    # review r26: sidecar I/O stays outside the card critical section.
+    if empty:
+        log.warning(
+            "refresh_run_card_classification: existing run_card.json is empty "
+            "in %s — rebuilt from run data; maintenance-owned keys were not recoverable",
+            card_path.parent.name)
+        return
+    from datetime import datetime, timezone
+    sidecar = card_path.with_name(
+        card_path.name + ".unreadable-"
+        + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
+    try:
+        sidecar.write_bytes(old.encode("utf-8", "surrogateescape"))
+        kept = f"old bytes preserved at {sidecar.name}"
+    except OSError:
+        kept = "old bytes could NOT be preserved to a sidecar"
+    log.warning(
+        "refresh_run_card_classification: run_card.json unreadable in %s "
+        "— rebuilt from run data (%s); maintenance-owned keys were not recoverable",
+        card_path.parent.name, kept)
+
+
+def _publish_pure_card(handle_id: str, rd: Path, *, status: Optional[str] = None,
+                       initial_meta: Optional[dict] = None) -> Optional[tuple]:
+    """Optimistically build and publish a pure card from a stable snapshot.
+
+    Returns ``(published_card, metadata_snapshot)``.  Curators always run
+    outside the lock; the lock contains only revalidation, old-card parsing,
+    merging, and serialization.
+    """
+    from file_lock import locked_rmw
     card_path = rd / "run_card.json"
-    with locked_write(card_path):
-        atomic_write(card_path, json.dumps(card, indent=2))
+    snapshot = deepcopy(initial_meta) if initial_meta is not None else _read_meta_strict(rd)
+    for _attempt in range(_CARD_PUBLISH_ATTEMPTS):
+        if snapshot is None:
+            log.warning("run-card publication: metadata unreadable for run %s", rd.name)
+            return None
+        build_meta = deepcopy(snapshot)
+        if status:
+            build_meta.setdefault("status", status)
+        # review r26: all curators, including copies and synthesis, run unlocked.
+        rebuilt = _build_run_card(handle_id, rd, build_meta)
+        state = {"card": None, "next_meta": None, "bad_old": None,
+                 "empty_old": False, "bad_old_parked": False}
+
+        def _merge(old: str) -> Optional[str]:
+            # review r26: cheap optimistic revalidation prevents stale rollback.
+            current = _read_meta_strict(rd)
+            if current is None or current != snapshot:
+                state["next_meta"] = current
+                return None
+            existed = card_path.exists()
+            try:
+                if not existed:
+                    card = {}
+                elif not old.strip():
+                    if not state["bad_old_parked"]:
+                        state["bad_old"] = old
+                        state["empty_old"] = True
+                        return None
+                    card = {}
+                else:
+                    card = loads_clean(old)
+                    if not isinstance(card, dict):
+                        raise ValueError("run_card.json is not a JSON object")
+            except (ValueError, TypeError):
+                if not state["bad_old_parked"]:
+                    state["bad_old"] = old
+                    return None
+                card = {}
+            for key in _pure_card_keys():
+                if key not in rebuilt:
+                    card.pop(key, None)
+            card.update(deepcopy(rebuilt))
+            state["card"] = card
+            return json.dumps(card, indent=2)
+
+        locked_rmw(card_path, _merge, default="")
+        if state["bad_old"] is not None and state["card"] is None:
+            # review r26: preserve/warn before replacing the unreadable card,
+            # while keeping sidecar I/O outside both card critical sections.
+            _park_unreadable_card(card_path, state["bad_old"],
+                                  empty=state["empty_old"])
+            state["bad_old_parked"] = True
+            state["bad_old"] = None
+            locked_rmw(card_path, _merge, default="")
+        if state["card"] is not None:
+            return state["card"], snapshot
+        snapshot = state["next_meta"]
+    # review r26: a moving record is safer left for the next sweep than stale.
+    log.warning("run-card publication: metadata kept moving for run %s; declining", rd.name)
+    return None
+
+
+def _publish_maintenance(rd: Path, card: dict, snapshot: dict) -> Optional[dict]:
+    """Merge maintenance-owned keys over the fresh on-disk card."""
+    from file_lock import locked_rmw
+    card_path = rd / "run_card.json"
+    state = {"card": None, "metadata_moved": False}
+    owned = _maintenance_card_keys()
+
+    def _merge(old: str) -> Optional[str]:
+        # review r26: if metadata moved, preserve the fresher writer's pure
+        # classification and still attach only this pass's maintenance keys.
+        current = _read_meta_strict(rd)
+        try:
+            fresh = loads_clean(old)
+            if current is None or not isinstance(fresh, dict):
+                return None
+        except (ValueError, TypeError):
+            return None
+        for key in owned:
+            if key in card:
+                fresh[key] = deepcopy(card[key])
+            else:
+                fresh.pop(key, None)
+        # review r26: record revalidation without changing the merge: a moved
+        # snapshot still publishes maintenance only, never stale pure keys.
+        state["metadata_moved"] = current != snapshot
+        state["card"] = fresh
+        return json.dumps(fresh, indent=2)
+
+    locked_rmw(card_path, _merge, default="")
+    if state["metadata_moved"]:
+        log.debug("run-card maintenance: metadata moved for %s; pure keys preserved",
+                  rd.name)
+    return state["card"]
 
 
 def curate_run(handle_id: str, status: Optional[str] = None,
@@ -1750,16 +1898,22 @@ def curate_run(handle_id: str, status: Optional[str] = None,
     Best-effort: returns None and never raises on a missing/unreadable run.
     """
     try:
-        rd, meta = _resolve_run(handle_id, status, run_dir)
-        if rd is None:
+        rd = run_dir or _run_dir_for(handle_id)
+        if rd is None or not rd.is_dir():
             return None
-        card = _build_run_card(handle_id, rd, meta)
+        # review r26: curate and refresh share the same optimistic publisher.
+        published = _publish_pure_card(handle_id, rd, status=status)
+        if published is None:
+            return None
+        card, snapshot = published
         # Persist useful, side-effect-free curation before trust-bearing
         # maintenance. A process interruption cannot erase the mined card.
-        _write_run_card(rd, card)
+        meta = deepcopy(snapshot)
+        if status:
+            meta.setdefault("status", status)
         maintain_run_card(card, rd, meta)
-        _write_run_card(rd, card)
-        return card
+        final = _publish_maintenance(rd, card, snapshot)
+        return final
     except Exception:
         return None
 
@@ -1777,67 +1931,10 @@ def refresh_run_card_classification(
     rd = run_dir or _run_dir_for(handle_id)
     if rd is None or not rd.is_dir():
         return None
-    card_path = rd / "run_card.json"
-    # review r25: the FIRST card goes through the same locked read-build-write
-    # as a refresh of an existing one — two first-time refreshes otherwise
-    # each built from their own read and the later blind write won.
-    from file_lock import locked_rmw
-    refreshed = {"card": None, "unreadable": False}
-
-    def _merge(old: str) -> Optional[str]:
-        # review r24: publish the metadata observed under the card lock.
-        meta = _read_meta_strict(rd)
-        if meta is None:
-            refreshed["unreadable"] = True
-            return None
-        rebuilt = _build_run_card(handle_id, rd, meta)
-        # Preserve-then-rebuild (adversarial r2, Architect HIGH): the old
-        # `except: card = {}` silently DESTROYED an unreadable card twice
-        # over — maintenance-owned keys gone from the rewrite, and the torn
-        # bytes (the only copy) overwritten. Refresh exists to re-propagate
-        # verdicts after audit repair, so a corrupt card must still
-        # self-heal (pinned 2026-08-13) — but the torn original is run
-        # data: it goes to a sidecar first and the loss is WARNed, never
-        # silent. loads_clean additionally refuses byte-tainted-but-valid
-        # content that plain json.loads would launder into \udcXX escapes.
-        try:
-            # no card yet (locked_rmw hands us the empty default) — nothing to
-            # preserve, nothing to sidecar (review r25)
-            card = {} if not old.strip() else loads_clean(old)
-            if not isinstance(card, dict):
-                raise ValueError("run_card.json is not a JSON object")
-        except (ValueError, TypeError):
-            from datetime import datetime, timezone
-            sidecar = card_path.with_name(
-                card_path.name + ".unreadable-"
-                + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
-            try:
-                sidecar.write_bytes(old.encode("utf-8", "surrogateescape"))
-                kept = f"old bytes preserved at {sidecar.name}"
-            except OSError:
-                kept = "old bytes could NOT be preserved to a sidecar"
-            log.warning(
-                "refresh_run_card_classification: run_card.json unreadable "
-                "in %s — rebuilt from run data (%s); maintenance-owned keys "
-                "were not recoverable", rd.name, kept)
-            card = {}
-        # Only-when-stamped pure keys the rebuild OMITTED must be removed,
-        # not merely left un-overwritten — a resolved verdict_pending (or a
-        # re-stamp that dropped goal_verdict_gaps) otherwise survives every
-        # refresh as a stale claim (review 2026-08-13). Maintenance keys are
-        # untouched: only keys the PURE curators own are eligible.
-        for fn in CURATORS:
-            for key in _SPEC_BY_NAME[fn.__name__].output_keys:
-                if key not in rebuilt:
-                    card.pop(key, None)
-        card.update(deepcopy(rebuilt))
-        refreshed["card"] = card
-        return json.dumps(card, indent=2)
-
-    locked_rmw(card_path, _merge, default="")
-    if refreshed["unreadable"]:
-        log.warning("refresh_run_card_classification: metadata unreadable for run %s", rd.name)
-    return refreshed["card"]
+    # review r26: first-card and existing-card refreshes use the same bounded
+    # unlocked-build/locked-revalidate publication discipline as curate_run.
+    published = _publish_pure_card(handle_id, rd)
+    return published[0] if published is not None else None
 
 
 def refresh_step_flags(handle_id: Optional[str] = None) -> int:
