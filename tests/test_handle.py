@@ -529,6 +529,47 @@ class TestModeThinModifier:
         assert "Thin final report survives curation" in result_files[0].read_text()
         assert not (rd / "artifact" / "OTHER_RUN_REPORT.md").exists()
 
+    def test_r28_a_failed_thin_marker_is_warned_not_swallowed(
+            self, monkeypatch, tmp_path, caplog):
+        # review r28: a failed provenance stamp is visible without sacrificing
+        # the in-hand answer or its independently persisted report.
+        import logging
+        import runs
+        monkeypatch.setattr(runs, "stamp_run_metadata", lambda fields: None)
+        with caplog.at_level(logging.WARNING, logger="maro.handle"):
+            result, _ = self._run(
+                monkeypatch, tmp_path, "mode:thin inspect marker failure",
+                fresh=True)
+        rd = runs.run_dir(result.handle_id)
+        reports = list((rd / "build").glob("loop-*-RESULT.md"))
+        assert "thin result" in result.result
+        assert len(reports) == 1 and "thin result" in reports[0].read_text()
+        assert "execution marker not recorded" in caplog.text
+
+    def test_r28_a_failed_thin_report_is_warned(
+            self, monkeypatch, tmp_path, caplog):
+        # review r28: report I/O failure cannot hide either the mode marker or returned answer.
+        import logging
+        import runs
+        real_write_text = Path.write_text
+
+        def _fail_thin_report(path, *args, **kwargs):
+            if path.name == "loop-thin-RESULT.md":
+                raise OSError("report disk failure")
+            return real_write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", _fail_thin_report)
+        with caplog.at_level(logging.WARNING, logger="maro.handle"):
+            result, _ = self._run(
+                monkeypatch, tmp_path, "mode:thin inspect report failure",
+                fresh=True)
+        meta = json.loads(
+            (runs.run_dir(result.handle_id) / "metadata.json").read_text(
+                encoding="utf-8"))
+        assert meta["execution"] == "thin"
+        assert "thin result" in result.result
+        assert "thin report not persisted" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # ultraplan: prefix modifier

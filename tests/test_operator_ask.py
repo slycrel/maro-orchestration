@@ -356,6 +356,55 @@ class TestAnswer:
         assert res["status"] == "queued" and res["question"] == "Which yahoo account?"
         assert _meta(rd)["operator_ask"]["source"] == "clarity-gate"
 
+    def test_r28_an_answered_clarification_publishes_the_clarified_goal(
+            self, ws, monkeypatch):
+        # review r28: answer-time publication owns the clarified direction;
+        # resume bookkeeping must preserve it without changing execution input.
+        import runs
+        import task_store
+        from handle_queue import handle_task
+        rd = _mk_run("abcd1234", prompt="Raw update report")
+        with runs.scoped_run_dir(rd):
+            runs.stamp_run_metadata({
+                "goal": "Update report",
+                "clarification_question": "Which client?",
+                "pause_reason": "awaiting-clarification",
+            })
+
+        answered = oa.answer("abcd1234", "client B")
+        assert answered["status"] == "queued"
+        meta = _meta(rd)
+        assert meta["goal"] == "Update report\n\nAdditional context: client B"
+        assert meta["clarification_answer"] == "client B"
+
+        task = task_store.claim(answered["job_id"])
+
+        class _R:
+            loop_id = "r28-resume"
+            status = "done"
+
+        with patch("agent_loop.run_agent_loop", return_value=_R()):
+            handle_task(task, dry_run=True)
+        terminal = _meta(rd)
+        assert terminal["goal"] == "Update report\n\nAdditional context: client B"
+
+        # review r28: environment approvals remain context, never goal rewrites.
+        env_rd = _mk_run("efgh5678", prompt="Install the dependency")
+        with runs.scoped_run_dir(env_rd):
+            runs.stamp_run_metadata({
+                "goal": "Install the dependency",
+                "pause_reason": "awaiting-clarification",
+                "operator_ask": {
+                    "question": "Allow apt:x?", "status": "pending",
+                    "kind": "env_request", "source": "worker",
+                },
+            })
+        import env_request
+        monkeypatch.setattr(env_request, "apply_answer", lambda rec, text: (
+            "deny", "The orchestrator denied it."))
+        assert oa.answer("efgh5678", "deny")["status"] == "queued"
+        assert _meta(env_rd)["goal"] == "Install the dependency"
+
     def test_queue_routes_the_answer_as_a_resume_with_the_answer_in_context(self, ws, monkeypatch):
         """handle_queue's strict-affirmative test (typed pause, no verdict) →
         RESUME: the parent run dir re-pinned, the identity kept, and the

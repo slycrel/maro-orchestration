@@ -407,8 +407,14 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     names then size ranked. The top pick is COPIED into <run>/artifact/ so
     the viz server (which serves runs_root only) can serve it and completion
     messages can link the actual report."""
-    # review r27: thin executes outside its bound project; that binding is continuation identity only.
-    if meta.get("execution") == "thin":
+    # review r28: scan only positive loop provenance, retaining behavior for
+    # records predating both execution and landscape project-binding stamps.
+    _legacy = (
+        "execution" not in meta
+        and "project_binding" not in meta
+        and meta.get("lane") != "now"
+    )
+    if meta.get("execution") != "loop" and not _legacy:
         return
     pdir = _project_dir_for(meta)
     started = str(meta.get("started_at") or "").strip()
@@ -1777,15 +1783,15 @@ def _maintenance_card_keys() -> set:
     return keys
 
 
-def _park_unreadable_card(card_path: Path, old: str, *, empty: bool = False) -> None:
-    """Warn after publication; preserve non-empty unreadable bytes in a sidecar."""
+def _park_unreadable_card(card_path: Path, old: str, *, empty: bool = False) -> bool:
+    """Preserve unreadable bytes; return whether replacement is authorized."""
     # review r26: sidecar I/O stays outside the card critical section.
     if empty:
         log.warning(
             "refresh_run_card_classification: existing run_card.json is empty "
             "in %s — rebuilt from run data; maintenance-owned keys were not recoverable",
             card_path.parent.name)
-        return
+        return True  # review r28: empty files contain no old bytes to preserve.
     from datetime import datetime, timezone
     sidecar = card_path.with_name(
         card_path.name + ".unreadable-"
@@ -1793,12 +1799,23 @@ def _park_unreadable_card(card_path: Path, old: str, *, empty: bool = False) -> 
     try:
         sidecar.write_bytes(old.encode("utf-8", "surrogateescape"))
         kept = f"old bytes preserved at {sidecar.name}"
+        preserved = True
     except OSError:
         kept = "old bytes could NOT be preserved to a sidecar"
-    log.warning(
-        "refresh_run_card_classification: run_card.json unreadable in %s "
-        "— rebuilt from run data (%s); maintenance-owned keys were not recoverable",
-        card_path.parent.name, kept)
+        preserved = False
+    if preserved:
+        log.warning(
+            "refresh_run_card_classification: run_card.json unreadable in %s "
+            "— rebuilt from run data (%s); maintenance-owned keys were not recoverable",
+            card_path.parent.name, kept)
+    else:
+        # review r28: do not claim a rebuild when preservation denied publication.
+        log.warning(
+            "refresh_run_card_classification: run_card.json unreadable in %s "
+            "— %s; leaving the card untouched",
+            card_path.parent.name, kept)
+    # review r28: publication may replace corrupt bytes only after preservation succeeds.
+    return preserved
 
 
 def _publish_pure_card(handle_id: str, rd: Path, *, status: Optional[str] = None,
@@ -1866,8 +1883,15 @@ def _publish_pure_card(handle_id: str, rd: Path, *, status: Optional[str] = None
             locked_rmw(card_path, _merge, default="")
             if state["bad_old"] is None or state["card"] is not None:
                 break
-            _park_unreadable_card(card_path, state["bad_old"],
-                                  empty=state["empty_old"])
+            if not _park_unreadable_card(
+                    card_path, state["bad_old"], empty=state["empty_old"]):
+                # review r28: failed preservation leaves the original card authoritative.
+                log.warning(
+                    "run-card publication declining: old bytes could not be "
+                    "preserved for run %s",
+                    rd.name,
+                )
+                return None
             parked_old = state["bad_old"]
             state["bad_old"], state["empty_old"] = None, False
         if state["card"] is not None:

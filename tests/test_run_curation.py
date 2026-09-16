@@ -8,6 +8,7 @@ surface ("show me my runs", "clean that up").
 from __future__ import annotations
 
 import json
+import errno  # review r28: simulate a sidecar-only ENOSPC preservation failure.
 import sys
 from pathlib import Path
 
@@ -207,6 +208,25 @@ def test_classification_refresh_sidecars_tainted_valid_card(workspace):
     assert sidecars[0].read_bytes() == tainted
     rewritten = (rd / "run_card.json").read_bytes()
     assert b"udcff" not in rewritten.lower() and b"\xff" not in rewritten
+
+
+def test_r28_a_failed_sidecar_declines_the_publish(workspace, monkeypatch):
+    # review r28: unreadable original bytes remain authoritative unless a sidecar succeeds.
+    rd = _finish("r28-nospace", "Preserve this card", "done", achieved=False)
+    card_path = rd / "run_card.json"
+    original = b"corrupt card that must survive"
+    card_path.write_bytes(original)
+    real_write_bytes = Path.write_bytes
+
+    def _no_sidecar_space(path, data):
+        if ".unreadable-" in path.name:
+            raise OSError(errno.ENOSPC, "no space for sidecar")
+        return real_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", _no_sidecar_space)
+    assert refresh_run_card_classification("r28-nospace", run_dir=rd) is None
+    assert card_path.read_bytes() == original
+    assert not list(rd.glob("run_card.json.unreadable-*"))
 
 
 def test_classification_refresh_merge_keeps_maintenance_keys(workspace):
@@ -1566,6 +1586,39 @@ def test_r27_locate_deliverables_skips_a_thin_run(workspace):
     assert not (rd / "artifact" / "FINAL_REPORT.md").exists()
 
 
+@pytest.mark.parametrize("extra, lane, expect_scan", [
+    ({}, "now", False),
+    ({"project": "r28-bound", "project_binding": "landscape"},
+     "agenda", False),
+    ({"project": "r28-loop", "execution": "loop"}, "agenda", True),
+    ({}, "agenda", True),
+], ids=["now", "bound-paused", "loop", "legacy"])
+def test_r28_locate_deliverables_needs_execution_provenance(
+        workspace, extra, lane, expect_scan):
+    # review r28: only a proven loop (or a pre-provenance legacy record) may
+    # claim a project file as this run's deliverable.
+    import orch_items
+    import run_curation
+    from agent_loop import _goal_to_slug
+    handle_id = f"r28-{lane}-{extra.get('project', 'legacy')}"
+    prompt = "R28 provenance scan"
+    rd = create_run_dir(
+        handle_id, prompt=prompt, lane=lane, model="cheap",
+        extra_metadata=extra or None,
+    )
+    slug = extra.get("project") or _goal_to_slug(prompt)
+    pdir = orch_items.projects_root() / slug
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "FINAL_REPORT.md").write_text(
+        "Fresh neighboring report", encoding="utf-8")
+    meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+    card = {}
+    run_curation.locate_deliverables(rd, meta, card)
+    copied = rd / "artifact" / "FINAL_REPORT.md"
+    assert ("deliverables" in card) is expect_scan
+    assert copied.exists() is expect_scan
+
+
 def test_synthesize_answer_llm_path(workspace, monkeypatch, tmp_path):
     import config
     import run_curation
@@ -2164,10 +2217,12 @@ def test_r27_a_second_corrupt_card_is_parked_before_it_is_replaced(
     parked = []
 
     def _park(path, old, **kwargs):
-        real_park(path, old, **kwargs)
+        # review r28: preserve the parking helper's authorization contract in this race seam.
+        preserved = real_park(path, old, **kwargs)
         parked.append(old)
         if len(parked) == 1:
             card_path.write_text(second, encoding="utf-8")
+        return preserved
 
     monkeypatch.setattr(run_curation, "_park_unreadable_card", _park)
     card = refresh_run_card_classification(hid, run_dir=rd)

@@ -780,12 +780,26 @@ def answer(ref: str, text: str, *, source: str = "cli") -> Dict[str, Any]:
         except Exception as exc:
             outcome_text = f"the orchestrator's answer could not be applied: {exc}"
             log.warning("answer: env_request apply failed: %s", exc)
+    # review r28: only a queued clarification changes the published goal;
+    # environment decisions and ephemeral code asks are execution context.
+    from stop_verdicts import PAUSE_OP_CLARIFICATION
+    _is_clarification = (
+        meta.get("pause_reason") == PAUSE_OP_CLARIFICATION
+        and str(rec.get("kind") or "") != "env_request"
+        and not asks_for_code(rec)
+    )
+    _answer_stamp = {
+        META_KEY: rec,
+        "clarification_answer": text[:2000],
+    }
+    if _is_clarification:
+        # review r28: mirror the live path's exact base text before appending context.
+        _base_goal = str(meta.get("goal") or meta.get("prompt") or "")
+        _answer_stamp["goal"] = f"{_base_goal}\n\nAdditional context: {text}"
     try:
         from runs import stamp_run_metadata_for
-        stamp_run_metadata_for(handle_id, {
-            META_KEY: rec,
-            "clarification_answer": text[:2000],
-        })
+        # review r28: answer provenance and clarified goal publish atomically in one stamp.
+        stamp_run_metadata_for(handle_id, _answer_stamp)
     except Exception as exc:
         log.warning("answer: metadata stamp failed: %s", exc)
     try:

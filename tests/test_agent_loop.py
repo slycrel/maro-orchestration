@@ -1115,6 +1115,24 @@ def test_run_agent_loop_fan_out_dry_run():
     assert result.status in ("done", "dry_run", "stuck")
 
 
+def test_r28_loop_project_stamp_carries_execution_provenance(
+        monkeypatch, tmp_path):
+    # review r28: curation's positive gate depends on project and execution
+    # being declared together by the loop initializer.
+    _setup_workspace(monkeypatch, tmp_path)
+    import runs
+    stamps = []
+    monkeypatch.setattr(
+        runs, "stamp_run_metadata",
+        lambda fields: stamps.append(dict(fields)) or tmp_path / "metadata.json",
+    )
+    run_agent_loop(
+        "Produce the R28 report", project="r28-loop-project",
+        dry_run=True, verbose=False,
+    )
+    assert {"project": "r28-loop-project", "execution": "loop"} in stamps
+
+
 def test_run_agent_loop_fan_out_dependency_falls_back_sequential():
     """When steps have dependencies, fan-out gate blocks parallel path (sequential used)."""
     dependent_steps = [

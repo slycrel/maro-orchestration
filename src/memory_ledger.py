@@ -884,15 +884,24 @@ def mark_outcomes_superseded(handle_id: str, *, max_attempts: int = 1) -> int:
 
 
 def _may_placeholder_repair(row: dict) -> bool:
-    """Allow a repair only when goal_achieved is None, the source is absent,
-    empty, or a known placeholder, and verdict_excluded is absent or exactly
-    False."""
+    """Allow an unjudged placeholder row, rejecting sourceless verdict traces.
+
+    Known placeholder sources remain repairable even with their normal verdict
+    timestamps/history; an absent or empty source is repairable only when no
+    other truthy verdict-operation evidence exists.
+    """
     # review r27: exclusion-only and malformed exclusion markers are judged provenance.
     from stop_verdicts import VERDICT_PLACEHOLDER_SOURCES
     source = row.get("goal_verdict_source")
-    source_ok = (source is None or source == "" or
-                 (isinstance(source, str)
-                  and source in VERDICT_PLACEHOLDER_SOURCES))
+    _placeholder_source = (
+        isinstance(source, str) and source in VERDICT_PLACEHOLDER_SOURCES)
+    _sourceless = source is None or source == ""
+    # review r28: a real verdict operation always supplies a source, so these
+    # fields beside an empty source are malformed judged provenance.
+    _sourceless_clean = _sourceless and not any(
+        row.get(field) for field in (
+            "goal_verdict_at", "goal_verdict_confidence", "verdict_history"))
+    source_ok = _placeholder_source or _sourceless_clean
     exclusion_ok = ("verdict_excluded" not in row
                     or row.get("verdict_excluded") is False)
     return row.get("goal_achieved") is None and source_ok and exclusion_ok

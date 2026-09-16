@@ -1,6 +1,8 @@
 """Regression coverage for conditional outcome verdict persistence."""
 import json
 
+import pytest  # review r28: exercise each sourceless verdict-evidence shape.
+
 
 def test_r24_a_placeholder_stamp_declines_a_judged_row(monkeypatch, tmp_path):
     import memory_ledger as ml
@@ -108,6 +110,31 @@ def test_r27_a_placeholder_stamp_declines_an_exclusion_only_row(
     path.write_text(original, encoding="utf-8")
     result = ml.stamp_outcome_verdict(
         "r27-exclusion-only", goal_achieved=None,
+        goal_verdict_source=VERDICT_SOURCE_PENDING_ORPHANED,
+        only_unjudged=True)
+    assert result.status == "superseded"
+    assert path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("field, value", [
+    ("goal_verdict_at", "2026-09-16T00:00:00+00:00"),
+    ("goal_verdict_confidence", 0.91),
+    ("verdict_history", [{"goal_achieved": False}]),
+])
+def test_r28_a_placeholder_stamp_declines_a_sourceless_judged_shape(
+        monkeypatch, tmp_path, field, value):
+    # review r28: verdict-operation evidence without its mandatory source fails closed.
+    import memory_ledger as ml
+    from stop_verdicts import VERDICT_SOURCE_PENDING_ORPHANED
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    path = ml._outcomes_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {"loop_id": "r28-sourceless", "goal_achieved": None,
+           "goal_verdict_source": "", field: value}
+    original = json.dumps(row) + "\n"
+    path.write_text(original, encoding="utf-8")
+    result = ml.stamp_outcome_verdict(
+        row["loop_id"], goal_achieved=None,
         goal_verdict_source=VERDICT_SOURCE_PENDING_ORPHANED,
         only_unjudged=True)
     assert result.status == "superseded"

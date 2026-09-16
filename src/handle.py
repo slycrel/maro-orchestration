@@ -1597,10 +1597,12 @@ def _handle_impl(
         # projects menu (handle_queue: Maro's own decision, made with
         # project evidence; recorded as `navigator`, not as an operator's
         # word); the project of the run the LANDSCAPE chose and judged the
-        # goal to CONTINUE; an explicit CLI --after PARENT project (recorded
-        # as `parent`); an existing project literally named in the goal;
-        # else the minted slug. Dispatch forks do not carry parent_project,
-        # so they retain their named/minted child-project behavior.
+        # goal to CONTINUE; an existing project literally named in the goal;
+        # else the minted slug. review r28: `parent` is reached only when an
+        # origin names a parent and the landscape was not consulted (notably
+        # explicit CLI --after), so it is effectively an operator-class
+        # override recorded under its own name. Dispatch forks do not carry
+        # parent_project and retain their named/minted child-project behavior.
         _nav_pick = ""
         if isinstance((origin or {}).get("dispatch_navigator"), dict):
             _nav_pick = str(origin["dispatch_navigator"].get("project") or "")
@@ -2252,6 +2254,8 @@ def _handle_impl(
             "MARO_YOLO",
             str(_cfg.get("yolo", "false")).strip().lower() == "true",
         )
+        # review r28: exact-input rerun identity is invalid after a live reply changes intent.
+        _clarified = False
         if not dry_run and not _yolo:
             try:
                 from intent import check_goal_clarity
@@ -2274,6 +2278,8 @@ def _handle_impl(
                         _reply = channel.ask(_q)
                         if _reply:
                             message = f"{message}\n\nAdditional context: {_reply}"
+                            # review r28: a reply changes exact-text identity for downstream recall.
+                            _clarified = True
                             # review r27: scans must see clarified user intent, not the submitted fragment.
                             try:
                                 from runs import stamp_run_metadata as _stamp_clarified_goal
@@ -2324,7 +2330,14 @@ def _handle_impl(
                         # No channel — return clarification_needed (CLI path).
                         # review r27: queued answers inherit this recorded direction; unlike
                         # the live-channel path, they cannot re-judge and move the binding.
-                        _bind_project()
+                        # review r28: an unavailable binder must not turn UNCLEAR into execution.
+                        try:
+                            _bind_project()
+                        except Exception as exc:
+                            log.warning(
+                                "clarification: project binding failed, pausing unbound: %s",
+                                exc,
+                            )
                         # Stamp the question into run metadata: the HandleResult
                         # is ephemeral on queue/dispatch paths, and a
                         # clarification_needed record without its question is
@@ -2351,6 +2364,8 @@ def _handle_impl(
                                 f"{_q}\n\n"
                                 f"*(Add `yolo: true` to user/CONFIG.md to skip this check.)*"
                             ),
+                            # review r28: the pause reports the same binding metadata records.
+                            project=_agenda_project,
                             elapsed_ms=elapsed,
                         )
             except Exception:
@@ -2415,6 +2430,21 @@ def _handle_impl(
             try:
                 from factory_thin import run_factory_thin
                 from conductor import assign_model_by_role
+                # review r28: declare thin provenance durably before any thin output exists.
+                try:
+                    from runs import stamp_run_metadata as _stamp_thin_execution
+                    if _stamp_thin_execution({"execution": "thin"}) is None:
+                        log.warning(
+                            "mode:thin: execution marker not recorded for %s — "
+                            "curation may scan the bound project",
+                            handle_id,
+                        )
+                except Exception:
+                    log.warning(
+                        "mode:thin: execution marker not recorded for %s — "
+                        "curation may scan the bound project",
+                        handle_id,
+                    )
                 _thin_result = run_factory_thin(
                     message,
                     model=model or assign_model_by_role("worker"),
@@ -2424,19 +2454,22 @@ def _handle_impl(
                 _thin_text = _thin_result.final_report or "[no output produced]"
                 if _thin_result.status != "done":
                     _thin_text += f"\n\n⚠️ Thin loop status: {_thin_result.status}"
-                # review r27: thin identity supports continuations, but execution writes no project files.
+                # review r28: report persistence is independent of the already-recorded mode marker.
                 try:
                     from runs import current_run_dir as _thin_current_run_dir
-                    from runs import stamp_run_metadata as _stamp_thin_execution
-                    _stamp_thin_execution({"execution": "thin"})
                     _thin_rd = _thin_current_run_dir()
-                    if _thin_rd is not None:
-                        _thin_build = _thin_rd / "build"
-                        _thin_build.mkdir(parents=True, exist_ok=True)
-                        (_thin_build / "loop-thin-RESULT.md").write_text(
-                            _thin_text, encoding="utf-8")
-                except Exception:
-                    pass
+                    if _thin_rd is None:
+                        raise RuntimeError("no active run directory")
+                    _thin_build = _thin_rd / "build"
+                    _thin_build.mkdir(parents=True, exist_ok=True)
+                    (_thin_build / "loop-thin-RESULT.md").write_text(
+                        _thin_text, encoding="utf-8")
+                except Exception as exc:
+                    log.warning(
+                        "mode:thin: thin report not persisted; the answer is only "
+                        "in the returned result: %s",
+                        exc,
+                    )
                 return HandleResult(
                     handle_id=handle_id,
                     lane="agenda",
@@ -2478,6 +2511,7 @@ def _handle_impl(
         # pipeline: prefix — user specifies explicit steps as "step1 | step2 | step3".
         # Bypasses LLM decomposition entirely; runs the given steps in order.
         if _pipeline_prefix:
+            # review r28: parse the preset submitted text only; a clarification is goal context, not a step.
             _pipe_raw = _pfx.message
             _pipe_steps = [s.strip() for s in _pipe_raw.split("|") if s.strip()]
             if not _pipe_steps:
@@ -2486,7 +2520,7 @@ def _handle_impl(
                 if verbose:
                     print(f"[maro] pipeline: {len(_pipe_steps)} steps: {_pipe_steps}", file=sys.stderr, flush=True)
                 _pipe_result = run_agent_loop(
-                    _pipe_raw,
+                    message,  # review r28: execute the clarified goal while retaining preset steps above.
                     project=_agenda_project,
                     model=model,
                     adapter=adapter,
@@ -2516,7 +2550,7 @@ def _handle_impl(
             if verbose:
                 print("[maro] team: dag execution mode (parallel_fan_out=4)", file=sys.stderr, flush=True)
             _team_result = run_agent_loop(
-                _pfx.message,
+                message,  # review r28: live clarification must reach every execution branch.
                 project=_agenda_project,
                 model=model,
                 adapter=adapter,
@@ -2724,13 +2758,16 @@ def _handle_impl(
         # Matched on _raw_input (pre-prefix-strip) — the same field the
         # intake record stores. exclude_handle_id: this handle's own row was
         # already written above.
-        try:
-            from rerun_identity import brief_for_goal as _rerun_brief
-            _rerun_block = _rerun_brief(_raw_input, exclude_handle_id=handle_id)
-            if _rerun_block:
-                _extra_ctx_parts.append(_rerun_block)
-        except Exception as _rerun_exc:
-            log.debug("handle: rerun brief skipped: %s", _rerun_exc)
+        # review r28: after clarification exact-text identity no longer holds;
+        # losing a brief is safer than injecting another intent's deliverables.
+        if not _clarified:
+            try:
+                from rerun_identity import brief_for_goal as _rerun_brief
+                _rerun_block = _rerun_brief(_raw_input, exclude_handle_id=handle_id)
+                if _rerun_block:
+                    _extra_ctx_parts.append(_rerun_block)
+            except Exception as _rerun_exc:
+                log.debug("handle: rerun brief skipped: %s", _rerun_exc)
 
         # Phase 65 minimum viable experiment: scope generation via inversion.
         # Gated by `scope_generation` config flag (default off). `scope_ab_skip`

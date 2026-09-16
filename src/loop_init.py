@@ -410,7 +410,9 @@ def _initialize_loop(
     # a disambiguated one. Stamp it so nothing has to guess.
     try:
         from runs import stamp_run_metadata
-        stamp_run_metadata({"project": ctx.project})
+        # review r28: curation scans projects only with positive loop provenance;
+        # mode:thin never enters loop_init, so its earlier `thin` marker cannot be overwritten.
+        stamp_run_metadata({"project": ctx.project, "execution": "loop"})
     except Exception:
         log.debug("project metadata stamp failed", exc_info=True)
 

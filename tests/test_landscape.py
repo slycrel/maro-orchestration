@@ -694,6 +694,8 @@ class TestTheLandscapeBindsTheProject:
                 dry_run=False, adapter=adapter, channel=None)
         meta = _meta(result.handle_id)
         assert result.status == "clarification_needed"
+        # review r28: the queued-clarification result exposes its durable binding too.
+        assert result.project == "revenue-dash"
         assert meta["landscape"]["chosen"] == prior
         assert (meta["project"], meta["project_binding"]) == (
             "revenue-dash", "landscape")
@@ -1169,6 +1171,128 @@ class TestTheFallbacksHonourTheJudge:
 
 
 class TestTheDecisionFollowsTheGoalItBindsOn:
+    @pytest.mark.parametrize("prefix, expected_steps", [
+        ("direct: Update report", None),
+        ("team: Update report", None),
+        ("pipeline: a | b", ["a", "b"]),
+    ])
+    def test_r28_a_live_clarification_reaches_every_execution_branch(
+            self, monkeypatch, tmp_path, prefix, expected_steps):
+        # review r28: every prefix executes the enriched goal, while pipeline
+        # presets remain derived solely from the submitted pipeline text.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        import llm
+        adapter = MagicMock()
+        adapter.model_key = "cheap"
+        monkeypatch.setattr(llm, "build_adapter", lambda *a, **k: adapter)
+        channel = MagicMock()
+        channel.ask.return_value = "client B"
+        calls = []
+
+        def _fake_loop(goal, **kwargs):
+            calls.append((goal, kwargs))
+            return LoopResult(
+                loop_id="r28-prefix", project=kwargs.get("project", ""),
+                goal=goal, status="done", stuck_reason=None,
+                steps=[StepOutcome(index=0, text="step", status="done",
+                                   result="output", iteration=0)],
+            )
+
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=_fake_loop), \
+             patch("intent.check_goal_clarity", return_value={
+                 "clear": False, "question": "Which client?"}), \
+             patch("intent.rewrite_imperative_goal", side_effect=lambda goal, **kw: goal):
+            handle(prefix, force_lane="agenda", dry_run=False, channel=channel,
+                   adapter=adapter, fresh=True)
+
+        assert len(calls) == 1
+        goal, kwargs = calls[0]
+        assert "Additional context: client B" in goal
+        if expected_steps is not None:
+            assert kwargs["preset_steps"] == expected_steps
+            assert all("client B" not in step for step in kwargs["preset_steps"])
+
+    def test_r28_a_clarified_run_takes_no_rerun_brief(
+            self, monkeypatch, tmp_path):
+        # review r28: a live answer invalidates raw-input identity; the clear
+        # control proves the ordinary rerun lookup remains active.
+        from unittest.mock import MagicMock
+        from handle import handle
+        from agent_loop import LoopResult, StepOutcome
+        from director import ClosureVerdict
+        import llm
+        import rerun_identity
+
+        brief_calls = []
+        monkeypatch.setattr(
+            rerun_identity, "brief_for_goal",
+            lambda goal, **kwargs: brief_calls.append(goal) or "prior brief",
+        )
+
+        def _run(root, *, clarified):
+            _setup(monkeypatch, root)
+            adapter = MagicMock()
+            adapter.model_key = "cheap"
+            monkeypatch.setattr(llm, "build_adapter", lambda *a, **k: adapter)
+            channel = MagicMock() if clarified else None
+            if channel is not None:
+                channel.ask.return_value = "client B"
+
+            def _fake_loop(goal, **kwargs):
+                return LoopResult(
+                    loop_id="r28-brief", project=kwargs.get("project", ""),
+                    goal=goal, status="done", stuck_reason=None,
+                    steps=[StepOutcome(index=0, text="step", status="done",
+                                       result="output", iteration=0)],
+                )
+
+            gate = MagicMock()
+            gate.escalate = False
+            gate.contested_claims = []
+            clarity = ({"clear": False, "question": "Which client?"}
+                       if clarified else {"clear": True})
+            with _no_hosted_free(), \
+                 patch("agent_loop.run_agent_loop", side_effect=_fake_loop), \
+                 patch("intent.check_goal_clarity", return_value=clarity), \
+                 patch("intent.rewrite_imperative_goal", side_effect=lambda goal, **kw: goal), \
+                 patch("director.verify_goal_completion", return_value=ClosureVerdict(
+                     complete=True, confidence=0.9, gaps=[], summary="verified",
+                     checks_run=1, checks_passed=1)), \
+                 patch("quality_gate.run_quality_gate", return_value=gate):
+                handle("Update report", force_lane="agenda", dry_run=False,
+                       channel=channel, adapter=adapter, fresh=True)
+
+        _run(tmp_path / "clarified", clarified=True)
+        assert brief_calls == []
+        _run(tmp_path / "clear", clarified=False)
+        assert brief_calls == ["Update report"]
+
+    def test_r28_a_failing_binder_still_pauses_for_clarification(
+            self, monkeypatch, tmp_path):
+        # review r28: binding failure after UNCLEAR cannot authorize execution.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock
+        import handle as handle_mod
+        loop_calls = []
+        monkeypatch.setattr(
+            handle_mod, "_project_for_goal",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("binder failed")),
+        )
+        with _no_hosted_free(), \
+             patch("agent_loop.run_agent_loop", side_effect=lambda *a, **k: loop_calls.append(1)), \
+             patch("intent.check_goal_clarity", return_value={
+                 "clear": False, "question": "Which client?"}):
+            result = handle_mod.handle(
+                "Update report", force_lane="agenda", dry_run=False,
+                adapter=MagicMock(), fresh=True)
+        assert result.status == "clarification_needed"
+        assert result.project == ""
+        assert loop_calls == []
+
     def test_r27_a_clarified_goal_is_the_goal_the_scan_reads(self, monkeypatch, tmp_path):
         # the landscape judged the goal AS SUBMITTED; the channel reply names
         # other work — the decision, its origin, its context and the bound

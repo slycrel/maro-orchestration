@@ -6978,6 +6978,38 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   promotion vs verdict correction share one `_publish_maintenance` path;
   binding stamp is best-effort at the pause. Round 28 = codex confirming
   round.
+  Round 28 (codex-written fixes, orchestrator-reviewed; 3 verified HIGH +
+  6 MED, all branch twins again): `team:`/`pipeline:` executed the
+  PRE-clarification `_pfx.message` (only `direct:` passed the clarified
+  `message`) → all three execute `message`, pipeline still parses its
+  preset steps from the submitted text; the QUEUED clarification never
+  published the clarified goal (`operator_ask.answer` stamped only
+  `clarification_answer`; the RESUME ran the original goal with the answer
+  in context) → the answer stamps `goal` = "<goal>\n\nAdditional context:
+  <reply>" in the same write, env/code asks untouched, RESUME input
+  unchanged; a FAILED sidecar write still authorized replacing the corrupt
+  card (`_park_unreadable_card` returned None either way) → it returns a
+  bool and the publisher declines (card untouched) on False. MEDs: thin's
+  `execution: thin` is stamped BEFORE the thin loop runs and both its
+  failures (marker None, report write) are warned, never swallowed; the
+  no-channel clarification result reports `project`; a binder raising at
+  the clarification exit no longer falls through the clarity `except` into
+  executing the UNCLEAR goal; the exact-text rerun brief is skipped after a
+  live clarification (fail-safe); `_may_placeholder_repair` fails closed on
+  a sourceless row carrying `goal_verdict_at`/confidence/`verdict_history`;
+  `locate_deliverables` needs positive provenance — `loop_init` stamps
+  `execution: loop` beside `project`, and the scan runs only for
+  `execution == loop` or legacy records (no `execution`, no
+  `project_binding`, lane ≠ now) — so NOW / Conductor / clarification-
+  paused / pre-loop-failed runs never copy a neighbour's project file.
+  DOC: the precedence comment claimed landscape > `parent`; the landscape
+  is not consulted when the origin names a parent (`--after` is the
+  operator's own continuation decision), so `parent` is an operator-class
+  override under its own name — comment corrected, r27 test stands.
+  Refuted/recorded: a symlink swap of the project dir between binding and
+  loop init is another actor in a single-user workspace (premise stands);
+  a logging handler raising is not a real vector (logging never re-raises)
+  but the guard covers the class. Round 29 = codex confirming round.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the
