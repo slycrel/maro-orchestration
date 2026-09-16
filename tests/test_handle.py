@@ -496,6 +496,39 @@ class TestModeThinModifier:
         assert meta["project_binding"] == "operator"
         assert result.project == "ops-x"
 
+    def test_r27_mode_thin_persists_its_report_and_scans_no_project(
+            self, monkeypatch, tmp_path):
+        # review r27: thin output is run data, while its project is continuation identity only.
+        import factory_thin
+        import runs
+        from orch_items import project_dir
+        _setup(monkeypatch, tmp_path)
+        pdir = project_dir("thin-identity")
+        pdir.mkdir(parents=True)
+
+        class _Thin:
+            status = "done"
+            final_report = "Thin final report survives curation."
+            total_tokens = 4
+
+        def _fake_thin(*args, **kwargs):
+            (pdir / "OTHER_RUN_REPORT.md").write_text(
+                "This must not be copied.", encoding="utf-8")
+            return _Thin()
+
+        monkeypatch.setattr(factory_thin, "run_factory_thin", _fake_thin)
+        _stub_build_adapter(monkeypatch)
+        result = handle(
+            "mode:thin inspect service", force_lane="agenda",
+            project="thin-identity", fresh=True)
+        rd = runs.run_dir(result.handle_id)
+        meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+        result_files = list((rd / "build").glob("loop-*-RESULT.md"))
+        assert meta["execution"] == "thin"
+        assert len(result_files) == 1
+        assert "Thin final report survives curation" in result_files[0].read_text()
+        assert not (rd / "artifact" / "OTHER_RUN_REPORT.md").exists()
+
 
 # ---------------------------------------------------------------------------
 # ultraplan: prefix modifier

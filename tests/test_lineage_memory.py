@@ -172,11 +172,17 @@ class TestMintScopesToTheLineage:
 
 
 class TestAfterFlag:
-    def test_after_stamps_the_parent_on_the_new_runs_origin(self, monkeypatch, tmp_path):
+    # review r27: the extended CLI regression now pins inherited project identity too.
+    def test_r27_after_stamps_the_parent_project_on_the_new_runs_origin(
+            self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         import handle
         import runs
+        # review r27: CLI --after carries a validated parent project in its origin.
+        from orch_items import project_dir
         a = _make_run("the first question")
+        project_dir("revenue-dash").mkdir(parents=True)
+        runs.stamp_run_metadata_for(a, {"project": "revenue-dash"})
         rc = handle.main(["--dry-run", "--lane", "now", "--after", a, "a follow-up question"])
         assert rc == 0
         # the newest run dir's metadata names a as parent
@@ -186,6 +192,7 @@ class TestAfterFlag:
         assert meta["origin"]["parent_handle_id"] == a
         assert meta["origin"]["parent_goal"] == "the first question"
         assert meta["origin"]["source"] == "cli"
+        assert meta["origin"]["parent_project"] == "revenue-dash"
 
     def test_after_a_run_with_unreadable_metadata_is_refused(self, monkeypatch, tmp_path, capsys):
         _setup(monkeypatch, tmp_path)

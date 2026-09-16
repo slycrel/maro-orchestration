@@ -883,6 +883,21 @@ def mark_outcomes_superseded(handle_id: str, *, max_attempts: int = 1) -> int:
     return 0
 
 
+def _may_placeholder_repair(row: dict) -> bool:
+    """Allow a repair only when goal_achieved is None, the source is absent,
+    empty, or a known placeholder, and verdict_excluded is absent or exactly
+    False."""
+    # review r27: exclusion-only and malformed exclusion markers are judged provenance.
+    from stop_verdicts import VERDICT_PLACEHOLDER_SOURCES
+    source = row.get("goal_verdict_source")
+    source_ok = (source is None or source == "" or
+                 (isinstance(source, str)
+                  and source in VERDICT_PLACEHOLDER_SOURCES))
+    exclusion_ok = ("verdict_excluded" not in row
+                    or row.get("verdict_excluded") is False)
+    return row.get("goal_achieved") is None and source_ok and exclusion_ok
+
+
 def stamp_outcome_verdict(
     loop_id: str,
     *,
@@ -939,7 +954,6 @@ def stamp_outcome_verdict(
             goal_verdict_confidence = None
         else:
             goal_verdict_confidence = _conf
-    from stop_verdicts import VERDICT_PLACEHOLDER_SOURCES
     path = _outcomes_path()
 
     attempts = max(1, int(max_attempts))
@@ -965,19 +979,10 @@ def stamp_outcome_verdict(
             if target_idx is None:
                 return old
             row = json.loads(lines[target_idx])
-            # review r24: a stale repair must not erase a judged exclusion.
-            source = row.get("goal_verdict_source")
-            # review r26: only a coherent, genuinely unjudged placeholder row
-            # may yield. Contradictory bool verdicts and malformed/unknown
-            # sources fail closed without touching exclusion provenance.
-            if only_unjudged:
-                achieved = row.get("goal_achieved")
-                source_ok = (source is None or source == "" or
-                             (isinstance(source, str)
-                              and source in VERDICT_PLACEHOLDER_SOURCES))
-                if achieved is not None or not source_ok:
-                    updated["superseded"] = True
-                    return old
+            # review r27: the centralized predicate preserves every judged or excluded shape byte-for-byte.
+            if only_unjudged and not _may_placeholder_repair(row):
+                updated["superseded"] = True
+                return old
             # Re-stamp honesty (Jeremy decree 2026-08-10: corrections may
             # flip a verdict "but be honest about it and note they were
             # failures at run time"): overwriting an existing judged

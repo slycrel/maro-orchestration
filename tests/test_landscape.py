@@ -674,6 +674,102 @@ def _meta(handle_id):
 
 
 class TestTheLandscapeBindsTheProject:
+    def test_r27_a_queued_clarification_resumes_in_the_bound_project(
+            self, monkeypatch, tmp_path):
+        # review r27: the no-channel pause must record the landscape direction before returning.
+        _setup(monkeypatch, tmp_path)
+        from handle import handle
+        from runs import recorded_project_verbatim
+        from orch_items import projects_root
+        (projects_root() / "revenue-dash").mkdir(parents=True)
+        prior = _finished_run(
+            "Update revenue forecast dashboard", "Updated revenue chart.",
+            extra={"project": "revenue-dash"})
+        adapter = _NowAndJudge(_related(1, "continues the dashboard"))
+        with _no_hosted_free(), \
+             patch("intent.check_goal_clarity", return_value={
+                 "clear": False, "question": "Which margin series?"}):
+            result = handle(
+                "Update revenue forecast chart", force_lane="agenda",
+                dry_run=False, adapter=adapter, channel=None)
+        meta = _meta(result.handle_id)
+        assert result.status == "clarification_needed"
+        assert meta["landscape"]["chosen"] == prior
+        assert (meta["project"], meta["project_binding"]) == (
+            "revenue-dash", "landscape")
+        assert recorded_project_verbatim(meta) == "revenue-dash"
+
+    @pytest.mark.parametrize("prefix", [
+        "direct: Update chart",
+        "team: Update chart",
+        "pipeline: Update chart | Polish chart",
+    ])
+    def test_r27_prefixed_runs_receive_the_related_context(
+            self, monkeypatch, tmp_path, prefix):
+        # review r27: every early prefix exit receives context from its chosen prior.
+        _setup(monkeypatch, tmp_path)
+        from orch_items import projects_root
+        (projects_root() / "revenue-dash").mkdir(parents=True)
+        prior = _finished_run(
+            "Update chart and polish chart",
+            "The prior answer says revenue rose 12%.",
+            extra={"project": "revenue-dash"})
+        _result, kwargs = _agenda_run(
+            monkeypatch, prefix,
+            _NowAndJudge(_related(1, "continues the dashboard")))
+        extra = kwargs.get("ancestry_context_extra", "")
+        assert f"## Related prior run ({prior}, related)" in extra
+        assert "revenue rose 12%" in extra
+
+    def test_r27_an_explicit_after_follow_up_lands_in_the_parents_project(
+            self, monkeypatch, tmp_path):
+        # review r27: explicit CLI lineage inherits its validated parent project.
+        _setup(monkeypatch, tmp_path)
+        from orch_items import projects_root
+        (projects_root() / "revenue-dash").mkdir(parents=True)
+        prior = _finished_run(
+            "Build revenue dashboard", "Built.",
+            extra={"project": "revenue-dash"})
+        # review r27: a scripted adapter makes any unexpected landscape call observable.
+        adapter = _NowAndJudge(None)
+        result, kwargs = _agenda_run(
+            monkeypatch, "Add the margin chart", adapter,
+            origin={"source": "cli", "parent_handle_id": prior,
+                    "parent_goal": "Build revenue dashboard",
+                    "parent_project": "revenue-dash"})
+        meta = _meta(result.handle_id)
+        assert (kwargs["project"], meta["project"], meta["project_binding"]) == (
+            "revenue-dash", "revenue-dash", "parent")
+        assert not [kw for _, kw in adapter.calls
+                    if kw.get("purpose") == "landscape"]
+
+    def test_r27_a_dispatch_fork_without_parent_project_still_mints(
+            self, monkeypatch, tmp_path):
+        # review r27: internal forks do not accidentally inherit the CLI-only project field.
+        _setup(monkeypatch, tmp_path)
+        from handle import _default_project_for
+        goal = "Draft an entirely new launch memo"
+        prior = _finished_run("Build revenue dashboard", "Built.")
+        result, kwargs = _agenda_run(
+            monkeypatch, goal, _NowAndJudge(None),
+            origin={"source": "dispatch", "parent_handle_id": prior,
+                    "parent_goal": "Build revenue dashboard"})
+        meta = _meta(result.handle_id)
+        assert kwargs["project"] == _default_project_for(goal)
+        assert (meta["project"], meta["project_binding"]) == (
+            kwargs["project"], "minted")
+        # review r27: pair the negative control with the new CLI-only field so pre-fix code fails.
+        from orch_items import projects_root
+        (projects_root() / "parent-work").mkdir(parents=True)
+        inherited, inherited_kwargs = _agenda_run(
+            monkeypatch, "Add margin labels", _NowAndJudge(None),
+            origin={"source": "cli", "parent_handle_id": prior,
+                    "parent_goal": "Build revenue dashboard",
+                    "parent_project": "parent-work"})
+        inherited_meta = _meta(inherited.handle_id)
+        assert (inherited_kwargs["project"], inherited_meta["project_binding"]) == (
+            "parent-work", "parent")
+
     def test_r26_a_prefixed_follow_up_still_finds_its_prior(self, monkeypatch, tmp_path):
         # review r26: `direct:` is execution control, not a landscape token.
         _setup(monkeypatch, tmp_path)
@@ -1073,7 +1169,7 @@ class TestTheFallbacksHonourTheJudge:
 
 
 class TestTheDecisionFollowsTheGoalItBindsOn:
-    def test_a_clarified_goal_is_judged_again_before_it_binds(self, monkeypatch, tmp_path):
+    def test_r27_a_clarified_goal_is_the_goal_the_scan_reads(self, monkeypatch, tmp_path):
         # the landscape judged the goal AS SUBMITTED; the channel reply names
         # other work — the decision, its origin, its context and the bound
         # project all follow the clarified goal
@@ -1116,6 +1212,8 @@ class TestTheDecisionFollowsTheGoalItBindsOn:
         judged = [m[0][-1].content for m in adapter.calls if m[1].get("purpose") == "landscape"]
         assert len(judged) == 2 and "client B" in judged[1] and "client B" not in judged[0]
         meta = _meta(r.handle_id)
+        # review r27: candidate scans prefer metadata.goal, so it must include the reply.
+        assert "Additional context: This is for client B" in meta["goal"]
         assert meta["landscape"]["chosen"] == prior and meta["landscape"]["continues"] is False
         assert kw["project"] != "client-a" and meta["project_binding"] == "minted"
         assert meta["origin"]["relation"] == "related" and meta["origin"]["parent_handle_id"] == prior

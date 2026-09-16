@@ -6951,6 +6951,33 @@ Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
   `project_transition.from_binding`) — a census script is future work;
   a corrupt metadata.json now declines `curate_run` too (no card at the
   finalize → record-only story) rather than curating from `{}`.
+  Round 27 (codex-written fixes, orchestrator-reviewed; 5 HIGH + 2 MED, all
+  branch-twin expansions of earlier rounds): the no-channel clarification
+  exit returned before the project was bound, so the queued RESUME resumed
+  projectless → `_bind_project()` closure runs before every AGENDA exit
+  (execution, clarification pause); a clarified goal was judged again but
+  `metadata.goal` kept the pre-clarification text, so candidate scans read
+  the wrong goal → re-stamped at clarification; `direct:`/`team:`/
+  `pipeline:` branches passed no related-prior context → one
+  `_base_context_parts` list feeds every branch; `mode:thin` bound a project
+  and then curated a NEIGHBOUR run's deliverable out of it → thin stamps
+  `execution: thin`, persists its own `build/loop-thin-RESULT.md`, and
+  `locate_deliverables` skips thin runs; CLI `--after` minted a project
+  instead of inheriting the parent's → origin carries a validated
+  `parent_project`, bound as `project_binding: parent` (below operator and
+  landscape, above named/minted; dispatch forks still mint); an
+  exclusion-only ledger row (`verdict_excluded`, no source/value) was
+  repairable as a placeholder → declined; a card that changed between park
+  and re-merge was replaced anyway → only the exact parked bytes may be
+  replaced, a different corrupt body is parked in turn, and the rebuilt
+  card is reused across parks (curators, incl. synthesis, never re-run —
+  the orchestrator reworked codex's `continue` into an inner park loop).
+  Deliverable copies are now atomic (mkstemp + os.replace). Directions
+  recorded, not built: build side effects before the CAS (the pure card's
+  curators write artifact copies whether or not the CAS wins); maintenance
+  promotion vs verdict correction share one `_publish_maintenance` path;
+  binding stamp is best-effort at the pause. Round 28 = codex confirming
+  round.
 - [ ] **Landscape judge cost census.** The one call rides
   `purpose="landscape"` (hosted-free when buildable); the subprocess
   backend does not enforce `max_tokens=200` (live: 378 tokens). Add the

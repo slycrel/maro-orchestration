@@ -1548,6 +1548,24 @@ def test_locate_deliverables_no_project_is_noop(workspace):
     assert "deliverable_link_path" not in card
 
 
+def test_r27_locate_deliverables_skips_a_thin_run(workspace):
+    # review r27: a thin run must never curate a neighboring run's project file.
+    import orch_items
+    import run_curation
+    rd = create_run_dir(
+        "h000thin", prompt="inspect service", lane="agenda", model="cheap",
+        extra_metadata={"project": "shared-project", "execution": "thin"})
+    pdir = orch_items.projects_root() / "shared-project"
+    pdir.mkdir(parents=True)
+    (pdir / "FINAL_REPORT.md").write_text(
+        "Another run's fresh report", encoding="utf-8")
+    meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+    card = {}
+    run_curation.locate_deliverables(rd, meta, card)
+    assert "deliverables" not in card
+    assert not (rd / "artifact" / "FINAL_REPORT.md").exists()
+
+
 def test_synthesize_answer_llm_path(workspace, monkeypatch, tmp_path):
     import config
     import run_curation
@@ -2130,6 +2148,58 @@ def test_r26_a_refresh_never_regresses_a_resolved_card(workspace, monkeypatch):
     written = json.loads((rd / "run_card.json").read_text())
     assert written["success_class"] == "done-not-achieved"
     assert "verdict_pending" not in written
+
+
+def test_r27_a_second_corrupt_card_is_parked_before_it_is_replaced(
+        workspace, monkeypatch):
+    # review r27: corruption arriving during preserve/re-merge gets its own sidecar.
+    import run_curation
+    hid = "r27-corrupt-race"
+    rd = _finish(hid, "Preserve corrupt cards", "done", achieved=False)
+    card_path = rd / "run_card.json"
+    first = "first corrupt body"
+    second = "second corrupt body"
+    card_path.write_text(first, encoding="utf-8")
+    real_park = run_curation._park_unreadable_card
+    parked = []
+
+    def _park(path, old, **kwargs):
+        real_park(path, old, **kwargs)
+        parked.append(old)
+        if len(parked) == 1:
+            card_path.write_text(second, encoding="utf-8")
+
+    monkeypatch.setattr(run_curation, "_park_unreadable_card", _park)
+    card = refresh_run_card_classification(hid, run_dir=rd)
+    sidecar_bodies = {
+        p.read_text(encoding="utf-8")
+        for p in rd.glob("run_card.json.unreadable-*")}
+    assert card is not None
+    assert sidecar_bodies == {first, second}
+    assert json.loads(card_path.read_text(encoding="utf-8")) == card
+
+
+def test_r27_parking_a_corrupt_card_does_not_rebuild_it(workspace, monkeypatch):
+    # review r27: a sidecar costs a re-merge, never a second curator pass
+    # (the curators include answer synthesis, which may call an LLM).
+    import run_curation
+    hid = "r27-park-no-rebuild"
+    rd = _finish(hid, "Park without rebuilding", "done", achieved=False)
+    card_path = rd / "run_card.json"
+    card_path.write_text("{not json", encoding="utf-8")
+    real_build = run_curation._build_run_card
+    builds = []
+
+    def _build(*args, **kwargs):
+        builds.append(1)
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(run_curation, "_build_run_card", _build)
+    card = refresh_run_card_classification(hid, run_dir=rd)
+    assert card is not None
+    assert len(builds) == 1
+    assert len(list(rd.glob("run_card.json.unreadable-*"))) == 1
+    assert json.loads(card_path.read_text(encoding="utf-8")) == card
 
 
 def test_r26_two_first_card_refreshes_do_not_lose_the_later_metadata(

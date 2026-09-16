@@ -38,7 +38,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os  # review r27: atomic served-artifact replacement closes temporary file descriptors.
 import shutil
+import tempfile  # review r27: deliverables stage in the destination directory before publish.
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -405,6 +407,9 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     names then size ranked. The top pick is COPIED into <run>/artifact/ so
     the viz server (which serves runs_root only) can serve it and completion
     messages can link the actual report."""
+    # review r27: thin executes outside its bound project; that binding is continuation identity only.
+    if meta.get("execution") == "thin":
+        return
     pdir = _project_dir_for(meta)
     started = str(meta.get("started_at") or "").strip()
     if pdir is None or not started:
@@ -501,10 +506,22 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
                 omitted.append({"path": str(p),
                                 "reason": "basename-collision"})
                 continue
+            # review r27: publish each served artifact atomically within its destination directory.
+            _tmp_path = None
             try:
-                shutil.copy2(p, dest_dir / p.name)
+                _tmp_fd, _tmp_name = tempfile.mkstemp(
+                    dir=dest_dir, prefix=f".{p.name}.", suffix=".tmp")
+                os.close(_tmp_fd)
+                _tmp_path = Path(_tmp_name)
+                shutil.copy2(p, _tmp_path)
+                os.replace(_tmp_path, dest_dir / p.name)
             except Exception:
                 log.debug("deliverable copy failed for %s", p, exc_info=True)
+                if _tmp_path is not None:
+                    try:
+                        _tmp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 continue
             taken.add(p.name)
             served.append(f"{rd.name}/artifact/{p.name}")
@@ -1795,6 +1812,8 @@ def _publish_pure_card(handle_id: str, rd: Path, *, status: Optional[str] = None
     from file_lock import locked_rmw
     card_path = rd / "run_card.json"
     snapshot = deepcopy(initial_meta) if initial_meta is not None else _read_meta_strict(rd)
+    # review r27: only the exact corrupt bytes already parked may be replaced.
+    parked_old: Optional[str] = None
     for _attempt in range(_CARD_PUBLISH_ATTEMPTS):
         if snapshot is None:
             log.warning("run-card publication: metadata unreadable for run %s", rd.name)
@@ -1805,7 +1824,7 @@ def _publish_pure_card(handle_id: str, rd: Path, *, status: Optional[str] = None
         # review r26: all curators, including copies and synthesis, run unlocked.
         rebuilt = _build_run_card(handle_id, rd, build_meta)
         state = {"card": None, "next_meta": None, "bad_old": None,
-                 "empty_old": False, "bad_old_parked": False}
+                 "empty_old": False}
 
         def _merge(old: str) -> Optional[str]:
             # review r26: cheap optimistic revalidation prevents stale rollback.
@@ -1818,7 +1837,7 @@ def _publish_pure_card(handle_id: str, rd: Path, *, status: Optional[str] = None
                 if not existed:
                     card = {}
                 elif not old.strip():
-                    if not state["bad_old_parked"]:
+                    if parked_old is None or old != parked_old:
                         state["bad_old"] = old
                         state["empty_old"] = True
                         return None
@@ -1828,7 +1847,7 @@ def _publish_pure_card(handle_id: str, rd: Path, *, status: Optional[str] = None
                     if not isinstance(card, dict):
                         raise ValueError("run_card.json is not a JSON object")
             except (ValueError, TypeError):
-                if not state["bad_old_parked"]:
+                if parked_old is None or old != parked_old:
                     state["bad_old"] = old
                     return None
                 card = {}
@@ -1839,17 +1858,24 @@ def _publish_pure_card(handle_id: str, rd: Path, *, status: Optional[str] = None
             state["card"] = card
             return json.dumps(card, indent=2)
 
-        locked_rmw(card_path, _merge, default="")
-        if state["bad_old"] is not None and state["card"] is None:
-            # review r26: preserve/warn before replacing the unreadable card,
-            # while keeping sidecar I/O outside both card critical sections.
+        # review r27: a corrupt card that changes between park and re-merge
+        # is parked in turn (only the exact bytes already parked may be
+        # replaced), and the rebuilt card is reused across parks — curators,
+        # including answer synthesis, never run again for a sidecar.
+        for _park in range(_CARD_PUBLISH_ATTEMPTS):
+            locked_rmw(card_path, _merge, default="")
+            if state["bad_old"] is None or state["card"] is not None:
+                break
             _park_unreadable_card(card_path, state["bad_old"],
                                   empty=state["empty_old"])
-            state["bad_old_parked"] = True
-            state["bad_old"] = None
-            locked_rmw(card_path, _merge, default="")
+            parked_old = state["bad_old"]
+            state["bad_old"], state["empty_old"] = None, False
         if state["card"] is not None:
             return state["card"], snapshot
+        if state["bad_old"] is not None:
+            log.warning("run-card publication: run_card.json kept arriving "
+                        "unreadable for run %s; declining", rd.name)
+            return None
         snapshot = state["next_meta"]
     # review r26: a moving record is safer left for the next sweep than stale.
     log.warning("run-card publication: metadata kept moving for run %s; declining", rd.name)

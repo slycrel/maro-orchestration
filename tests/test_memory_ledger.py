@@ -92,3 +92,23 @@ def test_r26_a_placeholder_stamp_declines_a_malformed_source(monkeypatch, tmp_pa
         only_unjudged=True)
     assert result.status == "superseded"
     assert path.read_text() == original
+
+
+def test_r27_a_placeholder_stamp_declines_an_exclusion_only_row(
+        monkeypatch, tmp_path):
+    # review r27: exclusion provenance is judged even without a verdict source/value.
+    import memory_ledger as ml
+    from stop_verdicts import VERDICT_SOURCE_PENDING_ORPHANED
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    path = ml._outcomes_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = json.dumps({
+        "loop_id": "r27-exclusion-only", "goal_achieved": None,
+        "verdict_excluded": True}) + "\n"
+    path.write_text(original, encoding="utf-8")
+    result = ml.stamp_outcome_verdict(
+        "r27-exclusion-only", goal_achieved=None,
+        goal_verdict_source=VERDICT_SOURCE_PENDING_ORPHANED,
+        only_unjudged=True)
+    assert result.status == "superseded"
+    assert path.read_text(encoding="utf-8") == original

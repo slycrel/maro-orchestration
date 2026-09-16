@@ -1520,6 +1520,8 @@ def _handle_impl(
     # context-only project is the one the automatic fallbacks keep out of.
     _landscape_project = ""
     _context_only_project = ""
+    # review r27: the binding helper can run at the pre-execution clarification exit.
+    _agenda_project = ""
     _project_binding = ""
     _landscape_decided = False
     _origin_as_given = dict(origin) if origin else None
@@ -1584,6 +1586,65 @@ def _handle_impl(
                       file=sys.stderr, flush=True)
         except Exception:
             pass
+
+    def _bind_project() -> None:
+        """Resolve and durably record the AGENDA project's identity once."""
+        # review r27: one helper gives early clarification and execution the same precedence.
+        nonlocal _agenda_project, _project_binding
+        # Project identity, by precedence (2026-09-13): the operator's
+        # explicit project (an override, never the design) — or, riding the
+        # same argument, the dispatch NAVIGATOR's pick from the recent-
+        # projects menu (handle_queue: Maro's own decision, made with
+        # project evidence; recorded as `navigator`, not as an operator's
+        # word); the project of the run the LANDSCAPE chose and judged the
+        # goal to CONTINUE; an explicit CLI --after PARENT project (recorded
+        # as `parent`); an existing project literally named in the goal;
+        # else the minted slug. Dispatch forks do not carry parent_project,
+        # so they retain their named/minted child-project behavior.
+        _nav_pick = ""
+        if isinstance((origin or {}).get("dispatch_navigator"), dict):
+            _nav_pick = str(origin["dispatch_navigator"].get("project") or "")
+        if project and project == _nav_pick:
+            _agenda_project, _project_binding = project, "navigator"
+        elif project:
+            _agenda_project, _project_binding = project, "operator"
+        elif _landscape_project:
+            _agenda_project, _project_binding = _landscape_project, "landscape"
+        else:
+            # review r27: --after inherits only a validated, existing project directory.
+            _parent_project = ""
+            try:
+                import landscape as _binding_landscape
+                from orch_items import projects_root as _binding_projects_root
+                _candidate = _binding_landscape.project_name(
+                    (origin or {}).get("parent_project"))
+                if (_candidate
+                        and (_binding_projects_root() / _candidate).is_dir()
+                        and _binding_landscape.project_inside_root(_candidate)):
+                    _parent_project = _candidate
+            except Exception:
+                _parent_project = ""
+            if _parent_project:
+                _agenda_project, _project_binding = _parent_project, "parent"
+            else:
+                _agenda_project, _project_binding = _project_for_goal(
+                    message, (_context_only_project,) if _context_only_project else ())
+        if _context_only_project and _project_binding in ("named", "minted"):
+            log.info("project binding: %s (%s) keeps out of %s (context only)",
+                     _agenda_project, _project_binding, _context_only_project)
+        if _landscape_project and _landscape_project != _agenda_project:
+            log.warning("project binding: %s (%s) outranks the landscape's %s",
+                        _agenda_project, _project_binding, _landscape_project)
+        try:
+            from runs import stamp_run_metadata as _stamp_project_metadata
+            if _stamp_project_metadata({"project": _agenda_project,
+                                        "project_binding": _project_binding}) is None:
+                log.warning("project binding: %s (%s) not recorded in run metadata",
+                            _agenda_project, _project_binding)
+        except Exception:
+            log.warning("project binding: %s (%s) not recorded in run metadata",
+                        _agenda_project, _project_binding, exc_info=True)
+        log.info("project binding: %s (%s)", _agenda_project, _project_binding)
 
     if not (origin or {}).get("parent_handle_id"):
         try:
@@ -2159,7 +2220,6 @@ def _handle_impl(
         if not dry_run and not project and _is_meta_command:
             try:
                 from conductor import conduct
-                from agent_loop import _goal_to_slug
                 conductor_response = conduct(
                     message,
                     adapter=adapter,
@@ -2167,7 +2227,6 @@ def _handle_impl(
                     dry_run=False,
                 )
                 elapsed = int((time.monotonic() - started_at) * 1000)
-                conductor_project = _goal_to_slug(message)
                 return HandleResult(
                     handle_id=handle_id,
                     lane="agenda",
@@ -2176,7 +2235,8 @@ def _handle_impl(
                     message=message,
                     status="done",
                     result=conductor_response.message,
-                    project=conductor_project,
+                    # review r27: a Conductor meta-command executes without binding a project.
+                    project="",
                     elapsed_ms=elapsed,
                     artifact_path=None,
                 )
@@ -2214,6 +2274,13 @@ def _handle_impl(
                         _reply = channel.ask(_q)
                         if _reply:
                             message = f"{message}\n\nAdditional context: {_reply}"
+                            # review r27: scans must see clarified user intent, not the submitted fragment.
+                            try:
+                                from runs import stamp_run_metadata as _stamp_clarified_goal
+                                _stamp_clarified_goal({"goal": message})
+                            except Exception:
+                                pass
+                            # review r27: do not re-stamp after BLE; goal_after_rewrite owns that transform.
                             if _landscape_decided:
                                 # the landscape judged the goal AS SUBMITTED;
                                 # the reply may name other work ("this is for
@@ -2255,6 +2322,9 @@ def _handle_impl(
                         # Fall through to continue execution
                     else:
                         # No channel — return clarification_needed (CLI path).
+                        # review r27: queued answers inherit this recorded direction; unlike
+                        # the live-channel path, they cannot re-judge and move the binding.
+                        _bind_project()
                         # Stamp the question into run metadata: the HandleResult
                         # is ephemeral on queue/dispatch paths, and a
                         # clarification_needed record without its question is
@@ -2334,49 +2404,8 @@ def _handle_impl(
         # decisions/artifact paths without an embedding or another LLM call.
         # Stamp it before recall so the next run can join this one even
         # though metadata was opened before lane classification.
-        # Project identity, by precedence (2026-09-13): the operator's
-        # explicit project (an override, never the design) — or, riding the
-        # same argument, the dispatch NAVIGATOR's pick from the recent-
-        # projects menu (handle_queue: Maro's own decision, made with
-        # project evidence; recorded as `navigator`, not as an operator's
-        # word); the project of the run the LANDSCAPE chose and judged the
-        # goal to CONTINUE (Maro's own decision from the run history — the
-        # deliverable lands where the prior work is); an existing project
-        # literally named in the goal (the string shortcut the landscape is
-        # meant to retire — kept as the fallback for fresh goals because
-        # the lexical judge still misses continuations whose wording shares
-        # no tokens, BACKLOG #65 (3)); else the minted slug. The rule that
-        # bound it is recorded so the shortcut's share can be measured
-        # before it is removed, and so a navigator/landscape disagreement
-        # is measurable before either is made to outrank the other.
-        _nav_pick = ""
-        if isinstance((origin or {}).get("dispatch_navigator"), dict):
-            _nav_pick = str(origin["dispatch_navigator"].get("project") or "")
-        if project and project == _nav_pick:
-            _agenda_project, _project_binding = project, "navigator"
-        elif project:
-            _agenda_project, _project_binding = project, "operator"
-        elif _landscape_project:
-            _agenda_project, _project_binding = _landscape_project, "landscape"
-        else:
-            _agenda_project, _project_binding = _project_for_goal(
-                message, (_context_only_project,) if _context_only_project else ())
-        if _context_only_project and _project_binding in ("named", "minted"):
-            log.info("project binding: %s (%s) keeps out of %s (context only)",
-                     _agenda_project, _project_binding, _context_only_project)
-        if _landscape_project and _landscape_project != _agenda_project:
-            log.warning("project binding: %s (%s) outranks the landscape's %s",
-                        _agenda_project, _project_binding, _landscape_project)
-        try:
-            from runs import stamp_run_metadata as _stamp_project_metadata
-            if _stamp_project_metadata({"project": _agenda_project,
-                                        "project_binding": _project_binding}) is None:
-                log.warning("project binding: %s (%s) not recorded in run metadata",
-                            _agenda_project, _project_binding)
-        except Exception:
-            log.warning("project binding: %s (%s) not recorded in run metadata",
-                        _agenda_project, _project_binding, exc_info=True)
-        log.info("project binding: %s (%s)", _agenda_project, _project_binding)
+        # review r27: execution and the clarification exit share the same binder.
+        _bind_project()
 
         # mode:thin — use factory_thin loop (stripped scaffolding) instead of
         # full Mode 2. Kept as an operator-only escape hatch + benchmark
@@ -2395,6 +2424,19 @@ def _handle_impl(
                 _thin_text = _thin_result.final_report or "[no output produced]"
                 if _thin_result.status != "done":
                     _thin_text += f"\n\n⚠️ Thin loop status: {_thin_result.status}"
+                # review r27: thin identity supports continuations, but execution writes no project files.
+                try:
+                    from runs import current_run_dir as _thin_current_run_dir
+                    from runs import stamp_run_metadata as _stamp_thin_execution
+                    _stamp_thin_execution({"execution": "thin"})
+                    _thin_rd = _thin_current_run_dir()
+                    if _thin_rd is not None:
+                        _thin_build = _thin_rd / "build"
+                        _thin_build.mkdir(parents=True, exist_ok=True)
+                        (_thin_build / "loop-thin-RESULT.md").write_text(
+                            _thin_text, encoding="utf-8")
+                except Exception:
+                    pass
                 return HandleResult(
                     handle_id=handle_id,
                     lane="agenda",
@@ -2411,6 +2453,27 @@ def _handle_impl(
             except Exception as _thin_exc:
                 log.warning("mode:thin failed, falling back to Mode 2: %s", _thin_exc)
                 # Fall through to run_agent_loop below
+
+        # review r27: prefix exits need the context already known before persona and
+        # completion-standard selection, which intentionally remain default-lane only.
+        _base_context_parts = []
+        if prior_context:
+            _base_context_parts.append(
+                f"== Prior run context (for continuation) ==\n{prior_context}\n"
+                f"== End prior context — continue from here =="
+            )
+        if operator_context:
+            _base_context_parts.append(operator_context)
+        if _related_ctx:
+            _base_context_parts.append(_related_ctx)
+        if _now_escalation_context:
+            _base_context_parts.append(
+                f"== Escalated from NOW lane ==\n{_now_escalation_context}\n"
+                f"== End NOW-lane context =="
+            )
+        _prefixed_context_kwargs = (
+            {"ancestry_context_extra": "\n\n".join(_base_context_parts)}
+            if _base_context_parts else {})
 
         # pipeline: prefix — user specifies explicit steps as "step1 | step2 | step3".
         # Bypasses LLM decomposition entirely; runs the given steps in order.
@@ -2433,6 +2496,7 @@ def _handle_impl(
                     measurement_class=measurement_class,
                     handle_id=handle_id,
                     introspection_access=introspects_self,
+                    **_prefixed_context_kwargs,
                     # Async-tail: this lane returns through handle()'s
                     # finalize, which drains post-notify — same contract as
                     # the agenda lane (review of 707a541: these lanes were
@@ -2462,6 +2526,7 @@ def _handle_impl(
                 measurement_class=measurement_class,
                 handle_id=handle_id,
                 introspection_access=introspects_self,
+                **_prefixed_context_kwargs,
                 defer_maintenance=True,  # drains in handle()'s finalize
             )
             return _loop_result_to_handle(
@@ -2483,6 +2548,7 @@ def _handle_impl(
                 measurement_class=measurement_class,
                 handle_id=handle_id,
                 introspection_access=introspects_self,
+                **_prefixed_context_kwargs,
                 defer_maintenance=True,  # drains in handle()'s finalize
             )
             return _loop_result_to_handle(
@@ -2612,27 +2678,8 @@ def _handle_impl(
                 log.info("handle: persona=%s conf=%.2f forced=%s", _pname, _pconf, _forced_honored)
         except Exception:
             pass
-        _extra_ctx_parts = []
-        if prior_context:
-            _extra_ctx_parts.append(
-                f"== Prior run context (for continuation) ==\n{prior_context}\n"
-                f"== End prior context — continue from here =="
-            )
-        # Dispatch-envelope operator channel (docs/DISPATCH_ENVELOPE.md):
-        # advisory operator framing rides context, never the goal — lesson
-        # extraction receives the goal only, so this text is structurally
-        # unlearnable. Arrives pre-labeled (dispatch_envelope.operator_block).
-        if operator_context:
-            _extra_ctx_parts.append(operator_context)
-        if _related_ctx:
-            _extra_ctx_parts.append(_related_ctx)
-        # NOW→AGENDA verdict escalation: the failed quick answer rides along
-        # so the orchestrated run doesn't re-answer from model knowledge.
-        if _now_escalation_context:
-            _extra_ctx_parts.append(
-                f"== Escalated from NOW lane ==\n{_now_escalation_context}\n"
-                f"== End NOW-lane context =="
-            )
+        # review r27: extend the same base list used by prefix paths with default-only context.
+        _extra_ctx_parts = list(_base_context_parts)
         if _persona_ctx:
             _extra_ctx_parts.append(_persona_ctx)
         # Completion standard — injected for every AGENDA run
@@ -4794,9 +4841,14 @@ def main(argv=None):
             print(f"Error: --after {args.after}: that run's metadata.json is unreadable ({_exc})", file=sys.stderr)
             return 2
         _prior_goal = str(_prior_meta.get("prompt") or "")
+        # review r27: explicit --after carries the parent's validated project direction.
+        from landscape import project_name as _after_project_name
+        _parent_project = _after_project_name(_prior_meta.get("project"))
         _attach_origin = {**(_attach_origin or {}), "source": "cli",
                           "parent_handle_id": _prior.name.split("-", 1)[0],
                           "parent_goal": _prior_goal[:200]}
+        if _parent_project:
+            _attach_origin["parent_project"] = _parent_project
     try:
         result = handle(
             msg,

@@ -128,6 +128,10 @@ ALLOWED_DELETION_SITES = {
         "ephemeral: drain lock file",
     ("run_curation.py", "prune_run"):
         "user-invoked: explicit `prune` CLI subcommand",
+    # review r27: failed atomic deliverable staging removes only its own unique temp.
+    ("run_curation.py", "locate_deliverables"):
+        "ephemeral: removes only a unique same-directory artifact-copy temp "
+        "after copy/publish failure; the source and served destination remain",
     ("runs.py", "invalidate_run_index"):
         "ephemeral: removes only the derived migration marker so metadata can "
         "rebuild the disposable run-reference index",
