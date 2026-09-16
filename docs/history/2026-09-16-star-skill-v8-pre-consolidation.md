@@ -1,6 +1,8 @@
 ---
+status: record
 name: star
-version: 9
+version: 8
+archived: 2026-09-16 (v9 consolidation pass; live skill at .claude/skills/star/SKILL.md)
 description: ALPHA star-pattern mini-orchestrator — a master loop that owns taste (choose the next task) and judgement (validate the answer) and delegates everything else, 0..n dynamically chosen steps, no pre-planned pathway. Dev-side gut check for maro's orchestration patterns; also the modern melt-test of the 2026-03-31 factory branch.
 ---
 
@@ -56,45 +58,24 @@ if/when it turns on, are structural, not vibes:
 
 ## Invocation contract (taste, up front — do this BEFORE any delegation)
 
-Write these five lines in your reply before the first delegation. If you
+Write these four lines in your reply before the first delegation. If you
 cannot fill one in, ask the user — that gap is itself a finding.
 
 1. **Goal**: one sentence, outcome language.
 2. **Done-means**: the executed check(s) that will verify completion —
-   named now, not after, and stated as **falsifiable claims**: each check
-   names the wrong result it would catch (work is proving a theory, not
-   asserting one — HOUSE_STYLE step 1, Jeremy 2026-08-16). A check that
-   cannot fail is not a check, it is a standing claim that the rule holds
-   (mutation-from-file decree, same day). An absence-shaped check
-   ("found 0", "no caller", "nothing missed") gets a **positive control**
-   — a planted or known hit the same instrument must find — before its
-   green counts.
+   named now, not after.
 3. **Cuts**: what is explicitly out of scope / what would make this the
    wrong thing to build (inversion). Cuts are a living term, not a
    frozen contract — see the re-cutting guardrail.
 4. **Budget**: max delegations this run (default 8). Hitting the cap =
    stop and report honestly, never push past it silently.
-5. **1-shot bet**: would ONE bare delegation of the whole goal, no loop,
-   likely pass done-means? yes / no, one clause of why. This is the
-   pre-registered prediction the run's close settles (D17, Jeremy
-   2026-09-04: "the bitter lesson is within our process, not part of
-   it... where a 1-shot can get better and possibly even replace our
-   learned subsystems; that is itself a learning... That's sort of the
-   star skill in action"). A run the 1-shot would have won is a
-   recorded learning about the goal class, not a failure of the run.
 
-**Landscape check (re-run identity, 2026-08-10; trichotomy 2026-09-05):**
-before the first delegation, classify this goal against what has run
-before (prior ledgers, stop verdicts, existing deliverables) as one of
-**fresh** / **related** / **rerun**, and write the relation with its
-evidence as ledger row 0. *Related*: a prior result bears on this goal —
-its judged findings pass to delegates as established, its residuals and
-open stop verdicts as labeled assumptions. *Rerun*: an IDENTICAL goal
-re-asked will mostly re-find the old answer, so taste aims at what the
-last run did NOT settle or names the different axis. The relation is
-decided from the record, never from how the goal happens to be phrased
-(decisions the run has the data for are the run's — string-identity
-shortcuts retired, Jeremy 2026-09-05).
+**Prior-attempt check (re-run identity, 2026-08-10):** before the first
+delegation, ask whether this goal — or its dead ends — has run before
+(prior ledgers, stop verdicts, existing deliverables). A re-run points
+taste at the prior result's residuals instead of re-treading; an
+IDENTICAL goal re-asked will mostly re-find the old answer, so either
+aim at what the last run did NOT settle or name the different axis.
 
 ## The loop (repeat 0..n times)
 
@@ -134,24 +115,13 @@ shortcuts retired, Jeremy 2026-09-05).
    experiment as a `recon` task / spawn a capability side-quest / reroute
    away (the goal may no longer need that step at all) / honest typed
    stop. The step recommended; the master decides — never auto-adopt the
-   step's proposal, and before routing ON a recommendation (a
-   `proposed_experiment`, a fix shape, a "just do Y") run the
-   **prescription audit**: if this were applied exactly as written,
-   would the result be correct — and what does it break? (board-of-review
-   corpus, imported 2026-09-05, n=0 here; there, a four-reviewer-agreed
-   fix would have turned a loud failure into a silent wrong result.) **Dedup at the map**: two tasks blocked on the same
+   step's proposal. **Dedup at the map**: two tasks blocked on the same
    *named missing thing* (`what_would_be_different`, not the cause enum —
    "missing GitHub access" and "missing DB credentials" are both
    missing-capability but need different side-quests) become ONE routing
    decision, not two experiments.
-2. **DELEGATE.** One delegate, serial (one live at a time — box rule):
-   an Agent-tool subagent, or an opposite-model CLI worker (`codex exec
-   --sandbox workspace-write -C <worktree>`) when the task is a fix and
-   cross-model pressure is wanted. **Which worker is a taste choice and
-   goes in the ledger row** — same model as the master means a weaker
-   independent judge, so the JUDGE refutation question below is
-   mandatory on every accept, not only static-read ones. The delegate's
-   final text is data for step 3, not truth.
+2. **DELEGATE.** One Agent-tool subagent, serial (one live at a time —
+   box rule). The subagent's final text is data for step 3, not truth.
 3. **JUDGE.** Validate the answer against the criteria stated in step 1
    *before* integrating it. Sub-agent reports are claims — spot-verify
    the load-bearing ones against the tree/artifacts yourself (reads and
@@ -181,22 +151,6 @@ shortcuts retired, Jeremy 2026-09-05).
    head-to-head (docs/history/2026-08-13-star-vs-harness-comparison.md) —
    both runs verified every row yet each missed one category leader the
    other's single axis caught; union beat either.
-   For **class-shaped deliverables** (a fix, stamp, gate, guard, rule or
-   field that applies to a CLASS of sites — every writer, every exit,
-   every lane) the verdict carries a THIRD refutation — the **twin
-   census**, symmetric to coverage: the delegate changed the site it was
-   aimed at; which members of the class did it NOT reach? Enumerate the
-   class by reading the FILE, not the diff — early returns before the
-   new stamp, the exception/retry/queued/CLI/parallel-lane twins, the
-   stamp's own non-raising failure form (returns None, ordering vs an
-   earlier exit, truthiness vs presence), the legacy-inferred-from-absence
-   rule. Census to RUN (grep and read), not a caveat to write; an unreached
-   member is a reject-with-evidence or a new task. Grounds: adversarial
-   rounds r27–r30 on the landscape-binding chunk (2026-09-16) each found
-   ONLY twins and failure paths of the previous round's fixes — four
-   rounds the loop paid for because nobody censused the class at judge
-   (patterns 17/19/20; review-miss taxonomy #2 "siblings",
-   docs/history/2026-08-15-review-miss-taxonomy.md).
    For `recon` tasks judgement asks a different question: did the map
    actually change, and are the new landmarks/edges REAL? Spot-probe
    claimed edges (a claim should name what settles it — the
@@ -213,9 +167,7 @@ shortcuts retired, Jeremy 2026-09-05).
    count. The master's routing decision gets its own row either way.
 5. Loop. Done only when the done-means checks from the invocation
    contract actually pass a final judgement step (run them; do not
-   narrate them) — and a check that could not have failed on this run
-   (its positive control never planted, its negative never reachable)
-   passes nothing: it is downgraded to inconclusive and named as such.
+   narrate them).
 
 ## Diagnosis at the failure boundary (§14, 2026-07-27)
 
@@ -301,13 +253,7 @@ routing decision lands its new capability or data.
   master or child — remains the violation.
 - **Two consecutive rejects on the same task → escalate to the user** with
   both rejection evidences. Vary approach once; never ralph the same
-  prompt — and the first variation after a reject on a FIX-shaped task
-  is a different **worker** (opposite model, or a higher tier), not a
-  re-phrase to the same one: the fixer's blind spot repeats when the
-  same model keeps fixing (flip decree, Jeremy 2026-09-13, after 17
-  rounds of one chunk; tier-escalation decree 2026-08-22; r26 datapoint
-  2026-09-16 — same-model fallback found 1 of 4 chunk-core HIGHs the
-  opposite model found on the identical prompt).
+  prompt.
 - **Serial only.** No parallel delegations in alpha (host-OOM rule on this
   box, and star is definitionally answer-informed).
 - **Recursion is not foreclosed** (standing decree) but alpha adds no
@@ -381,12 +327,7 @@ Close the ledger with the **result block** (the node's bounded output):
 - **Stop verdict** (only when not done): one of the four typed stops,
   with evidence and reopen condition (see Honest exit, typed).
 - **Residuals**: what remains undone or uncertain, honestly.
-- **Cost**: delegations used vs budget, worker per delegation.
-- **1-shot verdict**: settle the contract's bet — `loop-earned` (name the
-  judged reject/probe/route the 1-shot could not have made) /
-  `1-shot-sufficient` (recorded as a learning about this goal class) /
-  `undetermined`. This row is the run's contribution to the standing
-  champion–challenger against the bare prompt (D17).
+- **Cost**: delegations used vs budget.
 - **Findings**: crystallization-pressure, granularity, or strategy notes
   (which local move was chosen where — one-shot / delegate / would-have
   -recursed — and whether it was right in hindsight). These strategy
@@ -426,29 +367,35 @@ BACKLOG "NOW retry rung").
 
 **Versioning (Jeremy, 2026-08-12):** the frontmatter `version` bumps on
 every contract change, and a bump asserts the changed contract has been
-exercised at least once — version is a tested-revision counter, not an
-edit counter. Anti-prompt-soup rules (KEEP verdict, 2026-07-28): additions
-are contract changes or distilled principles with a pointer — war stories
-live in history docs; consolidation pass when the file doubles or ~3 arcs
-close, archiving the prior version; the DEV_PATTERNS graduation valve
-applies (anything that gains a deterministic home leaves this file).
+exercised at least once — version is a tested-revision counter, not a
+edit counter. Set to 7 at introduction (matches the seven distinct
+change-days in git history: 07-21, 22, 23, 27, 28, 29, 08-12). Usage
+note, same date: exercised 8–10+ times by Jeremy's count (adjudication
+was at 2 uses) — keep signal standing.
 
-**Version ledger** (each row = exercised; records in docs/history/):
+**Consolidation pass 2026-08-12** (the ~3-arcs condition fired:
+verdict-integrity, REPL A/B, world-facts arcs all closed since the KEEP
+verdict; prior version archived at
+`docs/history/2026-08-12-star-skill-pre-consolidation.md`). Five
+contract deltas folded in, each from a landed arc: prior-attempt check
+(re-run identity), assumption-labeled context partitioning (world-facts
+§7.1 amendment), teach-as-decision-rule (A/B-4 falsifier a),
+evidence-modality refutation at judge (MH #1 pass-audit),
+toolset-stamped reopen conditions (§14h revisit mechanic). Claim-error
+range updated 30–78% → 0–78% (later rounds measured 0%; verification
+stays unconditional).
 
-| v | Date | Contract change | Exercised on | Record |
-|---|------|-----------------|--------------|--------|
-| 7 | 2026-08-12 | Consolidation: prior-attempt check, assumption-labeled context, teach-as-decision-rule, evidence-modality refutation, toolset-stamped reopen | 8–10+ dev uses by Jeremy's count | 2026-08-12-star-skill-pre-consolidation.md (v6 archive) |
-| 8 | 2026-08-13 | Coverage refutation at JUDGE for enumeration goals | Re-run of the code-review-skills goal: the JUDGE probe caught two gh-verified leaders the coverage-taught delegation still missed — criteria-level teaching insufficient, judge-side probe is the load-bearing backstop | 2026-08-13-star-coverage-refutation-exercise.md, 2026-08-13-star-vs-harness-comparison.md |
-| 9 | 2026-09-16 | Consolidation (3+ arcs since v7: shadow lane, successor v1, secrets/ask lanes, landscape-binding loop). Deltas: falsifiable done-means + positive control; 1-shot bet + verdict (D17); landscape trichotomy fresh/related/rerun; worker identity as taste + same-model mandatory refutation; twin-census refutation at JUDGE; vary-the-worker after a reject; prescription audit before routing on a recommendation | Go twin census of the r26–r29 Python landscape-binding HIGHs on `successor` (planning/landscape-twins-go-2026-09-16.md): 2 of 5 delegations, positive control found, done-means 22/22 probed, twin-census refutation fired as a probe (found F9 riders gap + F20 non-atomic answer→launch), 1-shot verdict loop-earned (r30 recut, F17 downgrade, coverage probe over unread subsystems) | 2026-09-16-star-skill-v8-pre-consolidation.md (v8 archive) |
-
-**Currency (2026-09-16):** the shadow lane's `star|plain` arm (the live
-champion–challenger, docs/SHADOW_LANE_DESIGN.md) has produced ONE row
-since 2026-08-14 (be7c618a, star, $4.53/440s vs primary $3.43/1016s —
-star was MORE expensive at n=1, against the head-to-head's ~100× cheaper
-figure; the cost prediction is open, not settled). The READ-tier AGENDA
-gate has admitted almost nothing since; the Go successor took the
-challenger seat as its own track on 2026-09-06 (6 rows). The pre-registered
-~10-pair adjudication (due 2026-09-13) has NOT accrued for star|plain —
-the standing evidence for this skill remains its dev-side uses, and the
-1-shot verdict row above is how each of those now feeds the same
-question the shadow arm was built to answer.
+**Version 8 (2026-08-13):** coverage refutation at JUDGE for enumeration
+goals (the second refutation, symmetric to evidence-modality). Exercised
+same day on a re-run of the code-review-skills goal (the target of the
+2026-08-13 star-vs-harness head-to-head): it FIRED. The coverage-aware
+*delegation* still missed two `gh api`-verified category leaders —
+mattpocock/skills (216,678★ bundle shipping `skills/engineering/code-review/`)
+and awesome-skills/code-review-skill (1,703★, the dedicated leader) — even
+with the criteria demanding bundle enumeration and an explicit "a prior run
+missed a 200k+★ bundle" warning (it stopped at the first 200k bundle it
+found, obra/superpowers). The master's JUDGE-step coverage PROBE caught both.
+Finding: criteria-level coverage teaching is insufficient (the A/B-4
+advertisement-only lesson, again) — the judge-side probe is the load-bearing
+backstop, which is why the rule makes coverage a probe to RUN, not a caveat
+to write. Record: docs/history/2026-08-13-star-coverage-refutation-exercise.md

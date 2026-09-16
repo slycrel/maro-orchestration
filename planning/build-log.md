@@ -2473,3 +2473,60 @@ name, same presence wording.
   a `defer` inside `Complete` so a timeout, a parse error or a panic in
   the stream reader all leave no file. The caller (`wireSecrets`) only
   decides the path and the lines.
+
+## Star skill v9 + its exercise: Go twins of the landscape-binding HIGHs (2026-09-16)
+
+Jeremy: "upgrade the star skill in maro on the go port branch." The skill
+(`.claude/skills/star/SKILL.md`) had sat at v8 since 2026-08-13 while 3+ arcs
+closed (shadow lane, successor v1, secrets/ask lanes, the r1–r30
+landscape-binding loop on main), which is the skill's own consolidation
+trigger. v8 archived at docs/history/2026-09-16-star-skill-v8-pre-consolidation.md.
+
+**Seven contract deltas, each from a landed arc:** done-means stated as
+falsifiable claims with a positive control on absence-shaped checks
+(HOUSE_STYLE 2026-08-16 + mutation-from-file); a fifth contract line, the
+**1-shot bet**, settled at close by a **1-shot verdict** row (D17 — the star
+skill IS the standing champion–challenger against the bare prompt); the
+prior-attempt check becomes the **landscape trichotomy** fresh/related/rerun
+decided from the record (2026-09-05 decree); worker identity as a taste
+choice with a mandatory refutation when master and worker share a model;
+the **twin-census refutation** at JUDGE for class-shaped deliverables
+(patterns 17/19/20 — r27–r30 each found only twins of the prior fixes);
+vary the WORKER, not the prompt, after a reject on a fix (flip decree
+2026-09-13, tier decree 2026-08-22, r26 datapoint); the prescription audit
+before routing on a delegate's recommendation (board-of-review import,
+n=0 here). The version narrative collapsed into a ledger table; a currency
+note records that the shadow lane's star|plain arm has ONE row since
+08-14 and its ~10-pair adjudication never accrued.
+
+**Exercise (the version rule demands one):** a real question for this
+branch — which of the 21 Python HIGHs from r26–r29 have Go twins.
+Record: planning/landscape-twins-go-2026-09-16.md. 2 delegations of 5,
+blind positive control found, 22/22 rows probed. Verdicts: 3 twins
+(one downgraded to partial), 9 guarded, 4 absent, 6 n/a-by-design.
+
+- **113. Two Go twins to fix, one design question.** F9: the AGENDA step
+  executor (`stepPrompt`, agenda_driver.go:332) and fork children get no
+  Context/Related riders while intent, plan and the NOW executor do — an
+  operator's answer reaches the plan but not the step that does the work;
+  the fold re-derives the prompt byte-for-byte, so the fix is a template
+  version bump. F20: `maro-go answer` commits the Answer, then launches
+  the follow-up in a separate journal session; a failure there leaves the
+  run answered-with-no-follow-up and `answer` refuses a retry — no
+  `--retry` twin of Python's. F17 (partial): the related-run similarity
+  scan reads `Goal.Text` only, so an answer never changes what a later
+  run relates to — by the immutable-goal design; decide, don't patch.
+- **114. The control must be defect-shaped.** The planted positive control
+  was found, but the delegate recognised it as a control ("reads as
+  fix-shaped"). A control that looks different from the real rows tests
+  the instrument on an easier distribution than the one it is judged on.
+- **115. Honest not_examined lines are coverage probes waiting to run.**
+  The delegate's list of unread packages (tail, sheriff, learn) named the
+  F1-class hiding place; a 30-second master grep closed it. The v9 rule
+  ("a plausible missing class is a probe to RUN, not a caveat to write")
+  paid for itself on its first run.
+
+Owed on this branch: fix F9 (riders into `stepPrompt` + fork children,
+prompt-template version bump, fold parity) and F20 (answer→follow-up as
+one recoverable sequence, or a retry verb); census r30's five HIGHs
+(6a09e8bd) against F19–F21.
