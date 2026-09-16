@@ -1325,6 +1325,25 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   one-agent-per-milestone stays the rule (the scaling-study regime that
   actually penalizes is same-task fan-out).
 
+- **2026-09-16 (Review rounds: 2–3 is the norm — Jeremy: "30 rounds is
+  way way too much; 2-3 should be the norm, 6-7 should be rare. 31 is
+  just we're doing it wrong... I'm not running into this elsewhere, so
+  we are probably 'holding it wrong'"):** item 2 (landscape project
+  binding) ran 31 adversarial rounds and stopped under an orchestrator
+  stop rule (r30 → 6a09e8bd, r31 → e6999d78), after the container-auth
+  chunk ran 22; the r17 flip (codex writes, Claude reviews) changed the
+  fixer, not the generator. Diagnosis in
+  `docs/history/2026-09-16-review-loop-postmortem.md`: the stop decision
+  belonged to the adversary ("no HIGH" is unreachable against best-effort
+  writes), the whole-chunk scope grew every round, the prompt said
+  "attack the fixes first", classes were fixed one instance at a time,
+  and the orchestrator never triaged likelihood × consequence. Standing
+  rule from here: budget 2–3 rounds per CODE chunk (a fourth needs a
+  written reason, a fifth needs Jeremy); round 1 reviews the chunk diff
+  and every verified finding is triaged fix / pin / class / refute;
+  round 2 reads the fix diff only; residuals ship as known-gap pins.
+  The r31 design residue (checked pause API for every producer;
+  per-attempt provenance records) is a BACKLOG item, not a round 32.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

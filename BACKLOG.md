@@ -44,6 +44,30 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### The review loop itself: 31 rounds on item 2 is "holding it wrong" (Jeremy, 2026-09-16: "2-3 should be the norm, 6-7 should be rare") — HIGH, process
+Item 2 (landscape-driven project binding, 1dc74714) took 31 adversarial rounds
+(r30 → 6a09e8bd, r31 → e6999d78, both CI green) and stopped under the stop
+rule, not at a fixpoint. Two things to revisit, in this order:
+1. **The loop.** Diagnosis in docs/history/2026-09-16-review-loop-postmortem.md
+   (written the same day). Short form: the termination criterion ("no HIGH from
+   an adversarial reviewer") is unreachable for a codebase of best-effort
+   writes — an adversary with shell probes and unlimited effort always has one
+   more failure-path twin; the review scope grew monotonically (31 commits, a
+   600 KB prompt, every fix's neighbour became in-range); the prompt told the
+   reviewers to attack the fresh fixes first; findings were fixed one instance
+   at a time when they were a CLASS (unchecked stamp returns, two-store
+   non-atomicity); and the orchestrator never applied a likelihood/consequence
+   triage of its own — "verified true" was treated as "must fix now". New rule
+   (Jeremy): 2–3 rounds is the norm, 6–7 rare; the orchestrator triages
+   severity, residuals become known-gap pins, and a fix round re-reads the fix
+   diff only.
+2. **The residue** (r31 note above under the landscape bullet): one checked
+   pause API for `pause_for_ask` / `watch_live` / `env_request.pause_for_request`
+   (today they return `pending` and notify on a None stamp), and per-attempt
+   provenance records (loop_id, project, start, end) replacing the scalar
+   `execution` field and the run-wide `started_at..ended_at` scan window.
+   Design pass first (one round), then build.
+
 ### PCD + Formal Methods — constrained decision layer for Maro planner (Jeremy ask, 2026-09-16; research in flight)
 
 Two related research dispatches are running:
