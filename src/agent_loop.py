@@ -138,7 +138,8 @@ def run_agent_loop(
     cost_budget: Optional[float] = None,
     ralph_verify: bool = False,
     resume_from_loop_id: Optional[str] = None,
-    resume_checkpoint=None,  # the Checkpoint the caller already validated (CLI, under its lock) — used as-is, no re-read
+    resume_checkpoint=None,  # the CLAIMED Checkpoint (mark_checkpoint_claimed's read-back): admitted by its permit after ONE re-read of its exact source path — never re-resolved by id
+    loop_id: Optional[str] = None,  # pre-minted loop id (a resume names its successor in the claim it writes); None = mint here
     permission_context=None,
     continuation_depth: int = 0,
     preset_steps: Optional[List[str]] = None,
@@ -179,36 +180,57 @@ def run_agent_loop(
         LoopResult with full outcome.
     """
     # Phase A: Initialize loop state
-    ctx, _early_return = _initialize_loop(
-        goal,
-        project=project,
-        repo_path=repo_path,
-        model=model,
-        backend=backend,
-        adapter=adapter,
-        dry_run=dry_run,
-        verbose=verbose,
-        interrupt_queue=interrupt_queue,
-        hook_registry=hook_registry,
-        ancestry_context_extra=ancestry_context_extra,
-        permission_context=permission_context,
-        continuation_depth=continuation_depth,
-        cost_budget=cost_budget,
-        token_budget=token_budget,
-        ralph_verify=ralph_verify,
-        max_steps=max_steps,
-        max_iterations=max_iterations,
-        step_callback=step_callback,
-        loop_reason=loop_reason,
-        parent_loop_id=parent_loop_id,
-        admission_wait_s=admission_wait_s,
-        defer_learning=defer_learning,
-        defer_maintenance=defer_maintenance,
-        measurement_class=measurement_class,
-        handle_id=handle_id,
-    )
+    try:
+        ctx, _early_return = _initialize_loop(
+            goal,
+            loop_id=loop_id,
+            project=project,
+            repo_path=repo_path,
+            model=model,
+            backend=backend,
+            adapter=adapter,
+            dry_run=dry_run,
+            verbose=verbose,
+            interrupt_queue=interrupt_queue,
+            hook_registry=hook_registry,
+            ancestry_context_extra=ancestry_context_extra,
+            permission_context=permission_context,
+            continuation_depth=continuation_depth,
+            cost_budget=cost_budget,
+            token_budget=token_budget,
+            ralph_verify=ralph_verify,
+            max_steps=max_steps,
+            max_iterations=max_iterations,
+            step_callback=step_callback,
+            loop_reason=loop_reason,
+            parent_loop_id=parent_loop_id,
+            admission_wait_s=admission_wait_s,
+            defer_learning=defer_learning,
+            defer_maintenance=defer_maintenance,
+            measurement_class=measurement_class,
+            handle_id=handle_id,
+        )
+    except Exception:
+        if resume_checkpoint is not None:
+            # Initialization raised (bad pre-minted id, ...): nothing ran,
+            # the CLI's claim must not outlive it (r3 finding 6).
+            from checkpoint import release_own_claim as _release_own_claim
+            _release_own_claim(resume_checkpoint)
+        raise
     if _early_return is not None:
+        if resume_checkpoint is not None:
+            # Refused before any resource was taken (kill switch, busy
+            # slot…): the CLI's claim on the source must not outlive it.
+            from checkpoint import release_own_claim as _release_own_claim
+            if not _release_own_claim(resume_checkpoint):
+                log.warning("refused resume: claim on %s could not be released",
+                            getattr(resume_checkpoint, "resume_source", None))
         return _early_return
+    if resume_checkpoint is not None and getattr(resume_checkpoint, "resume_permit", None):
+        # From here every pre-execution refusal ends in finalize_refusal,
+        # which releases the claim the CLI wrote.
+        ctx.resume_claim_release = (resume_checkpoint.resume_source,
+                                    resume_checkpoint.resume_permit)
 
     # BACKLOG #17 sub-item 1: scope the ambient loop_id for the duration
     # of this run so log_event() calls deep in the execution call stack

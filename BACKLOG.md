@@ -7417,14 +7417,42 @@ NOT closed:
     overwritten by the complete successor or consumes it in place, and
     demotes the status to `incomplete` when neither is durable (disk full)
     — but the demoted run's source is then intact, unconsumed and
-    resumable again (`is_consumed()` false, metadata status ≠ done). Lead:
-    an atomic `resume_in_progress` tombstone / source rename taken under
-    the admission lock before `run_agent_loop`, refused by later resumes
-    until reconciled; if it cannot be written, refuse before executing.
-    Pairs with the "consumption can race a late writer" lead above (r3
-    finding 7: the proof re-read and the consumption run outside any lock
-    shared with `write_checkpoint`; a per-loop mutation lock or a
-    monotonic generation is the shared fix).
+    resumable again (`is_consumed()` false, metadata status ≠ done).
+    **SHIPPED 2026-09-17 (LoopsBench chunk 7, see BACKLOG_DONE):**
+    `resume_claim` written by a digest-keyed, locked compare-and-swap
+    before execution; live / superseded / unresolved / indeterminate;
+    `--reclaim` for unresolved only; permit (nonce) not pid; release on
+    pre-step refusal. Residue from its three review rounds (design, not
+    re-raised):
+    - *Consumption / the loop's own writer still outside the lock* (chunk-6
+      r3 finding 7, chunk-7 r1 Architect 7 / r3 5): claim, release and
+      consume now share `file_lock.locked_rmw` on the file, but
+      `write_checkpoint` writes unlocked, so the loop's writer can still
+      race a consume; and duplicate checkpoint homes for one loop lock by
+      their distinct embedded handle ids (the CLI locks a handle source by
+      HANDLE, the API loader by loop id — not serialized against each
+      other). The shared fix is an identity-level admission ledger
+      (one lock name per loop identity, every mutation of any home under
+      it) or a monotonic generation in the file.
+    - *The API path claims but never consumes* (r1 Architect 3): the
+      CLI proves-overwritten-or-consumes after `done`; a library resume
+      that finishes leaves its source claimed-not-consumed (refused later
+      as live/superseded — correct but opaque). Queued design: ONE
+      resume-admission service returning a typed `ResumePermit`
+      (source path, digest, nonce, successor address) used by CLI and API,
+      with consumption in the loop's own finalize.
+    - *Lossy listings hide a malformed claim* (r2 finding 9):
+      `list_checkpoints` → `checkpoint list` / heartbeat skip a file whose
+      `resume_claim` does not parse (it is LOOKUP_INVALID for an explicit
+      resume, which names it). Lead: a classified listing API returning
+      `CheckpointLookup` rows incl. invalid paths.
+    - *A held lease for a duplicate pre-minted loop id proceeds ungated*
+      (r2 finding 10; pre-existing for minted ids): `acquire_run_lease`
+      treats an already-held lease as an anomaly and returns None.
+    - *`finalize_refusal` clears `ctx.run_worktree` even when cleanup
+      raised* (r1 Skeptic 11): the disk worktree stays with no reference
+      for a retry; a cleanup record for the stranded-worktree sweep is the
+      lead.
   - **Operator-answer resume ignores checkpoints** (chunk-6 r1,
     pre-existing sibling): `operator_ask.answer` → `handle_queue` RESUME
     calls `run_agent_loop` with neither `resume_from_loop_id` nor

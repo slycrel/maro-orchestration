@@ -249,6 +249,7 @@ def _initialize_loop(
     defer_maintenance: bool = False,
     measurement_class: str = "",
     handle_id: str = "",
+    loop_id: Optional[str] = None,
 ) -> tuple:
     """Phase A: Initialize loop — setup adapter, project, ancestry, hooks.
 
@@ -275,7 +276,11 @@ def _initialize_loop(
     ctx.measurement_class = measurement_class
     ctx.handle_id = handle_id
 
-    ctx.loop_id = str(uuid.uuid4())[:8]
+    if loop_id:
+        from checkpoint import ID_REF_RE as _id_re
+        if not isinstance(loop_id, str) or not _id_re.fullmatch(loop_id):
+            raise ValueError(f"loop_id {loop_id!r} is not a loop id")
+    ctx.loop_id = str(loop_id or "") or str(uuid.uuid4())[:8]
     ctx.started_at = time.monotonic()
     ctx.start_ts = datetime.now(timezone.utc).isoformat()
 

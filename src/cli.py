@@ -2413,13 +2413,13 @@ def _cmd_router(args: argparse.Namespace) -> int:
 
 def _resume_lock_name(identity: str) -> str:
     """Stable, path-safe admission-lock name for one resumable run."""
-    import hashlib
-    return "resume-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+    from checkpoint import resume_lock_name
+    return resume_lock_name(identity)
 
 
 import re as _re
 
-_RESUME_REF_RE = _re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+from checkpoint import ID_REF_RE as _RESUME_REF_RE  # one grammar for ids in paths
 
 
 def _lookup_resume_checkpoint(ref: str):
@@ -2722,7 +2722,11 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     # drop the in-flight marker, the plan text, or a row's identity while
     # keeping the finished set). Completion / consumption between the reads
     # got their own messages above; any other change → re-run.
-    if _lk.ckpt.to_dict() != ckpt.to_dict():
+    # Same BYTES when both reads carry a digest (a legacy file with no
+    # `timestamp` parses as "now" on every read — r3 finding 2); the
+    # semantic compare stays for lookups built without one (test seams).
+    if (_lk.digest and _fresh_lk.digest and _lk.digest != _fresh_lk.digest) or (
+            not (_lk.digest and _fresh_lk.digest) and _lk.ckpt.to_dict() != ckpt.to_dict()):
         _resume_lock.close()
         return fail("E_RESUME",
                     f"checkpoint for {ref!r} changed between reads (a writer replaced "
@@ -2807,6 +2811,45 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     # idempotent — started_at/prompt.txt are preserved); otherwise mint one so
     # a loop_id-only checkpoint still gets attribution capture + inspectability.
     handle_id = ckpt.handle_id or _uuid.uuid4().hex[:8]
+    # The successor loop id is minted HERE so the claim can name it: the
+    # successor's checkpoint is then findable at its id address even when
+    # the run dir could not be opened (r1 Skeptic 8).
+    _succ_loop_id = _uuid.uuid4().hex[:8]
+
+    # Claim the source BEFORE anything executes (chunk 7): another resume's
+    # claim refuses (in progress / superseded / indeterminate / unresolved-
+    # without---reclaim), and a claim that cannot be written refuses too —
+    # a resume that cannot record what it is about to do cannot later prove
+    # it. The claim is a compare-and-swap against the admitted snapshot and
+    # the object the loop executes is the claimed file as read back.
+    from checkpoint import (mark_checkpoint_claimed, resume_claim_status,
+                            resume_claim_detail, RESUME_CLAIM_UNRESOLVED)
+    _reclaim = bool(getattr(args, "reclaim", False))
+    # Everything fallible that precedes the loop is built BEFORE the claim
+    # (r3 finding 3): a claim followed by "adapter unavailable" would rot
+    # into an unresolved claim for a run that never started.
+    try:
+        from llm import build_adapter
+        from conductor import assign_model_by_role
+        _learning_adapter = build_adapter(
+            model=_resume_model or assign_model_by_role("worker"))
+    except Exception as exc:
+        _resume_lock.close()
+        return fail("E_RESUME", f"{exc} (nothing ran; the checkpoint is unclaimed)")
+    _claim_state, _claim_extra = resume_claim_status(ckpt)
+    if _claim_state is not None and not (_claim_state == RESUME_CLAIM_UNRESOLVED and _reclaim):
+        _resume_lock.close()
+        return fail("E_RESUME", resume_claim_detail(ckpt, _claim_state, _claim_extra))
+    _claimed = mark_checkpoint_claimed(ckpt.loop_id, path=_fresh_lk.path, handle_id=handle_id,
+                                       expected=_fresh_lk, successor_loop_id=_succ_loop_id,
+                                       reclaim=_reclaim)
+    if _claimed is None:
+        _resume_lock.close()
+        return fail("E_RESUME",
+                    f"could not record the resume claim in {_fresh_lk.path} — refusing "
+                    "to execute (nothing ran; if the file changed under the lock, "
+                    "re-run; else free the disk / fix permissions and re-run)")
+    ckpt = _claimed
     _prior_rd = _runs.current_run_dir()
     _rd = None
     try:
@@ -2824,22 +2867,19 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     _runs.set_current_run_dir(_prior_rd)
     _status = "error"
     result = None
-    _learning_adapter = None
     try:
         with _runs.scoped_run_dir(_rd):
             try:
-                from llm import build_adapter
-                from conductor import assign_model_by_role
-                _learning_adapter = build_adapter(
-                    model=_resume_model or assign_model_by_role("worker"))
                 result = _al.run_agent_loop(
                     ckpt.goal,
                     project=ckpt.project or None,
                     resume_from_loop_id=ckpt.loop_id,
-                    # The object validated under THIS lock — the loop does
-                    # not re-read the id (a torn write in between used to
-                    # take the fresh branch).
+                    # The object validated AND claimed under THIS lock — the
+                    # loop does not re-read the id (a torn write in between
+                    # used to take the fresh branch); the claim names the
+                    # loop id the successor runs as.
                     resume_checkpoint=ckpt,
+                    loop_id=_succ_loop_id,
                     # The run's own execution policy: a DAG-written file
                     # re-enters the DAG lane (0 would run it sequentially).
                     parallel_fan_out=int(getattr(ckpt, "parallel_fan_out", 0) or 0),

@@ -1,5 +1,96 @@
 # Backlog — Completed Archive
 
+## A resume claims its source checkpoint before it executes — SHIPPED 2026-09-17 (LoopsBench chunk 7)
+
+**Found:** chunk-6 r3 finding 2: after a `done` resume whose consumption
+FAILED (disk full / EACCES / lost run-dir context) the run was demoted to
+`incomplete`, but the source checkpoint stayed intact, unconsumed and
+resumable AGAIN — a second `maro resume` replayed steps whose external
+effects had already happened. Nothing durable said "someone already ran
+this". The review rounds widened the class: the API path
+(`run_agent_loop(resume_from_loop_id=)`) never recorded anything;
+`branch_checkpoint` copied a mid-resume source into a fresh replayable
+file; a handed-in `resume_checkpoint=` object was trusted as a snapshot.
+
+**Fix:** `Checkpoint.resume_claim = {handle_id, pid, claimed_at, token,
+nonce, successor_loop_id, successor_path?}` written into the EXACT
+selected source by `checkpoint.mark_checkpoint_claimed(loop_id, path=,
+handle_id=, expected=<the admitted CheckpointLookup>, successor_loop_id=,
+successor_path=, reclaim=)` — a compare-and-swap under the per-file lock
+(`file_lock.locked_rmw`) keyed on the sha256 DIGEST of the bytes admitted
+(`CheckpointLookup.digest`; semantic equality was wrong — a file with no
+`timestamp` parses as "now" every read), refusing consumed / complete /
+claim-gated files, validating the proposed claim before any write,
+fsyncing the directory entry, and reading the file BACK; it returns the
+read-back object carrying two transient fields (`resume_permit` = the
+nonce, `resume_source` = the path) that make the claim read as OURS —
+never the pid. `resume_claim_status(ckpt) -> (state, detail)`: None (no
+claim / consumed / our permit), `live` (claimant alive by pid + start
+token), `superseded` (a successor checkpoint naming another loop exists at
+`run_dir(handle)/build/checkpoint.json`, `ckpt_<successor_loop_id>.json`
+or the recorded `successor_path` — read with the successor's identity),
+`unresolved` (claimant dead, every successor address PROVEN absent),
+`indeterminate` (a successor address unreadable / mismatched — no override
+opens it). Consumers: `maro resume` refuses all four, `--reclaim` (new
+flag) overrides only `unresolved`; the loader `_load_resume` is the policy
+boundary for the API path too — it admits under the CLI's pidfile lock
+(`checkpoint.resume_lock_name`), probes the source's own owner (run lease,
+then in-flight pid), claims after EVERY refusal check (never for a
+complete file), and for a preloaded object REQUIRES the permit (taken
+atomically, one-shot), re-reads the exact source once and requires the
+on-disk nonce to match; `branch_checkpoint` refuses a claimed source; the
+heartbeat skips `live`/`superseded` and SURFACES `unresolved`/
+`indeterminate` rows (legacy sources too, with `claim_state`,
+`claim_handle`, `finalized_status`) and its `stranded_run` notification
+names the recovery (`--reclaim` or repair). A refusal before the first
+step releases the claim: `finalize_refusal` → `release_checkpoint_claim`
+(locked, nonce-checked, never rewrites a file that no longer carries our
+claim), `run_agent_loop` releases on an `_initialize_loop` early return or
+exception, and the CLI builds the adapter BEFORE claiming so nothing
+fallible sits between the claim and the loop. `run_agent_loop(loop_id=)`
+lets the CLI pre-mint the successor loop id the claim names (grammar
+`checkpoint.ID_REF_RE`, which the CLI's ref grammar now aliases). A
+present-but-malformed `resume_claim` makes the file LOOKUP_INVALID, not
+"unclaimed". Consumed dominates: a consumed file's claim gates nothing.
+
+**Tests:** `tests/test_resume_claim.py` (claim on disk before the loop,
+durable, permit one-shot; unwritable claim → nothing ran; live claim
+refuses at CLI/API/heartbeat and the same pid is NOT our own; dead
+claimant + successor → superseded, `--reclaim` does not apply; dead
+claimant + proven-absent successor → unresolved, `--reclaim` re-claims;
+unreadable / EACCES / third-loop successor → indeterminate; pid-reuse
+token; malformed claims incl. path-escape handles → INVALID; CAS by
+bytes incl. the legacy no-timestamp file and a pre-write malformed handle;
+refusal-before-first-step releases on API (project mismatch never claims;
+restore failure releases) and CLI (init early return, init exception,
+adapter failure, release failure keeps the claim); a permitted object
+admits exactly one run; two threads cannot both take one permit; API
+admission under a held lock refuses; API refuses while the source loop is
+alive; API claim names the ambient run dir's checkpoint address; heartbeat
+surfaces unresolved / legacy / finalized rows; branching a claimed source
+refuses; `--reclaim` parsed) + `tests/test_resume_lookup.py` (the chunk-6
+write-failure test splits "claim fails → nothing ran" from "claim lands,
+later writes fail → demoted, claim kept, source refuses again"; the
+preloaded test claims first and pins ONE exact-source re-read) +
+`tests/test_plan_node_ids.py` unchanged (complete-file API resume runs
+nothing, cross-project refusal leaves no claim).
+
+**r1 (Skeptic + Architect, codex gpt-5.6-sol):** 21 findings → 9 classes
+fixed (CAS + read-back, permit-not-pid, indeterminate successor, strict
+claim parse + handle grammar, API path claims + branch refusal, successor
+at its id address, heartbeat surfaces unresolved, exact-path test spy).
+**r2 (Skeptic, fix diff):** 10 findings — one REGRESSION of the r1 fix
+(semantic CAS refused legacy no-timestamp files) → digest CAS; permit
+required + one-shot on the preloaded path; API admission lock; claim
+validated before write; claim after project check; id-address successor
+identity; release on pre-step refusal; heartbeat legacy rows; pre-minted
+id grammar. **r3 (Skeptic, fix-2 diff):** 9 findings → all cheap, landed
+(atomic permit take; digest between the CLI's two reads; adapter before
+claim; API owner probe; locked RMW for claim + release; init-exception
+release; `successor_path`; heartbeat reads metadata for claimed rows;
+"no second read" contract corrected). STOP RULE: no round 4; design
+residue queued in BACKLOG under the chunk-3 bullets.
+
 ## Explicit resume is fail-closed end to end — SHIPPED 2026-09-16 (LoopsBench chunk 6)
 
 **Found:** three chunk-3 leads (r2 findings 1 and 3, the class): (1) a torn

@@ -460,6 +460,11 @@ class LoopContext:
     # than being rediscovered from ambient run-dir context at finalize.
     measurement_class: str = ""
     handle_id: str = ""
+    # (source path, permit) of the resume claim THIS run holds — released
+    # by `finalize_refusal` when the run is refused before its first step
+    # (chunk 7 r2: a benign pre-execution refusal must not leave the
+    # source claimed). Kept — it is the replay barrier — once anything ran.
+    resume_claim_release: Any = None
 
     # Execution state
     step_outcomes: List[StepOutcome] = field(default_factory=list)

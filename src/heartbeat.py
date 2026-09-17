@@ -537,15 +537,28 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
                 from notify import emit as _notify_emit
                 _in_flight_note = (f"; step {entry['in_flight']} was in flight"
                                    if entry["in_flight"] else "")
+                if entry.get("claim_state") == "unresolved":
+                    _how = (f"A resume as run {entry['claim_handle']} claimed it and left "
+                            f"no checkpoint — inspect that run, then: "
+                            f"maro resume {entry['loop_id']} --reclaim")
+                elif entry.get("claim_state"):
+                    _how = (f"A resume as run {entry['claim_handle']} claimed it and its "
+                            f"checkpoint cannot be read — repair that record before resuming")
+                else:
+                    _how = f"Resume with: maro resume {entry['loop_id']}"
+                if entry.get("finalized_status"):
+                    _what = (f"Run {entry['handle_id'] or entry['loop_id']} finalized "
+                             f"({entry['finalized_status']}) without proving its checkpoint "
+                             f"consumed ({entry['done']}/{entry['total']} steps done)")
+                else:
+                    _what = (f"Run {entry['handle_id'] or entry['loop_id']} died "
+                             f"mid-loop ({entry['done']}/{entry['total']} steps done"
+                             f"{_in_flight_note})")
                 _notify_emit("stranded_run", {
                     "handle_id": entry["handle_id"],
                     "loop_id": entry["loop_id"],
-                    "message": (
-                        f"Run {entry['handle_id'] or entry['loop_id']} died "
-                        f"mid-loop ({entry['done']}/{entry['total']} steps done"
-                        f"{_in_flight_note}). "
-                        f"Resume with: maro resume {entry['loop_id']}"
-                    ),
+                    "claim_state": entry.get("claim_state"),
+                    "message": f"{_what}. {_how}",
                 })
             except Exception as exc:
                 log.debug("sweep: stranded_run notify failed: %s", exc)
@@ -768,6 +781,18 @@ def _find_resumable_runs() -> list:
     for ckpt in ckpts:
         if ckpt.is_complete() or ckpt.is_consumed():
             continue          # finished, or already resumed successfully
+        _claim_state = None
+        try:
+            from checkpoint import (resume_claim_state, RESUME_CLAIM_LIVE,
+                                    RESUME_CLAIM_SUPERSEDED)
+            _claim_state = resume_claim_state(ckpt)
+            if _claim_state in (RESUME_CLAIM_LIVE, RESUME_CLAIM_SUPERSEDED):
+                continue      # a resume is in progress, or its successor exists
+            # unresolved / indeterminate: NOT auto-resumable, but the
+            # operator must hear about it (r1 Skeptic 9) — the row carries
+            # the claim and the notification names the recovery path.
+        except Exception:
+            continue
         # Run-lease first: held → owner alive even between steps (when the
         # checkpoint carries no in_flight pid at all); present-unheld →
         # the LOOP is done, but the run's owner process may still be alive
@@ -783,28 +808,42 @@ def _find_resumable_runs() -> list:
             if pid and _alive(pid):
                 continue  # still running
         # run finalized? (legacy-dir checkpoints have no handle_id — treat
-        # unlinked checkpoints as stale history, not resumable)
-        if not ckpt.handle_id:
+        # unlinked checkpoints as stale history, not resumable). A claimed
+        # source is the exception: its claim names the successor run, and
+        # the operator must hear about it whether or not the SOURCE had a
+        # handle (r2 finding 8).
+        if not ckpt.handle_id and not _claim_state:
             continue
-        try:
-            from runs import run_dir
-            meta = _json.loads((run_dir(ckpt.handle_id) / "metadata.json")
-                               .read_text(encoding="utf-8"))
-            # "stranded" is the sweep's own non-terminal stamp — such runs
-            # stay resumable; anything else (done/stuck/error) is finalized.
-            if meta.get("status") and meta.get("status") != "stranded":
-                continue
-            _meta_pid = int(meta.get("pid") or 0)
-            if _meta_pid and _alive(_meta_pid):
-                continue  # owner process alive (e.g. mid-closure) — not stranded
-        except Exception:
-            continue
+        _finalized_status = None
+        if ckpt.handle_id:
+            try:
+                from runs import run_dir
+                meta = _json.loads((run_dir(ckpt.handle_id) / "metadata.json")
+                                   .read_text(encoding="utf-8"))
+                # "stranded" is the sweep's own non-terminal stamp — such runs
+                # stay resumable; anything else (done/stuck/error) is finalized.
+                if meta.get("status") and meta.get("status") != "stranded":
+                    if not _claim_state:
+                        continue
+                    # a claimed source whose run finalized without proving
+                    # the source consumed: still the operator's, but not
+                    # "died mid-loop" (r3 finding 8)
+                    _finalized_status = str(meta.get("status"))
+                _meta_pid = int(meta.get("pid") or 0)
+                if _meta_pid and _alive(_meta_pid):
+                    continue  # owner process alive (e.g. mid-closure) — not stranded
+            except Exception:
+                if not _claim_state:
+                    continue
         out.append({
             "loop_id": ckpt.loop_id,
             "handle_id": ckpt.handle_id,
             "done": ckpt.done_count,
             "total": len(ckpt.steps),
             "in_flight": (ckpt.in_flight or {}).get("index"),
+            "claim_state": _claim_state,
+            "claim_handle": (ckpt.resume_claim or {}).get("handle_id") if _claim_state else None,
+            "finalized_status": _finalized_status,
         })
     return out
 

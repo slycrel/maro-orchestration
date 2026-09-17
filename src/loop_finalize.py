@@ -627,6 +627,19 @@ def finalize_refusal(ctx, result):
                          stop_evidence=result.stop_evidence, pause_reason="")
     except Exception as _sv_exc:
         log.warning("refusal stop-verdict metadata stamp failed: %s", _sv_exc)
+    _rel = getattr(ctx, "resume_claim_release", None)
+    if _rel:
+        # Nothing ran: the claim this run wrote on its source must not
+        # outlive the refusal (it would read as unresolved once this
+        # process exits and demand --reclaim for a run that did nothing).
+        try:
+            from checkpoint import release_checkpoint_claim as _release_claim
+            if not _release_claim(_rel[0], _rel[1]):
+                log.warning("refused resume: the claim on %s could not be released — "
+                            "it reads as claimed until the operator reclaims it", _rel[0])
+        except Exception as _rel_exc:
+            log.warning("refused resume: claim release on %s failed: %s", _rel[0], _rel_exc)
+        ctx.resume_claim_release = None
     if getattr(ctx, "container_clone", None) is not None:
         # Provisioned before the resume load (agent_loop Phase A), so a
         # refusal used to leak it (r1 MED). Clone first: it is cut from

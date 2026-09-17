@@ -29,6 +29,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -262,6 +263,59 @@ def validate_identity(
     return steps, plan
 
 
+# The grammar of a loop id / run handle wherever one is interpolated into a
+# path (the CLI's resume ref, a claim's handle_id): one path segment, no
+# separators, no leading dot.
+ID_REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def resume_lock_name(identity: str) -> str:
+    """Stable, path-safe admission-lock name for one resumable run — the
+    CLI and the API loader serialize a resume's admission on it."""
+    return "resume-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+
+
+def _claim_dict(raw: Any) -> Optional[Dict[str, Any]]:
+    """A resume claim as written by `mark_checkpoint_claimed`. None when the
+    field is absent (null). A PRESENT but malformed claim raises: the claim
+    is the replay barrier, and a barrier that cannot be read is not "no
+    barrier" (r1 Architect finding 5 — unknown is not absent). `from_dict`
+    propagates the error, so the file reads as LOOKUP_INVALID."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"resume_claim is a {type(raw).__name__}, not a claim")
+    handle = raw.get("handle_id")
+    pid = raw.get("pid")
+    if not isinstance(handle, str) or not ID_REF_RE.fullmatch(handle):
+        raise ValueError(f"resume_claim.handle_id {handle!r} is not a run handle")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        raise ValueError(f"resume_claim.pid {pid!r} is not a pid")
+    out: Dict[str, Any] = {"handle_id": handle, "pid": pid,
+                           "claimed_at": str(raw.get("claimed_at") or "")}
+    for key in ("token", "nonce", "successor_loop_id", "successor_path"):
+        val = raw.get(key)
+        if val is None or val == "":
+            continue
+        if not isinstance(val, str):
+            raise ValueError(f"resume_claim.{key} {val!r} is not a string")
+        if key == "successor_loop_id" and not ID_REF_RE.fullmatch(val):
+            raise ValueError(f"resume_claim.successor_loop_id {val!r} is not a loop id")
+        if key == "successor_path" and not os.path.isabs(val):
+            raise ValueError(f"resume_claim.successor_path {val!r} is not an absolute path")
+        out[key] = val
+    return out
+
+
+def _fsync_dir(path: Path) -> None:
+    """Persist a directory entry (the rename `atomic_write` made)."""
+    fd = os.open(str(path.parent), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _coerce_row(c: Dict[str, Any], n_steps: int) -> Optional["CompletedStep"]:
     """Build a CompletedStep from a persisted dict, tolerating hand edits
     and older shapes: `index` defaults to -1, `position` to 0, and a
@@ -327,6 +381,23 @@ class Checkpoint:
     # retained checkpoint remains inspectable but can never replay effects.
     consumed_at: str = ""
     resumed_to_loop_id: str = ""
+    # A resume CLAIMS its source before it executes anything (LoopsBench
+    # chunk 7, 2026-09-16): {"handle_id": successor run, "pid": claimant,
+    # "token": claimant's start token, "claimed_at": iso}. Present and
+    # unconsumed ⇒ a resume is in progress (pid alive), or happened and
+    # left a record (successor checkpoint under that run → superseded), or
+    # happened and left NO record (unresolved: refuse, `--reclaim` is the
+    # operator's override). Cleared by consumption or by the successor's
+    # own first write when it shares the file.
+    resume_claim: Optional[Dict[str, Any]] = None
+    # Transient (never serialized): the nonce of the claim THIS object's
+    # holder wrote, handed from admission to the loop. A claim reads as our
+    # own only when its nonce matches — never because the pid matches (a
+    # long-lived process must not authorize its own later attempts).
+    resume_permit: Optional[str] = field(default=None, compare=False, repr=False)
+    # Transient: the exact file the claim was written to (the release
+    # target when the run is refused before its first step).
+    resume_source: Optional[Path] = field(default=None, compare=False, repr=False)
     # Run-scoped world-fact ledger rows (WORLD_FACTS_DESIGN slice 1) — a
     # resume must see the facts, not just the surviving steps.
     world_facts: Optional[List[Dict[str, Any]]] = None
@@ -474,6 +545,8 @@ class Checkpoint:
         if self.consumed_at:
             d["consumed_at"] = self.consumed_at
             d["resumed_to_loop_id"] = self.resumed_to_loop_id
+        if self.resume_claim:
+            d["resume_claim"] = dict(self.resume_claim)
         if self.world_facts:
             d["world_facts"] = self.world_facts
         if self.regression:
@@ -554,6 +627,7 @@ class Checkpoint:
             executor_session=executor_session,
             consumed_at=str(d.get("consumed_at") or ""),
             resumed_to_loop_id=str(d.get("resumed_to_loop_id") or ""),
+            resume_claim=_claim_dict(d.get("resume_claim")),
             world_facts=d.get("world_facts") or None,
             regression=d.get("regression") or None,
             # Identity lists are all-or-nothing (see _int_list): a torn or
@@ -765,6 +839,10 @@ class CheckpointLookup:
     ckpt: Optional[Checkpoint] = None
     path: Optional[Path] = None
     detail: str = ""
+    # sha256 of the BYTES a FOUND read parsed — the compare-and-swap key
+    # for the resume claim (semantic equality is not: a file with no
+    # `timestamp` reads as "now" on every parse).
+    digest: str = ""
 
     @property
     def found(self) -> bool:
@@ -817,7 +895,8 @@ def _read_candidate(path: Path, loop_id: Optional[str]) -> CheckpointLookup:
         return CheckpointLookup(
             LOOKUP_MISMATCH, path=path,
             detail=f"checkpoint {path} names loop {ckpt.loop_id}, not {loop_id}")
-    return CheckpointLookup(LOOKUP_FOUND, ckpt=ckpt, path=path)
+    return CheckpointLookup(LOOKUP_FOUND, ckpt=ckpt, path=path,
+                            digest=hashlib.sha256(raw).hexdigest())
 
 
 def _run_dir_loop_ids(build_ckpt_path: Path) -> Optional[set]:
@@ -989,6 +1068,234 @@ def mark_checkpoint_consumed(loop_id: str, *, resumed_to_loop_id: str,
         return False
 
 
+def mark_checkpoint_claimed(loop_id: str, *, path: Path, handle_id: str,
+                            expected: "CheckpointLookup", successor_loop_id: str = "",
+                            successor_path: str = "",
+                            reclaim: bool = False) -> Optional["Checkpoint"]:
+    """Record, in the SOURCE file, that this process is resuming it as run
+    `handle_id` / loop `successor_loop_id` — BEFORE anything executes — as
+    a compare-and-swap against `expected`, the FOUND read the caller
+    admitted (r1 Skeptic 3/4, Architect 1): the file is re-read, and the
+    claim is written only if its bytes are the SAME bytes (digest), the file
+    is neither complete nor consumed, and no other claim gates it
+    (`reclaim` lets an `unresolved` claim be replaced — the operator's
+    override). The write is power-loss durable (the directory entry is
+    fsynced: this record is what forbids a replay). The file is then read
+    BACK and must carry exactly this claim.
+
+    Returns the claimed snapshot as read back from disk, carrying the
+    permit (`resume_permit`) that makes the claim read as our own — that
+    object, and only that object, is what the loop executes. None on ANY
+    failure: the caller refuses to execute (a resume whose claim cannot be
+    made durable cannot later prove what it did — chunk-6 r3 finding 2).
+    """
+    from process_identity import process_start_token
+    nonce = uuid.uuid4().hex
+    claim: Dict[str, Any] = {"handle_id": str(handle_id), "pid": os.getpid(),
+                             "claimed_at": datetime.now(timezone.utc).isoformat(),
+                             "nonce": nonce}
+    if successor_loop_id:
+        claim["successor_loop_id"] = str(successor_loop_id)
+    if successor_path:
+        # Where the successor's checkpoint writer will actually land (an
+        # API resume under an ambient run dir writes THERE, not at its own
+        # handle's address — r3 finding 7).
+        claim["successor_path"] = str(successor_path)
+    token = process_start_token(os.getpid())
+    if token:
+        claim["token"] = token
+    try:
+        # The proposed claim must parse as one BEFORE it is written: a bad
+        # handle would turn a valid source into LOOKUP_INVALID (r2 finding 4).
+        if _claim_dict(claim) != claim:
+            log.error("checkpoint claim refused for %s: proposed claim is malformed (%r)",
+                      loop_id, claim)
+            return None
+        real = Path(os.path.realpath(path))
+        refusal: List[str] = []
+
+        def _commit(cur_text: str) -> Optional[str]:
+            # Runs UNDER the per-file lock (file_lock.locked_rmw): the
+            # read that decides and the write that claims are one section
+            # against every other locked mutation of this file (release,
+            # consume) — r3 finding 5.
+            raw = cur_text.encode("utf-8", errors="surrogateescape")
+            if not raw:
+                refusal.append(f"{real} is empty")
+                return None
+            try:
+                cur_ckpt = Checkpoint.from_dict(json.loads(raw.decode("utf-8")))
+            except Exception as exc:
+                refusal.append(f"{real} is not a readable checkpoint ({exc})")
+                return None
+            if cur_ckpt.loop_id != loop_id:
+                refusal.append(f"{real} names loop {cur_ckpt.loop_id}, not {loop_id}")
+                return None
+            if cur_ckpt.is_consumed() or cur_ckpt.is_complete():
+                refusal.append("the file is " + ("consumed" if cur_ckpt.is_consumed() else "complete"))
+                return None
+            if not expected.digest or hashlib.sha256(raw).hexdigest() != expected.digest:
+                refusal.append(f"{real} changed since it was admitted")
+                return None
+            state, _ = resume_claim_status(cur_ckpt)
+            if state is not None and not (reclaim and state == RESUME_CLAIM_UNRESOLVED):
+                refusal.append(f"already claimed ({state})")
+                return None
+            data = json.loads(raw.decode("utf-8"))
+            data["resume_claim"] = claim
+            return json.dumps(data, indent=2)
+
+        from file_lock import locked_rmw
+        locked_rmw(real, _commit)
+        if refusal:
+            log.error("checkpoint claim refused for %s: %s", loop_id, refusal[0])
+            return None
+        _fsync_dir(real)                       # power-loss durable: this record forbids a replay
+        back = _read_candidate(real, loop_id)
+        if not back.found or back.ckpt.resume_claim != claim:
+            log.error("checkpoint claim for %s did not read back from %s (%s)",
+                      loop_id, real, back.detail or "another writer replaced it")
+            return None
+        back.ckpt.resume_permit = nonce
+        back.ckpt.resume_source = real
+        return back.ckpt
+    except Exception as exc:
+        log.error("checkpoint claim failed for %s at %s: %s", loop_id, path, exc)
+        return None
+
+
+def release_checkpoint_claim(path: Path, permit: str) -> bool:
+    """Remove OUR claim (the one whose nonce is `permit`) from `path` —
+    only for a run refused BEFORE its first step (nothing ran, so nothing
+    to prove later). True when the file no longer carries our claim
+    (removed now, or already gone); False when it still does (the write
+    failed): the file then reads as claimed until the operator reclaims it.
+    Never touches another claim, and never a consumed file's record."""
+    try:
+        real = Path(os.path.realpath(path))
+
+        def _commit(cur_text: str) -> Optional[str]:
+            # Under the per-file lock (r3 finding 5): a file another writer
+            # replaced in the meantime no longer carries our nonce → left
+            # exactly as it is (None = no write), never overwritten with
+            # the stale snapshot we read.
+            try:
+                data = json.loads(cur_text)
+            except Exception:
+                return None
+            claim = data.get("resume_claim") if isinstance(data, dict) else None
+            if not isinstance(claim, dict) or claim.get("nonce") != permit:
+                return None
+            del data["resume_claim"]
+            return json.dumps(data, indent=2)
+
+        from file_lock import locked_rmw
+        locked_rmw(real, _commit)
+        _fsync_dir(real)
+        back = json.loads(real.read_bytes().decode("utf-8"))
+        return (back.get("resume_claim") or {}).get("nonce") != permit
+    except Exception as exc:
+        log.error("checkpoint claim release failed at %s: %s", path, exc)
+        return False
+
+
+def release_own_claim(ckpt: Any) -> bool:
+    """`release_checkpoint_claim` for the object a claim came back as."""
+    src = getattr(ckpt, "resume_source", None)
+    permit = getattr(ckpt, "resume_permit", None)
+    if not src or not permit:
+        return True
+    return release_checkpoint_claim(src, permit)
+
+
+RESUME_CLAIM_LIVE = "live"                  # the claimant process is still running
+RESUME_CLAIM_SUPERSEDED = "superseded"      # the claimant wrote a successor checkpoint
+RESUME_CLAIM_UNRESOLVED = "unresolved"      # claimant dead, successor PROVEN absent
+RESUME_CLAIM_INDETERMINATE = "indeterminate"  # claimant dead, successor record unreadable
+
+
+def _successor_addresses(ckpt: "Checkpoint",
+                         claim: Dict[str, Any]) -> List[Tuple[Path, Optional[str]]]:
+    """Every (address, expected loop id) the claimed successor's checkpoint
+    can live at: the claimed run dir's file (no identity — a handle resume
+    shares it with the source, so "another loop" is the test), and (an API
+    resume with no run dir, or an `open_run` that failed — r1 Skeptic 8)
+    the id-addressed file of the successor loop the claim names, which
+    must name THAT loop (a stale file naming a third loop is not proof —
+    r2 finding 6)."""
+    from runs import run_dir
+    out: List[Tuple[Path, Optional[str]]] = [
+        (run_dir(claim["handle_id"]) / "build" / "checkpoint.json", None)]
+    succ_id = claim.get("successor_loop_id") or ""
+    if succ_id and succ_id != ckpt.loop_id:
+        p = _checkpoint_path(succ_id)
+        if p != out[0][0]:
+            out.append((p, succ_id))
+    succ_path = claim.get("successor_path") or ""
+    if succ_path and Path(succ_path) not in [a for a, _ in out]:
+        out.append((Path(succ_path), succ_id or None))
+    return out
+
+
+def resume_claim_status(ckpt: "Checkpoint") -> Tuple[Optional[str], str]:
+    """What an unconsumed checkpoint's `resume_claim` means for a NEW resume,
+    as (state, detail): None (no claim, or the claim THIS object's holder
+    wrote — `resume_permit` matches the nonce), `live`, `superseded` (a
+    successor checkpoint naming another loop exists — resume THAT),
+    `unresolved` (claimant dead, every successor address PROVEN absent:
+    what it executed is unknown, and unknown is not "nothing" — the
+    operator decides with `--reclaim`), or `indeterminate` (claimant dead
+    and a successor address could not be read: no override opens it; the
+    detail names the address)."""
+    claim = ckpt.resume_claim
+    if not claim or ckpt.is_consumed():
+        return None, ""
+    if ckpt.resume_permit and claim.get("nonce") == ckpt.resume_permit:
+        return None, ""
+    pid = int(claim.get("pid") or 0)
+    from process_identity import owner_is_current
+    if owner_is_current(pid, claim.get("token")):
+        return RESUME_CLAIM_LIVE, ""
+    try:
+        addresses = _successor_addresses(ckpt, claim)
+    except Exception as exc:
+        return RESUME_CLAIM_INDETERMINATE, f"successor address for run {claim.get('handle_id')}: {exc}"
+    unreadable = ""
+    for addr, want in addresses:
+        succ = _read_candidate(addr, want)
+        if succ.found:
+            if succ.ckpt.loop_id != ckpt.loop_id:
+                return RESUME_CLAIM_SUPERSEDED, ""
+            continue          # the source itself (a handle resume shares the file)
+        if succ.state != LOOKUP_ABSENT and not unreadable:
+            unreadable = succ.detail or f"{addr} could not be read"
+    if unreadable:
+        return RESUME_CLAIM_INDETERMINATE, unreadable
+    return RESUME_CLAIM_UNRESOLVED, ""
+
+
+def resume_claim_state(ckpt: "Checkpoint") -> Optional[str]:
+    return resume_claim_status(ckpt)[0]
+
+
+def resume_claim_detail(ckpt: "Checkpoint", state: str, extra: str = "") -> str:
+    claim = ckpt.resume_claim or {}
+    h, p = claim.get("handle_id", "?"), claim.get("pid", "?")
+    if state == RESUME_CLAIM_LIVE:
+        return (f"a resume of loop {ckpt.loop_id} is in progress as run {h} "
+                f"(pid {p}) — wait for it")
+    if state == RESUME_CLAIM_SUPERSEDED:
+        return (f"loop {ckpt.loop_id} was already resumed as run {h}, which has its "
+                f"own checkpoint — resume that instead: maro resume {h}")
+    if state == RESUME_CLAIM_INDETERMINATE:
+        return (f"loop {ckpt.loop_id} was claimed by a resume as run {h} (pid {p}, now "
+                f"dead) whose checkpoint cannot be read ({extra}) — repair or remove "
+                "that record before resuming this checkpoint (--reclaim does not apply)")
+    return (f"loop {ckpt.loop_id} was claimed by a resume as run {h} (pid {p}, now "
+            "dead) that left no checkpoint — what it executed is unknown; inspect "
+            f"run {h}, then re-run with --reclaim to resume from this checkpoint anyway")
+
+
 def delete_checkpoint(loop_id: str) -> None:
     """Delete a checkpoint file.
 
@@ -1147,6 +1454,12 @@ def branch_checkpoint(loop_id: str) -> Optional[str]:
         # carry the same remaining plan without the marker (r3 HIGH 3).
         log.warning("branch_checkpoint: %s was already resumed as %s — not branching",
                     loop_id, ckpt.resumed_to_loop_id or "a newer loop")
+        return None
+    if ckpt.resume_claim:
+        # A claimed source is being (or was) resumed; a branch would drop
+        # the claim and carry the same remaining plan (r1 Skeptic 2).
+        log.warning("branch_checkpoint: %s is claimed by a resume as run %s — not branching",
+                    loop_id, ckpt.resume_claim.get("handle_id"))
         return None
 
     new_loop_id = uuid.uuid4().hex[:8]

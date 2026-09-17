@@ -55,9 +55,21 @@ def test_dag_lane_checkpoints_each_node_and_a_crash_resumes_at_the_unfinished(mo
                        kw.get("step_indices"), kw.get("plan_items")))
         return real(loop_id, goal, project, steps, step_outcomes, **kw)
     monkeypatch.setattr(ckmod, "write_checkpoint", spy)
+    # The crash is simulated IN this process: the kernel would drop the
+    # crashed loop's run-lease flock at process exit, here nothing unwinds
+    # it — release it by hand, or the resume (rightly) sees the owner alive
+    # (chunk 7: the loader probes the source's owner before claiming).
+    import run_lease
+    leases = []
+    real_acq = run_lease.acquire_run_lease
+    monkeypatch.setattr(run_lease, "acquire_run_lease",
+                        lambda *a, **k: leases.append(real_acq(*a, **k)) or leases[-1])
     with pytest.raises(_Crash):
         al.run_agent_loop("dag ckpt", adapter=_CrashingAdapter(seen, "Step D"), preset_steps=DAG,
                           max_steps=4, max_iterations=8, parallel_fan_out=2)
+    for _lease in leases:
+        if _lease is not None:
+            _lease.release()
     assert writes, "the DAG lane wrote no checkpoint"
     loop_id = writes[0][0]
     assert all(w[0] == loop_id for w in writes)

@@ -10,6 +10,7 @@ the pre-flight/prepare-execution phases that run before step execution begins.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 import re as _re
 import sys
@@ -235,6 +236,45 @@ def _items_name_these_steps(project: str, items: List[int], texts: List[str]) ->
 
 def _load_resume(ctx: LoopContext, resume_from_loop_id: str, *,
                  preloaded: Any = None) -> tuple:
+    """`_load_resume_admitted` under the resume admission lock when the
+    loader does its own lookup: lookup → checks → claim is ONE critical
+    section, or two library resumes both read the unclaimed file and both
+    claim it (chunk 7 r2 finding 2). The lock is the CLI's (by loop id);
+    a preloaded object was admitted under the CLI's lock already."""
+    if preloaded is not None:
+        return _load_resume_admitted(ctx, resume_from_loop_id, preloaded=preloaded)
+    try:
+        from checkpoint import resume_lock_name
+        from proc_lock import acquire_pidfile
+        _adm = acquire_pidfile(resume_lock_name(resume_from_loop_id),
+                               payload={"loop_id": resume_from_loop_id,
+                                        "command": f"resume {resume_from_loop_id} (api)"})
+    except Exception as _adm_exc:
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"resume admission lock for {resume_from_loop_id} failed ({_adm_exc}) — refusing")
+    if _adm.status != "acquired":
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"another resume of {resume_from_loop_id} is being admitted "
+            f"({_adm.status}{': ' + _adm.error if _adm.error else ''}) — refusing")
+    try:
+        return _load_resume_admitted(ctx, resume_from_loop_id, preloaded=None)
+    finally:
+        try:
+            _adm.handle.close()
+        except Exception as _rel_exc:
+            log.debug("resume admission lock release failed: %s", _rel_exc)
+
+
+# Taking a handed-in object's permit is take-AND-clear under this lock,
+# before any blocking work: two threads admitting the same object must not
+# both read the permit (r3 finding 1).
+_PERMIT_TAKE = threading.Lock()
+
+
+def _load_resume_admitted(ctx: LoopContext, resume_from_loop_id: str, *,
+                          preloaded: Any = None) -> tuple:
     """Load the checkpoint an explicit resume names, or refuse.
 
     Returns (restored, early_return). Exactly one is set, except when the
@@ -243,10 +283,12 @@ def _load_resume(ctx: LoopContext, resume_from_loop_id: str, *,
     before Phase B so a resume pays no planner call and appends nothing to
     NEXT.md, and an unreadable checkpoint refuses before either.
 
-    `preloaded`: the `Checkpoint` the caller already validated (the CLI,
-    under its admission lock) — used as-is, no second read (chunk 6: the
-    CLI validated one file and the loop re-read the id, a torn write in
-    between took the fresh branch). Otherwise `checkpoint.find_checkpoint`
+    `preloaded`: the CLAIMED `Checkpoint` the caller admitted (the CLI,
+    under its admission lock; the read-back of `mark_checkpoint_claimed`)
+    — never re-resolved by id (chunk 6: the CLI validated one file and the
+    loop re-read the id, a torn write in between took the fresh branch);
+    its permit is taken once and its EXACT source path is re-read once to
+    prove the claim on disk is still ours. Otherwise `checkpoint.find_checkpoint`
     is the one lookup: FOUND proceeds, ABSENT starts fresh, INVALID /
     MISMATCH / IO_ERROR refuse with the file named — a damaged run-dir
     file whose run cannot be attributed is IO_ERROR/INVALID here, not
@@ -265,6 +307,28 @@ def _load_resume(ctx: LoopContext, resume_from_loop_id: str, *,
                 ctx, resume_from_loop_id,
                 f"the checkpoint handed to the loop names loop "
                 f"{getattr(_ckpt, 'loop_id', '')!r}, not {resume_from_loop_id!r} — refusing")
+        # A handed-in object is a CAPABILITY, not a snapshot (r2 finding 1):
+        # it must be the read-back of a claim (`mark_checkpoint_claimed`),
+        # the source must still carry that claim on disk, and the permit is
+        # consumed here — the same object cannot admit a second run.
+        with _PERMIT_TAKE:
+            _permit = getattr(_ckpt, "resume_permit", None)
+            _source = getattr(_ckpt, "resume_source", None)
+            preloaded.resume_permit = None                   # one-shot, taken here
+        if not _permit or not _source:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"the checkpoint handed to the loop for {resume_from_loop_id} carries no "
+                "resume claim — claim it first (mark_checkpoint_claimed) — refusing")
+        from checkpoint import _read_candidate as _read_source
+        _disk = _read_source(_source, resume_from_loop_id)
+        if not _disk.found or (_disk.ckpt.resume_claim or {}).get("nonce") != _permit:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"the resume claim on {_source} is no longer this run's "
+                f"({_disk.detail or 'another claim replaced it'}) — refusing")
+        _ckpt = _disk.ckpt
+        _ckpt.resume_permit, _ckpt.resume_source = _permit, _source
     else:
         try:
             from checkpoint import find_checkpoint, LOOKUP_FOUND, LOOKUP_ABSENT
@@ -291,6 +355,16 @@ def _load_resume(ctx: LoopContext, resume_from_loop_id: str, *,
             ctx, resume_from_loop_id,
             f"checkpoint {resume_from_loop_id} was already resumed successfully as "
             f"{_ckpt.resumed_to_loop_id or 'a newer loop'} — refusing to replay it")
+    from checkpoint import resume_claim_status, resume_claim_detail, mark_checkpoint_claimed
+    _claim, _claim_extra = resume_claim_status(_ckpt)
+    if _claim is not None:
+        # Claimed by another resume (in progress / superseded / unresolved /
+        # indeterminate): the CLI is the override surface (`--reclaim`
+        # re-claims BEFORE handing the object in); the API path never
+        # guesses. A preloaded object carries its claimant's permit.
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            resume_claim_detail(_ckpt, _claim, _claim_extra) + " — refusing")
     _ckpt_project = str(getattr(_ckpt, "project", "") or "")
     if _ckpt_project and _ckpt_project != (ctx.project or ""):
         # An explicit resume runs the checkpoint's OWN plan under its own
@@ -304,6 +378,45 @@ def _load_resume(ctx: LoopContext, resume_from_loop_id: str, *,
             f"checkpoint {resume_from_loop_id} belongs to project "
             f"{_ckpt_project!r}, this run is {ctx.project!r} — refusing; "
             "resume it under its own project")
+    if preloaded is None and not _ckpt.is_complete():
+        # The source's OWN loop must be gone before anyone claims it (r3
+        # finding 4 — the CLI probes this; the loader is the boundary):
+        # run lease held → alive; no lease record → the in-flight pid.
+        try:
+            from run_lease import probe_owner_alive as _probe_owner
+            _owner = _probe_owner(resume_from_loop_id)
+        except ImportError:
+            _owner = None
+        if _owner is True:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"loop {resume_from_loop_id} is still running (its run lease is held) — refusing")
+        if _owner is None:
+            _pid = int((_ckpt.in_flight or {}).get("pid", 0) or 0)
+            if _pid:
+                from process_identity import pid_alive as _pid_alive
+                if _pid_alive(_pid):
+                    return None, _refuse_resume(
+                        ctx, resume_from_loop_id,
+                        f"loop {resume_from_loop_id} is still running (pid {_pid} is alive) — refusing")
+        # The API path claims its source too (r1 Skeptic 1 / Architect 3):
+        # the loader is the policy boundary, so a library resume records
+        # who runs it BEFORE executing, and refuses when it cannot. After
+        # every refusal check above (a refusal must not leave a claim), and
+        # not for a complete file (nothing remains to replay). The claim
+        # names the address the successor's writer will actually use.
+        from checkpoint import _rundir_checkpoint_path as _succ_home, _checkpoint_path as _id_home
+        _succ_path = _succ_home() or _id_home(ctx.loop_id)
+        _claimed = mark_checkpoint_claimed(
+            resume_from_loop_id, path=_lk.path, handle_id=ctx.handle_id or ctx.loop_id,
+            expected=_lk, successor_loop_id=ctx.loop_id, successor_path=str(_succ_path))
+        if _claimed is None:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"could not record the resume claim in {_lk.path} — refusing to "
+                "execute (nothing ran)")
+        _ckpt = _claimed
+        ctx.resume_claim_release = (_ckpt.resume_source, _ckpt.resume_permit)
     try:
         _remaining, _done = _resume_from(_ckpt)
         _items = _ckpt.remaining_items

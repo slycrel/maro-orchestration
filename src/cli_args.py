@@ -144,6 +144,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="handle_id (run dir) or loop_id of the crashed run")
     p_resume.add_argument("--verbose", "-v", action="store_true", default=True)
     p_resume.add_argument("--format", choices=["text", "json"], default="text")
+    p_resume.add_argument("--reclaim", action="store_true", default=False,
+                          help="override an UNRESOLVED resume claim (a previous resume "
+                               "of this checkpoint died without leaving a checkpoint) "
+                               "and resume from this checkpoint anyway")
 
     p_answer = sub.add_parser(
         "answer",

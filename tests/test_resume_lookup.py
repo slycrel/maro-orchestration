@@ -150,13 +150,24 @@ def test_a_preloaded_checkpoint_is_used_without_a_second_read(monkeypatch, tmp_p
     import agent_loop as al
     write_checkpoint("lp-pre1", "pre", "", ["Step one: fetch", "Step two: report"],
                      [_Row(1, "Step one: fetch")], step_indices=[1, 2])
-    ck = load_checkpoint("lp-pre1")
+    # chunk 7: a handed-in object must be the read-back of a CLAIM; it is
+    # never re-resolved by id — its EXACT source path is re-read ONCE to
+    # prove the claim on disk is still ours (r3 finding 9)
+    src = ckmod._checkpoint_path("lp-pre1")
+    ck = ckmod.mark_checkpoint_claimed("lp-pre1", path=src, handle_id="h-pre1",
+                                       expected=ckmod.find_checkpoint("lp-pre1"))
+    assert ck is not None
     monkeypatch.setattr(ckmod, "find_checkpoint",
                         lambda loop_id: (_ for _ in ()).throw(AssertionError("re-read")))
+    reads = []
+    real_read = ckmod._read_candidate
+    monkeypatch.setattr(ckmod, "_read_candidate",
+                        lambda path, loop_id: reads.append((str(path), loop_id)) or real_read(path, loop_id))
     adapter = _CountingAdapter()
     res = al.run_agent_loop("pre", adapter=adapter, preset_steps=["x"], max_steps=2,
                             max_iterations=4, resume_checkpoint=ck)
     assert res.status == "done" and adapter.calls >= 1
+    assert reads[0] == (str(src), "lp-pre1") and len([r for r in reads if r[0] == str(src)]) == 1
     assert [st.text for st in res.steps] == ["Step one: fetch", "Step two: report"]
     assert res.steps[0].result == "r"                            # the carried row, not re-run
     calls_after_first = adapter.calls
@@ -555,23 +566,51 @@ def test_handle_resume_whose_final_write_failed_is_not_done(monkeypatch, tmp_pat
     body["handle_id"] = "h-fw"
     src = _run_dir_with("h-fw", body=json.dumps(body), loop_ids=["lp-fw"])
     (ckmod._checkpoint_dir() / "ckpt_lp-fw.json").unlink()
-    _cli_success_harness(monkeypatch)
-    # every checkpoint write (the loop's and the consume) fails as on a full disk
-    monkeypatch.setattr(ckmod, "atomic_write",
-                        lambda *a, **k: (_ for _ in ()).throw(OSError(28, "No space left on device")))
+    seen = _cli_success_harness(monkeypatch)
+    # every checkpoint write fails as on a full disk: the CLAIM (written
+    # through the locked writer) cannot be written, so nothing executes
+    # (chunk 7) — the source is untouched
+    import file_lock
+    _enospc = lambda *a, **k: (_ for _ in ()).throw(OSError(28, "No space left on device"))
+    monkeypatch.setattr(file_lock, "atomic_write", _enospc)
+    monkeypatch.setattr(ckmod, "atomic_write", _enospc)
+    rc = cli.main(["resume", "h-fw"])
+    out = capsys.readouterr()
+    assert rc != 0 and "could not record the resume claim" in out.err and "nothing ran" in out.err, out
+    assert "resume_checkpoint" not in seen
+    after = ckmod._read_candidate(src, None)
+    assert after.found and after.ckpt.loop_id == "lp-fw" and after.ckpt.resume_claim is None
+    # the claim lands (locked writer intact), every LATER write fails (the
+    # loop's checkpoints, the consume — the checkpoint module's writer):
+    # the run is not reported done, and the source keeps the claim
+    monkeypatch.undo()
+    _env(monkeypatch, tmp_path)
+    seen = _cli_success_harness(monkeypatch)
+    monkeypatch.setattr(ckmod, "atomic_write", _enospc)
     rc = cli.main(["resume", "h-fw"])
     out = capsys.readouterr()
     assert rc != 0 and "could not be marked consumed" in (out.out + out.err), out
+    assert "resume_checkpoint" in seen                              # it DID run
     after = ckmod._read_candidate(src, None)
     assert after.found and after.ckpt.loop_id == "lp-fw" and not after.ckpt.is_consumed()
-    # the healthy twin: the successor overwrote the source → done, source not consumed
+    assert after.ckpt.resume_claim and after.ckpt.resume_claim["handle_id"] == "h-fw"
+    # …and THAT is the chunk-7 closure: the demoted run's source cannot be
+    # resumed again (its claim stands; the claimant — this process — is alive)
     monkeypatch.undo()
     _env(monkeypatch, tmp_path)
-    _cli_success_harness(monkeypatch)
-    rc = cli.main(["resume", "h-fw"])
+    seen = _cli_success_harness(monkeypatch)
+    assert cli.main(["resume", "h-fw"]) != 0
+    assert "in progress as run h-fw" in capsys.readouterr().err and "resume_checkpoint" not in seen
+    # the healthy twin (a fresh source): the successor overwrote the source
+    # → done, source not consumed
+    body = json.loads(_good_body("lp-fw2"))
+    body["handle_id"] = "h-fw2"
+    src = _run_dir_with("h-fw2", body=json.dumps(body), loop_ids=["lp-fw2"])
+    (ckmod._checkpoint_dir() / "ckpt_lp-fw2.json").unlink()
+    rc = cli.main(["resume", "h-fw2"])
     assert rc == 0, capsys.readouterr()
     after = ckmod._read_candidate(src, None)
-    assert after.found and after.ckpt.loop_id != "lp-fw" and after.ckpt.is_complete()
+    assert after.found and after.ckpt.loop_id != "lp-fw2" and after.ckpt.is_complete()
 
 
 # ------------------------------------------------------------ r3 fixes
