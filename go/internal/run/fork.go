@@ -582,7 +582,7 @@ func (d *Driver) commitDecision(ctx context.Context, rs *RunState, fs *ForkState
 // the judgment binding was left out by omission, and a first_verdict
 // child judged on the default arm whatever the parent was configured).
 func (d *Driver) childDriver(fs *ForkState) *Driver {
-	return &Driver{J: d.J, Store: d.Store, Backend: d.Backend, Judge: d.Judge, Lane: LaneNow, Origin: forkOrigin{}, Timeout: d.Timeout, Health: d.Health, Events: d.Events, Lens: d.Lens, Work: d.Work, Frame: d.Frame,
+	return &Driver{J: d.J, Store: d.Store, Backend: d.Backend, Judge: d.Judge, Lane: LaneNow, Origin: forkOrigin{}, Timeout: d.Timeout, Health: d.Health, Events: d.Events, Lens: d.Lens, Work: d.Work, WorkDefault: d.WorkDefault, Frame: d.Frame,
 		Confined: true, ChildOf: fs.Fork.ID, ModelJudge: fs.Fork.Policy == JoinFirstVerdict, MaxAttempts: d.MaxAttempts, MaxDeliveryAttempts: d.MaxDeliveryAttempts,
 		JudgeProvider: d.JudgeProvider, JudgeShadow: d.JudgeShadow, Providers: d.Providers}
 }

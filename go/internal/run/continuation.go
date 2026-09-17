@@ -356,7 +356,7 @@ func (d *Driver) continuation(ctx context.Context, rs *RunState) (*Outcome, erro
 			return nil, err
 		}
 		if prior := led.Runs[rs.Run]; prior != nil && prior.Continuation != nil {
-			rs.Continuation, rs.Related = prior.Continuation, prior.Related
+			rs.Continuation, rs.Related, rs.SourceWork = prior.Continuation, prior.Related, prior.SourceWork
 			return refusalOutcome(prior.Continuation), nil
 		}
 		source, how := continuationSource(rs, led.Runs)
@@ -382,6 +382,7 @@ func (d *Driver) continuation(ctx context.Context, rs *RunState) (*Outcome, erro
 	}
 	rs.Continuation = c
 	if c.Refused == "" {
+		rs.SourceWork = workOf(led.Runs[c.Source])
 		block, err := ContinuationContext(rs, led.Runs, d.Store.Get)
 		if err != nil {
 			return nil, err

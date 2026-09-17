@@ -173,12 +173,13 @@ func TestCLIAskAnswerLoop(t *testing.T) {
 	}
 	out.Reset()
 	errw.Reset()
-	if code := run([]string{"runs", "show", handle}, &out, &errw); code != 0 || !strings.Contains(out.String(), "continued by "+follow+": finished") {
+	if code := run([]string{"runs", "show", handle}, &out, &errw); code != 0 || !strings.Contains(out.String(), "continued by "+follow+": finished") || !strings.Contains(out.String(), "works in "+filepath.Join(ws, "work")+" (default)") {
 		t.Fatalf("runs show asked (%d):\n%s", code, out.String())
 	}
 	out.Reset()
 	errw.Reset()
-	if code := run([]string{"runs", "show", follow}, &out, &errw); code != 0 || !strings.Contains(out.String(), "continues "+handle+" (after)") {
+	// the follow-up works where the asked run worked, and says so
+	if code := run([]string{"runs", "show", follow}, &out, &errw); code != 0 || !strings.Contains(out.String(), "continues "+handle+" (after)") || !strings.Contains(out.String(), "works in "+filepath.Join(ws, "work")+" (continued)") {
 		t.Fatalf("runs show follow-up (%d):\n%s", code, out.String())
 	}
 	out.Reset()

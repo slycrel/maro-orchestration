@@ -98,7 +98,9 @@ func TestCLIRunsShowJSON(t *testing.T) {
 		Usage   struct {
 			Calls int `json:"calls"`
 		} `json:"usage"`
-		Landscape *struct{} `json:"landscape"`
+		Landscape   *struct{} `json:"landscape"`
+		Work        string    `json:"work"`
+		WorkBinding string    `json:"work_binding"`
 	}
 	// the workspace announcement comes first (every command); the JSON
 	// starts at the first line that is an object — the consumer's contract
@@ -108,6 +110,9 @@ func TestCLIRunsShowJSON(t *testing.T) {
 	}
 	if s.Handle != handle || s.Outcome != "delivered" || !strings.Contains(s.Result, "scripted response to: say hi") || s.Usage.Calls < 1 || s.Landscape == nil {
 		t.Fatalf("summary: %+v", s)
+	}
+	if s.Work != filepath.Join(os.Getenv(workspace.EnvOverride), "work") || s.WorkBinding != "default" {
+		t.Fatalf("work: %q (%s)", s.Work, s.WorkBinding)
 	}
 	out.Reset()
 	if code := run([]string{"runs", "show", "--json", "deadbeef"}, &out, &errw); code == 0 {

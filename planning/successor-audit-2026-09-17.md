@@ -117,7 +117,8 @@ relation is rerun, record it, refuse a forged binding.
    session-bound code cannot survive. Decide with Jeremy: a live window
    inside the attempt (Python's road) or a worker-side re-request rule.
    Recorded here; not built today.
-4. **Work-dir binding under the rerun relation** (§2a).
+4. **Work-dir binding under the rerun relation** (§2a). Contract in
+   §4.3. LANDED 2026-09-17.
 5. **Container executor + env-request lane** — a strand (Phase 3
    platform breadth), not a chunk. Owed; not today.
 
@@ -186,3 +187,35 @@ follow-up's claim are two commits (a claim landing between them leaves
 the answer recorded and the follow-up ending refused); `HandleOf`
 collisions are unhandled across every handle-addressed verb.
 
+### 4.3 The work-dir binding: a run works in one directory, a continuation works where its source worked — LANDED 2026-09-17
+
+**Contract (shared with main — the landscape binding arc, §2a):**
+
+| Clause | Python main | Go successor (this chunk) |
+|---|---|---|
+| What is bound | the run's PROJECT (`~/.maro/workspace/projects/<slug>/`): NEXT.md, decisions, risks | the run's WORK DIR: the absolute directory every invocation of the run that carries a working directory runs in. Go has no projects; the directory is the whole of it |
+| Precedence | operator > landscape > navigator/parent > named > minted, stamped `project_binding` | operator (`--work`) > continued (the dir the run it continues worked in) > default (the workspace's own `work/`); recorded on the attempt config as `work` + `work_binding` (`default` / `operator` / `continued`) |
+| When it binds | at loop start, from the landscape decision | at attempt 1, from the continuation claim (§4.2): an unrefused claim on a source that recorded a dir binds `continued` to exactly that dir — the source's attempt-1 config, or for a run that predates the binding, the one dir all its executes recorded; a `related` decision, a plain follow of a finished run, a fork child, a replay arm bind nothing (default — fork children and replay arms inherit the parent's / runner's default). Attempts after the first bound one REPEAT it — a resumed attempt works where the run works, not where the resuming process defaults to; a run whose early attempts predate the binding adopts one at its first bound attempt (`operator` to where its executes ran, else the resuming driver's choice), and that adopted binding is what later attempts, continuations and `runs show` read |
+| What the fold checks | ledger guards around the card/stamp | `continued` sits on a run with an unrefused continuation and names the source's dir exactly; `default` on such a run whose source recorded a dir is refused (the override is `operator`, which the fold cannot check and does not); a later attempt that moved the dir is refused, and a bound attempt after an unbound attempt 1 is held to the binding's meaning and to where the run's executes ran; once the journal shows a bound config, an unbound one is refused (watermark, like the continuation's); every execute invocation ran in exactly the attempt's dir, every other invocation that carries a cwd carries that one, and an invocation that arrives BEFORE its attempt, or names attempt 0 of a run for anything but the landscape, is refused (review r1/r2: the lens and backend rules had the same hole — a call nothing attached could still be cited by an outcome, intent, plan or step). The door refuses a relative dir, a binding out of vocabulary, `operator`/`continued` with no dir, a dir with no binding |
+| Surface | `project_binding` in the loop record, the card | `runs show` prints "works in <dir> (<binding>)"; `runs show --json` carries `work` / `work_binding`; the driver emits event stage `work` at attempt start |
+| Kill safety | — | the binding is on the attempt record itself (same commit as the attempt); a resume reads attempt 1's, so no seam can lose it. A `continued` dir that is gone stops the run BEFORE its next attempt, first or resumed (`ErrConfig` "… is gone: restore it and resume"); it is never re-created empty under the old name; the claim stands and a resume after restoring works there |
+
+**Intentional differences:** no projects are minted (the default stays
+the workspace's single `work/`; a per-run dir is its own decision, not
+this chunk's); the binding is a field of the attempt config, not a new
+record kind (the config is where every other binding the fold checks
+lives — lens, frame, backend, policy); a source that recorded no dir
+(an old run, or a test) yields `default`, not an error; judge requests
+carry no cwd (unchanged: a judge reads, it does not work); the operator
+override is recorded as unverifiable and trusted as the operator's own
+flag.
+
+**Residue:** a run that started with `--work X` and died before attempt
+1 resumes under the resuming process's choice (the flag lives nowhere
+before the attempt record); two spellings of one directory (a symlink)
+are two strings to the fold, and a retargeted symlink is a move the fold
+cannot see; `default`/`operator` are self-attested — the journal's
+writers are the engine's own, the fold detects inconsistency, not a
+hostile writer; the binding watermark, like the continuation's, means a
+mixed-version writer set on one journal is unsupported; AGENDA judge
+calls drop the cwd the same way NOW's do (pre-existing).

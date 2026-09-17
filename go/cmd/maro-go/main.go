@@ -411,9 +411,6 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		return fmt.Errorf("unknown backend %q (subprocess|scripted)", backend)
 	}
 	return withJournal(out, func(a *workspace.Announced, j *journal.Journal, st *thought.Store) error {
-		if work == "" {
-			work = a.Path("work")
-		}
 		askPath := ""
 		if sp, ok := b.(*invoke.Subprocess); ok {
 			frame += wireSecrets(sp, a, errw)
@@ -448,7 +445,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		// a NOW run judges its closure when a judge model is named OR a
 		// non-default provider is: `--judge-provider jev` alone is a judge
 		modelJudge := jb != nil || (judgeProvider != "" && judgeProvider != judgment.ProviderLLM)
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: modelJudge, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath,
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: modelJudge, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, WorkDefault: a.Path("work"), Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath,
 			JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: providers, JudgeFallback: judgeFallback, JudgeEscalate: judgeEscalate,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
@@ -552,6 +549,9 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 					for _, l := range spine.Inspect(rs) {
 						fmt.Fprintln(out, l)
 					}
+					if w := spine.Summarize(rs); w.Work != "" {
+						fmt.Fprintf(out, "works in %s (%s)\n", w.Work, w.WorkBinding)
+					}
 					if by := spine.ContinuedBy(led, rs); by != "" {
 						fmt.Fprintln(out, by)
 					}
@@ -564,7 +564,7 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 			// was judged through jev/hosted/pcd can re-ask its judge; the
 			// production timeout and work dir so re-runs see what the
 			// original's did
-			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Work: a.Path("work"),
+			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, WorkDefault: a.Path("work"),
 				Providers: buildProviders([]string{judgment.ProviderJev, judgment.ProviderHosted, judgment.ProviderPCD}, judgment.DefaultPCDURL, hostedSpec{})}
 			s, err := invoke.NewSubprocess("haiku")
 			if err == nil {

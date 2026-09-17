@@ -166,6 +166,10 @@ type RunState struct {
 	// Continuation is the run's claim on the stopped run it follows (or the
 	// refusal it ended on); nil for a fresh run or a plain follow.
 	Continuation *Continuation
+	// SourceWork is where the continued run worked (derived from its
+	// attempt-1 config when the claim folds); "" when it recorded none or
+	// the claim was refused. bindWork reads it.
+	SourceWork string
 	// Context is the goal's operator context rendered as the block that
 	// rides into its requests (nil when the goal carried none).
 	Context    []byte
@@ -291,6 +295,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	continued := map[record.RunID]*Continuation{}
 	runOfGoal := map[record.RecordID]record.RunID{} // one production run per goal
 	var firstContinuation uint64
+	var firstWorkBinding uint64 // Seq of the first attempt whose config carries a work binding
 	// invocation states are folded up front so transitions can be checked
 	// against evidence in one pass
 	inv, err := invoke.Fold(pr)
@@ -628,6 +633,22 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			// attach each to the attempt it ran under as its record arrives
 			st := inv[x.ID]
 			rs := runs[x.RunID]
+			if x.RunID != "" && x.Attempt == 0 && x.Purpose != invoke.PurposeLandscape {
+				// attempt 0 of a run is the landscape's call and nothing
+				// else: a run-scoped call that names no attempt would never
+				// attach, and an intent, plan or step could still cite it
+				// (review r2)
+				return fmt.Errorf("run: %s invocation %s (%s) names no attempt", x.RunID, x.ID, x.Purpose)
+			}
+			if x.Attempt > 0 && (rs == nil || int(x.Attempt) > len(rs.Attempts)) {
+				// an attempt's call is made after the attempt is committed
+				// (drive: attempt, then execute); one that arrives before
+				// would never attach, and a recorded outcome could cite it
+				// through the invocation fold with no rule having seen it
+				// (review r1 of the work binding: the lens and backend
+				// rules had the same hole)
+				return fmt.Errorf("run: %s attempt %d invocation %s arrived before the attempt", x.RunID, x.Attempt, x.ID)
+			}
 			if st != nil && rs != nil && x.Attempt > 0 && int(x.Attempt) <= len(rs.Attempts) {
 				a := rs.Attempts[x.Attempt-1]
 				// the lens rule executes as the invocation arrives (§13):
@@ -636,6 +657,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 					return err
 				}
 				if err := checkBackend(rs, a, st); err != nil {
+					return err
+				}
+				if err := checkWork(rs, a, st); err != nil {
 					return err
 				}
 				a.Invocations = append(a.Invocations, st)
@@ -724,6 +748,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			}
 			if want == "" {
 				continued[source] = x
+				rs.SourceWork = workOf(runs[source])
 				block, err := ContinuationContext(rs, runs, store.Get)
 				if err != nil {
 					return fmt.Errorf("run: %s continuation %s: %w", x.RunID, x.ID, err)
@@ -770,6 +795,12 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			}
 			if x.Config.Lane != rs.Goal.Lane {
 				return fmt.Errorf("run: %s attempt %d ran lane %s but the goal is routed to %s", x.RunID, x.Attempt, x.Config.Lane, rs.Goal.Lane)
+			}
+			if err := checkWorkBinding(rs, x, runs, firstWorkBinding); err != nil {
+				return err
+			}
+			if x.Config.WorkBinding != "" && firstWorkBinding == 0 {
+				firstWorkBinding = x.Seq
 			}
 			if rs.Goal.Origin == OriginFork {
 				fs := memberOf[x.RunID]

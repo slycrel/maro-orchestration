@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -158,6 +159,7 @@ func TestForkChildrenAreConfined(t *testing.T) {
 	exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec", ActsOutward: true}, Rules: execRules(rule{Key: "sub-goal B", Prefix: true, Answer: "wrote a file", Effect: &invoke.ScriptedEffect{Op: "Write", Input: []byte(`{"path":"x"}`)}}), Def: "?"}
 	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(JoinAll), Def: judgeDone}
 	d := h.agenda(exec, judge)
+	d.WorkDefault = filepath.Join(t.TempDir(), "work") // the parent's default reaches every child (review r1)
 	rep, err := d.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted})
 	if err != nil || rep.Mission.Outcome != MissionDelivered {
 		t.Fatalf("%v %+v", err, rep)
@@ -166,6 +168,17 @@ func TestForkChildrenAreConfined(t *testing.T) {
 	var fs *ForkState
 	for _, f := range led.Forks {
 		fs = f
+	}
+	for _, m := range fs.Fork.Members {
+		crs := led.Runs[m.Run]
+		if cfg := crs.Latest().Attempt.Config; cfg.Work != d.WorkDefault || cfg.WorkBinding != WorkDefault {
+			t.Fatalf("child %s config: work=%q binding=%q", m.Run, cfg.Work, cfg.WorkBinding)
+		}
+		for _, is := range crs.Latest().Invocations {
+			if is.Invocation.Purpose == invoke.PurposeExecute && is.Invocation.Cwd != d.WorkDefault {
+				t.Fatalf("child %s execute ran in %q", m.Run, is.Invocation.Cwd)
+			}
+		}
 	}
 	var failed, completed int
 	for _, m := range fs.Fork.Members {

@@ -32,6 +32,11 @@ type Summary struct {
 	// Continuation is the claim on the run this one continues (or its
 	// refusal), nil for a fresh run or a plain follow.
 	Continuation *Continuation `json:"continuation,omitempty"`
+	// Work is where the run works and WorkBinding how it came by it (the
+	// run's first bound attempt's config); absent for a run that predates
+	// the binding.
+	Work        string      `json:"work,omitempty"`
+	WorkBinding WorkBinding `json:"work_binding,omitempty"`
 	// ContinuedBy is the source-side line ("continued by <handle>: <state>");
 	// it needs the ledger, so the caller fills it. "" when nothing does.
 	ContinuedBy string `json:"continued_by,omitempty"`
@@ -79,6 +84,9 @@ func Summarize(rs *RunState) Summary {
 		Delivery: m.Delivery, Required: m.Required, Reason: m.Reason, Parent: string(rs.Parent), Root: string(rs.Root), Landscape: rs.Landscape, Continuation: rs.Continuation}
 	if rs.Goal != nil && rs.Goal.Context != nil {
 		s.Context = rs.Goal.Context.Hash
+	}
+	if b := boundAttempt(rs); b != nil {
+		s.Work, s.WorkBinding = b.Attempt.Config.Work, b.Attempt.Config.WorkBinding
 	}
 	if rs.Goal != nil {
 		s.Goal = string(rs.Goal.ID)

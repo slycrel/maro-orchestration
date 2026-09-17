@@ -7,8 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -142,13 +140,17 @@ type Driver struct {
 	// Frame is the execute frame text every NOW execute request of this
 	// driver's runs begins with (frame.go); "" = the bare goal (tests).
 	Frame string
-	// Work is the working directory every tool-bearing execute of this
-	// driver's runs starts in — the workspace's own `work/`, never the
+	// Work is the working directory the OPERATOR named for this driver's
+	// runs (--work); "" = none named. WorkDefault is where a run works
+	// when nothing binds it — the workspace's own `work/`, never the
 	// process's cwd (an execute that inherits the process's directory
 	// inherits whatever project it was launched from: its CLAUDE.md, its
-	// files, its idea of what the goal is about). Created on first use;
-	// recorded on the invocation. "" = the backend's default (tests).
-	Work string
+	// files, its idea of what the goal is about); "" = the backend's
+	// default (tests). Between the two sits the continued run's dir
+	// (work.go): the attempt config records which won, the fold checks
+	// it, and every invocation runs there. Created on first use.
+	Work        string
+	WorkDefault string
 	// MaxDeliveryAttempts bounds the outbox. Why 3: a CLI origin fails only
 	// when its writer is gone (closed pipe), which a retry never repairs; the
 	// bound exists so a dead origin becomes delivery_failed with a reason
@@ -411,28 +413,6 @@ func (d *Driver) policy(ctx context.Context, rs *RunState, n uint32) (*learn.Pol
 	return pol, recs, nil
 }
 
-// work is the working directory for every request when the driver has
-// one: Work, made to exist (mkdir -p; 0755) and absolute. Tool-less
-// requests run there too, not only the tool-bearing ones (comparison
-// rerun 2026-09-06: a tool-less planner inherited the LAUNCHER's cwd, the
-// CLI told it that was its working directory, and it baked that absolute
-// path into a step the tool-bearing execute then followed — the file
-// landed outside the work dir). The work dir is what "the current
-// directory" means to the run, for every call that could name it.
-func (d *Driver) work(tools bool) (string, error) {
-	if d.Work == "" {
-		return "", nil
-	}
-	abs, err := filepath.Abs(d.Work)
-	if err != nil {
-		return "", fmt.Errorf("%w: work dir %q: %v", ErrConfig, d.Work, err)
-	}
-	if err := os.MkdirAll(abs, 0o755); err != nil {
-		return "", fmt.Errorf("%w: work dir %q: %v", ErrConfig, d.Work, err)
-	}
-	return abs, nil
-}
-
 func (d *Driver) crash(stage string) error {
 	if d.CrashAt == stage {
 		return fmt.Errorf("%w: %s", ErrCrashed, stage)
@@ -576,6 +556,9 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 	if err != nil {
 		return nil, err
 	}
+	if cfg.Work, cfg.WorkBinding, err = d.bindWork(rs); err != nil {
+		return nil, err
+	}
 	att := &RunAttempt{Header: header(runRef(rs.Run), rs.Run, n, "run_attempt/1"), Goal: rs.Goal.ID, Family: rs.Family.ID, Config: cfg}
 	if prev != nil {
 		att.RecoversFrom = prev.Attempt.Attempt
@@ -585,6 +568,9 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 		return nil, err
 	}
 	d.emit(rs, n, "policy", Created, fmt.Sprintf("%d of %d policies enabled", len(pol.Enabled), len(pol.Considered)))
+	if cfg.Work != "" {
+		d.emit(rs, n, "work", Created, fmt.Sprintf("%s (%s)", cfg.Work, cfg.WorkBinding))
+	}
 	a := &AttemptState{Attempt: att, Transitions: []*Transition{created}}
 	rs.Attempts = append(rs.Attempts, a)
 	d.emit(rs, n, "attempt", Created, "")
@@ -785,7 +771,7 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 	}
 	prompt := Lensed(ft, append(append(append([]byte{}, text...), rs.riders()...), block...))
 	tools := d.Backend.Capabilities().ActsOutward && !d.Confined
-	cwd, err := d.work(tools)
+	cwd, err := d.work(rs.Attempts[n-1].Attempt.Config)
 	if err != nil {
 		return nil, err
 	}

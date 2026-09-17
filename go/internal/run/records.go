@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
@@ -226,6 +227,14 @@ type ConfigSnapshot struct {
 	Lens            string              `json:"lens,omitempty"`      // the persona lens judge requests are rendered under (§13); "" = neutral
 	LensText        *thought.Ref        `json:"lens_text,omitempty"` // the lens's text, content-addressed: present iff Lens is; every lensed invocation cites exactly this
 	Frame           *thought.Ref        `json:"frame,omitempty"`     // the execute frame (frame_text) every NOW execute request of this attempt begins with; nil = bare goal
+	// Work is the absolute directory every invocation of this attempt that
+	// carries a working directory ran in ("" = the backend's default:
+	// tests); WorkBinding says how the run came by it (work.go). One work
+	// dir per run: later attempts repeat attempt 1's. ABSENT binding = the
+	// attempt predates the binding; the fold refuses that once the journal
+	// shows bound configs.
+	Work        string      `json:"work,omitempty"`
+	WorkBinding WorkBinding `json:"work_binding,omitempty"`
 	// Policy is the attempt's policy selection (same command as the
 	// attempt); Mechanisms is its snapshot, copied here so the attempt's
 	// config is complete on its own record. The fold checks equality.
@@ -345,6 +354,18 @@ func (r *RunAttempt) ValidateWire() error {
 		if r.Config.Frame.Kind != thought.FrameText || r.Config.Frame.Bytes == 0 {
 			return errors.New("run_attempt: frame must be a non-empty frame_text thought")
 		}
+	}
+	if r.Config.WorkBinding != "" && !workBindings[r.Config.WorkBinding] {
+		return fmt.Errorf("run_attempt: work binding %q out of vocabulary", r.Config.WorkBinding)
+	}
+	if r.Config.Work != "" && !filepath.IsAbs(r.Config.Work) {
+		return fmt.Errorf("run_attempt: work dir %q is not absolute", r.Config.Work)
+	}
+	if (r.Config.WorkBinding == WorkContinued || r.Config.WorkBinding == WorkOperator) && r.Config.Work == "" {
+		return fmt.Errorf("run_attempt: a %s work binding names the dir", r.Config.WorkBinding)
+	}
+	if r.Config.Work != "" && r.Config.WorkBinding == "" {
+		return errors.New("run_attempt: a work dir is bound by dir and binding together")
 	}
 	if r.RecoversFrom != 0 && r.RecoversFrom >= r.Attempt {
 		return errors.New("run_attempt: recovers_from must be an earlier attempt")

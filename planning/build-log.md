@@ -3131,5 +3131,127 @@ Patterns:
 
 Owed on this branch: landscape prompt v4 (show the judge which
 candidates are already continued); the ask grounding gate (design
-decision owed on the live ask); work-dir binding; container executor +
-env-request strand; the resolution-completeness check.
+decision owed on the live ask); container executor + env-request
+strand; the resolution-completeness check.
+
+## Post-v1 — the work-dir binding, Go side: a continuation works where its source worked, and the config says so (2026-09-17)
+
+**Ask (Jeremy, 2026-09-17, afk, the same order):** audit §3 item 4, the
+port of main's landscape-binding edge (§2a). Main binds a continuing run
+to the PROJECT of the run it continues (operator > landscape > named >
+minted, stamped `project_binding`; 31 review rounds on the card/ledger
+machinery around the decision). The Go engine had one `work/` for every
+run, `--work` to point a run elsewhere, a `cwd` on every invocation that
+nothing checked, and a resume that ran in the resuming process's default
+whatever the original's `--work` was.
+
+**Contract kept from main (audit §4.3):** a continuing run works where the
+run it continues worked, and says so in a record the fold checks; the
+operator's explicit choice overrides; the binding is decided once, at the
+start, and does not drift between attempts.
+
+**The Go engine's own road (D1, D5):**
+
+- No projects: the work dir is the whole of it. `ConfigSnapshot.Work` +
+  `WorkBinding` (`default` / `operator` / `continued`) on the attempt
+  record — the config is where every other binding the fold checks
+  already lives (lens, frame, backend, policy), so the binding is a field,
+  not a record kind. `go/internal/run/work.go`.
+- `Driver.Work` is the operator's dir; `Driver.WorkDefault` is the
+  workspace's `work/` (fork children and replay arms inherit it as the
+  default it is). `bindWork` decides at the run's first bound attempt:
+  operator, else an unrefused continuation whose source recorded a dir
+  (`rs.SourceWork` = `workOf(source)`: its first bound attempt's config,
+  or for a run that predates the binding the one dir all its executes
+  recorded), else the default. Later attempts repeat the first bound
+  attempt's — the resume works where the run works; a migrated run
+  adopts at its first bound attempt and holds.
+- `Driver.work(cfg)` mkdirs the ATTEMPT's dir on request, never at
+  binding time: a run that continues nothing and executes nothing
+  creates nothing.
+- Fold: `checkWorkBinding` on the attempt (continued names the source's
+  dir exactly; default on a continuation whose source worked somewhere is
+  refused — the override is `operator`, unverifiable and trusted as the
+  operator's flag; a later attempt that moved from the first bound one is
+  refused, and a first bound attempt after unbound ones is held to the
+  meaning and to where the executes ran; an unbound config after the
+  first bound one is refused — the continuation's watermark shape),
+  `checkWork` on each invocation as it attaches (an execute ran exactly
+  there; any other call that carries a cwd carries that one) — and the
+  seam itself closed: an invocation that arrives before its attempt, or
+  names attempt 0 of a run for anything but the landscape, is refused.
+  The door refuses a relative dir, an unknown binding, `operator`/
+  `continued` with no dir, a dir with no binding.
+- Surface: `runs show` "works in <dir> (<binding>)", `--json`
+  `work`/`work_binding`, event stage `work`.
+
+**Review (codex gpt-5.6-sol, high; 3 rounds, per the 2026-09-16 budget
+decree):** r1 = Skeptic + Architect on the chunk (8 + 8 findings, ~62KB
+prompts, ~20 min each). Verified and fixed six: an invocation could fold
+BEFORE its attempt and dodge every per-invocation rule (the lens and
+backend rules had the same hole; the fold now refuses it); fork children
+lost the parent's default dir; replay arms recorded `operator` for what
+was the runner's default; a legacy source's recorded cwd was ignored
+(the `workOf` derivation from its executes); a migrated run's attempt 2
+skipped the binding's meaning; a vanished `continued` dir was re-created
+empty under the old name. Three recorded intentional: `default` /
+`operator` are self-attested (the engine's own writers), the watermark
+instead of a `run_attempt/2` schema (chunk 2's road), lexical dir
+identity. r2 = ONE Skeptic on the fix diff only: 3 findings, all
+verified and fixed — two were regressions of the r1 fixes (the adopted
+binding of a migrated run was read from attempt 1, so its next resume
+could move it — `boundAttempt`, the run's FIRST bound attempt, now
+answers everywhere; and a run-scoped attempt-0 invocation still dodged
+the join — refused unless it is the landscape's) and one gap (the gone
+dir was checked at attempt 1 only; now every attempt). r3 = the
+regression round on the r2 → r3 fix diff: one LOW (the migrated-source
+continuation had no end-to-end fixture — added: attempt 1 unbound,
+attempt 2 adopts, the child under another default binds `continued` to
+the adopted dir, executes there, refolds from disk), no regression.
+Stopped at three per the decree. Full Go suite green three times
+(before and after each fix set).
+
+**Patterns (141+; the `jev` merge re-used 133–137 in its own entry above,
+the continuation entry's 133–140 stand — numbering resumes here):**
+
+- **141. One dir per run, answered by the first bound attempt.** A
+  resume reads the run's binding, not the resuming process's default;
+  and "the run's binding" is the first attempt that has one — attempt
+  1 alone let a migrated run move on its next resume (review r2). Where
+  the journal can predate a field, the reader of that field walks to
+  the first record that carries it.
+- **142. A call attaches to the attempt it names, or is refused.** The
+  fold's per-invocation rules (lens, backend, work dir) execute when an
+  invocation joins its attempt; an invocation that arrives before the
+  attempt, or names attempt 0 of a run for anything but the landscape,
+  joins nothing and used to be checked by nothing while an outcome could
+  still cite it. Every seam a join crosses is a rule's blind spot until
+  the join itself is a rule.
+- **143. Derive the legacy fact from the record that existed then.** A
+  run that predates the binding recorded its cwd on every execute; that
+  is where it worked, and a continuation of it must go there — not to
+  today's default because the new field is empty. When a field is new,
+  the old runs are not "unknown"; they said it another way.
+- **144. A continued dir is never created.** The dir is where the
+  source's files are; a path that no longer exists is not that. mkdir
+  would hand the continuation an empty dir under the old name and call
+  it the source's. Stop before the call, say what is gone, resume after
+  it is restored — for every attempt, not only the first.
+- **145. A migrated run keeps what it adopts.** The first bound attempt
+  of an old run is held to the binding's meaning AND to where the run's
+  own executes already ran, and then answers for the run like attempt 1
+  of a new one. Migration is a one-way door: the adoption is checked
+  once and thereafter repeated, never re-decided.
+- **146. One history per forgery, again (137).** The fixture that proves
+  the driver keeps the adopted binding cannot share a journal with the
+  refused forgery that proves the fold refuses a move — the refusal
+  poisons the journal for the resume. Each claim about the driver gets
+  its own journal.
+
+**Owed:** a `--work` given to a run that dies before attempt 1 is lost on
+resume (nothing records it before the attempt); a per-run work dir (the
+default is still one shared `work/`); AGENDA judge calls drop the cwd
+like NOW's (pre-existing); physical identity of a dir (a symlink
+retargeted under a `continued` run is a move the fold cannot see); the
+`run_attempt/2` road for the binding (a schema version instead of a
+watermark) if mixed-version writers on one journal ever matter.

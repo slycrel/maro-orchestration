@@ -308,7 +308,7 @@ type Runner struct {
 	Backend invoke.Backend
 	Judge   invoke.Backend
 	Timeout time.Duration
-	Work    string // the replay arms' working directory (run.Driver.Work)
+	Work    string // the replay arms' working directory when nothing binds one (run.Driver.WorkDefault)
 	Events  func(run.Event)
 	// CrashAt is forwarded to every arm driver (the kill matrix's seam);
 	// production never sets it.
@@ -382,7 +382,7 @@ func (r *Runner) arm(ctx context.Context, st *State, x *Experiment, as *Assignme
 	if err != nil {
 		return err
 	}
-	d := &run.Driver{J: r.J, Store: r.Store, Backend: r.Backend, Judge: r.Judge, Lane: unit.Goal.Lane, Origin: run.ReplayOrigin{}, Events: r.Events, Timeout: r.Timeout, CrashAt: r.CrashAt, Frame: frame, Work: r.Work,
+	d := &run.Driver{J: r.J, Store: r.Store, Backend: r.Backend, Judge: r.Judge, Lane: unit.Goal.Lane, Origin: run.ReplayOrigin{}, Events: r.Events, Timeout: r.Timeout, CrashAt: r.CrashAt, Frame: frame, WorkDefault: r.Work,
 		Replay: &run.ReplayContext{Assignment: as.ID, Arm: arm.Arm, Unit: as.Unit, Root: unit.Root, Apply: arm.Apply, Withhold: arm.Withhold}}
 	if err := d.Validate(); err != nil {
 		return err

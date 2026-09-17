@@ -53,8 +53,9 @@ type Options struct {
 	TailEvery time.Duration
 	// Lens is the persona lens every judge request runs under (§13); "" = neutral.
 	Lens string
-	// Work is the working directory tool-bearing executes start in; "" =
-	// the workspace's own work/ (Root.Path("work")).
+	// Work is the working directory the operator named for every run; "" =
+	// none, and runs work in the workspace's own work/ (Root.Path("work"))
+	// unless they continue a run that worked elsewhere (run/work.go).
 	Work string
 	// Frame is the execute frame every driver runs under; "" = run.DefaultFrame.
 	// The CLI appends the secrets presence block here (docs/SECRETS_DESIGN.md).
@@ -150,9 +151,6 @@ func Serve(ctx context.Context, opts Options) (*Server, error) {
 	}
 	if opts.Poll == 0 {
 		opts.Poll = 2 * time.Second
-	}
-	if opts.Work == "" {
-		opts.Work = opts.Root.Path("work")
 	}
 	if err := opts.Root.Ensure(); err != nil {
 		return nil, err
@@ -313,7 +311,7 @@ func (l *executor) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 	defer t.Stop()
 	lastErr, repeats := "", 0
 	for {
-		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health, Lens: l.s.opts.Lens, Work: l.s.opts.Work, Frame: l.s.opts.frame(), AskPath: l.s.opts.AskPath,
+		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health, Lens: l.s.opts.Lens, Work: l.s.opts.Work, WorkDefault: l.s.opts.Root.Path("work"), Frame: l.s.opts.frame(), AskPath: l.s.opts.AskPath,
 			JudgeProvider: l.s.opts.JudgeProvider, JudgeShadow: l.s.opts.JudgeShadow, Providers: l.s.opts.Providers, JudgeFallback: l.s.opts.JudgeFallback, JudgeEscalate: l.s.opts.JudgeEscalate,
 			Events: func(e run.Event) {
 				if e.Stage == "attempt" && e.Goal != "" {

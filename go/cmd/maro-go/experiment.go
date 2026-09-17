@@ -323,7 +323,7 @@ func experimentRun(args []string, a *workspace.Announced, j *journal.Journal, st
 			return err
 		}
 	}
-	r := &experiment.Runner{J: j, Store: st, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Work: a.Path("work"), Events: func(e spine.Event) {
+	r := &experiment.Runner{J: j, Store: st, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Work: a.Path("work") /* the arms' default; the runner binds it as such */, Events: func(e spine.Event) {
 		fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 	}}
 	if err := r.Run(context.Background(), exp); err != nil {

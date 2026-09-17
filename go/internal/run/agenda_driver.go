@@ -97,7 +97,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			sh.CrashAt = ""
 		}
 		req := invoke.Request{Purpose: purpose, Prompt: prompt, Tools: tools && b.Capabilities().ActsOutward, Timeout: d.Timeout}
-		cwd, err := d.work(req.Tools)
+		cwd, err := d.work(a.Attempt.Config)
 		if err != nil {
 			return nil, nil, err
 		}
