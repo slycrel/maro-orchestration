@@ -107,6 +107,22 @@ func Inspect(rs *RunState) []string {
 			lines = append(lines, fmt.Sprintf("  tried without the operator (%v): %s", q.Tried, q.NoInputAlternative))
 		}
 	}
+	for _, at := range rs.Attempts {
+		if at == nil {
+			continue
+		}
+		for _, rr := range at.Regression {
+			where := "the execute"
+			if rr.Step > 0 {
+				where = fmt.Sprintf("step %d", rr.Step)
+			}
+			detail := fmt.Sprintf("exit %d", rr.Exit)
+			if rr.Why != "" {
+				detail = rr.Why
+			}
+			lines = append(lines, fmt.Sprintf("regression (attempt %d, proved at %s): %s in %s → %s (%s)", rr.Attempt, where, strings.Join(rr.Argv, " "), rr.Dir, rr.Outcome, detail))
+		}
+	}
 	if ans := rs.Answer; ans != nil {
 		late := ""
 		if ans.Late {

@@ -1,6 +1,6 @@
 {
   "generator": "maro-go contracts gen v1",
-  "source_ref": "efda42f0",
+  "source_ref": "fb49a976",
   "kinds": {
     "answer": "00bcf334fcf472c3fb26d4e6fa6e738b9a43548c98056476976c7ba62c4f4697",
     "application": "ddab4335dd49232e8a3a7056daa72ae181e21794f25b5ab5d38a3dbd52305385",
@@ -43,6 +43,7 @@
     "question": "d953bb9cdfeaecbaf67c994457d8f45fe91cdb09ffb126d4bea93b05dace07f9",
     "recall_selection": "fb6b3f4de23e78526ccb1db69a68cdafdd95207b25b604bcd04de383811cf3e9",
     "receipt": "99af36863095c2df0b351b941eba62378a4b4b500ba19417d178fd262cf74e37",
+    "regression_rerun": "2652c2975c7253c4f849d9f066be8c3c5390c9876fd7cb3f427bdf9392ae1120",
     "resolution": "cbd87868a7a4d7a6a193fb2b67df544fe84d3bf965c74b543681d9d718456765",
     "run_attempt": "23db6be1847e26e78389831bd047b35941c096663a79559394d0a273a8c9025a",
     "run_transition": "eb352c87b9a8393adc3b4ed0d9a83308071a1a09f9981e2aa9bec028897c99f9",

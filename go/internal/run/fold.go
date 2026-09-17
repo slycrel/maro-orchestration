@@ -96,6 +96,9 @@ type AttemptState struct {
 	Steps    []*StepDone // by ordinal, dense from 1
 	// Verdicts this attempt committed (run-scoped), in Seq order.
 	Verdicts []*verdict.Verdict
+	// Regression: the closure re-runs of the attempt's regression obligations, in obligation order, and the observations they ground (LoopsBench item 2).
+	Regression   []*RegressionRerun
+	Observations []*verdict.Observation
 	// LastAt/LastRef: the newest attempt-scoped record the fold attached —
 	// the sheriff's "last committed activity", with invocation-side records
 	// considered by the sheriff itself.
@@ -570,7 +573,28 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				a.Verdicts = append(a.Verdicts, x)
 				a.touch(x)
 			}
+		case *RegressionRerun:
+			a, err := attempt(get(x.RunID), x.Attempt, "regression_rerun")
+			if err != nil {
+				return err
+			}
+			if err := checkRegressionRerun(runs[x.RunID], a, x, inv, store); err != nil {
+				return err
+			}
+			a.Regression = append(a.Regression, x)
+			a.touch(x)
 		case *verdict.Observation:
+			if x.Check == verdict.CheckRegressionRerun {
+				a, err := attempt(get(x.RunID), x.Attempt, "observation")
+				if err != nil {
+					return err
+				}
+				if err := checkRegressionObservation(a, x); err != nil {
+					return err
+				}
+				a.Observations = append(a.Observations, x)
+				a.touch(x)
+			}
 			observations[x.ID] = x
 		case *verdict.Resolution:
 			// every resolution is a derived record: it must re-derive from
@@ -1232,6 +1256,13 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 			}
 			want = closurePrompt(goal, []string{string(goal)}, [][]byte{judged}, []bool{term == invoke.TerminalPartial})
 		}
+		// the closure judge sees the regression re-runs (what the done
+		// steps proved, re-run at closure) before judging
+		reruns, err := closureReruns(rs, a, inv, store)
+		if err != nil {
+			return err
+		}
+		want = append(want, regressionBlock(reruns)...)
 	default:
 		return nil
 	}

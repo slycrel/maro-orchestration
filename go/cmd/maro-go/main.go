@@ -490,9 +490,14 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 			return nil
 		}
 		if len(args) > 0 && args[0] == "resume" {
-			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out}}
+			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Work: a.Path("work")}
 			s, err := invoke.NewSubprocess("haiku")
 			if err == nil {
+				// the same tool environment a run's backend gets (the secrets
+				// drop, the ask path): a resumed attempt's calls and re-runs
+				// see what the original's did
+				wireSecrets(s, a, errw)
+				wireAsk(s, a)
 				d.Backend = s
 			} else {
 				fmt.Fprintln(errw, "resume: no subprocess backend available; runs needing re-execution will fail honestly:", err)

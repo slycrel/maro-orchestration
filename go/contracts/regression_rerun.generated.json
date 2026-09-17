@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "metering_target",
+  "kind": "regression_rerun",
   "envelope": "production",
-  "schema": "metering_target/1",
-  "go_type": "run.MeteringTarget",
+  "schema": "regression_rerun/1",
+  "go_type": "run.RegressionRerun",
   "fields": [
     {
       "name": "header.ID",
@@ -78,30 +78,86 @@
       "from_header": true
     },
     {
-      "name": "Goal",
-      "wire": "goal",
+      "name": "Step",
+      "wire": "step",
+      "go_type": "int",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Invocation",
+      "wire": "invocation",
       "go_type": "record.RecordID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Name",
-      "wire": "name",
+      "name": "Effect",
+      "wire": "effect",
+      "go_type": "record.RecordID",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Argv",
+      "wire": "argv",
+      "go_type": "[]string",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Env",
+      "wire": "env",
+      "go_type": "[]string",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Dir",
+      "wire": "dir",
       "go_type": "string",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Dimension",
-      "wire": "dimension",
-      "go_type": "run.Dimension",
+      "name": "Exit",
+      "wire": "exit",
+      "go_type": "int",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Limit",
-      "wire": "limit",
-      "go_type": "float64",
+      "name": "TimedOut",
+      "wire": "timed_out",
+      "go_type": "bool",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Truncated",
+      "wire": "truncated",
+      "go_type": "bool",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Stdout",
+      "wire": "stdout",
+      "go_type": "*thought.Ref",
+      "omittable": true,
+      "is_thought": true
+    },
+    {
+      "name": "Stderr",
+      "wire": "stderr",
+      "go_type": "*thought.Ref",
+      "omittable": true,
+      "is_thought": true
+    },
+    {
+      "name": "Outcome",
+      "wire": "outcome",
+      "go_type": "regression.Outcome",
       "omittable": false,
       "is_thought": false
     },
@@ -109,7 +165,7 @@
       "name": "Why",
       "wire": "why",
       "go_type": "string",
-      "omittable": false,
+      "omittable": true,
       "is_thought": false
     }
   ],

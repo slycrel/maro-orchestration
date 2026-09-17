@@ -13,6 +13,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
+	"github.com/slycrel/maro-orchestration/go/internal/regression"
 	"github.com/slycrel/maro-orchestration/go/internal/run"
 	"github.com/slycrel/maro-orchestration/go/internal/supervise"
 	"github.com/slycrel/maro-orchestration/go/internal/tail"
@@ -102,6 +103,7 @@ func samples() map[record.Kind]any {
 		verdict.KindResolution:      &verdict.Resolution{Header: withSchema(h, "resolution/1"), VerdictKind: verdict.KindClosure, Outcome: "achieved", Effective: inv, Candidates: []record.RecordID{inv}, Observations: []record.RecordID{inv}, ResolverVer: verdict.ResolverVer, Thresholds: verdict.DefaultThresholds, Rule: "standing:judge", Confidence: 0.7},
 		invoke.KindReconciled:       &invoke.Reconciled{Header: withSchema(h, "invocation_reconciled/1"), Invocation: inv, Disposition: invoke.DispositionAbandoned, Evidence: "tool-less"},
 		run.KindLandscape:           &run.Landscape{Header: withAttempt(withSubject(withSchema(h, "landscape/1"), record.Ref{Kind: "run", ID: string(h.RunID)}), 0), Goal: inv, AsOf: 3, Rule: run.LandscapeJudge, Floor: run.LandscapeFloor, TopK: run.LandscapeTopK, Scanned: 2, BelowFloor: 1, Candidates: []run.LandscapeCandidate{{Run: "run-2", Goal: inv, Similarity: 0.5}}, Relation: run.RelationRelated, Chosen: "run-2", Reason: "same subject", Judge: inv, PromptVer: run.LandscapePromptVer},
+		run.KindRegressionRerun:     &run.RegressionRerun{Header: withSubject(withSchema(h, "regression_rerun/1"), record.Ref{Kind: "run", ID: string(h.RunID)}), Step: 1, Invocation: inv, Effect: inv, Argv: []string{"make", "test"}, Env: []string{"CI=1"}, Dir: "/work", Exit: 2, Stdout: &ref, Outcome: regression.Fail},
 		run.KindMeteringTarget:      &run.MeteringTarget{Header: withSubject(withSchema(h, "metering_target/1"), record.Ref{Kind: "goal", ID: string(inv)}), Goal: inv, Name: "cost_usd", Dimension: run.DimCostUSD, Limit: 2, Why: "Manti envelope"},
 		run.KindOverage:             &run.Overage{Header: withSubject(withSchema(h, "overage/1"), record.Ref{Kind: "run", ID: "run-1"}), Goal: inv, Target: tomb, Dimension: run.DimCostUSD, Measured: 2.5, Limit: 2},
 		run.KindGoal:                &run.Goal{Header: withSubject(withSchema(h, "goal/1"), record.Ref{Kind: "goal", ID: string(h.ID)}), Parent: inv, Root: inv, Text: goalRef, Origin: run.OriginReplay, Lane: run.LaneNow, Delivery: run.DeliveryPolicy{Required: run.TransportAccepted}, Arm: &learn.ArmRef{Assignment: inv, Arm: "treatment"}},

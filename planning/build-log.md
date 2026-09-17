@@ -2696,3 +2696,185 @@ what a step verified, over the recorded `tool_effect` rows, at restart
 and closure); the r1 residue above plus "continue the producing
 selection" as the non-failing answer to pattern 125; F9, F20, the r30
 census (unchanged).
+
+## Post-v1 — LoopsBench item 2, Go side: what a step proved is re-run at closure (2026-09-17)
+
+**Ask (Jeremy, 2026-09-17, afk):** "re-implement the missing/intentional
+things we've added to main and have not for whatever reason on
+successor" — by contract, not line by line. The audit
+(`planning/successor-audit-2026-09-17.md`) put this first: the Python
+main closed it 2026-09-16 (chunks 2–9 of the LoopsBench arc) and the
+Go engine had item 1 (the gate) but not item 2.
+
+**The gap (LoopsBench):** step 1 runs the suite and sees it pass; step 2
+edits; closure believes "achieved" because the closure judge reads the
+steps' own results. The proof is stale at the moment it is trusted.
+
+**Contract kept from main (audit §2):** an obligation is the exact
+runner argv a FINAL-done step ran in a recorded cwd, taken from real
+shell tool events with POSITIVE evidence (a result seen, not an error,
+non-empty, no failure tally, the family's pass tally where it has one);
+the literal grammar `[cd DIR &&] [NAME=value…] [uv|poetry|pipenv run]
+RUNNER ARGS` and nothing programmatic; re-run at closure with no shell in
+the recorded cwd; tally-first classification; a Fail downgrades an
+achieved closure; an inconclusive re-run never downgrades and never
+vetoes.
+
+**The Go engine's own road (D1, D5):**
+
+- `internal/regression` (pure): `Parse`, `Passed`, `Classify`, `Rerun`
+  (`exec.CommandContext`, no shell, `WaitDelay` 2s, dir-missing / not
+  started / timeout ⇒ Inconclusive with a `Why`). No policy mechanism,
+  no kill switch, no cap on obligations (D13/D15, "off switches stay
+  off").
+- Obligations are DERIVED at closure, never carried: from the folded
+  invocation states (`invoke.Fold` over the journal — the driver's run
+  state, folded at start, does not carry this attempt's own calls) of
+  the done steps (AGENDA) or the one complete execute (NOW); the tool
+  effect's input/output ride the shell's byte-preserving evidence
+  envelope (`invoke.DecodeEvidence`).
+- `Driver.regress` re-runs each obligation BEFORE the closure judge and
+  commits, per obligation, ONE journal command holding the
+  `regression_rerun` record (argv, env, dir, exit, timed_out,
+  stdout/stderr as `thought.Evidence`, outcome, why) and the
+  `verdict.Observation` it grounds (check `regression_rerun`; Fail ⇒
+  refuted@1, Pass ⇒ supported@1, Inconclusive ⇒ could_not_observe@0).
+  Neither exists without the other. A re-run an earlier unrecorded
+  attempt made for the same (argv, env, dir) is reused, the judge-verdict
+  rule.
+- The closure prompt gets a `## Regression checks` section (byte-identical
+  to before when there is no obligation); the observations ride
+  `AttemptState.Observations` into `verdict.Commit`, so a Fail refutes an
+  `achieved` closure MECHANICALLY (resolver rule
+  `refuted_by_observation:regression_rerun`) — not by persuading the
+  judge.
+- The fold re-derives: a re-run must cite an obligation the folded steps
+  derive (same step, dir, argv, env), once; a classified outcome must
+  equal `Classify` over its own stored bytes; an observation must cite a
+  re-run of its attempt and say what the re-run says, once; the closure
+  verdict's prompt parity appends the re-runs the driver showed
+  (`closureReruns` mirrors the reuse rule). Crash seam `after_regression`.
+- Registry: `thought.Evidence`, `verdict.CheckRegressionRerun` (closure),
+  `regression_rerun/1` declared + generated; `contracts report` 0/0.
+
+**Tests:** grammar must-detect fixtures (programs, non-exec forms incl.
+`--help`/`--version`, make clusters and `--dry`-style abbreviations,
+control env like `MAKEFLAGS=-n`, wrappers kept in the identity), positive-evidence table, tally-first,
+real re-run in a temp dir (Makefile flipped between step and closure;
+missing runner / dir / timeout / signal / cancel / truncated-pass
+inconclusive, truncated-fail a Fail; a recorded `PATH=bin` and an empty
+`PATH=` select the runner and never the host's; a background writer and
+a grandchild die with the group); run-package: a refuted
+achieved closure and its passing negative control (resolution names the
+observation; `runs show` line; re-derives after restart), seven
+no-obligation shapes render the prompt byte-for-byte, dedup + inconclusive
+moves the closure nowhere, the kill at `after_regression` reuses the one
+re-run (Makefile repaired in between — a second run would have passed),
+the NOW lane's execute is an obligation too, eleven forgeries refused
+(no such obligation, outcome disagrees, a why / a truncated flag / a
+signal death launder nothing, an observation citing another effect or
+the re-run alone, an orphan re-run, a re-run of what an earlier attempt
+already re-ran, a disagreeing observation), wire validation, a JSON
+round trip with `"step":0` explicit.
+
+**Review (codex gpt-5.6-sol, high; 3 rounds, stopped per the 2026-09-16
+budget decree):** r1 = Skeptic + Architect on the chunk (10 + 9 findings,
+the first pass timed out at 900s on a 70KB prompt and three leads were
+salvaged from its event stream; the slim 44KB re-issue finished in ~18
+min). Verified and fixed: a silent runner (exit 0, empty output) was
+Pass — now Inconclusive, and Classify demands the family's pass tally;
+the re-run resolved the runner through the ORCHESTRATOR's PATH and the
+process env, not the recorded `PATH=…` assignment and the shell's tool
+env — now `lookPath` over the recorded PATH, `PWD`, and the backend's
+`ToolEnv` (secrets drop, ask file); the fold's outcome check only fired
+on Fail — now a total state table (`TimedOut || Truncated || Exit < 0` ⇒
+Inconclusive, else `Classify` over the stored bytes); `go test` pass
+tallies were pytest-shaped — `ok`/`PASS`/`no test files`/`-json`
+Action:pass; `Key` did not quote, so `A="x B=y"` and `A=x B=y` collided;
+non-executing forms (`make -n/-q/-t`, `tox -l`, `pytest --co`, `go test
+-list`, `cargo --list`) were obligations; the process group was not
+killed with the leader and a cancelled context read as a timeout;
+capture was unbounded; an observation could cite any tool effect —
+now exactly `[regression_rerun, tool_effect]` with the re-run's own
+effect, and a re-run with no observation is refused; the NOW lane
+looked only at its own attempt's execute (mutation-checked). r2 = one
+Skeptic on the fix diff (8): the PATH lookup fell back to the host's
+`pytest` when the recorded one was gone (now Inconclusive "runner not on
+the recorded PATH"); `runs resume` built a bare subprocess without
+`wireSecrets`/`wireAsk` and with the 10-minute test timeout; a truncated
+capture could still classify (now Inconclusive); `TimedOut` with an exit
+code passed the wire; a redirected background child outlived the
+re-run; `--help`/`--version`, clustered make flags (`-nk`) and
+`MAKEFLAGS=-n` / `PYTEST_ADDOPTS=--co` / `GOFLAGS=-n` slipped the
+grammar; completeness checked only the shown re-runs. r3 = one Skeptic on the r2 fix diff (4; the regression
+round the decree allows): the `Truncated` flag skipped the fold's byte
+check, so a forged record could launder a failing tail as inconclusive
+— now `Decide` (tally-first even under truncation: a failure tally or
+non-zero exit is a Fail, only a pass tally in the tail is inconclusive)
+is the ONE classification the writer and the fold share, and the fold
+refuses the flag over a capture shorter than `MaxCapture`; an explicitly
+EMPTY recorded `PATH=` was read as "no PATH" and fell through to the host
+runner — now a set-but-empty PATH is the dir; `make -kh`, `make -v` and
+the getopt_long/argparse abbreviations (`make --dry`, `pytest --collect`,
+`tox --listenv`) were obligations — now refused (a prefix of a
+non-executing long option, in the abbreviating families); the group
+kill was fired and assumed — now the result waits, bounded at 2s, until
+nothing in the group answers signal 0, and a Pass over a group that did
+not exit is inconclusive. One r3 claim was refuted on read: the
+grandchild fixture's `$$!` is a Makefile recipe, which make unescapes to
+`$!` before the shell runs it. Stopped after r3 per the round budget.
+
+Full suite: 19 packages ok, twice; the one red in the last-but-one pass
+was `supervise` `TestPanicIsContainedAndRestartIsBounded`, untouched by
+this chunk and green 3/3 in isolation — a pre-existing race (the lane's
+`gaveUp` flag flips under the lock BEFORE the `gave_up` event commits,
+so a reader that waits on the flag can read the journal a beat early;
+fix shape: commit first, or wait on the event). Recorded, not fixed here.
+
+Residue stated in review and owed: the resume driver's wiring is now
+run's, but a backend change across a restart is not part of the re-run
+key (no "context identity"); the shell tool's hand-off file is not
+reproduced by a re-run; a crash between the re-run and its commit
+re-runs once more on resume (the rerun-then-commit seam); a tally inside
+a diagnostic line reads as Fail (tally-first, by contract); the closure
+executes workspace-controlled runners including `cd ..` — the same
+contract as main, confinement is the container executor strand; no
+fake-subprocess CLI composition test; the resolution-completeness check.
+
+Patterns:
+
+- **126. The driver's folded state is older than the driver.** `rs` is
+  the run folded at START; this attempt's own invocations are not in it.
+  Anything derived from what the attempt just did folds the journal
+  again (`invoke.Fold(d.J.Production())`).
+- **127. Tool bytes ride the evidence envelope.** A shell effect's
+  input/output are stored byte-preserving under `{"role","b64","tool_call"}`;
+  read them through `invoke.DecodeEvidence`, never as the raw thought.
+- **128. Content checks before duplicate checks.** "Observed twice" and
+  "already re-ran" fired before the lie was examined, so a lying record
+  was refused for the wrong reason and the lying check was untested.
+  Refuse a record for what it says first; duplicates last.
+- **129. A recorded PATH never falls back to the host's.** A bare
+  runner resolves through the command's own `PATH=` (relative from the
+  dir; an EMPTY one is the dir), or not at all — a same-named host
+  runner would answer for the one that is gone.
+- **130. One classification, shared by the writer and the fold, total
+  over every termination.** `Decide(family, exit, truncated, bytes)`:
+  tally or exit says Fail everywhere; a flag (`why`, `truncated`,
+  `timed_out`) never launders bytes; the fold enforces the writer's own
+  invariants (a truncated capture kept `MaxCapture` bytes).
+- **131. Kill the group and CHECK it.** `Setpgid`, cancel kills
+  `-pgid`, and after the leader exits the group is killed again and
+  the result waits (bounded) until nothing answers signal 0; a Pass
+  over a group that did not exit is inconclusive.
+- **132. Every entry point wires the backend the same way.** `runs
+  resume` built a bare subprocess (no secrets drop, no ask file, the
+  test timeout); the re-run then differed from the step's run by
+  environment alone. Wire once, from one place, or the re-run is not a
+  re-run.
+
+Owed on this branch (unchanged unless noted): continuation (a rerun
+claims and settles the run it continues — audit §3 item 2), the ask
+grounding gate, work-dir binding, container executor + env-request
+strand; the resolution-completeness check (a Resolution naming ALL
+committed observations).

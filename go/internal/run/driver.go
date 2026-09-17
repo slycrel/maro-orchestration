@@ -558,6 +558,20 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 // finish judges, records, and delivers an attempt's execution outcome.
 func (d *Driver) finish(ctx context.Context, rs *RunState, a *AttemptState, out *Outcome, candidates []*verdict.Verdict) (*Report, error) {
 	n := a.Attempt.Attempt
+	if rs.Goal.Lane == LaneNow && out.Terminal == invoke.TerminalComplete && out.Invocation != "" {
+		// regression obligations of the one execute (LoopsBench item 2)
+		live, err := d.liveInvocations()
+		if err != nil {
+			return nil, err
+		}
+		obligations, err := deriveObligations(d.Store, live, nil, out.Invocation)
+		if err != nil {
+			return nil, err
+		}
+		if _, _, err := d.regress(ctx, rs, a, obligations); err != nil {
+			return nil, err
+		}
+	}
 	if rs.Goal.Lane == LaneNow && a.Attempt.Config.Judge == JudgeModel && out.Terminal != invoke.TerminalFailed && len(candidates) == 0 {
 		v, err := d.nowClosureJudge(ctx, rs, a, out)
 		if err != nil {
@@ -585,7 +599,7 @@ func (d *Driver) finish(ctx context.Context, rs *RunState, a *AttemptState, out 
 		return nil, err
 	}
 	// Record — the resolution, then the execution outcome as a fold.
-	res, err := verdict.Commit(ctx, d.J, rs.Run, n, verdict.Candidates{Subject: runRef(rs.Run), VerdictKind: verdict.KindClosure, Verdicts: candidates}, verdict.DefaultThresholds)
+	res, err := verdict.Commit(ctx, d.J, rs.Run, n, verdict.Candidates{Subject: runRef(rs.Run), VerdictKind: verdict.KindClosure, Verdicts: candidates, Observations: a.Observations}, verdict.DefaultThresholds)
 	if err != nil && !errors.Is(err, verdict.ErrAlreadyResolved) {
 		return nil, err
 	}
@@ -891,7 +905,7 @@ func (d *Driver) nowClosureJudge(ctx context.Context, rs *RunState, a *AttemptSt
 		}
 	}
 	sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n}
-	req, err := d.lensedRequest(closurePrompt(goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}), false)
+	req, err := d.lensedRequest(append(closurePrompt(goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}), regressionBlock(a.Regression)...), false)
 	if err != nil {
 		return nil, err
 	}

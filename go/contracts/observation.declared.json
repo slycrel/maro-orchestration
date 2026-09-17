@@ -11,7 +11,7 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^(path_exists|symbol_exists|fabrication_diff|receipt_complete|claim_probe)$",
+      "pattern": "^(path_exists|symbol_exists|fabrication_diff|receipt_complete|claim_probe|regression_rerun)$",
       "rejects": "vibes",
       "measured_by": "internal/verdict:TestRefutationSettlesFailure"
     },
