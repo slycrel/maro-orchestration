@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func chatServer(t *testing.T, handler func(body map[string]any, w http.ResponseWriter)) *httptest.Server {
@@ -129,5 +130,67 @@ func TestOpenAIChatWithoutAKeyFailsBeforeDispatch(t *testing.T) {
 	_, err := o.Complete(context.Background(), Request{Purpose: PurposeJudge, Prompt: []byte("x")}, nil)
 	if err == nil || !strings.Contains(err.Error(), "GEMINI_API_KEY") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// Review r1 (all four lenses): the hosted client stored the raw error
+// body as the invocation TRANSCRIPT while only the reason was clipped, so
+// a gateway that echoes the Authorization header would have put the key
+// in the thought store. Every byte that leaves Complete is scrubbed of
+// the resolved key itself.
+func TestAnEchoedKeyNeverReachesTheTranscript(t *testing.T) {
+	srv := chatServer(t, func(body map[string]any, w http.ResponseWriter) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":"invalid token: sk-echo-9f (Authorization: Bearer sk-echo-9f)"}`)
+	})
+	o := NewOpenAIChat("hosted", srv.URL, "m", "KEY", func() (string, error) { return "sk-echo-9f", nil })
+	res, err := o.Complete(context.Background(), Request{Purpose: PurposeJudge, Prompt: []byte("x")}, nil)
+	if err != nil || res.Terminal != TerminalFailed {
+		t.Fatalf("%v %+v", err, res)
+	}
+	for _, s := range []string{res.Reason, string(res.Transcript), string(res.Response)} {
+		if strings.Contains(s, "sk-echo-9f") {
+			t.Fatalf("the key reached a recorded surface: %q", s)
+		}
+	}
+	if !strings.Contains(string(res.Transcript), "<redacted>") || !strings.Contains(res.Reason, "401") {
+		t.Fatalf("reason %q transcript %q", res.Reason, res.Transcript)
+	}
+}
+
+func TestRedactRemovesTheKeyAndAnyBearerToken(t *testing.T) {
+	cases := map[string]string{
+		"token abc123 leaked":                      "token <redacted> leaked",
+		"Authorization: Bearer abc123, then":       "Authorization: Bearer <redacted>, then",
+		"authorization: bearer other-token\" more": "authorization: bearer <redacted>\" more",
+		"Bearer abc123 and Bearer zzz":             "Bearer <redacted> and Bearer <redacted>",
+		"nothing here":                             "nothing here",
+	}
+	for in, want := range cases {
+		if got := Redact(in, "abc123"); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := Redact("Bearer only-prefix", ""); got != "Bearer <redacted>" {
+		t.Errorf("empty key: %q", got)
+	}
+}
+
+// The hosted client's timeout is a ceiling over the request's budget, the
+// same rule as the wire providers.
+func TestTheHostedTimeoutIsACeiling(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	t.Cleanup(srv.Close)
+	o := NewOpenAIChat("hosted", srv.URL, "m", "", nil)
+	o.Timeout = 50 * time.Millisecond
+	start := time.Now()
+	res, err := o.Complete(context.Background(), Request{Purpose: PurposeJudge, Prompt: []byte("x"), Timeout: 20 * time.Minute}, nil)
+	if err != nil || res.Terminal != TerminalFailed || time.Since(start) > 2*time.Second {
+		t.Fatalf("%v %+v after %s", err, res, time.Since(start))
 	}
 }

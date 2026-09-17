@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -71,9 +72,21 @@ def answer_all_questions(state: SidecarState, model_name: str, raw_state, questi
     }
 
 
+# MAX_BODY bounds one request. A System One state is a few KB; 4 MiB is
+# generous for a whole run's results and small enough that a stalled or
+# hostile upload cannot pin memory.
+MAX_BODY = 4 << 20
+# READ_TIMEOUT bounds how long a handler thread waits on the socket for
+# the body it was promised (BaseHTTPRequestHandler.timeout → socket
+# settimeout). Without it a Content-Length the peer never sends holds a
+# thread forever.
+READ_TIMEOUT = 30
+
+
 def make_handler(state: SidecarState):
     class Handler(BaseHTTPRequestHandler):
         server_version = "pcd-sidecar/0.1"
+        timeout = READ_TIMEOUT
 
         def log_message(self, fmt, *args):  # quieter, timestamped one-liners
             logger.info("%s - %s", self.address_string(), fmt % args)
@@ -108,11 +121,31 @@ def make_handler(state: SidecarState):
                 self._send_json(404, {"error": "not found"})
                 return
 
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length) if length else b""
+            # framing is validated BEFORE any byte is read: a negative or
+            # non-numeric length is a 400, an oversized one a 413, and
+            # the read itself is bounded by both the length and the
+            # socket timeout. Nothing here can escape without an HTTP
+            # reply — a stray exception would drop the connection and
+            # look, from the client's side, like the model hung.
             try:
-                body = json.loads(raw or b"{}")
-            except json.JSONDecodeError as e:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                self._send_json(400, {"error": "invalid Content-Length"})
+                return
+            if length < 0:
+                self._send_json(400, {"error": "invalid Content-Length"})
+                return
+            if length > MAX_BODY:
+                self._send_json(413, {"error": f"body exceeds {MAX_BODY} bytes"})
+                return
+            try:
+                raw = self.rfile.read(length) if length else b""
+            except (socket.timeout, OSError) as e:
+                self._send_json(408, {"error": f"body not received: {e}"})
+                return
+            try:
+                body = json.loads((raw or b"{}").decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
                 self._send_json(400, {"error": f"invalid JSON: {e}"})
                 return
 

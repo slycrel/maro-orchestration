@@ -55,7 +55,7 @@ func List() []Default {
 			Key:   "judgment.timeout",
 			Value: judgment.DefaultTimeout.String(),
 			Flag:  "",
-			Why:   "a wire judgment is a single small request; past a minute it is a hang, not a slow answer.",
+			Why:   "a judgment is a single small request; past a minute it is a hang, not a slow answer. It is a CEILING: a wire or hosted provider clamps any longer caller budget to it, and every shadow is asked under it, so measurement never holds delivery for the executor's twenty minutes.",
 		},
 		{
 			Key:   "judgment.jev.url",

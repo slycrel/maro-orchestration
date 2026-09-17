@@ -80,6 +80,11 @@ type Summary struct {
 	Stats         []Stats
 	Disagreements []Disagreement
 	Unpaired      int // shadow records whose primary verdict is not in the journal
+	// Unshadowed counts the judge verdicts (step/closure, model-judged)
+	// with NO shadow record at all — the population the report does not
+	// measure. A shadow lost to a crash between the primary verdict and
+	// its control record lands here, not nowhere.
+	Unshadowed int
 }
 
 var bands = [][2]float64{{0, 0.5}, {0.5, 0.7}, {0.7, 0.9}, {0.9, 1.0001}}
@@ -113,6 +118,11 @@ func Summarize(pr *journal.ProductionReader, cr *journal.ControlReader) (Summary
 		return nil
 	}); err != nil {
 		return s, err
+	}
+	for id, v := range verdicts {
+		if v.Source.Standing == verdict.StandingJudge && len(byPrimary[id]) == 0 {
+			s.Unshadowed++
+		}
 	}
 	stats := map[string]*Stats{}
 	for _, id := range order {
@@ -174,10 +184,10 @@ func newBuckets() []Bucket {
 // behaviour go to the operator's screen, never into a repo file.
 func (s Summary) Render(w io.Writer) {
 	if len(s.Pairs) == 0 {
-		fmt.Fprintln(w, "judgment: no shadow answers recorded (judgment.shadow is empty by default)")
+		fmt.Fprintf(w, "judgment: no shadow answers recorded (judgment.shadow is empty by default); %d judge verdicts unshadowed\n", s.Unshadowed)
 		return
 	}
-	fmt.Fprintf(w, "judgment report: %d primary verdicts with shadow answers\n\n", len(s.Pairs))
+	fmt.Fprintf(w, "judgment report: %d primary verdicts with shadow answers, %d judge verdicts without any\n\n", len(s.Pairs), s.Unshadowed)
 	fmt.Fprintln(w, "provider  answered  agree  agreement  failed  median ms  p95 ms")
 	for _, st := range s.Stats {
 		fmt.Fprintf(w, "%-9s %8d %6d %9.0f%% %7d %10d %7d\n", st.Provider, st.N, st.Agree, 100*st.Agreement(), st.Failed, st.Median(), st.P95())

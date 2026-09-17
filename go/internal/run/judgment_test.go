@@ -20,6 +20,7 @@ type fakeWire struct {
 	name    string
 	outcome string
 	fail    bool
+	first   bool // answer the FIRST option (the happy one) instead of the last
 	calls   int
 	models  []string // the model each request was asked in
 }
@@ -46,6 +47,9 @@ func (f *fakeWire) Complete(ctx context.Context, req invoke.Request, sink invoke
 	f.models = append(f.models, parsed.Model)
 	opts := parsed.Questions[QOutcome].Options
 	choice := opts[len(opts)-1].Name
+	if f.first {
+		choice = opts[0].Name
+	}
 	if f.outcome != "" {
 		choice = f.outcome
 	}
@@ -139,8 +143,20 @@ func TestAShadowAnswerCannotChangeTheResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sum.Pairs) != 3 || len(sum.Stats) != 1 || sum.Stats[0].Agree != 0 || sum.Stats[0].N != 3 || len(sum.Disagreements) != 3 {
+	if len(sum.Pairs) != 3 || len(sum.Stats) != 1 || sum.Stats[0].Agree != 0 || sum.Stats[0].N != 3 || len(sum.Disagreements) != 3 || sum.Unshadowed != 0 {
 		t.Fatalf("summary %+v", sum)
+	}
+	// and the unshadowed control run's three judge verdicts are COUNTED
+	// as unmeasured, not absent from the report (review r1: a shadow lost
+	// between the primary verdict and its record vanished from the
+	// denominator)
+	_, ph := control(nil)
+	psum, err := judgment.Summarize(ph.j.Production(), ph.j.Control())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if psum.Unshadowed != 3 || len(psum.Pairs) != 0 {
+		t.Fatalf("unshadowed run summary %+v", psum)
 	}
 	var b strings.Builder
 	sum.Render(&b)
@@ -272,5 +288,66 @@ func TestAShadowIsAskedInItsOwnModel(t *testing.T) {
 		if s.Failed {
 			t.Fatalf("shadow failed: %s", s.Reason)
 		}
+	}
+}
+
+// An AGENDA run configured with a non-default PRIMARY provider asks that
+// provider — every step judge and the closure — and the incumbent judge
+// backend is never asked a judgement. Review r1 (all four lenses): the
+// AGENDA invocation closure sent every judge to d.judge(a) whatever
+// --judge-provider said, so a jev primary received the wire body on the
+// subprocess judge and the fold then refused its own history.
+func TestAnAgendaPrimaryProviderIsTheOneAsked(t *testing.T) {
+	h := open(t)
+	// the judge backend scripts ONLY intent and plan: a judge call
+	// reaching it exhausts the script and fails the run
+	exec, judge := agendaBackends(
+		[]string{"Collected 12 rows of numbers", "Summary written: revenue flat"},
+		[]string{intentClear, planTwo})
+	d := h.agenda(exec, judge)
+	primary := &fakeWire{name: judgment.ProviderJev, first: true}
+	d.JudgeProvider = primary.Name()
+	d.Providers = map[string]judgment.Provider{primary.Name(): primary}
+	rep, err := d.Run(ctxBg, []byte("Summarize the quarterly numbers into a short report"), DeliveryPolicy{Required: TransportAccepted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Mission.Outcome != MissionDelivered || rep.Mission.Closure != "achieved" {
+		t.Fatalf("mission %+v", rep.Mission)
+	}
+	if primary.calls != 3 {
+		t.Fatalf("the primary was asked %d times, want 3 (two steps + closure)", primary.calls)
+	}
+	for _, m := range primary.models {
+		if m != "fake-jev" {
+			t.Fatalf("asked in model %q, want the provider's own", m)
+		}
+	}
+	if len(judge.Seen) != 2 {
+		t.Fatalf("the incumbent judge backend saw %d calls, want 2 (intent + plan only)", len(judge.Seen))
+	}
+	// the history folds: the recorded binding and the invocations agree
+	if _, err := Fold(h.j.Production(), h.st); err != nil {
+		t.Fatal(err)
+	}
+	rs := h.only()
+	for _, v := range h.verdicts(t, rs.Run) {
+		if v.Source.Standing == verdict.StandingJudge && v.Outcome != "done" && v.Outcome != "achieved" {
+			t.Fatalf("verdict %s %s: %s", v.VerdictKind, v.ID, v.Outcome)
+		}
+	}
+}
+
+// A fork child inherits the parent's judgment binding — primary, shadows
+// and the wired providers — so a first_verdict child's closure judge is
+// the provider the operator configured. Review r1: the child driver was
+// hand-copied field by field and the binding was left out.
+func TestAForkChildInheritsTheJudgmentBinding(t *testing.T) {
+	p := &fakeWire{name: judgment.ProviderJev}
+	d := &Driver{JudgeProvider: p.Name(), JudgeShadow: []string{judgment.ProviderHosted}, Providers: map[string]judgment.Provider{p.Name(): p}}
+	fs := &ForkState{Fork: &Fork{Policy: JoinFirstVerdict}}
+	cd := d.childDriver(fs)
+	if cd.JudgeProvider != p.Name() || len(cd.JudgeShadow) != 1 || cd.Providers[p.Name()] != p || !cd.ModelJudge || !cd.Confined {
+		t.Fatalf("child driver %+v", cd)
 	}
 }

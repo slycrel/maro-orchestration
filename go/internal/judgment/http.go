@@ -78,12 +78,16 @@ func (h *HTTP) Complete(ctx context.Context, req invoke.Request, sink invoke.Sin
 	if req.Tools {
 		return nil, fmt.Errorf("%w: %s cannot take a tool-bearing request", invoke.ErrBackendIncapable, h.Provider)
 	}
-	timeout := req.Timeout
-	if timeout <= 0 {
-		timeout = h.Timeout
+	// the provider's timeout is a CEILING: a caller's longer budget (the
+	// executor's 20 minutes rides every request) never turns one small
+	// wire request into a 20-minute hang
+	ceiling := h.Timeout
+	if ceiling <= 0 {
+		ceiling = DefaultTimeout
 	}
-	if timeout <= 0 {
-		timeout = DefaultTimeout
+	timeout := req.Timeout
+	if timeout <= 0 || timeout > ceiling {
+		timeout = ceiling
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -92,16 +96,22 @@ func (h *HTTP) Complete(ctx context.Context, req invoke.Request, sink invoke.Sin
 		return nil, fmt.Errorf("%w: %v", invoke.ErrBeforeDispatch, err)
 	}
 	hreq.Header.Set("Content-Type", "application/json")
+	var key string
 	if h.Key != nil {
-		key, err := h.Key()
+		k, err := h.Key()
 		if err != nil {
 			return nil, fmt.Errorf("%w: %s: no key for %s: %v", invoke.ErrBeforeDispatch, h.Provider, h.KeyName, err)
 		}
-		if strings.TrimSpace(key) == "" {
+		if strings.TrimSpace(k) == "" {
 			return nil, fmt.Errorf("%w: %s: %s is empty in the secrets store", invoke.ErrBeforeDispatch, h.Provider, h.KeyName)
 		}
+		key = k
 		hreq.Header.Set("Authorization", "Bearer "+key)
 	}
+	// everything that leaves this function is scrubbed of the resolved
+	// key itself, not just of a "Bearer " prefix: an endpoint or proxy
+	// that echoes the header would otherwise land it in a record
+	scrub := func(s string) string { return invoke.Redact(s, key) }
 	cl := h.Client
 	if cl == nil {
 		cl = &http.Client{}
@@ -118,8 +128,9 @@ func (h *HTTP) Complete(ctx context.Context, req invoke.Request, sink invoke.Sin
 		return &invoke.Result{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("%s: reading the response: %v", h.Provider, scrub(rerr.Error())), Usage: invoke.Usage{WallMillis: wall}}, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return &invoke.Result{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("%s: HTTP %d: %s", h.Provider, resp.StatusCode, snippet(body)), Usage: invoke.Usage{WallMillis: wall}}, nil
+		return &invoke.Result{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("%s: HTTP %d: %s", h.Provider, resp.StatusCode, scrub(snippet(body))), Usage: invoke.Usage{WallMillis: wall}}, nil
 	}
+	body = []byte(scrub(string(body)))
 	usage := invoke.Usage{WallMillis: wall}
 	var u struct {
 		Usage Usage `json:"usage"`
@@ -135,15 +146,6 @@ func snippet(b []byte) string {
 	s := strings.TrimSpace(strings.ReplaceAll(string(b), "\n", " "))
 	if len(s) > 200 {
 		s = s[:200] + "…"
-	}
-	return scrub(s)
-}
-
-// scrub removes anything that could be a bearer token from a message a
-// caller will record or print.
-func scrub(s string) string {
-	if i := strings.Index(strings.ToLower(s), "bearer "); i >= 0 {
-		return s[:i+len("bearer ")] + "<redacted>"
 	}
 	return s
 }

@@ -576,12 +576,22 @@ func (d *Driver) commitDecision(ctx context.Context, rs *RunState, fs *ForkState
 	return nil
 }
 
+// childDriver is the ONE place a child's configuration is derived from
+// the parent's — every field a child inherits is named here, so a new
+// driver field is either added here or knowingly left out (review r1:
+// the judgment binding was left out by omission, and a first_verdict
+// child judged on the default arm whatever the parent was configured).
+func (d *Driver) childDriver(fs *ForkState) *Driver {
+	return &Driver{J: d.J, Store: d.Store, Backend: d.Backend, Judge: d.Judge, Lane: LaneNow, Origin: forkOrigin{}, Timeout: d.Timeout, Health: d.Health, Events: d.Events, Lens: d.Lens, Work: d.Work, Frame: d.Frame,
+		Confined: true, ChildOf: fs.Fork.ID, ModelJudge: fs.Fork.Policy == JoinFirstVerdict, MaxAttempts: d.MaxAttempts, MaxDeliveryAttempts: d.MaxDeliveryAttempts,
+		JudgeProvider: d.JudgeProvider, JudgeShadow: d.JudgeShadow, Providers: d.Providers}
+}
+
 // driveChild is the child's own driver: confined (tool-less), fork origin,
 // NOW lane with the parent's judge when the policy needs a verdict. It
 // writes the ChildTerminal from the child attempt's own scope.
 func (d *Driver) driveChild(ctx context.Context, crs *RunState, fs *ForkState, member int) error {
-	cd := &Driver{J: d.J, Store: d.Store, Backend: d.Backend, Judge: d.Judge, Lane: LaneNow, Origin: forkOrigin{}, Timeout: d.Timeout, Health: d.Health, Events: d.Events, Lens: d.Lens, Work: d.Work, Frame: d.Frame,
-		Confined: true, ChildOf: fs.Fork.ID, ModelJudge: fs.Fork.Policy == JoinFirstVerdict, MaxAttempts: d.MaxAttempts, MaxDeliveryAttempts: d.MaxDeliveryAttempts}
+	cd := d.childDriver(fs)
 	// crash seams: "child:<seam>" fires in every child, "child:<n>:<seam>"
 	// only in member n (1-based)
 	if strings.HasPrefix(d.CrashAt, "child:") {

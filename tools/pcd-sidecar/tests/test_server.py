@@ -167,3 +167,86 @@ def test_unknown_path_is_404(running_server):
         assert False, "expected HTTPError"
     except urllib.error.HTTPError as e:
         assert e.code == 404
+
+
+def _raw(base_url, request_bytes):
+    """Send raw bytes on a fresh socket and return (status, body-json)."""
+    host, port = base_url.replace("http://", "").split(":")
+    with socket.create_connection((host, int(port)), timeout=5) as s:
+        s.sendall(request_bytes)
+        s.settimeout(5)
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        head, _, rest = data.partition(b"\r\n\r\n")
+        status = int(head.split(b" ")[1])
+        length = 0
+        for line in head.split(b"\r\n"):
+            if line.lower().startswith(b"content-length:"):
+                length = int(line.split(b":")[1])
+        while len(rest) < length:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            rest += chunk
+        return status, json.loads(rest)
+
+
+def _request(headers, body=b""):
+    lines = [b"POST /v1/systemone HTTP/1.1", b"Host: x", b"Connection: close"] + [
+        h.encode() for h in headers
+    ]
+    return b"\r\n".join(lines) + b"\r\n\r\n" + body
+
+
+def test_bad_framing_and_encoding_are_bounded_4xx(running_server):
+    """Review r1 (all four lenses): a non-numeric or negative Content-Length
+    escaped the handler as an uncaught exception (dropped connection, no
+    HTTP reply), a negative length reached read(-1) = read-to-EOF, an
+    oversized one was uncapped, and invalid UTF-8 raised past the
+    JSONDecodeError handler. Every shape now gets a structured 4xx."""
+    base_url, _, _ = running_server
+    status, body = _raw(base_url, _request(["Content-Length: abc"]))
+    assert status == 400 and set(body) == {"error"}
+    status, body = _raw(base_url, _request(["Content-Length: -1"]))
+    assert status == 400 and set(body) == {"error"}
+    status, body = _raw(base_url, _request(["Content-Length: 999999999999"]))
+    assert status == 413 and set(body) == {"error"}
+    status, body = _raw(base_url, _request(["Content-Length: 2"], b"\xff\xfe"))
+    assert status == 400 and "invalid JSON" in body["error"]
+
+
+def test_a_body_that_never_arrives_times_out_with_a_reply():
+    """A Content-Length the peer never honours must not hold a handler
+    thread forever: the socket read is bounded and answered 408."""
+    from pcd_sidecar.server import make_handler
+
+    engine = FakeEngine()
+    config = Config(
+        model_id=engine.model_id, device="cpu", dtype=None, port=0, threads=None,
+        pmi_enabled=True, backend="torch",
+    )
+    state = SidecarState(engine, PMICache(engine, enabled=True), config)
+    handler_cls = make_handler(state)
+    handler_cls.timeout = 0.5  # the class-level socket deadline, shrunk
+    port = _free_port()
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler_cls)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+            s.sendall(_request(["Content-Length: 10"], b"{"))  # promises 10, sends 1
+            s.settimeout(10)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            assert data.startswith(b"HTTP/1.0 408") or data.startswith(b"HTTP/1.1 408"), data[:80]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

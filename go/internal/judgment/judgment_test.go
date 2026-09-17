@@ -153,6 +153,33 @@ func TestRefusals(t *testing.T) {
 			_, err := DecodeResponse([]byte(`{"model":"m","answers":{},"usage":{"input_tokens":0,"output_tokens":0}} and then some`))
 			return err
 		}},
+		// review r1: Decoder.More() is false at a stray closing delimiter,
+		// so a reply followed by `}` passed as clean
+		{"stray closing delimiter", func() error {
+			_, err := DecodeResponse([]byte(`{"model":"m","answers":{},"usage":{"input_tokens":0,"output_tokens":0}}}`))
+			return err
+		}},
+		{"stray closing bracket in an llm reply", func() error {
+			_, err := ParseAnswers([]byte(`{"q":{"type":"noul","noul":0.5,"why":"w"}}]`), "m")
+			return err
+		}},
+		// review r1: encoding/json keeps the LAST of two equal keys, so
+		// {"choice":"a","choice":"b"} resolved to b
+		{"duplicate key in an answer", func() error {
+			_, err := DecodeResponse([]byte(`{"model":"m","answers":{"q":{"type":"choice","choice":"done","choice":"blocked","confidence":0.5}},"usage":{"input_tokens":1,"output_tokens":1}}`))
+			return err
+		}},
+		{"duplicate question id in an llm reply", func() error {
+			_, err := ParseAnswers([]byte(`{"q":{"type":"noul","noul":0.1,"why":"w"},"q":{"type":"noul","noul":0.9,"why":"w"}}`), "m")
+			return err
+		}},
+		// review r1: every value in range, total nowhere near one
+		{"distribution that sums to three", func() error {
+			return Answer{Type: Choice, Choice: "done", Confidence: 0.5, Probabilities: map[string]float64{"done": 1, "blocked": 1, "unclear": 1}}.Validate(q)
+		}},
+		{"score distribution that sums to a fifth", func() error {
+			return Answer{Type: Score, Score: 1, Confidence: 0.5, Probabilities: map[string]float64{"0": 0.1, "1": 0.1}}.Validate(Question{Type: Score, Instructions: "i", Levels: []string{"a", "b"}})
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -251,5 +278,18 @@ func TestEncodeResponseRoundTrips(t *testing.T) {
 	}
 	if again.Answers["quality"].Score != 1.91 || again.Usage.InputTokens != 473 {
 		t.Fatalf("round trip lost content: %s", b)
+	}
+}
+
+// The negative control for the distribution check: rounding in an
+// llm-written reply is not a refusal.
+func TestADistributionWithinRoundingIsAccepted(t *testing.T) {
+	q := stepQ()
+	a := Answer{Type: Choice, Choice: "done", Confidence: 0.7, Probabilities: map[string]float64{"done": 0.7, "blocked": 0.2, "unclear": 0.08}}
+	if err := a.Validate(q); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Answer{Type: Choice, Choice: "done", Confidence: 0.7}).Validate(q); err != nil {
+		t.Fatalf("an answer without a distribution is not one that sums wrong: %v", err)
 	}
 }

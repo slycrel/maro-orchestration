@@ -2579,3 +2579,25 @@ skipped line, never a failed run.
   in both directions, and the Python doc points at it in prose. Two
   engines, two registries, one rule: OFF when it spends, ON when it only
   adds evidence.
+- **118. Review r1 of the seam: the finding every seat found was the one
+  the tests could not.** Four Codex seats converged on the same HIGH from
+  independent probes: the AGENDA invocation closure sent every judge to
+  the incumbent backend whatever `--judge-provider` said. The
+  shadow-isolation test's adversary made the shadow path airtight and
+  left the primary path with no non-default coverage. Fixed at the
+  closure (a judge is asked through `d.primary(a)`), pinned by a run
+  whose judge backend scripts only intent + plan. Same round: the
+  resolved key is scrubbed from every byte a client hands the shell
+  (`invoke.Redact`, not a "bearer " prefix match); a provider's timeout
+  is a CEILING over the caller's twenty-minute budget and shadows ask
+  under the registered minute; a fork child inherits the judgment
+  binding through the one `childDriver` constructor; the decoder
+  requires EOF, refuses duplicate keys and un-normalised distributions;
+  the sidecar bounds its framing. Record:
+  `docs/history/2026-09-17-judgment-providers-adversarial-review.md`.
+- **119. A true finding can still be out of scope.** "Old journals no
+  longer fold" was correct and was settled with binaries, not argument:
+  the `successor` engine already refuses the live shadow-go journal at
+  the intent prompt (84a7c12a changed it on 09-07 with no version
+  dispatch). Journal↔template versioning is an engine gap, recorded as a
+  lead, not a fix bolted onto this seam.

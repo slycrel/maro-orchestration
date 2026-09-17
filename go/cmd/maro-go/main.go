@@ -420,7 +420,10 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		}
 		shadow := splitNames(judgeShadow)
 		providers := buildProviders(append(shadow, judgeProvider), pcdURL, hosted)
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath,
+		// a NOW run judges its closure when a judge model is named OR a
+		// non-default provider is: `--judge-provider jev` alone is a judge
+		modelJudge := jb != nil || (judgeProvider != "" && judgeProvider != judgment.ProviderLLM)
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: modelJudge, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath,
 			JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: providers,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
@@ -528,7 +531,10 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 			return nil
 		}
 		if len(args) > 0 && args[0] == "resume" {
-			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out}}
+			// every provider is wired at its defaults so an attempt that
+			// was judged through jev/hosted/pcd can re-ask its judge
+			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out},
+				Providers: buildProviders([]string{judgment.ProviderJev, judgment.ProviderHosted, judgment.ProviderPCD}, judgment.DefaultPCDURL, hostedSpec{})}
 			s, err := invoke.NewSubprocess("haiku")
 			if err == nil {
 				d.Backend = s

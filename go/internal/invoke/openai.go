@@ -85,12 +85,15 @@ func (o *OpenAIChat) Complete(ctx context.Context, req Request, sink Sink) (*Res
 	if req.Tools {
 		return nil, fmt.Errorf("%w: %s is tool-less", ErrBackendIncapable, o.Name)
 	}
-	timeout := req.Timeout
-	if timeout <= 0 {
-		timeout = o.Timeout
+	// the backend's timeout is a CEILING over the caller's budget: one
+	// chat completion is never a 20-minute wait
+	ceiling := o.Timeout
+	if ceiling <= 0 {
+		ceiling = 60 * time.Second
 	}
-	if timeout <= 0 {
-		timeout = 60 * time.Second
+	timeout := req.Timeout
+	if timeout <= 0 || timeout > ceiling {
+		timeout = ceiling
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -114,8 +117,14 @@ func (o *OpenAIChat) Complete(ctx context.Context, req Request, sink Sink) (*Res
 	}
 	wall := time.Since(start).Milliseconds()
 	usage := Usage{WallMillis: wall}
+	// the resolved key is scrubbed from every byte that leaves here —
+	// the reason, the transcript the shell stores, the content itself —
+	// so an endpoint or proxy that echoes the header cannot land it in a
+	// record (review r1: clip redacted the reason and the transcript
+	// carried the raw body)
+	body = []byte(Redact(string(body), key))
 	if err != nil {
-		return &Result{Terminal: TerminalFailed, Reason: fmt.Sprintf("%s: %v", o.Name, err), Usage: usage}, nil
+		return &Result{Terminal: TerminalFailed, Reason: Redact(fmt.Sprintf("%s: %v", o.Name, err), key), Usage: usage}, nil
 	}
 	if status < 200 || status > 299 {
 		return &Result{Terminal: TerminalFailed, Reason: fmt.Sprintf("%s: HTTP %d: %s", o.Name, status, clip(body)), Usage: usage, Transcript: body}, nil
@@ -173,8 +182,34 @@ func clip(b []byte) string {
 	if len(s) > 200 {
 		s = s[:200] + "…"
 	}
-	if i := strings.Index(strings.ToLower(s), "bearer "); i >= 0 {
-		return s[:i+len("bearer ")] + "<redacted>"
+	return s
+}
+
+// Redact removes a credential from text that will be recorded or printed:
+// every occurrence of the key's VALUE (the only thing that matters) and,
+// belt and braces, whatever follows a "Bearer " prefix. An empty key
+// redacts only the prefix form.
+func Redact(s, key string) string {
+	if key = strings.TrimSpace(key); key != "" {
+		s = strings.ReplaceAll(s, key, "<redacted>")
+	}
+	const marker = "<redacted>"
+	from := 0
+	for {
+		i := strings.Index(strings.ToLower(s[from:]), "bearer ")
+		if i < 0 {
+			break
+		}
+		at := from + i + len("bearer ")
+		rest := s[at:]
+		if !strings.HasPrefix(rest, marker) {
+			end := strings.IndexAny(rest, " \"'\n\r\t,;}")
+			if end < 0 {
+				end = len(rest)
+			}
+			s = s[:at] + marker + rest[end:]
+		}
+		from = at + len(marker)
 	}
 	return s
 }

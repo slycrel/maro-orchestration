@@ -20,7 +20,7 @@ self-modifies, acts outward, spends money, or persists beyond the run.
 |---|---|---|---|
 | `judgment.provider` | `llm` | `--judge-provider` | The incumbent generative judge over the run's own backend. This seam changes how a judgment is asked, not who answers it; a fresh install behaves exactly as before. |
 | `judgment.shadow` | (empty) | `--judge-shadow` | **OFF.** A shadow arm reaches the network and spends money on every verdict. Evidence-gathering never turns itself on because the code shipped. |
-| `judgment.timeout` | `1m0s` | — | A wire judgment is one small request; past a minute it is a hang, not a slow answer. |
+| `judgment.timeout` | `1m0s` | — | A judgment is one small request; past a minute it is a hang, not a slow answer. It is a ceiling: a wire or hosted provider clamps any longer caller budget to it, and every shadow is asked under it, so measurement never holds delivery for the executor's twenty minutes. |
 | `judgment.jev.url` | `https://api.typesafe.ai` | — | TypeSafe's System One endpoint. |
 | `judgment.jev.model` | `jev-latest` | — | The vendor's moving latest; pinning a version here would rot silently. |
 | `judgment.jev.key_name` | `TYPESAFE_API_KEY` | — | A **name** in the secrets store, so the value never reaches a config file, a record, or a log line. |

@@ -67,9 +67,21 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 	// invoke runs one judge-or-execute call and applies the recall block's
 	// revisions to it when the block was in the request
 	invoke_ := func(purpose invoke.Purpose, prompt []byte, withBlock bool, tools bool) (*invoke.Outcome, []byte, error) {
-		b := d.Backend
+		var b invoke.Backend = d.Backend
 		if !tools {
 			b = d.judge(a)
+		}
+		if purpose == invoke.PurposeJudge {
+			// a judge is asked through the attempt's PRIMARY judgment
+			// provider (llm wraps d.judge(a); jev/hosted/pcd are their
+			// own backends) — the same arm the snapshot records and the
+			// fold checks. Review r1: this closure sent every AGENDA
+			// judge to d.judge(a) whatever --judge-provider said.
+			p, err := d.primary(a)
+			if err != nil {
+				return nil, nil, err
+			}
+			b = p
 		}
 		sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n, CrashAt: strings.TrimPrefix(d.CrashAt, "invoke:")}
 		if !strings.HasPrefix(d.CrashAt, "invoke:") {

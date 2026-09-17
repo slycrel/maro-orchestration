@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -291,6 +292,9 @@ func (a Answer) Validate(q Question) error {
 				return err
 			}
 		}
+		if err := distributionSums(a.Probabilities); err != nil {
+			return err
+		}
 	case Score:
 		top := float64(len(q.Levels) - 1)
 		if math.IsNaN(a.Score) || a.Score < 0 || a.Score > top {
@@ -307,6 +311,9 @@ func (a Answer) Validate(q Question) error {
 			if err := inUnit("probability", v); err != nil {
 				return err
 			}
+		}
+		if err := distributionSums(a.Probabilities); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -473,13 +480,84 @@ func encodeState(s any) ([]byte, error) {
 }
 
 func strictDecode(b []byte, into any) error {
+	if err := noDuplicateKeys(b); err != nil {
+		return err
+	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {
 		return wireErr("%v", err)
 	}
-	if dec.More() {
+	// EOF, not More(): More() is false at a stray closing delimiter, so a
+	// reply followed by an extra `}` or `]` would pass as clean
+	if _, err := dec.Token(); err != io.EOF {
 		return wireErr("trailing content after the JSON object")
+	}
+	return nil
+}
+
+// noDuplicateKeys refuses an object (at any depth) that names a key twice:
+// encoding/json keeps the LAST value, so {"choice":"a","choice":"b"} would
+// resolve to b with a straight face. A judgement is never last-wins.
+func noDuplicateKeys(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	type frame struct {
+		object bool
+		seen   map[string]bool
+		key    bool // an object frame is expecting a key next
+	}
+	var stack []*frame
+	for {
+		t, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return wireErr("%v", err)
+		}
+		switch v := t.(type) {
+		case json.Delim:
+			switch v {
+			case '{':
+				stack = append(stack, &frame{object: true, seen: map[string]bool{}, key: true})
+				continue
+			case '[':
+				stack = append(stack, &frame{})
+				continue
+			default:
+				stack = stack[:len(stack)-1]
+			}
+		case string:
+			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].key {
+				if stack[n-1].seen[v] {
+					return wireErr("key %q appears twice", v)
+				}
+				stack[n-1].seen[v] = true
+				stack[n-1].key = false
+				continue
+			}
+		}
+		// a value was consumed: an object frame expects a key again
+		if n := len(stack); n > 0 && stack[n-1].object {
+			stack[n-1].key = true
+		}
+	}
+}
+
+// distributionSums refuses a reported distribution that is not one: every
+// value in range but a total of 3.0 (or 0.2) is not a distribution, and
+// Value() would read a number off it as if it were. A small tolerance
+// covers rounding in an llm-written reply.
+func distributionSums(p map[string]float64) error {
+	if len(p) == 0 {
+		return nil
+	}
+	sum := 0.0
+	for _, v := range p {
+		sum += v
+	}
+	if math.Abs(sum-1) > 0.05 {
+		return wireErr("probabilities sum to %.2f, not 1", sum)
 	}
 	return nil
 }

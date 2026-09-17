@@ -218,7 +218,9 @@ func (d *Driver) shadow(ctx context.Context, rs *RunState, a *AttemptState, v *v
 		ask.Model = modelOf(p.Capabilities(), name)
 		sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n}
 		start := time.Now()
-		res, o, err := judgment.Ask(ctx, sh, p, invoke.PurposeShadowJudge, ask, d.Timeout)
+		// a shadow is measurement: it gets the judgment budget (the
+		// registered judgment.timeout), never the executor's 20 minutes
+		res, o, err := judgment.Ask(ctx, sh, p, invoke.PurposeShadowJudge, ask, judgment.DefaultTimeout)
 		latency := time.Since(start).Milliseconds()
 		sj := &judgment.ShadowJudgment{
 			Header:        header(v.Subject, rs.Run, n, "shadow_judgment/1"),
