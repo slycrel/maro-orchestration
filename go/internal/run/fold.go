@@ -372,6 +372,11 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if a.Plan == nil || x.Step != len(a.Steps)+1 || a.Plan.ParallelAt(x.Step) == nil || len(a.Plan.ParallelAt(x.Step).Goals) != len(x.Members) {
 				return fmt.Errorf("run: %s attempt %d fork %s at step %d, which is not its plan's next parallel step", x.RunID, x.Attempt, x.ID, x.Step)
 			}
+			// the gate is re-derived here too: a parallel step whose declared
+			// prerequisite did not end done is gated, never forked
+			if by, _ := gatedBy(a.Plan, x.Step, a.Steps); len(by) > 0 {
+				return fmt.Errorf("run: %s attempt %d fork %s at step %d, which is gated by its declared prerequisites %v", x.RunID, x.Attempt, x.ID, x.Step, by)
+			}
 			for _, f := range forks {
 				if f.Fork.RunID == x.RunID && f.Fork.Step == x.Step {
 					return fmt.Errorf("run: %s attempt %d fork %s: step %d already forked (%s)", x.RunID, x.Attempt, x.ID, x.Step, f.Fork.ID)
@@ -823,6 +828,19 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if parallels != len(x.Parallel) {
 				return fmt.Errorf("run: %s attempt %d plan carries parallel steps the response does not", x.RunID, x.Attempt)
 			}
+			// the declared prerequisites are the response's, exactly
+			edged := 0
+			for i, ps := range planned {
+				if !equalInts(x.EdgesAt(i+1), ps.After) {
+					return fmt.Errorf("run: %s attempt %d plan step %d: declared prerequisites are not the response's", x.RunID, x.Attempt, i+1)
+				}
+				if len(ps.After) > 0 {
+					edged++
+				}
+			}
+			if edged != len(x.Edges) {
+				return fmt.Errorf("run: %s attempt %d plan carries edges the response does not", x.RunID, x.Attempt)
+			}
 			a.Plan = x
 			a.touch(x)
 		case *StepDone:
@@ -836,7 +854,20 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if len(a.Steps) > 0 && a.Steps[len(a.Steps)-1].Outcome == StepBlocked {
 				return fmt.Errorf("run: %s attempt %d step %d after a blocked step", x.RunID, x.Attempt, x.Ordinal)
 			}
-			if x.Fork != "" {
+			// the gate is re-derived, never trusted: a gated record must name
+			// exactly the prerequisites that did not end done and carry the
+			// text that says so; an executed record must have had none
+			gatedByPlan, outs := gatedBy(a.Plan, x.Ordinal, a.Steps)
+			if x.Outcome == StepGated {
+				if !equalInts(x.GatedBy, gatedByPlan) || x.Result != thought.Address(thought.Response, gatedText(gatedByPlan, outs)) || x.Terminal != invoke.TerminalComplete {
+					return fmt.Errorf("run: %s attempt %d step %d gated record does not re-derive from its prerequisites' outcomes", x.RunID, x.Attempt, x.Ordinal)
+				}
+			} else if len(gatedByPlan) > 0 {
+				return fmt.Errorf("run: %s attempt %d step %d ran although its declared prerequisites %v did not end done", x.RunID, x.Attempt, x.Ordinal, gatedByPlan)
+			}
+			if x.Outcome == StepGated {
+				// nothing to cite: no invocation, no fork, no verdict
+			} else if x.Fork != "" {
 				// a fork step: its result is the composition of the settled
 				// fork's selected members, re-derived
 				fs := forks[x.Fork]
@@ -1081,7 +1112,7 @@ func stepRequest(rs *RunState, a *AttemptState, k int, learned *learn.Ledger, st
 	if err != nil {
 		return thought.Ref{}, err
 	}
-	return thought.Address(thought.Prompt, stepPrompt(goal, steps, k, results[:k-1], block)), nil
+	return thought.Address(thought.Prompt, stepPrompt(goal, steps, planAfter(a.Plan), k, results[:k-1], block)), nil
 }
 
 // checkJudgeVerdict re-executes the judge boundary for a judge-standing

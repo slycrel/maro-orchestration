@@ -120,33 +120,117 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		}
 		return o
 	}
-	// reuse looks for an invocation of the purpose the recovered attempt
-	// left with a receipt and no committed stage record: the call happened,
-	// only the record did not land. Its usage is already in the sum over
-	// earlier attempts; nothing is added here.
-	reuse := func(purpose invoke.Purpose, ordinal int) (*invoke.Outcome, []byte, error) {
+	// reuse looks for an invocation of this purpose that an earlier attempt
+	// of the run asked EXACTLY this request and left with a receipt and no
+	// committed stage record: the call happened, only the record did not
+	// land. It matches the request, never a count of calls: an attempt that
+	// reused a call and then crashed does not carry it in its own list (a
+	// second recovery must still find it), and a judge whose response did
+	// not parse is still that step's judge call. Only attempts that never
+	// recorded an outcome are candidates — a recorded failure's calls are
+	// its own. Its usage is already in the sum over earlier attempts;
+	// nothing is added here. Returns the attempt that made the call.
+	//
+	// A step's judge call is the one made AFTER that step's execute call:
+	// judge prompts carry no ordinal, so two steps with the same text and
+	// the same result render the same judge request, and the earlier
+	// step's (unjudged) call must not stand in for the later step's. The
+	// filter (from, after) admits the calls of attempt `from` after
+	// invocation `after`, and every call of a later attempt (which
+	// inherited the execute and could only be judging this step).
+	reuse := func(purpose invoke.Purpose, prompt []byte, from uint32, after record.RecordID) (*invoke.Outcome, []byte, uint32, error) {
 		if prev == nil {
-			return nil, nil, nil
+			return nil, nil, 0, nil
 		}
-		st := inflight(prev, purpose, ordinal)
-		if st == nil || st.Receipt == nil {
-			return nil, nil, nil
+		want := prompt
+		if purpose == invoke.PurposeJudge {
+			lr, err := d.lensedRequest(prompt, false)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			want = lr.Prompt
 		}
-		b, err := d.Store.Get(st.Receipt.Response)
-		if err != nil {
-			return nil, nil, err
+		ref := thought.Address(thought.Prompt, want)
+		for _, p := range rs.Attempts {
+			if p == a || p.Has(Recorded) != nil || (from != 0 && p.Attempt.Attempt < from) {
+				continue
+			}
+			admitted := from == 0 || p.Attempt.Attempt > from
+			for _, st := range p.Invocations {
+				if !admitted {
+					admitted = st.Invocation.ID == after
+					continue
+				}
+				if st.Invocation.Purpose != purpose || st.Invocation.Request != ref || st.Receipt == nil {
+					continue
+				}
+				b, err := d.Store.Get(st.Receipt.Response)
+				if err != nil {
+					return nil, nil, 0, err
+				}
+				return &invoke.Outcome{Invocation: st.Invocation.ID, Receipt: st.Receipt.ID, Terminal: st.Terminal.State, Response: b}, b, p.Attempt.Attempt, nil
+			}
 		}
-		return &invoke.Outcome{Invocation: st.Invocation.ID, Receipt: st.Receipt.ID, Terminal: st.Terminal.State, Response: b}, b, nil
+		return nil, nil, 0, nil
+	}
+	// attemptN is an earlier attempt's state (the recall a reused call was
+	// rendered with)
+	attemptN := func(by uint32) *AttemptState {
+		for _, p := range rs.Attempts {
+			if p.Attempt.Attempt == by {
+				return p
+			}
+		}
+		return nil
+	}
+	// verdictOf is the judge-standing verdict some earlier attempt committed
+	// FROM a reused judge call — whichever attempt wrote it (an attempt that
+	// reused the call, committed the verdict under its own subject, and
+	// then crashed is not the attempt that made the call)
+	verdictOf := func(inv record.RecordID) *verdict.Verdict {
+		for _, p := range rs.Attempts {
+			if p == a || p.Has(Recorded) != nil {
+				continue
+			}
+			for _, v := range p.Verdicts {
+				if v.Source.Standing == verdict.StandingJudge && v.Source.Ref == inv {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+	// uncited is a landed execute call of an earlier, unrecorded attempt
+	// that no step record cites: the call happened; its step never landed
+	uncited := func() *invoke.State {
+		cited := map[record.RecordID]bool{}
+		for _, p := range rs.Attempts {
+			for _, sd := range p.Steps {
+				cited[sd.Invocation] = true
+			}
+		}
+		for _, p := range rs.Attempts {
+			if p == a || p.Has(Recorded) != nil {
+				continue
+			}
+			for _, st := range p.Invocations {
+				if st.Invocation.Purpose == invoke.PurposeExecute && st.Receipt != nil && !cited[st.Invocation.ID] {
+					return st
+				}
+			}
+		}
+		return nil
 	}
 
 	// Intent
 	if intent == nil {
-		o, resp, err := reuse(invoke.PurposeIntent, 0)
+		ip := intentPrompt(goal, rs.riders())
+		o, resp, _, err := reuse(invoke.PurposeIntent, ip, 0, "")
 		if err != nil {
 			return nil, nil, err
 		}
 		if o == nil {
-			o, resp, err = invoke_(invoke.PurposeIntent, intentPrompt(goal, rs.riders()), false, false)
+			o, resp, err = invoke_(invoke.PurposeIntent, ip, false, false)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -174,19 +258,23 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 	}
 	// Plan
 	if plan == nil {
-		o, resp, err := reuse(invoke.PurposePlan, 0)
+		pp := planPrompt(goal, intent.Interpretation, rs.riders(), block)
+		o, resp, by, err := reuse(invoke.PurposePlan, pp, 0, "")
 		if err != nil {
 			return nil, nil, err
 		}
 		if o != nil {
-			if err := d.apply(ctx, rs, prev.Attempt.Attempt, prev.Recall, o.Invocation); err != nil {
+			if err := d.apply(ctx, rs, by, attemptN(by).Recall, o.Invocation); err != nil {
 				return nil, nil, err
 			}
 		} else {
-			o, resp, err = invoke_(invoke.PurposePlan, planPrompt(goal, intent.Interpretation, rs.riders(), block), len(block) > 0, false)
+			o, resp, err = invoke_(invoke.PurposePlan, pp, len(block) > 0, false)
 			if err != nil {
 				return nil, nil, err
 			}
+		}
+		if err := d.crash("after_plan_invoke"); err != nil {
+			return nil, nil, err
 		}
 		if o.Terminal == invoke.TerminalFailed {
 			return failed("plan: "+o.Reason, o.Invocation), nil, nil
@@ -195,13 +283,16 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		if perr != nil {
 			return failed("plan: "+perr.Error(), o.Invocation), nil, nil
 		}
-		plan = &Plan{Header: header(runRef(rs.Run), rs.Run, n, "plan/1"), Invocation: o.Invocation}
+		plan = &Plan{Header: header(runRef(rs.Run), rs.Run, n, "plan/2"), Invocation: o.Invocation}
 		for i, st := range planned {
 			ref, err := d.Store.Put(thought.Step, []byte(st.Text))
 			if err != nil {
 				return nil, nil, err
 			}
 			plan.Steps = append(plan.Steps, ref)
+			if len(st.After) > 0 {
+				plan.Edges = append(plan.Edges, StepEdge{Ordinal: i + 1, After: st.After})
+			}
 			if len(st.Parallel) > 0 {
 				ps := ParallelStep{Ordinal: i + 1, Policy: st.Policy}
 				for _, g := range st.Parallel {
@@ -218,7 +309,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			return nil, nil, err
 		}
 		a.Plan = plan
-		d.emit(rs, n, "plan", Executing, fmt.Sprintf("%d steps", len(plan.Steps)))
+		d.emit(rs, n, "plan", Executing, fmt.Sprintf("%d steps, %d with declared prerequisites", len(plan.Steps), len(plan.Edges)))
 		if err := d.crash("after_plan"); err != nil {
 			return nil, nil, err
 		}
@@ -231,6 +322,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		}
 		steps[i] = string(b)
 	}
+	after := planAfter(plan)
 	results := make([][]byte, 0, len(steps))
 	for _, sd := range done {
 		b, err := d.Store.Get(sd.Result)
@@ -243,15 +335,31 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 	var lastExec record.RecordID
 	var lastReceipt record.RecordID
 	var lastResp *thought.Ref
-	var lastBy uint32 // the attempt that made lastExec
+	var lastBy uint32    // the attempt that made lastExec
+	var lastModel string // the model that made it (the fold binds the outcome's model to the invocation's)
+	model := func() string {
+		if lastModel != "" {
+			return lastModel
+		}
+		return d.Backend.Capabilities().Model
+	}
 	if len(done) > 0 {
 		last := done[len(done)-1]
-		lastExec, lastResp = last.Invocation, &last.Result
-		if st, by := rs.invocation(last.Invocation); st != nil && st.Receipt != nil {
-			lastReceipt, lastBy = st.Receipt.ID, by
+		// the representative call is the latest step's that made one: a
+		// gated step made none, and a recovery right after a final gated
+		// step still records the closure with a receipt
+		for i := len(done) - 1; i >= 0; i-- {
+			if done[i].Invocation == "" {
+				continue
+			}
+			lastExec, lastResp = done[i].Invocation, &done[i].Result
+			if st, by := rs.invocation(lastExec); st != nil && st.Receipt != nil {
+				lastReceipt, lastBy, lastModel = st.Receipt.ID, by, st.Invocation.Backend.Model
+			}
+			break
 		}
 		if last.Outcome == StepBlocked {
-			return &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("blocked at step %d: %s", last.Ordinal, steps[last.Ordinal-1]), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: d.Backend.Capabilities().Model, Recall: sel.ID, Steps: len(done)}, nil, nil
+			return &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("blocked at step %d: %s", last.Ordinal, steps[last.Ordinal-1]), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: model(), Recall: sel.ID, Steps: len(done)}, nil, nil
 		}
 	}
 	resumeAt := len(done) + 1 // only the first new step can have an in-flight invocation to reuse
@@ -262,9 +370,34 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			}
 			io.Usage, io.Recall, io.Steps = usage, sel.ID, len(done)
 			if lastExec != "" {
-				io.Invocation, io.Produced, io.Receipt, io.Response, io.Model = lastExec, lastBy, lastReceipt, lastResp, d.Backend.Capabilities().Model
+				io.Invocation, io.Produced, io.Receipt, io.Response, io.Model = lastExec, lastBy, lastReceipt, lastResp, model()
 			}
 			return io, nil, nil
+		}
+		if by, outs := gatedBy(plan, k, done); len(by) > 0 {
+			// the gate (LoopsBench item 1): a declared prerequisite did not
+			// end done, so this step is not executed and not judged — nothing
+			// ran. Its record says which prerequisites gated it and its
+			// result says so in words (the closure judge and the deliverable
+			// see the gap); its own dependents gate in turn.
+			text := gatedText(by, outs)
+			rref, err := d.Store.Put(thought.Response, text)
+			if err != nil {
+				return nil, nil, err
+			}
+			sd := &StepDone{Header: header(runRef(rs.Run), rs.Run, n, "step_done/2"), Ordinal: k, Step: plan.Steps[k-1], Terminal: invoke.TerminalComplete, Result: rref, Outcome: StepGated, GatedBy: by}
+			sd.At = now()
+			if err := d.commit(ctx, fmt.Sprintf("step/%s/%d/%d", rs.Run, n, k), sd); err != nil {
+				return nil, nil, err
+			}
+			a.Steps = append(a.Steps, sd)
+			done = append(done, sd)
+			results = append(results, text)
+			d.emit(rs, n, "step", Executing, fmt.Sprintf("%d/%d gated by %s", k, len(steps), ordinals(by)))
+			if err := d.crash("after_gated_step"); err != nil {
+				return nil, nil, err
+			}
+			continue
 		}
 		if ps := plan.ParallelAt(k); ps != nil {
 			// a parallel step: fork, join, compose — then judge like any step
@@ -282,19 +415,38 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			if err != nil {
 				return nil, nil, err
 			}
-			sd := &StepDone{Header: header(runRef(rs.Run), rs.Run, n, "step_done/1"), Ordinal: k, Step: plan.Steps[k-1], Fork: fs.Fork.ID, Terminal: invoke.TerminalComplete, Result: rref, Outcome: StepUnjudged}
-			jo, jresp, err := invoke_(invoke.PurposeJudge, stepJudgePrompt(goal, steps[k-1], composed, invoke.TerminalComplete, true), false, false)
+			sd := &StepDone{Header: header(runRef(rs.Run), rs.Run, n, "step_done/2"), Ordinal: k, Step: plan.Steps[k-1], Fork: fs.Fork.ID, Terminal: invoke.TerminalComplete, Result: rref, Outcome: StepUnjudged}
+			// the fork's own judge call (and its verdict, when committed) is
+			// reused like any step's: the composition re-derives the same
+			jp := stepJudgePrompt(goal, steps[k-1], composed, invoke.TerminalComplete, true)
+			jo, jresp, jby, err := reuse(invoke.PurposeJudge, jp, 0, "")
 			if err != nil {
+				return nil, nil, err
+			}
+			if jo == nil {
+				jo, jresp, err = invoke_(invoke.PurposeJudge, jp, false, false)
+				if err != nil {
+					return nil, nil, err
+				}
+				jby = n
+			}
+			if err := d.crash("after_fork_judge"); err != nil {
 				return nil, nil, err
 			}
 			if jo.Terminal != invoke.TerminalFailed {
 				if jr, perr := ParseJudge(jresp, "done", "blocked", "unclear"); perr == nil {
-					v := &verdict.Verdict{Header: header(stepRef(rs.Run, n, k), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindStep, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: jo.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(jo.Receipt)}}}
-					if err := d.commit(ctx, fmt.Sprintf("verdict/%s/%d/step/%d", rs.Run, n, k), v); err != nil {
-						return nil, nil, err
+					var v *verdict.Verdict
+					if jby != n {
+						v = verdictOf(jo.Invocation)
 					}
-					a.Verdicts = append(a.Verdicts, v)
-					sd.Verdict, sd.Outcome = v.ID, StepOutcome(jr.Outcome)
+					if v == nil {
+						v = &verdict.Verdict{Header: header(stepRef(rs.Run, n, k), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindStep, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: jo.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(jo.Receipt)}}}
+						if err := d.commit(ctx, fmt.Sprintf("verdict/%s/%d/step/%d", rs.Run, n, k), v); err != nil {
+							return nil, nil, err
+						}
+						a.Verdicts = append(a.Verdicts, v)
+					}
+					sd.Verdict, sd.Outcome = v.ID, StepOutcome(v.Outcome)
 				}
 			}
 			sd.At = now()
@@ -309,27 +461,37 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 				return nil, nil, err
 			}
 			if sd.Outcome == StepBlocked {
-				return &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("blocked at step %d: %s", k, steps[k-1]), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: d.Backend.Capabilities().Model, Recall: sel.ID, Steps: len(done)}, nil, nil
+				return &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("blocked at step %d: %s", k, steps[k-1]), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: model(), Recall: sel.ID, Steps: len(done)}, nil, nil
 			}
 			continue
 		}
 		var o *invoke.Outcome
 		var resp []byte
 		by := n
+		sp := stepPrompt(goal, steps, after, k, results, block)
 		if k == resumeAt {
-			ro, rb, err := reuse(invoke.PurposeExecute, len(prevSteps(prev)))
+			ro, rb, rby, err := reuse(invoke.PurposeExecute, sp, 0, "")
 			if err != nil {
 				return nil, nil, err
 			}
 			if ro != nil {
-				if err := d.apply(ctx, rs, prev.Attempt.Attempt, prev.Recall, ro.Invocation); err != nil {
+				if err := d.apply(ctx, rs, rby, attemptN(rby).Recall, ro.Invocation); err != nil {
 					return nil, nil, err
 				}
-				o, resp, by = ro, rb, prev.Attempt.Attempt
+				o, resp, by = ro, rb, rby
+			} else if continues == nil {
+				// this attempt renders its own recall block (the policy
+				// changed between the crash and its recovery): a call that
+				// landed under the earlier block is this step's, and running
+				// the step again would replay its effect. Fail closed — an
+				// honest stop that names the call — rather than invoke again.
+				if st := uncited(); st != nil {
+					return failed(fmt.Sprintf("recovery: step %d's call %s landed under a recall selection this attempt does not continue (the recall policy changed between attempts); not run again", k, st.Invocation.ID), st.Invocation.ID), nil, nil
+				}
 			}
 		}
 		if o == nil {
-			o, resp, err = invoke_(invoke.PurposeExecute, stepPrompt(goal, steps, k, results, block), len(block) > 0, true)
+			o, resp, err = invoke_(invoke.PurposeExecute, sp, len(block) > 0, true)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -343,7 +505,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		// per-step judge (tool-less); a refused output = unjudged, continue.
 		// A recovered attempt's judge call for this step (and its verdict,
 		// when committed) are reused: the judgement happened once.
-		sd := &StepDone{Header: header(runRef(rs.Run), rs.Run, n, "step_done/1"), Ordinal: k, Step: plan.Steps[k-1], Invocation: o.Invocation, Terminal: o.Terminal, Outcome: StepUnjudged}
+		sd := &StepDone{Header: header(runRef(rs.Run), rs.Run, n, "step_done/2"), Ordinal: k, Step: plan.Steps[k-1], Invocation: o.Invocation, Terminal: o.Terminal, Outcome: StepUnjudged}
 		rr, err := receiptResponse(d.J, o.Receipt)
 		if err != nil {
 			return nil, nil, err
@@ -352,15 +514,15 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		var jo *invoke.Outcome
 		var jresp []byte
 		var jby uint32 = n
-		if by != n { // the execute was reused: so may be its judge
-			jo, jresp, err = reuse(invoke.PurposeJudge, len(prevSteps(prev)))
+		jp := stepJudgePrompt(goal, steps[k-1], resp, o.Terminal, false)
+		if by != n { // the execute was reused: so may be its judge — the one made after it
+			jo, jresp, jby, err = reuse(invoke.PurposeJudge, jp, by, o.Invocation)
 			if err != nil {
 				return nil, nil, err
 			}
-			jby = prev.Attempt.Attempt
 		}
 		if jo == nil {
-			jo, jresp, err = invoke_(invoke.PurposeJudge, stepJudgePrompt(goal, steps[k-1], resp, o.Terminal, false), false, false)
+			jo, jresp, err = invoke_(invoke.PurposeJudge, jp, false, false)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -373,7 +535,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			if jr, perr := ParseJudge(jresp, "done", "blocked", "unclear"); perr == nil {
 				var v *verdict.Verdict
 				if jby != n {
-					v = priorVerdict(prev, verdict.KindStep, stepRef(rs.Run, jby, k))
+					v = verdictOf(jo.Invocation)
 				}
 				if v == nil {
 					v = &verdict.Verdict{Header: header(stepRef(rs.Run, n, k), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindStep, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: jo.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(jo.Receipt)}}}
@@ -398,6 +560,11 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		done = append(done, sd)
 		results = append(results, resp)
 		lastExec, lastReceipt, lastResp, lastBy = o.Invocation, o.Receipt, rr, by
+		if m, ok := made[o.Invocation]; ok {
+			lastModel = m
+		} else if st, _ := rs.invocation(o.Invocation); st != nil {
+			lastModel = st.Invocation.Backend.Model
+		}
 		d.emit(rs, n, "step", Executing, fmt.Sprintf("%d/%d %s", k, len(steps), sd.Outcome))
 		if err := d.crash("after_step"); err != nil {
 			return nil, nil, err
@@ -405,10 +572,10 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		if q, err := d.askAfterExecute(ctx, rs, n, k); err != nil {
 			return nil, nil, err
 		} else if q != nil {
-			return &Outcome{Terminal: invoke.TerminalFailed, Reason: NeedsAnswer(q), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: d.Backend.Capabilities().Model, Recall: sel.ID, Steps: len(done)}, nil, nil
+			return &Outcome{Terminal: invoke.TerminalFailed, Reason: NeedsAnswer(q), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: model(), Recall: sel.ID, Steps: len(done)}, nil, nil
 		}
 		if sd.Outcome == StepBlocked {
-			return &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("blocked at step %d: %s", k, steps[k-1]), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: d.Backend.Capabilities().Model, Recall: sel.ID, Steps: len(done)}, nil, nil
+			return &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("blocked at step %d: %s", k, steps[k-1]), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: model(), Recall: sel.ID, Steps: len(done)}, nil, nil
 		}
 	}
 	// Closure judge (tool-less); a refused output = no judge verdict. The
@@ -420,26 +587,28 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			terminal, partial[i] = invoke.TerminalPartial, true
 		}
 	}
-	out := &Outcome{Terminal: terminal, Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: d.Backend.Capabilities().Model, Recall: sel.ID, Steps: len(done)}
+	out := &Outcome{Terminal: terminal, Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: model(), Recall: sel.ID, Steps: len(done)}
 	if terminal == invoke.TerminalPartial {
 		out.Reason = "one or more steps ended partial"
 	}
-	// a recovered attempt's closure call and verdict are reused: judged once
+	// an earlier attempt's closure call and verdict are reused: judged once
 	var candidates []*verdict.Verdict
-	if v := priorVerdict(prev, verdict.KindClosure, runRef(rs.Run)); v != nil {
-		out.Usage = usage
-		return out, []*verdict.Verdict{v}, nil
-	}
-	var jo *invoke.Outcome
-	var jresp []byte
-	if prev != nil && len(prevSteps(prev))+len(inheritedSteps(prev)) == len(steps) {
-		jo, jresp, err = reuse(invoke.PurposeJudge, len(prevSteps(prev)))
-		if err != nil {
-			return nil, nil, err
+	for _, p := range rs.Attempts {
+		if p == a || p.Has(Recorded) != nil {
+			continue
+		}
+		if v := priorVerdict(p, verdict.KindClosure, runRef(rs.Run)); v != nil {
+			out.Usage = usage
+			return out, []*verdict.Verdict{v}, nil
 		}
 	}
+	cp := closurePrompt(goal, steps, results, partial)
+	jo, jresp, _, err := reuse(invoke.PurposeJudge, cp, 0, "")
+	if err != nil {
+		return nil, nil, err
+	}
 	if jo == nil {
-		jo, jresp, err = invoke_(invoke.PurposeJudge, closurePrompt(goal, steps, results, partial), false, false)
+		jo, jresp, err = invoke_(invoke.PurposeJudge, cp, false, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -476,7 +645,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 	return out, candidates, nil
 }
 
-// priorVerdict finds a judge-standing verdict the recovered attempt
+// priorVerdict finds a judge-standing verdict an earlier attempt
 // committed for the subject (a step, or the run's closure).
 func priorVerdict(prev *AttemptState, kind verdict.VerdictKind, subject record.Ref) *verdict.Verdict {
 	if prev == nil {
@@ -486,43 +655,6 @@ func priorVerdict(prev *AttemptState, kind verdict.VerdictKind, subject record.R
 		if v.VerdictKind == kind && v.Source.Standing == verdict.StandingJudge && v.Subject == subject {
 			return v
 		}
-	}
-	return nil
-}
-
-// inheritedSteps counts the steps the recovered attempt inherited.
-func inheritedSteps(prev *AttemptState) []*StepDone {
-	own := len(prevSteps(prev))
-	return prev.Steps[:len(prev.Steps)-own]
-}
-
-// prevSteps counts the steps the recovered attempt itself executed (its
-// inherited ones came from the attempt before it).
-func prevSteps(prev *AttemptState) []*StepDone {
-	if prev == nil {
-		return nil
-	}
-	own := 0
-	for _, sd := range prev.Steps {
-		if sd.Attempt == prev.Attempt.Attempt {
-			own++
-		}
-	}
-	return prev.Steps[len(prev.Steps)-own:]
-}
-
-// inflight finds the recovered attempt's invocation of a purpose by
-// ordinal: the (ordinal+1)-th such invocation it made.
-func inflight(prev *AttemptState, purpose invoke.Purpose, done int) *invoke.State {
-	k := 0
-	for _, st := range prev.Invocations {
-		if st.Invocation.Purpose != purpose {
-			continue
-		}
-		if k == done {
-			return st
-		}
-		k++
 	}
 	return nil
 }

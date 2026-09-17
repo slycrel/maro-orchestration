@@ -46,7 +46,7 @@
       "used_for": "authorization",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^(done|blocked|unclear|unjudged)$",
+      "pattern": "^(done|blocked|unclear|unjudged|gated)$",
       "rejects": "maybe",
       "measured_by": "internal/run:TestAgendaBlockedStepIsHonest"
     },
@@ -66,6 +66,13 @@
       "used_for": "identity",
       "constraint": "unconstrained",
       "measured_by": "internal/run:TestTwoLevelScenarioSurvivesEveryKill"
+    },
+    "gated_by": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "routing",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestAgendaDeclaredPrerequisiteGates"
     }
   }
 }

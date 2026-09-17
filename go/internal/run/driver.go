@@ -156,6 +156,8 @@ type Driver struct {
 	// invocation shell's seam. Test seam for the kill matrix; production
 	// never sets it.
 	CrashAt string
+	// crashSeen counts each seam's occurrences for a "stage#N" CrashAt
+	crashSeen map[string]int
 }
 
 // AdmitFunc: see Driver.Admit.
@@ -364,6 +366,16 @@ func (d *Driver) work(tools bool) (string, error) {
 func (d *Driver) crash(stage string) error {
 	if d.CrashAt == stage {
 		return fmt.Errorf("%w: %s", ErrCrashed, stage)
+	}
+	// "stage#N" fires on the Nth time the seam is reached in this process
+	if want, ok := strings.CutPrefix(d.CrashAt, stage+"#"); ok {
+		if d.crashSeen == nil {
+			d.crashSeen = map[string]int{}
+		}
+		d.crashSeen[stage]++
+		if fmt.Sprint(d.crashSeen[stage]) == want {
+			return fmt.Errorf("%w: %s", ErrCrashed, d.CrashAt)
+		}
 	}
 	return nil
 }
@@ -609,10 +621,16 @@ func (d *Driver) finish(ctx context.Context, rs *RunState, a *AttemptState, out 
 // indeterminate reconciliation is an honest failure, never a replay; else
 // a fresh invocation.
 func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *AttemptState, forced *Outcome) (*Outcome, error) {
-	if prev != nil {
-		p := prev.Attempt.Attempt
-		for i := len(prev.Invocations) - 1; i >= 0; i-- {
-			st := prev.Invocations[i]
+	// the in-flight call may be ANY earlier unrecorded attempt's: an attempt
+	// that reused it and then crashed does not carry it in its own list
+	for ai := len(rs.Attempts) - 1; prev != nil && ai >= 0; ai-- {
+		cand := rs.Attempts[ai]
+		if cand.Attempt.Attempt >= n || cand.Has(Recorded) != nil {
+			continue
+		}
+		p := cand.Attempt.Attempt
+		for i := len(cand.Invocations) - 1; i >= 0; i-- {
+			st := cand.Invocations[i]
 			if st.Invocation.Purpose != invoke.PurposeExecute {
 				continue
 			}
@@ -635,11 +653,11 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 				// the request was rendered from the recovered attempt's recall;
 				// its applications may not have landed before the crash — they
 				// are derivable from that selection, so commit them now
-				if prev.Recall == nil {
+				if cand.Recall == nil {
 					return nil, fmt.Errorf("run: attempt %d invoked without a recall selection", p)
 				}
-				out.Recall = prev.Recall.ID
-				if err := d.apply(ctx, rs, p, prev.Recall, st.Invocation.ID); err != nil {
+				out.Recall = cand.Recall.ID
+				if err := d.apply(ctx, rs, p, cand.Recall, st.Invocation.ID); err != nil {
 					return nil, err
 				}
 				return out, nil

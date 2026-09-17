@@ -2,7 +2,7 @@
   "format_version": "2026-09-04",
   "kind": "plan",
   "envelope": "production",
-  "schema": "plan/1",
+  "schema": "plan/2",
   "go_type": "run.Plan",
   "fields": [
     {
@@ -97,8 +97,15 @@
       "go_type": "[]run.ParallelStep",
       "omittable": true,
       "is_thought": false
+    },
+    {
+      "name": "Edges",
+      "wire": "edges",
+      "go_type": "[]run.StepEdge",
+      "omittable": true,
+      "is_thought": false
     }
   ],
-  "source_ref": "7d9be8d8",
+  "source_ref": "efda42f0",
   "generator": "maro-go contracts gen v1"
 }

@@ -1507,6 +1507,21 @@ Dormant (deliberately parked, not dropped):
   re-tier site `loop_execute.py:_select_step_adapter` fail-safes by explicit
   contract on `dry_run`/non-LLMAdapter, not by accident).
 
+- **2026-09-17 (The active dev branch is `successor` — Jeremy):** after
+  LoopsBench chunks 1–9 (2026-09-16/17) landed on the Python mainline
+  (`main` e855c018): *"The current active dev branch should be the
+  succession branch. I think you're not targeting that and making changes
+  on the 'old' maro fork. We should correct that at the next opportunity
+  ... it's mostly salvageable."* Read: engine work targets the Go
+  successor (`go/`, this branch) and lands on `origin/successor`; the
+  Python engine on `main` is the live production arm, not the direction.
+  Applied the same morning: LoopsBench item 1 ported as a Go feature (the
+  plan's declared prerequisites gate execution; build log 2026-09-17);
+  chunks 2–9's substrate plumbing (checkpoint atomicity, resume claims /
+  consumption, NEXT.md mark debt) is answered by the journal design and
+  does not port. Item 2 (regression obligations) is next on this branch.
+  Recorded in the runtime decision journal (449a8fdb).
+
 ## Open questions (system-maintained)
 
 - ~~**Learning granularity below the run**~~ — RESOLVED BY BUILD
