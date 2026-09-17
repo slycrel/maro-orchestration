@@ -169,6 +169,12 @@ func TestRefusals(t *testing.T) {
 			_, err := DecodeResponse([]byte(`{"model":"m","answers":{"q":{"type":"choice","choice":"done","choice":"blocked","confidence":0.5}},"usage":{"input_tokens":1,"output_tokens":1}}`))
 			return err
 		}},
+		// review r2: the struct decoder folds case, so "Choice" is
+		// "choice" twice
+		{"duplicate key under case folding", func() error {
+			_, err := DecodeResponse([]byte(`{"model":"m","answers":{"q":{"type":"choice","choice":"done","Choice":"blocked","confidence":0.5}},"usage":{"input_tokens":1,"output_tokens":1}}`))
+			return err
+		}},
 		{"duplicate question id in an llm reply", func() error {
 			_, err := ParseAnswers([]byte(`{"q":{"type":"noul","noul":0.1,"why":"w"},"q":{"type":"noul","noul":0.9,"why":"w"}}`), "m")
 			return err
@@ -291,5 +297,16 @@ func TestADistributionWithinRoundingIsAccepted(t *testing.T) {
 	}
 	if err := (Answer{Type: Choice, Choice: "done", Confidence: 0.7}).Validate(q); err != nil {
 		t.Fatalf("an answer without a distribution is not one that sums wrong: %v", err)
+	}
+}
+
+// The duplicate-key walker's negative controls: the same key in two
+// DIFFERENT objects, and objects inside arrays, are not duplicates.
+func TestTheSameKeyInDifferentObjectsIsNotADuplicate(t *testing.T) {
+	if err := noDuplicateKeys([]byte(`{"a":{"k":1},"b":{"k":2},"c":[{"k":1},{"k":2}],"d":[[{"k":1}],{"k":2}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := noDuplicateKeys([]byte(`{"a":[{"k":1,"K":2}]}`)); err == nil {
+		t.Fatal("a folded duplicate inside an array element was accepted")
 	}
 }

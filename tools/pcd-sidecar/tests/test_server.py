@@ -250,3 +250,50 @@ def test_a_body_that_never_arrives_times_out_with_a_reply():
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_a_trickling_body_still_hits_the_deadline():
+    """The read deadline is absolute, not idle: a peer that sends one byte
+    every 0.3 s against a 1 s budget never trips an idle timeout but must
+    still be answered 408 within the budget (review r2)."""
+    import time as _time
+    from pcd_sidecar.server import make_handler
+
+    engine = FakeEngine()
+    config = Config(
+        model_id=engine.model_id, device="cpu", dtype=None, port=0, threads=None,
+        pmi_enabled=True, backend="torch",
+    )
+    state = SidecarState(engine, PMICache(engine, enabled=True), config)
+    handler_cls = make_handler(state)
+    handler_cls.timeout = 1.0
+    port = _free_port()
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler_cls)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+            s.sendall(_request(["Content-Length: 4000"]))
+            start = _time.monotonic()
+            s.setblocking(False)
+            data = b""
+            while _time.monotonic() - start < 6:
+                try:
+                    s.sendall(b"{")
+                except (BlockingIOError, BrokenPipeError, ConnectionResetError):
+                    pass
+                _time.sleep(0.3)
+                try:
+                    chunk = s.recv(4096)
+                    if chunk:
+                        data += chunk
+                    if b"\r\n\r\n" in data:
+                        break
+                except (BlockingIOError, ConnectionResetError):
+                    continue
+            elapsed = _time.monotonic() - start
+            assert data.startswith(b"HTTP/1.0 408") or data.startswith(b"HTTP/1.1 408"), data[:80]
+            assert elapsed < 4, elapsed
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

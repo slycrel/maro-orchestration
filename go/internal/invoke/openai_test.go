@@ -160,19 +160,25 @@ func TestAnEchoedKeyNeverReachesTheTranscript(t *testing.T) {
 
 func TestRedactRemovesTheKeyAndAnyBearerToken(t *testing.T) {
 	cases := map[string]string{
-		"token abc123 leaked":                      "token <redacted> leaked",
-		"Authorization: Bearer abc123, then":       "Authorization: Bearer <redacted>, then",
+		"token abc123xyz leaked":                   "token <redacted> leaked",
+		"Authorization: Bearer abc123xyz, then":    "Authorization: Bearer <redacted>, then",
 		"authorization: bearer other-token\" more": "authorization: bearer <redacted>\" more",
-		"Bearer abc123 and Bearer zzz":             "Bearer <redacted> and Bearer <redacted>",
+		"Bearer abc123xyz and Bearer zzz":          "Bearer <redacted> and Bearer <redacted>",
 		"nothing here":                             "nothing here",
 	}
 	for in, want := range cases {
-		if got := Redact(in, "abc123"); got != want {
+		if got := Redact(in, "abc123xyz"); got != want {
 			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
 		}
 	}
 	if got := Redact("Bearer only-prefix", ""); got != "Bearer <redacted>" {
 		t.Errorf("empty key: %q", got)
+	}
+	// a degenerate short key is not replaced by value: every "k" in a
+	// JSON body is not a credential (review r2 found the 1-char test key
+	// mangling the usage object)
+	if got := Redact(`{"prompt_tokens":11}`, "k"); got != `{"prompt_tokens":11}` {
+		t.Errorf("short key: %q", got)
 	}
 }
 
@@ -192,5 +198,27 @@ func TestTheHostedTimeoutIsACeiling(t *testing.T) {
 	res, err := o.Complete(context.Background(), Request{Purpose: PurposeJudge, Prompt: []byte("x"), Timeout: 20 * time.Minute}, nil)
 	if err != nil || res.Terminal != TerminalFailed || time.Since(start) > 2*time.Second {
 		t.Fatalf("%v %+v after %s", err, res, time.Since(start))
+	}
+}
+
+// Review r2: the body was redacted AFTER post had parsed it, so a 200
+// reply whose content echoed the key reached Result.Response raw. The
+// redaction now happens before the parse.
+func TestAnEchoedKeyInASuccessfulReplyIsRedactedBeforeTheParse(t *testing.T) {
+	srv := chatServer(t, func(body map[string]any, w http.ResponseWriter) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"your token is sk-echo-9f"},"finish_reason":"sk-echo-9f"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	})
+	o := NewOpenAIChat("hosted", srv.URL, "m", "KEY", func() (string, error) { return "sk-echo-9f", nil })
+	res, err := o.Complete(context.Background(), Request{Purpose: PurposeJudge, Prompt: []byte("x")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{res.Reason, string(res.Transcript), string(res.Response)} {
+		if strings.Contains(s, "sk-echo-9f") {
+			t.Fatalf("the key reached a recorded surface: %q", s)
+		}
+	}
+	if string(res.Response) != "your token is <redacted>" || res.Terminal != TerminalPartial {
+		t.Fatalf("%+v", res)
 	}
 }

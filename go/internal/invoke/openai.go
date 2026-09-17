@@ -117,12 +117,11 @@ func (o *OpenAIChat) Complete(ctx context.Context, req Request, sink Sink) (*Res
 	}
 	wall := time.Since(start).Milliseconds()
 	usage := Usage{WallMillis: wall}
-	// the resolved key is scrubbed from every byte that leaves here —
-	// the reason, the transcript the shell stores, the content itself —
-	// so an endpoint or proxy that echoes the header cannot land it in a
-	// record (review r1: clip redacted the reason and the transcript
-	// carried the raw body)
-	body = []byte(Redact(string(body), key))
+	// the resolved key is scrubbed from every byte that leaves here — the
+	// reason, the transcript the shell stores, the content itself. post
+	// redacts the body BEFORE parsing it, so the parsed content and
+	// finish_reason are already clean (review r2: redacting the bytes
+	// after the parse left the parsed content raw)
 	if err != nil {
 		return &Result{Terminal: TerminalFailed, Reason: Redact(fmt.Sprintf("%s: %v", o.Name, err), key), Usage: usage}, nil
 	}
@@ -165,8 +164,11 @@ func (o *OpenAIChat) post(ctx context.Context, key string, prompt []byte, jsonMo
 	}
 	defer resp.Body.Close()
 	body, rerr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	// redact first, parse second: nothing derived from the body can
+	// carry the key
+	body = []byte(Redact(string(body), key))
 	if rerr != nil {
-		return out, resp.StatusCode, body, rerr
+		return out, resp.StatusCode, body, fmt.Errorf("%s", Redact(rerr.Error(), key))
 	}
 	_ = json.Unmarshal(body, &out) // a non-2xx body is not a chat response; the status decides
 	return out, resp.StatusCode, body, nil
@@ -175,6 +177,9 @@ func (o *OpenAIChat) post(ctx context.Context, key string, prompt []byte, jsonMo
 func mentionsResponseFormat(body []byte) bool {
 	return strings.Contains(strings.ToLower(string(body)), "response_format")
 }
+
+// minRedactedKey is the shortest key value Redact replaces by value.
+const minRedactedKey = 8
 
 // clip is a bounded, single-line quote of an error body.
 func clip(b []byte) string {
@@ -188,9 +193,11 @@ func clip(b []byte) string {
 // Redact removes a credential from text that will be recorded or printed:
 // every occurrence of the key's VALUE (the only thing that matters) and,
 // belt and braces, whatever follows a "Bearer " prefix. An empty key
-// redacts only the prefix form.
+// redacts only the prefix form; so does a key shorter than
+// minRedactedKey — a one-letter "key" is a test artifact, and replacing
+// every "k" in a JSON body is a mangled body, not a redaction.
 func Redact(s, key string) string {
-	if key = strings.TrimSpace(key); key != "" {
+	if key = strings.TrimSpace(key); len(key) >= minRedactedKey {
 		s = strings.ReplaceAll(s, key, "<redacted>")
 	}
 	const marker = "<redacted>"

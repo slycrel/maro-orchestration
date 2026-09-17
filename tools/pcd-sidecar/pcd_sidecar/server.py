@@ -11,6 +11,7 @@ import logging
 import socket
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
@@ -116,6 +117,33 @@ def make_handler(state: SidecarState):
             else:
                 self._send_json(404, {"error": "not found"})
 
+        def _read_body(self, length: int):
+            """Read exactly `length` bytes under ONE absolute deadline. The
+            class timeout alone is an idle timeout: a peer trickling a byte
+            every few seconds never trips it (review r2). Each socket wait
+            gets only what is left of the budget; None means it ran out."""
+            if not length:
+                return b""
+            deadline = time.monotonic() + self.timeout
+            chunks = []
+            got = 0
+            while got < length:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self.connection.settimeout(remaining)
+                # read1, not read: BufferedReader.read(n) loops over raw
+                # recvs until it has n bytes, and each raw recv only sees
+                # the IDLE timeout — a trickling peer never trips it.
+                # read1 returns after one raw recv, so the deadline is
+                # re-checked per chunk.
+                chunk = self.rfile.read1(min(65536, length - got))
+                if not chunk:
+                    return None
+                chunks.append(chunk)
+                got += len(chunk)
+            return b"".join(chunks)
+
         def do_POST(self):
             if self.path != "/v1/systemone":
                 self._send_json(404, {"error": "not found"})
@@ -139,9 +167,12 @@ def make_handler(state: SidecarState):
                 self._send_json(413, {"error": f"body exceeds {MAX_BODY} bytes"})
                 return
             try:
-                raw = self.rfile.read(length) if length else b""
+                raw = self._read_body(length)
             except (socket.timeout, OSError) as e:
                 self._send_json(408, {"error": f"body not received: {e}"})
+                return
+            if raw is None:
+                self._send_json(408, {"error": f"body not received within {self.timeout}s"})
                 return
             try:
                 body = json.loads((raw or b"{}").decode("utf-8"))

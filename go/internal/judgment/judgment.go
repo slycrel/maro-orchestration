@@ -499,6 +499,11 @@ func strictDecode(b []byte, into any) error {
 // noDuplicateKeys refuses an object (at any depth) that names a key twice:
 // encoding/json keeps the LAST value, so {"choice":"a","choice":"b"} would
 // resolve to b with a straight face. A judgement is never last-wins.
+// "Twice" is under case folding: the struct decoder matches field names
+// case-insensitively, so "choice" and "Choice" land on the SAME field
+// (review r2). Keys are compared folded everywhere, which narrows the
+// accepted JSON toward refusal — a state whose keys differ only by case
+// is not one this engine writes.
 func noDuplicateKeys(b []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	type frame struct {
@@ -529,10 +534,11 @@ func noDuplicateKeys(b []byte) error {
 			}
 		case string:
 			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].key {
-				if stack[n-1].seen[v] {
-					return wireErr("key %q appears twice", v)
+				folded := strings.ToLower(v)
+				if stack[n-1].seen[folded] {
+					return wireErr("key %q appears twice (case-insensitively)", v)
 				}
-				stack[n-1].seen[v] = true
+				stack[n-1].seen[folded] = true
 				stack[n-1].key = false
 				continue
 			}

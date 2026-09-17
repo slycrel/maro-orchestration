@@ -128,7 +128,9 @@ func (h *HTTP) Complete(ctx context.Context, req invoke.Request, sink invoke.Sin
 		return &invoke.Result{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("%s: reading the response: %v", h.Provider, scrub(rerr.Error())), Usage: invoke.Usage{WallMillis: wall}}, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return &invoke.Result{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("%s: HTTP %d: %s", h.Provider, resp.StatusCode, scrub(snippet(body))), Usage: invoke.Usage{WallMillis: wall}}, nil
+		// scrub BEFORE clipping: a key that straddles the clip boundary
+		// would otherwise leave its prefix in the reason (review r2)
+		return &invoke.Result{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("%s: HTTP %d: %s", h.Provider, resp.StatusCode, snippet([]byte(scrub(string(body))))), Usage: invoke.Usage{WallMillis: wall}}, nil
 	}
 	body = []byte(scrub(string(body)))
 	usage := invoke.Usage{WallMillis: wall}

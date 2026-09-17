@@ -166,3 +166,22 @@ func TestAnEchoedKeyNeverLeavesTheProvider(t *testing.T) {
 		t.Fatal("the key reached a recorded body")
 	}
 }
+
+// Review r2: the reason was clipped to 200 bytes BEFORE the key was
+// scrubbed, so a key straddling the boundary left its prefix behind.
+func TestAKeyStraddlingTheClipBoundaryIsStillScrubbed(t *testing.T) {
+	key := "sekret-0123456789-0123456789-0123456789-end"
+	var seen, auth string
+	pad := strings.Repeat("x", 180) // the key begins at byte 190; the marker must survive the 200-byte clip
+	srv := server(t, 401, `{"error":"`+pad+key+`"}`, &seen, &auth)
+	h := NewJev(func() (string, error) { return key, nil })
+	h.BaseURL = srv.URL
+	prompt, _ := h.Render(Ask1(JevModel, Sect("goal", "g"), "verdict", stepQ()))
+	res, err := h.Complete(context.Background(), invoke.Request{Purpose: invoke.PurposeJudge, Prompt: prompt}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Reason, "sekret-0") || !strings.Contains(res.Reason, "<redacted>") {
+		t.Fatalf("reason %q", res.Reason)
+	}
+}

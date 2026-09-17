@@ -105,6 +105,45 @@ in the tree.
   gap. Crash-time re-asking of a shadow is deliberately NOT added:
   measurement is never re-run to look complete.
 
+## Round 2 — one Codex seat on the fix diff (`3b162cdc..0458ac4a`)
+
+Status 0, numbered findings. Ledger:
+
+1. **The redaction scrubbed one representation, not every outgoing
+   field** — **VERIFIED, a regression class in the fix layer.** The
+   hosted client parsed the body before `Complete` scrubbed it, so a
+   200 reply echoing the key reached `Result.Response` raw; the wire
+   client clipped the reason to 200 bytes before scrubbing, so a key
+   straddling the boundary left its prefix. Both r1 pins used short 401
+   bodies and passed. **FIXED:** the hosted client redacts inside `post`
+   before the parse (content and finish_reason are derived from clean
+   bytes); the wire client scrubs before it clips. Pins: a 200 reply
+   whose content and finish_reason echo the key; a key beginning at byte
+   190. Settling the fix also found that a one-character key mangles the
+   JSON it is scrubbed from — value replacement now needs 8+ characters.
+2. **`runs resume` rebuilds the driver without the attempt's binding**
+   — **OUT-OF-SCOPE (pre-existing class).** The resume constructor on
+   `successor` already carries no judge model, lens or mechanisms; the
+   replacement attempt's config is rebuilt from the live driver, not the
+   recorded one. Wiring the providers (r1) is kept so a restored binding
+   can find them; restoring per-run config at resume is an engine lead.
+3. **Duplicate-key guard blind to case folding** — **VERIFIED**
+   (`encoding/json` matches struct fields by folded name, so
+   `"Choice"` lands on `choice`). **FIXED:** keys compared folded at
+   every depth; fixture added, plus the negative control the r1 fixtures
+   lacked (same key in different objects, objects inside arrays).
+4. **The sidecar's deadline was an idle timeout** — **VERIFIED.** A peer
+   trickling a byte every few seconds never trips `settimeout`, and
+   `BufferedReader.read(n)` loops raw recvs until it has n bytes.
+   **FIXED:** one absolute monotonic deadline across the body, each
+   socket wait given only the remainder, `read1` so the deadline is
+   re-checked per chunk. Pin: a peer sending one byte per 0.3 s against a
+   1 s budget is answered 408 within it.
+
+Noted, not changed: `Unshadowed` counts verdicts with ZERO shadow
+records, so a crash after provider A's record and before B's is not
+visible per provider — the metric is defined that way and says so.
+
 ## Out-of-scope leads
 
 - Journal ↔ prompt-template versioning: every prompt-template change on
@@ -114,6 +153,9 @@ in the tree.
   are per engine version" decree with the workspace rotated on upgrade.
 - Partial judge terminals: whether a `partial` judge reply should ever
   verdict is a successor-wide question, not this seam's.
+- `runs resume` rebuilds every replacement attempt's configuration from
+  the live driver (no judge model, lens, mechanisms, or judgment
+  binding); recovery should read the recorded attempt config instead.
 
 ## What went well
 
