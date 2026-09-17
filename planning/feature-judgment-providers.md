@@ -16,8 +16,8 @@ A System One model: one request carries a `state` (string, object or
 array) and a map of typed questions — Choice (one of N, full distribution +
 confidence), Score (ordered levels, expected value + distribution + confidence),
 Noul (probability of yes). No generated text, no reasoning trace. Questions
-in one request are evaluated independently. Measured on this box
-2026-09-17: a three-question judge-shaped request answered in ~250 ms.
+in one request are evaluated independently. Latency, cost and quality measurements are not recorded here (see
+guardrails); they live under the workspace root.
 Pricing is per input token, output free. (Numbers about Jev's quality or
 agreement are NOT recorded in this repo — see guardrails.)
 
@@ -99,6 +99,54 @@ raw-likelihood short-string bias. Home is the thinkcentre (CPU); the M1
 and the incoming M6 are optional faster homes. Its softmax is a score, not
 demonstrated calibration — the replay and shadow report are how it earns
 (or fails to earn) a rung.
+
+## 2026-09-17, later: evidence, the ladder, and the fallback (branch `jev-tiers`)
+
+The dev-Mac evaluation of Jev (private; see the workspace root) reduced to
+three engine changes. Recorded here before the code, so the fold rules are
+decided rather than discovered.
+
+**1. The judge sees the evidence, not only the claim.** `StepJudgeRequest` and
+`ClosureJudgeRequest` gain an `evidence` section: a deterministic digest of
+the step's recorded effects — per tool effect, in ordinal order: the op, its
+class, `refused`/`announced`, whether the result was an error, and a bounded
+tail of the result output — plus the execute terminal. It is derived only
+from committed records (`tool_effect`, `tool_effect_result`, the receipt), so
+the driver and the fold build byte-identical bytes through one function.
+`judgment.evidence.max_bytes` bounds it (registered, with a why). A step
+whose execute produced no effects says so explicitly ("no recorded
+effects") — an absent section is never silently equal to an empty one.
+
+**2. A confidence ladder, recorded in the attempt.** The resolver already
+demotes a success verdict below `Promote` (0.5) to unknown. The ladder adds
+one registered bar: `judgment.escalate` (default 0.6 — the retired Python
+rung's `min_certainty`, the same corpus). A primary answer whose confidence
+is under it is UNDECIDED for this judgment: the driver asks the fallback
+provider the same question and the fallback's answer is the verdict of
+record. Both bars live in the attempt's `ConfigSnapshot` so the fold checks
+what was in force, not a live default.
+
+**3. Primary failure escalates; nothing proceeds unjudged by default.** When
+the primary's call ends `failed` (unreachable, 429/529, timeout, no key,
+incapable) the driver asks `judgment.fallback` (default `llm`, the incumbent)
+instead of committing a verdict-less step. Only if the fallback also fails
+does the step stay `unjudged`, and that is emitted with its reason. Never
+fail-open: an unjudged step still gates its dependents (`gatedBy` treats it
+as not done).
+
+**Fold rules (the part that makes this a seam, not a patch).** A judge
+verdict's invocation must have been asked through the attempt's primary OR
+its recorded fallback — read from the invocation's `Backend.Name`, never
+guessed. The fold renders and parses under the provider that answered. A
+fallback-answered verdict is admissible only when the record shows why: a
+primary invocation for the same judgment (same request address under the
+primary's rendering) ended `failed`, or answered with confidence below the
+recorded `judgment.escalate`. Anything else is a fold error.
+
+**Not changed.** Shadow semantics; `Promote`/`Refute`; the LLM arm's prose
+template; PCD stays experimental (`PCD_PMI` default moves to off — on the
+evaluation's benign documents PMI was the most over-asserting rule, and the
+replay is how it earns it back).
 
 ## Where judgment goes next (not built tonight)
 

@@ -181,7 +181,8 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 				if err != nil {
 					return nil, nil, 0, err
 				}
-				return &invoke.Outcome{Invocation: st.Invocation.ID, Receipt: st.Receipt.ID, Terminal: st.Terminal.State, Response: b}, b, p.Attempt.Attempt, nil
+				return &invoke.Outcome{Invocation: st.Invocation.ID, Receipt: st.Receipt.ID, Terminal: st.Terminal.State, Reason: st.Terminal.Reason, Response: b,
+					Tools: st.Invocation.Tools, EffectRecords: st.Effects, EffectResults: st.Results}, b, p.Attempt.Attempt, nil
 			}
 		}
 		return nil, nil, 0, nil
@@ -433,7 +434,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			// reused like any step's: the composition re-derives the same
 			// typed request bytes, so the reuse lookup matches by address
 			jreq, jprompt, err := d.judgeRequest(a, func(model string) judgment.Request {
-				return StepJudgeRequest(model, goal, steps[k-1], composed, invoke.TerminalComplete, true)
+				return StepJudgeRequest(model, goal, steps[k-1], composed, invoke.TerminalComplete, true, invoke.ForkEvidence(len(fs.Fork.Members)))
 			})
 			if err != nil {
 				return nil, nil, err
@@ -537,8 +538,9 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		var jo *invoke.Outcome
 		var jresp []byte
 		var jby uint32 = n
+		evidence := outcomeEvidence(o, d.Store)
 		jreq, jprompt, err := d.judgeRequest(a, func(model string) judgment.Request {
-			return StepJudgeRequest(model, goal, steps[k-1], resp, o.Terminal, false)
+			return StepJudgeRequest(model, goal, steps[k-1], resp, o.Terminal, false, evidence)
 		})
 		if err != nil {
 			return nil, nil, err
@@ -618,6 +620,26 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			terminal, partial[i] = invoke.TerminalPartial, true
 		}
 	}
+	// one evidence text per committed step, from the journal's own records
+	// (the fold derives the same from the states it replays)
+	ids, forkIDs := map[record.RecordID]bool{}, map[record.RecordID]bool{}
+	for _, sd := range done {
+		if sd.Invocation != "" {
+			ids[sd.Invocation] = true
+		}
+		if sd.Fork != "" {
+			forkIDs[sd.Fork] = true
+		}
+	}
+	states, err := journalStates(d.J, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	members, err := journalForkMembers(d.J, forkIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	evidence := planEvidence(a, func(id record.RecordID) int { return members[id] }, func(id record.RecordID) *invoke.State { return states[id] }, d.Store)
 	out := &Outcome{Terminal: terminal, Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: model(), Recall: sel.ID, Steps: len(done)}
 	if terminal == invoke.TerminalPartial {
 		out.Reason = "one or more steps ended partial"
@@ -634,7 +656,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		}
 	}
 	creq, cprompt, err := d.judgeRequest(a, func(model string) judgment.Request {
-		return ClosureJudgeRequest(model, goal, steps, results, partial)
+		return ClosureJudgeRequest(model, goal, steps, results, partial, evidence)
 	})
 	if err != nil {
 		return nil, nil, err

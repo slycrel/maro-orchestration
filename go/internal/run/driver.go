@@ -935,9 +935,19 @@ func (d *Driver) nowClosureJudge(ctx context.Context, rs *RunState, a *AttemptSt
 			return nil, err
 		}
 	}
+	// the one call's recorded execution, read from the journal (the fold
+	// reads the same records)
+	evidence := invoke.EvidenceUnavailable
+	if out.Invocation != "" {
+		states, err := journalStates(d.J, map[record.RecordID]bool{out.Invocation: true})
+		if err != nil {
+			return nil, err
+		}
+		evidence = stateEvidence(states[out.Invocation], d.Store)
+	}
 	sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n}
 	jreq, prompt, err := d.judgeRequest(a, func(model string) judgment.Request {
-		return ClosureJudgeRequest(model, goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial})
+		return ClosureJudgeRequest(model, goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}, []string{evidence})
 	})
 	if err != nil {
 		return nil, err

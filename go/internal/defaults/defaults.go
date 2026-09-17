@@ -14,6 +14,7 @@ package defaults
 
 import (
 	"fmt"
+	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 
 	"github.com/slycrel/maro-orchestration/go/internal/judgment"
 )
@@ -50,6 +51,12 @@ func List() []Default {
 			Value: "",
 			Flag:  "--judge-shadow",
 			Why:   "OFF: a shadow arm reaches the network and spends money on every verdict. Evidence-gathering never turns itself on because the code shipped.",
+		},
+		{
+			Key:   "judgment.evidence.max_bytes",
+			Value: fmt.Sprint(invoke.EvidenceMaxBytes),
+			Flag:  "",
+			Why:   "a judge is shown the recorded execution (tool effects and their outputs) next to the worker's claim, bounded: a judge state is one request, and past this the evidence is the run, not the step. Not a flag: the driver and the fold must derive the same bytes, so the bound is a constant both read.",
 		},
 		{
 			Key:   "judgment.timeout",

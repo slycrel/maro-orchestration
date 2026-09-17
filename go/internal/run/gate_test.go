@@ -23,7 +23,7 @@ import (
 const (
 	planGated    = `{"steps": ["Collect the numbers", "Check the source", {"step": "Write the summary", "after": [1]}]}`
 	planChain    = `{"steps": ["Collect the numbers", {"step": "Check the source", "after": [1]}, {"step": "Write the summary", "after": [2]}]}`
-	judgeUnclear = `{"outcome": "unclear", "confidence": 0.4, "why": "the result does not show the numbers"}`
+	judgeUnclear = `{"outcome": {"type": "choice", "choice": "unclear", "confidence": 0.4, "why": "the result does not show the numbers"}}`
 )
 
 func TestAgendaDeclaredPrerequisiteGates(t *testing.T) {
@@ -68,8 +68,9 @@ func TestAgendaDeclaredPrerequisiteGates(t *testing.T) {
 	if len(reqs) != 2 || !bytes.Contains(reqs[1], []byte("## Plan\n1. Collect the numbers\n2. Check the source\n3. Write the summary (after 1)\n")) {
 		t.Fatalf("step prompt: %q", reqs)
 	}
-	// the closure judge saw the gap in the step's own words
-	if !bytes.Contains(judge.Seen[4].Prompt, []byte("## Step 3: Write the summary\nnot executed: gated")) {
+	// the closure judge saw the gap in the step's own words (the typed
+	// request renders a step and its result as their own sections)
+	if !bytes.Contains(judge.Seen[4].Prompt, []byte("### step 3\nWrite the summary\n")) || !bytes.Contains(judge.Seen[4].Prompt, []byte("### result 3\nnot executed: gated")) {
 		t.Fatalf("closure prompt: %q", judge.Seen[4].Prompt)
 	}
 	// the fold re-derives the gated record: a restart accepts it and writes nothing

@@ -355,7 +355,8 @@ func cmdJudgmentReplay(args []string, out, errw io.Writer) error {
 			}
 			t := &replayTally{provider: name}
 			for _, c := range cases {
-				req := spine.StepJudgeRequest(modelFor(p), []byte(c.StepText), c.StepText, []byte(c.Result), invoke.TerminalComplete, false)
+				// a replayed corpus case has no execution record: the judge is told so, never shown an empty one
+				req := spine.StepJudgeRequest(modelFor(p), []byte(c.StepText), c.StepText, []byte(c.Result), invoke.TerminalComplete, false, invoke.EvidenceUnavailable)
 				sh := &invoke.Shell{J: j, Store: st}
 				start := time.Now()
 				res, o, err := judgment.Ask(context.Background(), sh, p, invoke.PurposeShadowJudge, req, judgment.DefaultTimeout)

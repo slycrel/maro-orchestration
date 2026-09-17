@@ -14,7 +14,7 @@ import (
 // the prompt, so the recorded bytes say which template produced them, and
 // the run fold re-derives them with the same constant. Bump it whenever
 // the rendering below changes by a byte.
-const PromptVer = "judgment-llm/1"
+const PromptVer = "judgment-llm/2" // /2: the evidence section, and instructions that name it
 
 // LLM is the third provider: the engine's existing generative backend,
 // asked the same typed Request in prose and parsed strictly. It exists

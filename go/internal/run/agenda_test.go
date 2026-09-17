@@ -453,11 +453,15 @@ func TestAgendaInvocationSequenceAndForgedStages(t *testing.T) {
 		}
 		return b
 	}
+	// the evidence a step of this run carries: the exec fake announces no
+	// effects, so it is the digest of a call that offered tools iff the
+	// fake acts outward — the same function the driver and the fold use
+	ev := invoke.Digest(exec.Capabilities().ActsOutward, nil, nil, invoke.TerminalComplete, "", nil, invoke.EvidenceMaxBytes)
 	stepJudge := rendered(func(m string) judgment.Request {
-		return StepJudgeRequest(m, goal, steps[1], []byte("r2"), invoke.TerminalComplete, false)
+		return StepJudgeRequest(m, goal, steps[1], []byte("r2"), invoke.TerminalComplete, false, ev)
 	})
 	closure := rendered(func(m string) judgment.Request {
-		return ClosureJudgeRequest(m, goal, steps, [][]byte{[]byte("r1"), []byte("r2")}, []bool{false, false})
+		return ClosureJudgeRequest(m, goal, steps, [][]byte{[]byte("r1"), []byte("r2")}, []bool{false, false}, []string{ev, ev})
 	})
 	if !bytes.Equal(judge.Seen[0].Prompt, intentPrompt(goal, nil)) || !bytes.Equal(judge.Seen[1].Prompt, planPrompt(goal, "Collect the numbers, then summarize them.", nil, nil)) ||
 		!bytes.Equal(exec.Seen[1].Prompt, stepPrompt(goal, steps, nil, 2, [][]byte{[]byte("r1")}, nil)) || !bytes.Equal(judge.Seen[3].Prompt, stepJudge) ||

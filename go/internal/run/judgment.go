@@ -41,13 +41,15 @@ func closureOptions() []judgment.Option {
 	}
 }
 
-const stepInstructions = "Given the goal, one planned step, and the executor's result for that step, decide whether THIS STEP is done. " +
+const stepInstructions = "Given the goal, one planned step, the executor's result for that step, and the recorded evidence of what the executor actually did, decide whether THIS STEP is done. " +
+	"The result is the executor's own report; the evidence is the execution record (the tools it ran and what they returned). A report the evidence contradicts, or that claims work the evidence does not show, is not done. " +
 	"Judge only this step: later steps of the plan handle the rest of the goal, and a step that does its own part is done even when the goal is not yet complete."
 
-const closureInstructions = "Given the goal and every step's result, decide whether the GOAL was achieved — not whether work happened."
+const closureInstructions = "Given the goal, every step's result, and each step's recorded evidence of what the executor actually did, decide whether the GOAL was achieved — not whether work happened. " +
+	"A result the evidence contradicts, or that claims work the evidence does not show, does not count toward the goal."
 
 // StepJudgeRequest is the per-step judge's question about one step.
-func StepJudgeRequest(model string, goal []byte, step string, result []byte, terminal invoke.TerminalState, fork bool) judgment.Request {
+func StepJudgeRequest(model string, goal []byte, step string, result []byte, terminal invoke.TerminalState, fork bool, evidence string) judgment.Request {
 	var notes []string
 	if terminal == invoke.TerminalPartial {
 		notes = append(notes, "the executor's stream ended PARTIAL — the result may be truncated")
@@ -55,7 +57,10 @@ func StepJudgeRequest(model string, goal []byte, step string, result []byte, ter
 	if fork {
 		notes = append(notes, "this step ran its sub-goals in parallel; the result lists each member's whole answer under a '### Member' heading, and the step is done when the sub-goals were answered")
 	}
-	state := judgment.Sect("goal", string(goal), "step", step, "result", string(result))
+	if evidence == "" {
+		evidence = invoke.EvidenceUnavailable
+	}
+	state := judgment.Sect("goal", string(goal), "step", step, "result", string(result), "evidence", evidence)
 	if len(notes) > 0 {
 		state.Sections = append(state.Sections, judgment.Section{Key: "notes", Text: strings.Join(notes, "\n")})
 	}
@@ -65,7 +70,7 @@ func StepJudgeRequest(model string, goal []byte, step string, result []byte, ter
 // ClosureJudgeRequest is the closure judge's question about the run. It
 // asks for falsifiers: the arm that can name them does, and the verdict
 // carries them exactly as before.
-func ClosureJudgeRequest(model string, goal []byte, steps []string, results [][]byte, partial []bool) judgment.Request {
+func ClosureJudgeRequest(model string, goal []byte, steps []string, results [][]byte, partial []bool, evidence []string) judgment.Request {
 	state := judgment.Sect("goal", string(goal))
 	for i, s := range steps {
 		note := ""
@@ -76,9 +81,14 @@ func ClosureJudgeRequest(model string, goal []byte, steps []string, results [][]
 		if i < len(results) {
 			res = string(results[i])
 		}
+		ev := invoke.EvidenceUnavailable
+		if i < len(evidence) && evidence[i] != "" {
+			ev = evidence[i]
+		}
 		state.Sections = append(state.Sections,
 			judgment.Section{Key: fmt.Sprintf("step %d", i+1), Text: s},
-			judgment.Section{Key: fmt.Sprintf("result %d", i+1), Text: res + note})
+			judgment.Section{Key: fmt.Sprintf("result %d", i+1), Text: res + note},
+			judgment.Section{Key: fmt.Sprintf("evidence %d", i+1), Text: ev})
 	}
 	return judgment.Ask1(model, state, QOutcome, judgment.Question{Type: judgment.Choice, Instructions: closureInstructions, Options: closureOptions(), Falsifiers: true})
 }

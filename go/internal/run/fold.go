@@ -1159,10 +1159,16 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 		// invocation whose request re-derives as step k's prompt
 		var judged []byte
 		var term invoke.TerminalState = invoke.TerminalComplete
+		evidence := invoke.EvidenceUnavailable
 		if k-1 < len(results) {
 			judged = results[k-1]
 			if partial[k-1] {
 				term = invoke.TerminalPartial
+			}
+			// the step is committed: its evidence is what the step record says
+			// it was, from the same states the driver read
+			if k-1 < len(a.Steps) && a.Steps[k-1].Ordinal == k {
+				evidence = stepEvidence(a.Steps[k-1], forkMembersIn(forks, a.Steps[k-1].Fork), func(id record.RecordID) *invoke.State { return inv[id] }, store)
 			}
 		} else if a.Plan.ParallelAt(k) != nil {
 			var fs *ForkState
@@ -1179,6 +1185,7 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 				return err
 			}
 			judged = b
+			evidence = invoke.ForkEvidence(len(fs.Fork.Members))
 		} else {
 			wantReq, err := stepRequest(rs, a, k, learned, store)
 			if err != nil {
@@ -1193,6 +1200,7 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 							return err
 						}
 						judged, term, found = b, es.Terminal.State, true
+						evidence = stateEvidence(es, store)
 					}
 				}
 			}
@@ -1202,7 +1210,7 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 		}
 		fork := a.Plan.ParallelAt(k) != nil
 		build = func(model string) judgment.Request {
-			return StepJudgeRequest(model, goal, steps[k-1], judged, term, fork)
+			return StepJudgeRequest(model, goal, steps[k-1], judged, term, fork, evidence)
 		}
 	case verdict.KindClosure:
 		if a.Plan != nil {
@@ -1210,14 +1218,16 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 			if err != nil {
 				return err
 			}
+			evidence := planEvidence(a, func(id record.RecordID) int { return forkMembersIn(forks, id) }, func(id record.RecordID) *invoke.State { return inv[id] }, store)
 			build = func(model string) judgment.Request {
-				return ClosureJudgeRequest(model, goal, steps, results, partial)
+				return ClosureJudgeRequest(model, goal, steps, results, partial, evidence)
 			}
 		} else {
 			// a NOW run with the model judge: the goal is its own one step and
 			// the judged result is the newest execute receipt of the run
 			var judged []byte
 			var term invoke.TerminalState
+			evidence := invoke.EvidenceUnavailable
 			found := false
 			for _, p := range rs.Attempts {
 				if p.Attempt.Attempt > a.Attempt.Attempt {
@@ -1230,6 +1240,7 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 							return err
 						}
 						judged, term, found = b, es.Terminal.State, true
+						evidence = stateEvidence(es, store)
 					}
 				}
 			}
@@ -1237,7 +1248,7 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 				return fmt.Errorf("run: %s attempt %d closure verdict %s before any execute receipt", rs.Run, v.Attempt, v.ID)
 			}
 			build = func(model string) judgment.Request {
-				return ClosureJudgeRequest(model, goal, []string{string(goal)}, [][]byte{judged}, []bool{term == invoke.TerminalPartial})
+				return ClosureJudgeRequest(model, goal, []string{string(goal)}, [][]byte{judged}, []bool{term == invoke.TerminalPartial}, []string{evidence})
 			}
 		}
 	default:
@@ -1816,4 +1827,13 @@ func carriesRelated(rs *RunState, st *invoke.State, store *thought.Store) error 
 		return fmt.Errorf("request %s does not carry the related prior run", st.Invocation.Request.Hash)
 	}
 	return nil
+}
+
+// forkMembersIn is a settled fork's member count by fork id, from the
+// folded forks; 0 when unknown.
+func forkMembersIn(forks map[record.RecordID]*ForkState, id record.RecordID) int {
+	if f := forks[id]; f != nil && f.Fork != nil {
+		return len(f.Fork.Members)
+	}
+	return 0
 }

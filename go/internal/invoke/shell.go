@@ -44,7 +44,15 @@ type Outcome struct {
 	Response   []byte
 	Usage      Usage
 	Effects    []record.RecordID
-	Err        error // a bookkeeping failure after the invocation existed
+	// Tools says whether the request offered tools; EffectRecords and
+	// EffectResults are the effect records the call committed, kept so a
+	// judge's evidence digest is built from the same records the fold
+	// replays (see Digest). Populated by Invoke, and by a driver that
+	// reuses a landed call from the journal.
+	Tools         bool
+	EffectRecords []*ToolEffect
+	EffectResults map[int]*ToolEffectResult
+	Err           error // a bookkeeping failure after the invocation existed
 }
 
 var (
@@ -69,6 +77,8 @@ type sink struct {
 	ctx     context.Context // detached: evidence is committed even after the caller's deadline
 	next    int
 	effects []record.RecordID
+	records []*ToolEffect
+	results map[int]*ToolEffectResult
 	seen    map[int]bool // ordinals with a committed result
 	err     error
 }
@@ -100,6 +110,7 @@ func (s *sink) Observe(ev EffectEvent) (int, string, error) {
 		return 0, "", err
 	}
 	s.effects = append(s.effects, te.ID)
+	s.records = append(s.records, te)
 	s.next++
 	if te.Refused {
 		s.err = fmt.Errorf("%w: effect %s reported on a tool-less request (confined)", ErrBackendContract, ev.Op)
@@ -133,6 +144,10 @@ func (s *sink) Result(res EffectResult) error {
 		return err
 	}
 	s.seen[res.Ordinal] = true
+	if s.results == nil {
+		s.results = map[int]*ToolEffectResult{}
+	}
+	s.results[res.Ordinal] = rr
 	return nil
 }
 
@@ -240,6 +255,7 @@ func (sh *Shell) Invoke(ctx context.Context, b Backend, req Request, target *Tar
 	sk := &sink{sh: sh, inv: inv, ctx: book, seen: map[int]bool{}}
 	res, berr := safeComplete(ctx, b, req, sk)
 	out.Effects = sk.effects
+	out.Tools, out.EffectRecords, out.EffectResults = req.Tools, sk.records, sk.results
 	if err := sh.crash("effects"); err != nil {
 		return out, err
 	}
