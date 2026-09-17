@@ -105,6 +105,38 @@ def _prepare_execution(
     return steps, step_indices, manifest_steps
 
 
+def _refuse_resume(ctx: LoopContext, resume_from_loop_id: str, reason: str) -> LoopResult:
+    """Terminal refusal of an explicit resume (chunk-3 reviews, 2026-09-16).
+
+    An explicit resume whose checkpoint exists but cannot be read, names a
+    different loop, cannot be looked up, or fails to restore must not
+    silently become a fresh run that replays every step's side effects.
+    Like the cost-gate refusal beside it, this returns before any step; it
+    additionally stamps the typed stop verdict and records a trace edge so
+    the run's record says "refused" rather than reading like a crash at
+    preflight (r2 finding 4). Known gap, same class as the cost gate: the
+    early return bypasses loop_finalize's explicit resource releases (see
+    BACKLOG "pre-execution refusals bypass finalize").
+    """
+    log.error("checkpoint resume: %s", reason)
+    try:
+        ctx.stamp_stop("external-interrupt", reason)
+    except Exception as _st_exc:
+        log.debug("resume refusal stop stamp failed: %s", _st_exc)
+    try:
+        from run_trace import record_edge
+        from context_budget import clip as _clip
+        record_edge("plan.resume", "plan.resume_refused",
+                    loop_id=ctx.loop_id, resume_from=resume_from_loop_id,
+                    reason=_clip(reason, 300))
+    except Exception as _tr_exc:
+        log.debug("resume refusal edge failed: %s", _tr_exc)
+    return LoopResult(
+        loop_id=ctx.loop_id, project=ctx.project or "", goal=ctx.goal,
+        status="stuck", stuck_reason=reason,
+    )
+
+
 def _preflight_checks(
     ctx: LoopContext,
     steps: List[str],
@@ -218,9 +250,35 @@ def _preflight_checks(
                 log.info("checkpoint resume: loop_id=%s done=%d remaining=%d rows=%d",
                          resume_from_loop_id, _ckpt.done_count, len(steps), len(resume_completed))
             else:
+                # Absent vs unreadable (chunk-3 review, 2026-09-16): a file
+                # that EXISTS but cannot be loaded (torn by an older
+                # in-place writer, hand-damaged, storage fault) must not
+                # turn an explicit resume into a fresh run that replays
+                # every step's side effects. Fail closed with the path.
+                try:
+                    from checkpoint import _find_checkpoint_path as _ckpt_file
+                    _torn = _ckpt_file(resume_from_loop_id)
+                except Exception as _find_exc:
+                    # Unknown is not absent (r2 finding 1): a lookup that
+                    # cannot even stat the checkpoint dir refuses too.
+                    return steps, {}, _refuse_resume(
+                        ctx, resume_from_loop_id,
+                        f"checkpoint lookup for {resume_from_loop_id} failed "
+                        f"({_find_exc}) — refusing to start fresh")
+                if _torn is not None:
+                    return steps, {}, _refuse_resume(
+                        ctx, resume_from_loop_id,
+                        f"checkpoint {resume_from_loop_id} exists at {_torn} but could "
+                        "not be read as that loop's checkpoint — refusing to start fresh "
+                        "(repair or delete the file to re-run from scratch)")
                 log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh", resume_from_loop_id)
         except Exception as _ckpt_err:
-            log.warning("checkpoint resume failed (%s), starting fresh", _ckpt_err)
+            # Same direction: the checkpoint loaded but restoring it failed —
+            # an explicit resume does not silently become a replay.
+            return steps, {}, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"checkpoint {resume_from_loop_id} loaded but restore failed "
+                f"({_ckpt_err}) — refusing to start fresh")
 
     # Upfront cost estimation — fail fast if estimate exceeds budget
     if ctx.cost_budget is not None:

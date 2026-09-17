@@ -7255,19 +7255,25 @@ NOT closed:
   restart path (blocked dep → gate → closure → director restart) and a CLI
   closure path with obligations; current tests cover each unit and the loop
   flow, not the handle/cli composition.
-- **Checkpoint write is not atomic** (pre-existing, out of scope; QA round
-  1): `checkpoint.write_checkpoint` writes in place — a kill mid-write leaves
-  a torn file the resume path then drops. Lead: temp-file + rename like the
-  metadata stamp.
+- **Checkpoint write is not atomic** — SHIPPED 2026-09-16 (chunk 3):
+  `write_checkpoint` / `branch_checkpoint` write through
+  `file_lock.atomic_write`; record in BACKLOG_DONE. (Was: in-place
+  `Path.write_text`; a kill mid-write left a torn file the resume path
+  dropped.)
 - **DAG lane does not harvest obligations** — only the sequential lane
   harvests; fan-out steps' passing runners are not carried to closure.
 - **Checkpoint resume by plan position — SHIPPED 2026-09-16 (chunk 2)**; the
   HIGH lead moved to BACKLOG_DONE. Residue it left, in the same family:
-  - **Parallel-batch has no checkpoint boundary** (r1 finding 8, pre-existing):
-    the sequential loop's parallel-batch branch (`loop_execute` ~L930) mutates
-    `step_outcomes` and `continue`s past the post-step writer; the DAG/fan-out
-    lane writes no checkpoint at all. A crash after a joined batch loses the
-    batch and re-executes it. Lead: one checkpoint write after the join.
+  - **Parallel work has no checkpoint boundary** (r1 finding 8, pre-existing,
+    re-examined 2026-09-16 chunk 3): the sequential loop's parallel-batch
+    branch (`loop_execute` ~L913) is UNREACHABLE in production — any plan with
+    a multi-step level and `parallel_fan_out > 0` takes the DAG lane
+    (`loop_planning.use_dag`), and `_run_parallel_path` always returns a
+    LoopResult. The real gap is that the DAG / fan-out lane writes no
+    checkpoint at all, so a crash mid-DAG resumes as nothing-done — and a DAG
+    resume is itself blocked on durable plan-node ids (a resumed suffix is
+    scheduled by re-numbered tags). Build the ids first, then a per-node write
+    under `results_lock`; do not add a write to the dead sequential branch.
   - **Duplicate step texts defeat the text-keyed interrupt re-pairing** (r2
     finding 2): `_check_loop_interrupts` re-pairs text ↔ item index by text
     (first unused occurrence), so a priority interrupt that injects a text
@@ -7275,15 +7281,39 @@ NOT closed:
     copy; a permuted `step_indices` list is likewise undetectable by the
     writer (r2 finding 3). Both are the durable-plan-node-id residue above —
     carry `(text, item_id)` pairs as one structure instead of parallel lists.
-  - **Explicit resume of a corrupt checkpoint starts fresh** (r1 finding 6,
-    pre-existing policy): `loop_planning` catches any restore error and runs
-    the whole decomposition again. The loader now coerces rows so fewer
-    shapes raise, but the policy itself (fail open = re-run everything) is
-    unchanged; a `maro resume` of a torn file should fail closed with the
-    reason.
-  - **`write_checkpoint` still writes in place** although
-    `file_lock.atomic_write` is already what `mark_checkpoint_consumed` uses
-    two functions down — the atomic-write residue above is a one-line lift.
+  - **Checkpoint consumption can race a late writer** (chunk-3 r1 finding 3,
+    pre-existing): `mark_checkpoint_consumed` and `write_checkpoint` are
+    separate read/write actors on the same file with no shared lock; atomic
+    rename removes torn bytes but keeps last-writer-wins, so a still-running
+    original loop writing after consumption erases `consumed_at` and the
+    source becomes resumable again. The CLI resume lock serializes resumes,
+    not the original loop's writes, and `run_lease` returns unknown for a
+    missing lease. Lead: a per-loop lock shared by both, `write_checkpoint`
+    refusing to overwrite a consumed generation, or resume failing closed
+    when owner liveness is unknown.
+  - **Explicit resume: torn run-dir checkpoints and the CLI re-read race**
+    (chunk-3 r2 finding 1): `loop_planning` now refuses an explicit resume
+    when the loop-id-named fallback file exists but cannot be read, names
+    another loop, or the lookup raises — but a torn `*/build/checkpoint.json`
+    carries its loop_id INSIDE the JSON, so the scan cannot attribute it and
+    the loop API still reads it as absent → fresh. `maro resume <handle>`
+    validates the file first, then `run_agent_loop` re-reads it (a torn
+    write in between takes the fresh branch). Lead: a public loader returning
+    a discriminated result (FOUND / ABSENT / INVALID / MISMATCH / IO_ERROR
+    with the candidate path) and passing the CLI's already-validated
+    checkpoint object into the loop instead of the id.
+  - **Pre-execution refusals bypass finalize** (chunk-3 r2 finding 3, class):
+    both `_preflight_checks` early returns — the cost gate and the new
+    resume refusal — return after `_initialize_loop` took the project slot,
+    run lease, running marker, fence/worktree and after `_decompose_goal`
+    (a paid planner call without preset steps), and skip loop_finalize's
+    explicit releases (`clear_loop_running` etc.; destructors release the
+    slot/lease incidentally). Lead: validate an explicit resume BEFORE
+    admission and decomposition, and put acquired loop resources behind an
+    unconditional `finally` / shared refusal finalizer.
+  - **`_checkpoint_path` interpolates unsanitized loop ids** (chunk-3 r2
+    out-of-scope lead): a loop_id with path separators escapes the
+    checkpoint dir; `run_lease._safe_name` is the existing pattern.
 - **Recorded cwd is ephemeral under run-worktree / container-clone modes:**
   finalize removes the successful worktree/clone before closure runs, so
   the obligation's cwd is gone ⇒ inconclusive (never fail). Rerun before

@@ -39,6 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from file_lock import atomic_write
+
 log = logging.getLogger("maro.checkpoint")
 
 _CHECKPOINT_DIR_NAME = "checkpoints"
@@ -466,6 +468,7 @@ def write_checkpoint(
             It is retained beside the checkpoint, never treated as sufficient
             without the adapter's configuration-signature check.
     """
+    _target: Any = "<unresolved>"
     try:
         # item index → 1-based plan position, from the loop's own mapping
         # (`step_indices[i]` is the NEXT.md item of plan step i+1). A row
@@ -543,11 +546,28 @@ def write_checkpoint(
             path = rd_path
         else:
             path = _checkpoint_path(loop_id)
-        path.write_text(json.dumps(ckpt.to_dict(), indent=2), encoding="utf-8")
+        _target = path
+        # Process-kill safe: a kill mid-write used to leave a torn file that
+        # the resume path then read as "no checkpoint" (BACKLOG residue since
+        # the LoopsBench chunk-1 QA round; same helper mark_checkpoint_consumed
+        # already used). mkstemp beside the target + fsync + os.replace: a
+        # reader sees the old file or the new one, never a partial. Not
+        # claimed: power-loss durability (durable=False — no directory
+        # fsync) and a symlinked target (os.replace swaps the link itself).
+        # Needs a WRITABLE PARENT DIRECTORY, which a plain in-place write
+        # did not; a failure here is logged at WARNING below.
+        atomic_write(path, json.dumps(ckpt.to_dict(), indent=2))
         log.debug("checkpoint written: %s (%d/%d steps done, %d rows)",
                   loop_id, ckpt.done_count, len(steps), len(completed))
     except Exception as exc:
-        log.debug("checkpoint write failed (non-fatal): %s", exc)
+        # WARNING, not debug (chunk-3 review): a full disk or an unwritable
+        # directory used to look exactly like successful checkpointing. Still
+        # non-fatal — the loop continues; a crash resumes from the last
+        # checkpoint that DID land, and if none did this run is not
+        # resumable.
+        log.warning("checkpoint write failed for %s at %s (non-fatal; a crash resumes "
+                    "from the last successful checkpoint, if any — otherwise this run "
+                    "is not resumable): %s", loop_id, _target, exc)
 
 
 def _load_from(path: Path, loop_id: Optional[str] = None) -> Optional[Checkpoint]:
@@ -556,6 +576,8 @@ def _load_from(path: Path, loop_id: Optional[str] = None) -> Optional[Checkpoint
         data = json.loads(path.read_text(encoding="utf-8"))
         ckpt = Checkpoint.from_dict(data)
         if loop_id is not None and ckpt.loop_id != loop_id:
+            log.warning("checkpoint %s names loop %s, not the requested %s — ignored",
+                        path, ckpt.loop_id, loop_id)
             return None
         return ckpt
     except FileNotFoundError:
@@ -581,7 +603,10 @@ def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
 
     found = _find_checkpoint_path(loop_id)
     if found is not None:
-        ckpt = _load_from(found)
+        # The requested id is checked against the file's own loop_id
+        # (chunk-3 r2 finding 2): a `ckpt_<id>.json` whose body names a
+        # different loop must not resume that other loop's plan.
+        ckpt = _load_from(found, loop_id)
         if ckpt is not None:
             return ckpt
 
@@ -615,7 +640,6 @@ def mark_checkpoint_consumed(loop_id: str, *, resumed_to_loop_id: str) -> bool:
             return False
         data["consumed_at"] = datetime.now(timezone.utc).isoformat()
         data["resumed_to_loop_id"] = resumed_to_loop_id
-        from file_lock import atomic_write
         atomic_write(path, json.dumps(data, indent=2))
         return True
     except Exception as exc:
@@ -793,7 +817,7 @@ def branch_checkpoint(loop_id: str) -> Optional[str]:
         positioned=ckpt.positioned,
     )
     path = _checkpoint_path(new_loop_id)
-    path.write_text(json.dumps(branch.to_dict(), indent=2), encoding="utf-8")
+    atomic_write(path, json.dumps(branch.to_dict(), indent=2))
     log.info("branch_checkpoint: %s -> %s (%d/%d steps done carried over, %d rows)",
              loop_id, new_loop_id, branch.done_count, len(branch.steps), len(branch.completed))
     return new_loop_id

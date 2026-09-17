@@ -10,6 +10,30 @@ Rotation policy (2026-08-16): when this file outgrows whole-file readability (25
 
 ---
 
+## Checkpoint write torn-file window + fail-open resume — FIXED 2026-09-16 (LoopsBench chunk 3)
+
+**Found:** chunk-1 QA round (write in place → a kill mid-write left a torn
+file the resume path read as "no checkpoint"); chunk-2 / chunk-3 reviews
+(an explicit resume of an unreadable or unrestorable checkpoint silently
+started fresh = replayed every step's side effects).
+
+**Fix:** `write_checkpoint` and `branch_checkpoint` write through
+`file_lock.atomic_write` (mkstemp beside the target + fsync + os.replace;
+process-kill safe, not power-loss durable, needs a writable parent dir; a
+failed write is now a WARNING, still non-fatal). `loop_planning` fails an
+explicit resume CLOSED (early-return `stuck` with the path) when the
+checkpoint file exists but cannot be read, or loaded but its restore raised;
+an absent checkpoint still starts fresh. Two Skeptic rounds (r2: fallback-file loop-id mismatch now refused, lookup errors refuse, refusal stamps a stop verdict + trace edge, warning names the path; structural leads → BACKLOG); tests in
+`tests/test_checkpoint_atomic.py` (no temp files; simulated crash before the
+rename keeps the previous checkpoint byte-identical with a negative control
+on the attempted rename; mechanism pin on both writers; torn-file resume →
+stuck with no step executed; absent → fresh; restore-raises → stuck).
+
+**Residue → BACKLOG:** consumption racing a late writer; DAG/fan-out lane
+writes no checkpoint (the sequential batch branch is unreachable); durable
+plan-node ids.
+
+
 ## Checkpoint resume never skipped completed rows — FIXED 2026-09-16 (LoopsBench chunk 2)
 
 **Found:** round-2 Skeptic of the LoopsBench chunk-1 diff

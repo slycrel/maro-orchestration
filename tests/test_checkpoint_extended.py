@@ -147,14 +147,15 @@ class TestBranchCheckpoint(unittest.TestCase):
         def mock_load(loop_id):
             return source_ckpt if loop_id == source_ckpt.loop_id else None
 
-        def mock_write(text, **_):
+        def mock_write(path, text, **_):
             saved["data"] = json.loads(text)
 
+        # branch_checkpoint writes through file_lock.atomic_write (crash-safe
+        # rename), not Path.write_text — capture at that seam.
         with patch("checkpoint.load_checkpoint", side_effect=mock_load):
-            with patch("checkpoint._checkpoint_path") as mock_path:
-                mock_file = mock_path.return_value
-                mock_file.write_text.side_effect = mock_write
-                new_id = branch_checkpoint(source_ckpt.loop_id)
+            with patch("checkpoint._checkpoint_path"):
+                with patch("checkpoint.atomic_write", side_effect=mock_write):
+                    new_id = branch_checkpoint(source_ckpt.loop_id)
 
         return new_id, saved.get("data", {})
 
