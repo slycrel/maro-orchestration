@@ -316,6 +316,17 @@ def _fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
+# The literal states that survive a round trip: the two owed states and
+# "attempt" (a row that is not a verdict, r3). Everything else reads applied.
+_PERSISTED_MARK_STATES = frozenset({"pending", "drifted", "attempt"})
+
+
+def _mark_state(value: Any) -> str:
+    """A persisted `item_mark`: only the literal non-default states survive
+    a round trip; everything else (absent, bool, other strings) is "applied"."""
+    return str(value) if isinstance(value, str) and value in _PERSISTED_MARK_STATES else "applied"
+
+
 def _coerce_row(c: Dict[str, Any], n_steps: int) -> Optional["CompletedStep"]:
     """Build a CompletedStep from a persisted dict, tolerating hand edits
     and older shapes: `index` defaults to -1, `position` to 0, and a
@@ -330,6 +341,7 @@ def _coerce_row(c: Dict[str, Any], n_steps: int) -> Optional["CompletedStep"]:
     row["position"] = pos if 0 < pos <= n_steps else 0
     row["text"] = str(row.get("text", "") or "")
     row["status"] = str(row.get("status", "") or "")
+    row["item_mark"] = _mark_state(row.get("item_mark"))
     try:
         return CompletedStep(**row)
     except TypeError:
@@ -356,6 +368,15 @@ class CompletedStep:
     provider_cost_usd: float = 0.0
     executor_session_id: str = ""
     executor_session_resumed: bool = False
+    # NEXT.md mirror state (chunk 8): "applied" (nothing owed), "pending"
+    # (the row's terminal state was never applied to its item — settled by
+    # the writer's later snapshots or by a resume,
+    # `loop_planning.settle_item_marks`), "drifted" (owed, but the item no
+    # longer names this row — surfaced, never retried). Only the literal
+    # strings "pending" / "drifted" are owed states: a missing field
+    # (older file), a boolean or any other value reads "applied" — a
+    # checkpoint cannot manufacture a mark obligation out of a hand edit.
+    item_mark: str = "applied"
 
 
 @dataclass
@@ -732,6 +753,7 @@ def write_checkpoint(
                 executor_session_id=str(getattr(s, "executor_session_id", "") or ""),
                 executor_session_resumed=bool(
                     getattr(s, "executor_session_resumed", False)),
+                item_mark=_mark_state(getattr(s, "item_mark", None)),
             )
             for i, s in enumerate(step_outcomes)
         ]
@@ -1412,6 +1434,10 @@ def export_human(loop_id: str) -> Optional[str]:
         if cs is not None:
             icon = "✓" if cs.status == "done" else "✗"
             status_label = cs.status
+            if cs.item_mark == "pending":
+                status_label += " (NEXT.md mark pending)"
+            elif cs.item_mark == "drifted":
+                status_label += " (NEXT.md mark not applied — the item no longer names this step)"
         else:
             icon = "·"
             status_label = "pending"

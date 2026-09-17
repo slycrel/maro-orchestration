@@ -17,6 +17,10 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from loop_types import (
+    MARK_APPLIED,
+    MARK_ATTEMPT,
+    MARK_DRIFTED,
+    MARK_PENDING,
     _orch,
     _project_dir_root,
     LoopContext,
@@ -232,6 +236,107 @@ def _items_name_these_steps(project: str, items: List[int], texts: List[str]) ->
             # identity — ambiguous reads as no.
             return False
     return True
+
+
+_RESUME_NOTE_RE = _re.compile(r"^(?:\[resume note:.*?\]\s*)+", _re.DOTALL)
+
+
+def item_mark_state(status: str) -> str:
+    """The NEXT.md state a terminal row's item carries: blocked → `!`,
+    done / skipped → `x` (the parallel lane's rule; `skipped` finishes its
+    position). Empty for a non-terminal status (nothing to mark)."""
+    o = _orch()
+    if status == "blocked":
+        return o.STATE_BLOCKED
+    if status in ("done", "skipped"):
+        return o.STATE_DONE
+    return ""
+
+
+def settle_item_marks(project: str, rows: List[Any], *, loop_id: str = "",
+                      source: str = "") -> int:
+    """Apply the NEXT.md marks that rows still owe (`item_mark` PENDING).
+
+    The checkpoint is the authoritative execution record and NEXT.md its
+    mirror (chunk-5 r2 lead, 2026-09-17): a mark that failed at step time
+    used to be retried only by the parallel lane's next snapshot, and
+    nothing durable recorded it — a crash in between left the checkpoint
+    saying done while NEXT.md said TODO, and NEXT.md-driven work could
+    execute the item again. The state now travels with the row; this is
+    the ONE settler every lane and the resume call.
+
+    Every mark here is a compare-and-mark (`mark_item(expected_text=)`,
+    checked under the ledger lock): an item index is a line number, and
+    time has passed since the row was produced. Outcomes, per row:
+      - marked → APPLIED (the debt is paid);
+      - `ItemIdentityError` (item gone, names another text, or the text is
+        duplicated) → DRIFTED: surfaced (WARNING + a DECISIONS.md line,
+        best effort) and never retried — a blind mark would land on
+        another item's line, the unsafe direction; the checkpoint keeps
+        the owed state visible;
+      - any other exception (ledger locked, unreadable, project dir
+        missing) → stays PENDING, retried at the next call.
+    A leading `[resume note: …]` prefix (one or more) on the row's text is
+    ignored when comparing (`orch_items.normalize_item_text` handles the
+    rest). An item's obligation is its LATEST row: an earlier pending row
+    for the same item is superseded and owes nothing (r2 finding 1: it
+    re-marked a later done item blocked) — but only a VERDICT row
+    supersedes: an ATTEMPT row (a blocked retry's record, `MARK_ATTEMPT`)
+    is skipped when finding the latest (r3 finding 1: a carried pending
+    row followed by a fresh attempt lost its debt without a mark).
+    Returns the number of rows marked.
+    """
+    settled = 0
+    if not project:
+        return 0
+    from checkpoint import _as_int
+    from orch_items import ItemIdentityError
+    o = _orch()
+    _latest: Dict[int, int] = {}
+    for _pos, row in enumerate(rows):
+        if getattr(row, "item_mark", MARK_APPLIED) == MARK_ATTEMPT:
+            continue        # not a verdict: supersedes nothing (r3 finding 1)
+        _it = _as_int(getattr(row, "index", -1), -1)
+        if _it >= 0:
+            _latest[_it] = _pos
+    for _pos, row in enumerate(rows):
+        if getattr(row, "item_mark", MARK_APPLIED) != MARK_PENDING:
+            continue
+        item = _as_int(getattr(row, "index", -1), -1)
+        want = item_mark_state(str(getattr(row, "status", "") or ""))
+        if item < 0 or not want:
+            continue
+        if _latest.get(item) != _pos:
+            row.item_mark = MARK_APPLIED
+            log.debug("NEXT.md mark for %s#%d owed by a superseded attempt row — dropped "
+                      "(the item's latest row carries the obligation)", project, item)
+            continue
+        _text = _RESUME_NOTE_RE.sub("", str(getattr(row, "text", "") or ""), count=1)
+        try:
+            o.mark_item(project, item, want, expected_text=_text)
+        except ItemIdentityError as _id_exc:
+            row.item_mark = MARK_DRIFTED
+            log.warning("NEXT.md item %s#%d no longer names step %r (%s) — its %r mark "
+                        "owed by %s was NOT applied; mark it by hand", project, item,
+                        _text[:80], _id_exc, want, source or loop_id or "this run")
+            try:
+                o.append_decision(project, [
+                    f"[loop:{loop_id}] NEXT.md item {item} no longer names "
+                    f"{_text[:80]!r} ({_id_exc}) — its {want!r} mark"
+                    + (f" owed by {source}" if source else "")
+                    + " was not applied; mark it by hand"])
+            except Exception as _dec_exc:
+                log.debug("mark-debt decision line failed: %s", _dec_exc)
+            continue
+        except Exception as _mk_exc:
+            log.warning("mark_item(%s) still failing for %s#%d (retried at the next "
+                        "snapshot): %s", want, project, item, _mk_exc)
+            continue
+        row.item_mark = MARK_APPLIED
+        settled += 1
+        log.info("NEXT.md mark settled: %s#%d → %r%s", project, item, want,
+                 f" (owed by {source})" if source else "")
+    return settled
 
 
 def _load_resume(ctx: LoopContext, resume_from_loop_id: str, *,
@@ -534,7 +639,40 @@ def _preflight_checks(
                         # falls back to its approximate mode instead of showing
                         # a resumed step as if it just finished.
                         ended_ts="",
+                        item_mark=getattr(_cs, "item_mark", None),
                     ))
+                # Marks the source still owes (chunk 8): settle them from
+                # the checkpoint BEFORE anything executes, when the carried
+                # rows belong to this project (the loader refuses a
+                # mismatch; a directly built RestoredCheckpoint is not
+                # trusted here either — same rule as `_mirror_plan_items`;
+                # its rows keep their owed state and every later retry is
+                # a compare-and-mark, so a foreign row can only ever mark
+                # an item carrying exactly its own text).
+                if any(_r.item_mark == MARK_PENDING for _r in resume_completed):
+                    if (resume.project or "") == (ctx.project or ""):
+                        try:
+                            settle_item_marks(ctx.project or "", resume_completed,
+                                              loop_id=ctx.loop_id, source=resume_from_loop_id)
+                        except Exception as _settle_exc:
+                            # The owed state stays on the rows (retried at
+                            # the successor's snapshots); never a refusal.
+                            log.warning("checkpoint resume: NEXT.md mark settlement failed "
+                                        "(%s) — owed marks kept on the carried rows",
+                                        _settle_exc)
+                    else:
+                        # Their items live in another project's ledger: no
+                        # settler here may touch them (r2 finding 6: a
+                        # same-text item at the same line in THIS project
+                        # would have been marked). Surfaced as drifted —
+                        # owed, durable, never retried.
+                        for _r in resume_completed:
+                            if _r.item_mark == MARK_PENDING:
+                                _r.item_mark = MARK_DRIFTED
+                        log.warning("checkpoint resume: carried rows of %s belong to project "
+                                    "%r, this run is %r — their owed NEXT.md marks are "
+                                    "recorded drifted, not applied here",
+                                    resume_from_loop_id, resume.project, ctx.project)
                 # Phase B ran on these texts (preset from the restore);
                 # re-take the exact list — the in-flight note below edits
                 # a copy, never `resume.steps` (which `_load_resume`

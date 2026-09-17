@@ -85,7 +85,11 @@ _add("derived-index", """
  memory_sqlite.py:_catch_up
  memory_ledger.py:_update_memory_index loop_report.py:_render_devlog_html
  portability.py:main""")
+# 2026-09-17 (LoopsBench chunk 8): `normalize_item_text` is a pure predicate —
+# the identity form of a NEXT.md item text (first non-blank line, tag and
+# whitespace collapsed) that compare-and-mark compares; nothing is written.
 _add("read-only", """
+ orch_items.py:normalize_item_text
  metrics.py:_reverse_readline convo_miner.py:scan_session_logs
  secrets_store.py:recipient secrets_store.py:recipients
  correspondence.py:render_transcript

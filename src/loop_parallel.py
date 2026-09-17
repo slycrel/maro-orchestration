@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COM
 from typing import Any, Dict, List, Optional
 
 from loop_types import (
+    MARK_APPLIED,
+    MARK_PENDING,
     LoopContext,
     LoopResult,
     StepOutcome,
@@ -251,7 +253,10 @@ def _run_parallel_batch(
                 try:
                     _o = _orch()
                     _o.mark_item(ctx.project, _b_item_idx, _o.STATE_DONE)
+                    step_outcomes[-1].item_mark = MARK_APPLIED
                 except Exception as _mark_exc:
+                    # The row stays pending (chunk 8): the next snapshot's
+                    # settler applies the mark.
                     log.debug("parallel batch mark_item failed: %s", _mark_exc)
             _b_result = _batch_oc.get("result", "")
             _b_excerpt = _b_result[:800] if _b_result else ""
@@ -356,9 +361,12 @@ def _normalize_outcome(oc: Any, position: int) -> dict:
     return fixed
 
 
-def _fanout_row(step_text: str, item: int, position: int, oc: dict) -> StepOutcome:
+def _fanout_row(step_text: str, item: int, position: int, oc: dict, *,
+                item_mark: Optional[str] = None) -> StepOutcome:
     """One returned/checkpointed row for a fan-out / DAG outcome dict.
-    `item` is the NEXT.md item (or the position for direct callers)."""
+    `item` is the NEXT.md item (or the position for direct callers).
+    `item_mark`: the lane's mirror state for the row (chunk 8) — None
+    means "not recorded" (a terminal row on a real item is born pending)."""
     return step_from_decompose(
         step_text, item,
         status=oc.get("status", "blocked"),
@@ -374,6 +382,7 @@ def _fanout_row(step_text: str, item: int, position: int, oc: dict) -> StepOutco
         confidence=oc.get("confidence", "unverified"),
         injected_steps=oc.get("inject_steps", []),
         call_record=oc.get("call_record", ""),
+        item_mark=item_mark,
         # 2026-07-08 adversarial review (finding #2): no elapsed_ms is
         # tracked per fan-out worker at all here (defaults to 0) — ended_ts=""
         # keeps the run-visibility report's timeline in its approximate
@@ -477,6 +486,19 @@ def _run_parallel_path(
             return
         _marked[k] = _want
 
+    def _row_mark(k: int, st: str) -> str:
+        """The mirror state a row for node k carries (chunk 8): applied
+        ⇔ `_mark_node` recorded this very state (a provisional blocked row
+        later moved to done owes `x` until the move is applied). Direct
+        callers (no items) have nothing to mirror. ONE rule for the
+        checkpoint rows and the returned rows (r1: the result rows were
+        built with the default and disagreed with the file)."""
+        if _items is None:
+            return MARK_APPLIED
+        from loop_planning import item_mark_state
+        _want = item_mark_state(st) if st in _TERMINAL_STATUSES else ""
+        return MARK_APPLIED if (not _want or _marked.get(k) == _want) else MARK_PENDING
+
     def _node_effects(k: int, oc: dict) -> None:
         """Once per node whose outcome is done: decisions, world facts and
         regression obligations (the sequential lane's post-step effects),
@@ -541,10 +563,18 @@ def _run_parallel_path(
                 return
             for _k in keys:
                 _mark_node(_k, str(normal[_k].get("status", "blocked")))
+            # Marks the carried rows still owe (a resume whose settlement
+            # failed) are retried here too; the lane's own nodes are
+            # `_mark_node`'s.
+            if any(getattr(_r, "item_mark", MARK_APPLIED) == MARK_PENDING for _r in _carried):
+                from loop_planning import settle_item_marks as _settle_marks
+                _settle_marks(ctx.project or "", _carried)
             from checkpoint import write_checkpoint as _lane_ckpt
             rows = list(_carried)
             for _k in keys:
-                rows.append(_fanout_row(_lane_texts[_k - 1], _items[_k - 1], _k, normal[_k]))
+                _st = str(normal[_k].get("status", "blocked"))
+                rows.append(_fanout_row(_lane_texts[_k - 1], _items[_k - 1], _k, normal[_k],
+                                        item_mark=_row_mark(_k, _st)))
             _lane_ckpt(
                 ctx.loop_id, ctx.goal, ctx.project or "", list(_lane_texts), rows,
                 world_facts=ctx.world_facts.to_list(),
@@ -634,7 +664,8 @@ def _run_parallel_path(
             )
         except Exception as _cost_exc:
             log.debug("fan-out record_step_cost failed (non-critical): %s", _cost_exc)
-        _fanout_step_outcomes.append(_fanout_row(_step_text, _item, _i, _oc))
+        _fanout_step_outcomes.append(_fanout_row(_step_text, _item, _i, _oc,
+                                                 item_mark=_row_mark(_i, _st)))
         _fanout_tokens_in += _oc.get("tokens_in", 0)
         _fanout_tokens_out += _oc.get("tokens_out", 0)
         if _st == "blocked":
@@ -658,8 +689,14 @@ def _run_parallel_path(
             except Exception as _cb_exc:
                 log.debug("step_callback raised on parallel step %d: %s", _i, _cb_exc)
     # Final write: every row as returned (fill rows included), so the
-    # checkpoint and the LoopResult agree.
+    # checkpoint and the LoopResult agree — including the mirror state
+    # after this pass's own mark retry (r2 finding 4: a retry that
+    # succeeded only here left the returned rows saying pending).
     _write_progress({_k: _oc for _k, _oc in enumerate(_fanout_outcomes, 1)})
+    # This hop's rows only: the carried prefix is not indexed by node (r3
+    # finding 2: refreshing it from node 1 read another node's mark).
+    for _i, _row in enumerate(_fanout_step_outcomes[len(_carried):], 1):
+        _row.item_mark = _row_mark(_i, str(getattr(_row, "status", "") or ""))
     elapsed = int((time.monotonic() - ctx.started_at) * 1000)
     return LoopResult(
         loop_id=ctx.loop_id,

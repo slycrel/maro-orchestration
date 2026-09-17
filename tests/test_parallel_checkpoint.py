@@ -226,7 +226,7 @@ def _path_env(monkeypatch, tmp_path, dag_impl, *, items=None, project="proj", ma
     if marks is not None:
         import orch
 
-        def _mark(project_, item, state):
+        def _mark(project_, item, state, **kw):     # chunk 8: compare-and-mark passes expected_text
             marks.append((item, state))
             if isinstance(marks, _FailFirst) and marks.fail_once:
                 marks.fail_once = False

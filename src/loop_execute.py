@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loop_types import (
+    MARK_APPLIED,
+    MARK_ATTEMPT,
+    MARK_PENDING,
     ContextContribution,
     LoopContext,
     StepOutcome,
@@ -321,6 +324,9 @@ def _execute_main_loop(
     _consecutive_max_timeouts = 0  # ceiling-hit timeouts across different steps — adapter health signal
     _MAX_CONSECUTIVE_TIMEOUTS = 3  # bail out if adapter appears hung, not just steps being too large
     iteration = 0
+    # Rows the last checkpoint write covered (chunk 8 r3): the loop-exit
+    # flush below writes once more when rows were appended after it.
+    _rows_snapshotted = 0
     loop_status = "done"
     stuck_reason = None
     completed_context: List[str] = []
@@ -673,9 +679,10 @@ def _execute_main_loop(
                 if item_index >= 0:
                     try:
                         o.mark_item(project, item_index, o.STATE_BLOCKED)
+                        step_outcomes[-1].item_mark = MARK_APPLIED
                     except OSError as _gm_exc:
-                        log.warning("mark_item(BLOCKED) failed for gated %s#%d: %s",
-                                    project, item_index, _gm_exc)
+                        log.warning("mark_item(BLOCKED) failed for gated %s#%d (the row "
+                                    "keeps the mark owed): %s", project, item_index, _gm_exc)
                 try:
                     from run_trace import record_edge as _gate_edge
                     _gate_edge("exec.step", "exec.gate", loop_id=ctx.loop_id,
@@ -704,6 +711,7 @@ def _execute_main_loop(
                                step_indices=step_indices,
                                plan_items=getattr(ctx, "plan_items", None),
                                parallel_fan_out=getattr(ctx, "parallel_fan_out", 0))
+                    _rows_snapshotted = len(step_outcomes)
                 except Exception as _gk_exc:
                     log.warning("gated-step checkpoint write failed: %s", _gk_exc)
                 continue
@@ -1905,6 +1913,7 @@ def _execute_main_loop(
                 step_outcomes.append(step_from_decompose(
                     step_text, item_index,
                     status="blocked",
+                    item_mark=MARK_ATTEMPT,   # an attempt row, not the item's verdict (chunk 8 r2/r3)
                     result=step_result,
                     iteration=iteration,
                     tokens_in=outcome.get("tokens_in", 0),
@@ -2176,8 +2185,10 @@ def _execute_main_loop(
             if item_index >= 0:
                 try:
                     o.mark_item(project, item_index, o.STATE_BLOCKED)
+                    step_outcomes[-1].item_mark = MARK_APPLIED
                 except OSError as _mark_exc:  # FileLockTimeout: ledger contended — the run result matters more than the checkbox
-                    log.warning("mark_item(BLOCKED) failed for %s#%d: %s", project, item_index, _mark_exc)
+                    log.warning("mark_item(BLOCKED) failed for %s#%d (the row keeps the "
+                                "mark owed): %s", project, item_index, _mark_exc)
             o.append_decision(project, [f"[loop:{loop_id}] stuck on step {step_idx}: {stuck_reason}"])
             break
 
@@ -2293,6 +2304,11 @@ def _execute_main_loop(
             tier_escalated_from=_step_tier_from,
             venue=_step_venue,
             artifact_check=outcome.get("artifact_check", ""),
+            # The mirror state `_process_done_step` recorded (chunk 8); a
+            # blocked row that reaches here (the "normal" blocked flow)
+            # records none and is born pending — the next snapshot's
+            # settler applies or re-applies its mark.
+            item_mark=outcome.get("item_mark"),
         ))
 
         # Regression obligations (regression_ledger.py, 2026-09-16): a step
@@ -2326,6 +2342,7 @@ def _execute_main_loop(
             update_dead_ends_fn=_update_dead_ends if _dead_ends_available else None,
             executor_session=_executor_session,
         )
+        _rows_snapshotted = len(step_outcomes)
         if _mon_alert:
             _march_of_nines_alert = True
 
@@ -2746,6 +2763,36 @@ def _execute_main_loop(
             # Restart break — outside the try/except, mirroring _ae2
             if loop_status == "restart":
                 break
+
+    # Rows a `continue` appended after the last snapshot (a skipped
+    # milestone step as the final step) never reached the end-of-iteration
+    # artifacts (chunk 8 r2 finding 2): settle the marks still owed and
+    # write the rows once more, so the checkpoint and the mirror hold every
+    # row the run returns. Only when something is owed OR a row was
+    # appended after the last snapshot (r3 finding 1: a retry attempt cut
+    # short by max_iterations owes nothing, so the debt predicate alone
+    # left it out of the checkpoint) — otherwise the last iteration's
+    # snapshot already wrote everything.
+    if (any(getattr(_r, "item_mark", "") == MARK_PENDING for _r in step_outcomes)
+            or len(step_outcomes) > _rows_snapshotted):
+        try:
+            from loop_planning import settle_item_marks as _final_settle
+            _final_settle(ctx.project or "", step_outcomes)
+        except Exception as _fs_exc:
+            log.warning("final NEXT.md mark settlement failed for loop %s: %s", ctx.loop_id, _fs_exc)
+        try:
+            from checkpoint import write_checkpoint as _final_ckpt
+            _final_ckpt(
+                ctx.loop_id, ctx.goal, ctx.project or "", steps, step_outcomes,
+                executor_session=_executor_session,
+                world_facts=ctx.world_facts.to_list(),
+                regression=ctx.regression.to_list(),
+                step_indices=list(getattr(ctx, "step_indices", []) or []),
+                plan_items=getattr(ctx, "plan_items", None),
+                parallel_fan_out=getattr(ctx, "parallel_fan_out", 0),
+            )
+        except Exception as _fc_exc:
+            log.warning("final checkpoint write failed for loop %s: %s", ctx.loop_id, _fc_exc)
 
     # Belt-and-braces (adversarial review 2026-07-15): the merge-point drain
     # only runs when another step executes, so anything still pending when

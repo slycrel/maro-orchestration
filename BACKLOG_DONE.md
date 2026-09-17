@@ -1,5 +1,86 @@
 # Backlog — Completed Archive
 
+## A NEXT.md mark a row still owes is durable state, settled from the checkpoint — SHIPPED 2026-09-17 (LoopsBench chunk 8)
+
+**Found:** chunk-5 r2 lead: a `mark_item` that failed at step time (NEXT.md
+locked) was retried only by the parallel lane's next snapshot and never by
+the sequential lane, and nothing durable recorded it — a crash in between
+left the checkpoint saying done while NEXT.md said TODO, so NEXT.md-driven
+work (heartbeat drain, a later run over the project) could execute the item
+again. Review r1 widened the class: producers that never marked (the
+milestone-advisor `skipped` row), marked and swallowed the failure (the
+parallel-batch branch) or could not record the result (the blocked
+"advance" flow) all reported the mirror as up to date by default; the first
+cut's verify-then-mark read the ledger outside the lock the rewrite took
+(a check that proved nothing), and read an unreadable ledger as drift.
+
+**Doctrine:** the checkpoint is the authoritative execution record and
+NEXT.md its mirror; the mirror catches up FROM the record, never the other
+way round; a mirror whose identity drifted (ledger edited) is surfaced, not
+blindly marked.
+
+**Shipped:**
+- `StepOutcome.item_mark` / `CompletedStep.item_mark` ∈ {`applied`,
+  `pending`, `drifted`, `attempt`} (loop_types, checkpoint). A terminal row (done /
+  blocked / skipped) on a real item is BORN `pending` unless its producer
+  records the applied mark (`_process_done_step`, the terminal blocked
+  mark in `loop_blocked`, the gate / stuck / batch sites) — a producer
+  that records nothing yields one redundant idempotent mark, never a lie;
+  attempt rows (retry / re-decompose / split / stuck-advisor) are born
+  `attempt` — not the item's verdict: they owe nothing AND supersede
+  nothing (r3: born `applied` they counted as the item's latest row and
+  erased a carried pending row's debt without a mark). On load only the
+  literal strings `pending` / `drifted` / `attempt` survive (absent, bool,
+  anything else → `applied`). `export_human` renders both owed states.
+- ONE settler, `loop_planning.settle_item_marks`: blocked → `!`, done /
+  skipped → `x`; the LATEST VERDICT row per item carries the obligation
+  (an earlier pending row is superseded; `attempt` rows are skipped when
+  finding the latest). Every settlement is a
+  COMPARE-AND-MARK: `orch_items.mark_item(expected_text=)` checks under
+  the ledger lock that the item exists, still names this text
+  (`normalize_item_text`: first physical line, `[boundary]` removed,
+  whitespace collapsed; the settler strips `[resume note: …]` prefixes
+  first) and that the text is unique — `ItemIdentityError` (a ValueError)
+  otherwise, nothing written. Identity failure → `drifted` (WARNING +
+  DECISIONS.md line, never retried); any other failure → stays `pending`.
+- Retry / settle sites: before every sequential snapshot
+  (`_write_iteration_artifacts`), at every parallel snapshot for carried
+  rows (the lane's own nodes are `_mark_node`'s, and their rows carry
+  `_row_mark` = applied ⇔ the lane recorded that very state, in the file
+  AND the returned rows, refreshed after the final pass — this hop's rows
+  only, r3: the carried prefix was being re-indexed by node), at loop exit
+  (`_execute_main_loop` settles and writes the checkpoint once more when
+  anything is still owed OR a row was appended after the last snapshot —
+  a `continue` after the last step never reached a snapshot; r3: a retry
+  cut short by `max_iterations` owes nothing and was lost), and by the resume in `_preflight_checks` BEFORE any step
+  executes (foreign carried rows → `drifted`; a settler failure is a
+  warning, never a refusal).
+
+**Review:** r1 Skeptic+Architect (10 findings: 4 HIGH — parallel result
+rows disagreed with the file; unreadable ledger read as drift; verify-then-
+mark race; producers born "applied" — all fixed as ONE design change:
+tri-state + compare-and-mark + born-pending) → r2 Skeptic on the fix diff
+(6: one REGRESSION — born-pending attempt rows re-marked a finished item
+blocked → attempt rows born applied + latest-row coalescing; skipped last
+step never snapshotted → loop-exit flush; `[boundary]` false drift →
+identity normalization; parallel final-pass retry; terminal blocked mark
+recorded; foreign carried rows drifted) → r3 Skeptic (regression check:
+1 HIGH — attempt rows born `applied` superseded a carried pending row /
+were lost at a max-iteration cut → 4th state `attempt` + verdict-only
+coalescing + exit flush on unsnapshotted rows; 2 MED — parallel final
+refresh re-indexed the carried prefix → fixed; lossy identity
+normalization → residue) → STOP RULE, no round 4. Suite 83 green.
+
+**Residue (BACKLOG, under the chunk-5 lead):** lossy identity
+normalization (shared first line / `[boundary]` twin → false `drifted`);
+max-iteration termination reaches no verdict (NEXT.md keeps DOING); the
+milestone-advisor REPHRASE (c) executes a text the ledger never held;
+step-time marks still trust the item index; the dead parallel-batch
+branch; `append_next_items` multi-line numbering; the stuck path's
+post-break checkpoint.
+
+Tests: tests/test_item_mark_debt.py (34) + tests/test_parallel_checkpoint.py.
+
 ## A resume claims its source checkpoint before it executes — SHIPPED 2026-09-17 (LoopsBench chunk 7)
 
 **Found:** chunk-6 r3 finding 2: after a `done` resume whose consumption

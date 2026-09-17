@@ -108,6 +108,36 @@ def _project_dir_root():
 # Data types
 # ---------------------------------------------------------------------------
 
+# NEXT.md mirror states of a terminal row (chunk 8) — see StepOutcome.item_mark
+MARK_APPLIED = "applied"
+MARK_PENDING = "pending"
+MARK_DRIFTED = "drifted"
+# An attempt row (a blocked retry / re-decompose / split / stuck-advisor
+# record): not the item's verdict — it owes nothing AND supersedes nothing
+# (r3: born "applied" it counted as the item's latest row and erased the
+# debt a carried pending row still owed).
+MARK_ATTEMPT = "attempt"
+MARK_STATES = frozenset({MARK_APPLIED, MARK_PENDING, MARK_DRIFTED, MARK_ATTEMPT})
+# Row statuses that have a NEXT.md state to apply (checkpoint: done and
+# skipped finish a position; blocked is marked `!`).
+MARK_TERMINAL_STATUSES = frozenset({"done", "blocked", "skipped"})
+
+
+def resolve_item_mark(value: Any, *, index: Any, status: Any) -> str:
+    """The mirror state a row is born with. An explicit known state passes
+    through; None means "not recorded": PENDING for a terminal row on a
+    real item (the settler applies the mark), APPLIED otherwise (nothing
+    to mirror). Any other value reads APPLIED — a state is never
+    manufactured from garbage."""
+    if value in MARK_STATES:
+        return str(value)
+    if value is None:
+        _real_item = isinstance(index, int) and not isinstance(index, bool) and index >= 0
+        if _real_item and status in MARK_TERMINAL_STATUSES:
+            return MARK_PENDING
+    return MARK_APPLIED
+
+
 @dataclass
 class StepOutcome:
     index: int
@@ -155,6 +185,20 @@ class StepOutcome:
                                  # measurable from run records (2026-08-06
                                  # readout: the judged bit lived only in a
                                  # log.info and history was unmeasurable).
+    # NEXT.md mirror state (2026-09-17, LoopsBench chunk 8): the checkpoint
+    # is the authoritative execution record and NEXT.md its mirror, so the
+    # mirror's state travels with the row and the mirror catches up FROM
+    # the record (`loop_planning.settle_item_marks`) at the next snapshot
+    # or, after a crash, by the resume. MARK_APPLIED = nothing owed (the
+    # mark was applied, or there is no item / the row is not terminal);
+    # MARK_PENDING = owed, retried; MARK_DRIFTED = owed but the item no
+    # longer names this row (ledger edited) — surfaced, never retried;
+    # MARK_ATTEMPT = not a verdict (a retry attempt's record): owes nothing
+    # and never supersedes an earlier row's obligation (r3). A
+    # terminal row on a real item is born PENDING unless its producer
+    # records the applied mark (r1: producers that never marked, or marked
+    # and swallowed the failure, reported "applied" by default).
+    item_mark: str = "applied"
 
 
 def step_from_decompose(
@@ -181,6 +225,7 @@ def step_from_decompose(
     tier_escalated_from: str = "",
     venue: str = "",
     artifact_check: str = "",
+    item_mark: Optional[str] = None,
 ) -> StepOutcome:
     """Factory for StepOutcome — centralises defaults so inline construction sites stay DRY.
 
@@ -220,6 +265,7 @@ def step_from_decompose(
         tier_escalated_from=tier_escalated_from,
         venue=venue,
         artifact_check=artifact_check,
+        item_mark=resolve_item_mark(item_mark, index=index, status=status),
     )
 
 

@@ -21,7 +21,8 @@ from typing import Any, Dict, List, Optional
 
 from ancestry import Origin
 from stop_verdicts import PAUSE_OP_MANUAL
-from loop_types import LoopContext, StepOutcome, _orch, MAX_RESTART_DEPTH
+from loop_types import (LoopContext, StepOutcome, _orch, MAX_RESTART_DEPTH,
+                        MARK_APPLIED, MARK_PENDING)
 from loop_artifacts import _write_plan_manifest
 from loop_planning import _shape_steps
 from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
@@ -224,6 +225,16 @@ def _write_iteration_artifacts(
     Returns True if march_of_nines_alert was triggered.
     """
     o = _orch()
+
+    # NEXT.md marks earlier rows still owe (a failed mark_item, or a
+    # producer that records none) are applied before every snapshot, so
+    # the file records the mirror's true state (chunk 8; the parallel
+    # lane retries the same way).
+    try:
+        from loop_planning import settle_item_marks as _settle_marks
+        _settle_marks(ctx.project or "", step_outcomes)
+    except Exception as _settle_exc:
+        log.warning("NEXT.md mark settlement failed for loop %s: %s", ctx.loop_id, _settle_exc)
 
     # Checkpoint
     try:
@@ -964,10 +975,17 @@ def _process_done_step(
     """
     o = _orch()
     if item_index >= 0:
+        # The row built from this outcome carries the mirror state (chunk
+        # 8): applied here, or pending — settled at the next snapshot or,
+        # after a crash, by the resume.
         try:
             o.mark_item(ctx.project, item_index, o.STATE_DONE)
+            outcome["item_mark"] = MARK_APPLIED
         except OSError as _mark_exc:  # FileLockTimeout: ledger contended — the run result matters more than the checkbox
-            log.warning("mark_item(DONE) failed for %s#%d: %s", ctx.project, item_index, _mark_exc)
+            log.warning("mark_item(DONE) failed for %s#%d (recorded as an owed mark on the "
+                        "row; settled at the next snapshot or by a resume): %s",
+                        ctx.project, item_index, _mark_exc)
+            outcome["item_mark"] = MARK_PENDING
 
     # Write to scratchpad
     if not isinstance(step_result, str):

@@ -7321,6 +7321,38 @@ NOT closed:
     "item sync pending" record (in the checkpoint row, e.g. `item_marked:
     false`) that resume reconciles by re-marking from the checkpoint — the
     checkpoint is the authoritative execution record, NEXT.md the mirror.
+    **SHIPPED 2026-09-17 (LoopsBench chunk 8, see BACKLOG_DONE):**
+    `item_mark` ∈ {applied, pending, drifted, attempt} on every row; born
+    pending unless the producer records the mark; ONE settler
+    (`loop_planning.settle_item_marks`, latest VERDICT row per item) at
+    every snapshot, at loop exit, and by the resume before any step; every
+    settlement a compare-and-mark under the ledger lock. Residue from its
+    three review rounds (design, not re-raised):
+    - *Identity normalization is lossy* (r3): two multi-line items sharing
+      a first line, or a `[boundary]` item beside its untagged twin, are
+      one identity form → "ambiguous" → a false `drifted` with no ledger
+      edit. Lead: canonicalize the text to one ledger line at
+      `append_next_items` time and treat `[boundary]` as an alias of the
+      untagged text rather than stripping it before the uniqueness check;
+      a stable item id (Jeremy's NEXT.md-ids item) closes it outright.
+    - *Max-iteration termination reaches no verdict* (r3): a retry cut
+      short by `max_iterations` is checkpointed as an `attempt` row (the
+      exit flush now writes rows appended after the last snapshot) but
+      NEXT.md keeps the item DOING — the loop ends without a verdict for
+      it. Lead: append an explicit blocked verdict (owing `!`) at
+      max-iteration termination, or a typed "interrupted" mirror state.
+    - *The milestone-advisor REPHRASE (c) executes a text the ledger never
+      held* — a failed mark there surfaces as `drifted`; a ledger-side
+      rename or a stable id closes it.
+    - *Step-time marks still trust the item index* — only settlements
+      compare-and-mark; the mark at `_process_done_step` / the terminal
+      blocked mark could take `expected_text=` too (same class).
+    - *The sequential parallel-batch branch is dead in production*
+      (carried from chunk 5); *`append_next_items` numbers a multi-line
+      text as ONE item while its second line shifts every later item*
+      (pre-existing, the identity-form test places such an item last);
+      *the stuck path writes no post-break checkpoint* (the exit flush
+      now covers rows it appended, not its NEXT.md state).
   - **Decision-journal rows have no idempotency key** (chunk-5 r3):
     `record_step_decisions` → `record_decision` mints a fresh UUID per call
     and the thread brain is append-only, so any re-run of a step's effects
