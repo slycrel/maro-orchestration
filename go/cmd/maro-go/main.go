@@ -20,6 +20,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/experiment"
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/judgment"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/pack"
 	"github.com/slycrel/maro-orchestration/go/internal/process"
@@ -80,6 +81,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdAnswer(args[1:], stdout, stderr)
 	case "asks":
 		err = cmdAsks(args[1:], stdout, stderr)
+	case "judgment":
+		err = cmdJudgment(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return 2
@@ -92,7 +95,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status | secrets list|check [--json]|get <name> | answer <handle> [--source s] [--backend b] [--model m] <text> | asks [--json]")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--judge-provider llm|jev|hosted|pcd] [--judge-shadow a,b] [--pcd-url u] [--hosted-url u --hosted-model m --hosted-key NAME] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--judge-provider llm|jev|hosted|pcd] [--judge-shadow a,b] [--pcd-url u] [--hosted-url u --hosted-model m --hosted-key NAME] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status | secrets list|check [--json]|get <name> | answer <handle> [--source s] [--backend b] [--model m] <text> | asks [--json] | judgment report [--json]|ask --provider p --state-file f --questions-file q|replay --corpus f --providers llm,jev,hosted,pcd")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -249,6 +252,8 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	var lens, target, why, work, after, contextPath string
 	fresh := false
 	allowTools, denyTools := "", "WebFetch,WebSearch"
+	judgeProvider, judgeShadow, pcdURL := judgment.DefaultProvider, "", judgment.DefaultPCDURL
+	var hosted hostedSpec
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--fresh":
@@ -307,6 +312,36 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			i++
 			if i < len(args) {
 				judgeModel = args[i]
+			}
+		case "--judge-provider":
+			i++
+			if i < len(args) {
+				judgeProvider = args[i]
+			}
+		case "--judge-shadow":
+			i++
+			if i < len(args) {
+				judgeShadow = args[i]
+			}
+		case "--pcd-url":
+			i++
+			if i < len(args) {
+				pcdURL = args[i]
+			}
+		case "--hosted-url":
+			i++
+			if i < len(args) {
+				hosted.url = args[i]
+			}
+		case "--hosted-model":
+			i++
+			if i < len(args) {
+				hosted.model = args[i]
+			}
+		case "--hosted-key":
+			i++
+			if i < len(args) {
+				hosted.keyName = args[i]
 			}
 		case "--ack":
 			policy.Required = spine.UserAcknowledged
@@ -383,7 +418,10 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			}
 			fmt.Fprintf(errw, "follows: run %s (goal %s, root %s)\n", after, lineage.Goal, lineage.Root)
 		}
+		shadow := splitNames(judgeShadow)
+		providers := buildProviders(append(shadow, judgeProvider), pcdURL, hosted)
 		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath,
+			JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: providers,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}
@@ -684,6 +722,8 @@ func cmdLearn(args []string, out io.Writer) error {
 func cmdServe(args []string, out, errw io.Writer) error {
 	model, judgeModel, lens, work := "haiku", "", "", ""
 	allowTools, denyTools := "", "WebFetch,WebSearch"
+	judgeProvider, judgeShadow, pcdURL := judgment.DefaultProvider, "", judgment.DefaultPCDURL
+	var hosted hostedSpec
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--work":
@@ -715,6 +755,36 @@ func cmdServe(args []string, out, errw io.Writer) error {
 			i++
 			if i < len(args) {
 				judgeModel = args[i]
+			}
+		case "--judge-provider":
+			i++
+			if i < len(args) {
+				judgeProvider = args[i]
+			}
+		case "--judge-shadow":
+			i++
+			if i < len(args) {
+				judgeShadow = args[i]
+			}
+		case "--pcd-url":
+			i++
+			if i < len(args) {
+				pcdURL = args[i]
+			}
+		case "--hosted-url":
+			i++
+			if i < len(args) {
+				hosted.url = args[i]
+			}
+		case "--hosted-model":
+			i++
+			if i < len(args) {
+				hosted.model = args[i]
+			}
+		case "--hosted-key":
+			i++
+			if i < len(args) {
+				hosted.keyName = args[i]
 			}
 		}
 	}
@@ -748,7 +818,9 @@ func cmdServe(args []string, out, errw io.Writer) error {
 	frame := spine.DefaultFrame + wireSecrets(b, a, errw)
 	askPath := wireAsk(b, a)
 	frame += "\n\n" + spine.AskInstructions(askPath)
-	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens, Work: work, Frame: frame, AskPath: askPath})
+	shadow := splitNames(judgeShadow)
+	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens, Work: work, Frame: frame, AskPath: askPath,
+		JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: buildProviders(append(shadow, judgeProvider), pcdURL, hosted)})
 	if err != nil {
 		return err
 	}
