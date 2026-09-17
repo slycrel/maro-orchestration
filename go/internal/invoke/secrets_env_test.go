@@ -60,7 +60,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"user=%s 
 func TestSubprocessHandOffFile(t *testing.T) {
 	dir := t.TempDir()
 	echo := writeFake(t, dir, "read-file", `cat >/dev/null
-mode=$(stat -c %a "$MARO_SECRETS_FILE" 2>/dev/null)
+mode=$(stat -c %a "$MARO_SECRETS_FILE" 2>/dev/null || stat -f %Lp "$MARO_SECRETS_FILE" 2>/dev/null)
 line=$(grep '^YAHOO_USER=' "$MARO_SECRETS_FILE" 2>/dev/null)
 printf '{"type":"result","subtype":"success","is_error":false,"result":"env=%s mode=%s line=%s","usage":{"input_tokens":1,"output_tokens":1}}\n' "$YAHOO_USER" "$mode" "$line"
 `)
