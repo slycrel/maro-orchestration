@@ -2850,6 +2850,8 @@ def _cmd_resume(args: argparse.Namespace) -> int:
                     "to execute (nothing ran; if the file changed under the lock, "
                     "re-run; else free the disk / fix permissions and re-run)")
     ckpt = _claimed
+    from checkpoint import permit_of as _permit_of
+    _permit = _permit_of(ckpt)             # the canonical claimed path + nonce (taken now: admission nulls the object's permit)
     _prior_rd = _runs.current_run_dir()
     _rd = None
     try:
@@ -2887,11 +2889,14 @@ def _cmd_resume(args: argparse.Namespace) -> int:
                     measurement_class=_measurement_class,
                     handle_id=handle_id,
                     defer_learning=True,
+                    # The CLI ends the run: closure verification below can
+                    # still demote done → incomplete, so the source is
+                    # settled HERE afterwards, never inside the loop.
+                    defer_resume_settlement=True,
                     adapter=_learning_adapter,
                 )
             except Exception as exc:
                 return fail("E_RESUME", str(exc))
-            _status = result.status
             try:
                 _runs.stamp_run_metadata({
                     "loop_id": result.loop_id,
@@ -2900,46 +2905,47 @@ def _cmd_resume(args: argparse.Namespace) -> int:
             except Exception:
                 pass
             _verdict = _closure_verdict_pass(ckpt.goal, result)
+            # A successful resume must leave the SOURCE unable to replay —
+            # settled right AFTER closure verification, the CLI's last
+            # status decision (a closure-demoted run keeps its source
+            # resumable), and BEFORE deferred learning reads the status
+            # (r2: lessons and skills were extracted from a "done" the
+            # settlement then demoted). `checkpoint.settle_resume_source`
+            # proves the successor overwrote the exact claimed file (a
+            # handle resume writes into the same run dir — checkpoint
+            # writes swallow their own failures, so success is PROVEN by
+            # re-reading) or consumes it in place under this run's claim
+            # nonce. Neither → not done (chunk-6 r2 HIGH 3). The same
+            # function the loop's finalize uses for library callers
+            # (chunk 9); the loop deferred to us. `_status` stays "error"
+            # until this decision is made: an interrupt in between must
+            # not close the run's metadata as done (r2).
+            if result.status == "done":
+                _settled = False
+                try:
+                    from checkpoint import settle_resume_source as _settle_source
+                    _settled = bool(_permit) and _settle_source(
+                        _permit, successor_loop_id=result.loop_id)
+                except Exception:
+                    _settled = False
+                if not _settled:
+                    from loop_finalize import RESUME_UNSETTLED_REASON as _unsettled
+                    result.status = "incomplete"
+                    result.stuck_reason = _unsettled
+                    if not getattr(result, "stop_verdict", ""):
+                        result.stop_verdict = "external-interrupt"
+                        result.stop_evidence = _unsettled
+                        try:
+                            from runs import stamp_run_stop_verdict as _stamp_unsettled
+                            _stamp_unsettled(stop_verdict=result.stop_verdict,
+                                             stop_evidence=result.stop_evidence,
+                                             pause_reason="")
+                        except Exception:
+                            pass
+            _status = result.status
             _finalize_cli_deferred_learning(
                 result, adapter=_learning_adapter, verbose=args.verbose)
             _status = result.status
-        # A successful resume must leave the SOURCE file unable to replay:
-        # either the successor durably overwrote it (a handle resume writes
-        # into the same run dir — proven by re-reading the exact source
-        # path, since checkpoint writes swallow their own failures) or the
-        # source is consumed in place (a legacy id-addressed file, or a
-        # run-dir file resumed under a fresh handle). Neither → not done
-        # (r2 HIGH 3: a failed final write used to report success with the
-        # source still resumable).
-        if result.status == "done":
-            _src_path = _fresh_lk.path
-            _overwritten = False
-            try:
-                from checkpoint import _read_candidate as _reread_source
-                _after = _reread_source(_src_path, None) if _src_path else None
-                _overwritten = bool(
-                    _after is not None and _after.found
-                    and _after.ckpt.loop_id == result.loop_id
-                    and _after.ckpt.is_complete())
-            except Exception:
-                _overwritten = False
-        if result.status == "done" and not _overwritten:
-            try:
-                from checkpoint import mark_checkpoint_consumed
-                if not mark_checkpoint_consumed(
-                        ckpt.loop_id, resumed_to_loop_id=result.loop_id,
-                        path=_src_path):
-                    result.status = "incomplete"
-                    result.stuck_reason = (
-                        "resume completed, but the source checkpoint could not "
-                        "be marked consumed; refusing a success status because "
-                        "the old resume id could replay external effects"
-                    )
-            except Exception:
-                result.status = "incomplete"
-                result.stuck_reason = (
-                    "resume completed, but source-checkpoint consumption failed")
-        _status = result.status
         _resume_out = {"loop_id": result.loop_id, "status": result.status,
                        "resumed_from": ckpt.loop_id}
         if _verdict is not None and _verdict.checks_run > 0 and getattr(_verdict, "judged", True):

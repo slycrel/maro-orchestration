@@ -148,6 +148,7 @@ def run_agent_loop(
     parent_loop_id: Optional[str] = None,
     admission_wait_s: Optional[float] = None,  # seconds to poll a busy project slot; None = config (default: refuse immediately)
     defer_learning: bool = False,  # data-r2-01: caller runs closure + finalize_deferred_learning() afterwards — skip verdict-blind lesson extraction/crystallization at finalize
+    defer_resume_settlement: bool = False,  # chunk 9: the caller settles the resume source after its own closure pass
     defer_maintenance: bool = False,  # async-tail decree: caller drains handle._POST_NOTIFY_MAINTENANCE post-notify — NOT implied by defer_learning (CLI lanes set that and drain nothing)
     measurement_class: str = "",  # explicit organic/smoke/control/benchmark provenance; empty = unknown direct caller
     handle_id: str = "",  # top-level request key; continuations reuse it for report dedup
@@ -207,6 +208,7 @@ def run_agent_loop(
             admission_wait_s=admission_wait_s,
             defer_learning=defer_learning,
             defer_maintenance=defer_maintenance,
+            defer_resume_settlement=defer_resume_settlement,
             measurement_class=measurement_class,
             handle_id=handle_id,
         )
@@ -228,9 +230,10 @@ def run_agent_loop(
         return _early_return
     if resume_checkpoint is not None and getattr(resume_checkpoint, "resume_permit", None):
         # From here every pre-execution refusal ends in finalize_refusal,
-        # which releases the claim the CLI wrote.
-        ctx.resume_claim_release = (resume_checkpoint.resume_source,
-                                    resume_checkpoint.resume_permit)
+        # which releases the claim the CLI wrote; a done ending settles the
+        # source (loop_finalize.settle_resume_claim).
+        from checkpoint import permit_of as _permit_of
+        ctx.resume_claim_release = _permit_of(resume_checkpoint)
 
     # BACKLOG #17 sub-item 1: scope the ambient loop_id for the duration
     # of this run so log_event() calls deep in the execution call stack
@@ -514,6 +517,11 @@ def run_agent_loop(
                 carried_outcomes=list(_resume_completed or []),
             )
             if _parallel_result is not None:
+                # The lane bypasses Phase G (below): settle the resume claim
+                # here so its status is final before anything reads it.
+                from loop_finalize import settle_resume_claim as _settle_claim
+                _parallel_result.status, _parallel_result.stuck_reason = _settle_claim(
+                    ctx, _parallel_result.status, _parallel_result.stuck_reason)
                 # Record the fan-out itself and the terminal it returns from.
                 # The phase never leaves "parallel" and none of the execute /
                 # finalize / verify edges exist on this path, so without this a
@@ -751,6 +759,14 @@ def run_agent_loop(
                         _recovery_in_progress=True,
                     )
                     log.info("auto-recovery result: status=%s", result.status)
+                    # The child ran without the permit (a fresh loop): the
+                    # source THIS frame claimed is settled against the loop
+                    # that finished the work (r1: a done child returned with
+                    # the source still claimed-not-consumed).
+                    from loop_finalize import settle_resume_claim as _settle_child
+                    result.status, result.stuck_reason = _settle_child(
+                        ctx, result.status, result.stuck_reason,
+                        successor_loop_id=result.loop_id)
             except ImportError:
                 pass
             except Exception as exc:

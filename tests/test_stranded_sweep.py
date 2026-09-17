@@ -507,8 +507,9 @@ def test_resume_consume_failure_never_reports_done(monkeypatch, tmp_path, capsys
         lambda *a, **k: SimpleNamespace(
             loop_id="loopnew", status="done", project="", steps=[]),
     )
-    monkeypatch.setattr(ckpt_module, "mark_checkpoint_consumed",
-                        lambda *a, **k: False)
+    # chunk 9: the consumer is `consume_claimed` (a compare-and-consume on
+    # the claim nonce), reached through `settle_resume_source`
+    monkeypatch.setattr(ckpt_module, "consume_claimed", lambda *a, **k: False)
 
     rc = cli.main(["resume", "loopconsume", "--format", "json"])
 

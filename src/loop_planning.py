@@ -346,6 +346,14 @@ def _load_resume(ctx: LoopContext, resume_from_loop_id: str, *,
     section, or two library resumes both read the unclaimed file and both
     claim it (chunk 7 r2 finding 2). The lock is the CLI's (by loop id);
     a preloaded object was admitted under the CLI's lock already."""
+    if ctx.dry_run:
+        # A dry run simulates steps; a resume claims a real checkpoint and
+        # a simulated "done" would consume it (r1): refuse before any claim.
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"a dry run cannot resume {resume_from_loop_id}: it would claim the real "
+            "checkpoint and a simulated success would consume it — run it for real, "
+            "or branch the checkpoint (`maro checkpoint branch`) — refusing")
     if preloaded is not None:
         return _load_resume_admitted(ctx, resume_from_loop_id, preloaded=preloaded)
     try:
@@ -521,7 +529,8 @@ def _load_resume_admitted(ctx: LoopContext, resume_from_loop_id: str, *,
                 f"could not record the resume claim in {_lk.path} — refusing to "
                 "execute (nothing ran)")
         _ckpt = _claimed
-        ctx.resume_claim_release = (_ckpt.resume_source, _ckpt.resume_permit)
+        from checkpoint import permit_of as _permit_of
+        ctx.resume_claim_release = _permit_of(_ckpt)
     try:
         _remaining, _done = _resume_from(_ckpt)
         _items = _ckpt.remaining_items

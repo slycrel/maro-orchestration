@@ -247,6 +247,7 @@ def _initialize_loop(
     admission_wait_s: Optional[float] = None,
     defer_learning: bool = False,
     defer_maintenance: bool = False,
+    defer_resume_settlement: bool = False,
     measurement_class: str = "",
     handle_id: str = "",
     loop_id: Optional[str] = None,
@@ -273,6 +274,7 @@ def _initialize_loop(
     ctx.repo_path = repo_path or ""
     ctx.defer_learning = defer_learning
     ctx.defer_maintenance = defer_maintenance
+    ctx.defer_resume_settlement = defer_resume_settlement
     ctx.measurement_class = measurement_class
     ctx.handle_id = handle_id
 

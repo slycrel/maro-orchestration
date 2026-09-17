@@ -391,12 +391,16 @@ def test_api_resume_claims_its_source_and_a_second_api_resume_refuses(monkeypatc
     assert res.status == "done" and adapter.calls >= 1
     assert seen["claim"]["successor_loop_id"] == res.loop_id and seen["claim"]["pid"] == os.getpid()
     assert seen["permit"] == seen["claim"]["nonce"]
-    # the source is not consumed by the API path (the CLI owns consumption)
-    # — but it IS claimed by a process that is alive: a second resume refuses
+    # chunk 9: the loop's own finalize consumes the source (the API path
+    # used to leave it claimed-not-consumed) — a second resume refuses as
+    # already resumed, naming the successor
+    after = load_checkpoint("lp-api")
+    assert after.is_consumed() and after.resumed_to_loop_id == res.loop_id
+    assert after.resume_claim == seen["claim"]                    # the record of WHO stays
     adapter2 = _CountingAdapter()
     res2 = al.run_agent_loop("g", adapter=adapter2, preset_steps=["Step one: fetch", "Step two: report"],
                              max_steps=2, max_iterations=6, resume_from_loop_id="lp-api")
-    assert res2.status == "stuck" and "in progress" in res2.stuck_reason and adapter2.calls == 0
+    assert res2.status == "stuck" and "already resumed" in res2.stuck_reason and adapter2.calls == 0
     # an API claim that cannot be written refuses with nothing run
     _legacy("lp-api2")
     monkeypatch.setattr(ckmod, "mark_checkpoint_claimed", lambda *a, **k: None)
@@ -689,9 +693,14 @@ def test_api_claim_names_the_address_its_successor_writes_to(monkeypatch, tmp_pa
     assert res.status == "done"
     assert seen["claim"]["successor_path"] == str(rd / "build" / "checkpoint.json")
     assert (rd / "build" / "checkpoint.json").exists()
-    # with the claimant gone, that address proves supersession
+    # the successor wrote elsewhere, so the source was consumed in place
+    # (chunk 9) — consumed dominates the claim
+    assert load_checkpoint("lp-amb").resumed_to_loop_id == res.loop_id
+    assert resume_claim_state(load_checkpoint("lp-amb")) is None
+    # with the claimant gone and the source NOT consumed (a run that did
+    # not end done), that address proves supersession
     data = json.loads(src.read_text()); data["resume_claim"]["pid"] = _dead_pid()
-    data["resume_claim"].pop("token", None)
+    data["resume_claim"].pop("token", None); data.pop("consumed_at"); data.pop("resumed_to_loop_id")
     src.write_text(json.dumps(data))
     assert resume_claim_state(load_checkpoint("lp-amb")) == "superseded"
 

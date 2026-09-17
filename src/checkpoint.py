@@ -1221,6 +1221,121 @@ def release_checkpoint_claim(path: Path, permit: str) -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class ResumePermit:
+    """What a run holds on the source it resumed (chunk 9): the exact file
+    the claim was written to, the claim's nonce (the claim reads as ours
+    only when it matches — never by pid), and the loop the source records
+    (what consumption names). Handed from admission (the CLI's claim or
+    `_load_resume`'s) to the loop; released by `finalize_refusal` when the
+    run is refused before its first step, SETTLED by the loop's own
+    finalize when it ends done (`settle_resume_source`)."""
+    source: Path
+    nonce: str
+    source_loop_id: str
+
+
+def permit_of(ckpt: "Checkpoint") -> Optional["ResumePermit"]:
+    """The permit a claimed object carries, or None when it carries none —
+    or names no loop (an empty id could never match a file, r1 Architect 7)."""
+    src = getattr(ckpt, "resume_source", None)
+    nonce = getattr(ckpt, "resume_permit", None)
+    loop_id = str(getattr(ckpt, "loop_id", "") or "")
+    if not src or not nonce or not loop_id:
+        return None
+    return ResumePermit(Path(src), str(nonce), loop_id)
+
+
+def consume_claimed(permit: "ResumePermit", *, successor_loop_id: str) -> bool:
+    """Consume the source `permit` names, ONLY while it still carries OUR
+    claim (r1 Architect 3: the typed permit must authorize the mutation it
+    represents): under the per-file lock the file must record
+    `permit.source_loop_id` and a `resume_claim` whose nonce is
+    `permit.nonce` — a file another writer replaced (a fresh unconsumed
+    snapshot of the same loop, another run's claim) is left exactly as it
+    is. The lock is mandatory (`require=True`), the path is the pinned
+    canonical address (a symlink there is refused), the write is the
+    checkpoint module's `atomic_write` (its failures are this module's
+    failures) and the record is read back: True only when the bytes say
+    consumed to this successor."""
+    try:
+        real = Path(permit.source)          # pinned at admission; never re-resolved
+        if real.is_symlink():
+            log.error("resume source %s became a symlink after admission — not consumed", real)
+            return False
+        from file_lock import locked_write
+        # require=True: the operator's fail-open escape hatch must not turn
+        # this compare-and-consume into an unlocked read-then-write (r2).
+        with locked_write(real, require=True):
+            data = json.loads(real.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or str(data.get("loop_id") or "") != permit.source_loop_id:
+                log.error("resume source %s no longer records loop %s — not consumed",
+                          real, permit.source_loop_id)
+                return False
+            claim = data.get("resume_claim")
+            if not isinstance(claim, dict) or claim.get("nonce") != permit.nonce:
+                log.error("resume source %s no longer carries this run's claim — not consumed", real)
+                return False
+            if data.get("consumed_at") and str(data.get("resumed_to_loop_id") or "") != successor_loop_id:
+                log.error("resume source %s is already consumed by %s — not consumed",
+                          real, data.get("resumed_to_loop_id"))
+                return False
+            data["consumed_at"] = datetime.now(timezone.utc).isoformat()
+            data["resumed_to_loop_id"] = successor_loop_id
+            atomic_write(real, json.dumps(data, indent=2))
+            _fsync_dir(real)
+        back = json.loads(real.read_bytes().decode("utf-8"))
+        return bool(back.get("consumed_at")) and str(back.get("resumed_to_loop_id") or "") == successor_loop_id
+    except Exception as exc:
+        log.error("resume source %s could not be consumed: %s", permit.source, exc)
+        return False
+
+
+def source_is_settled(source: Path, *, source_loop_id: str, successor_loop_id: str) -> bool:
+    """True when the SOURCE file can no longer replay: the successor
+    durably overwrote it with a complete checkpoint (a handle resume
+    writes into the same run dir — proven by re-reading the exact source
+    path, since checkpoint writes swallow their own failures), or it is
+    consumed in place naming this successor. A re-read failure is False.
+    `source` is the PINNED canonical address the claim was written to
+    (admission resolved the alias once): it is not resolved again, and a
+    symlink appearing there is refused (r2: re-resolving followed a
+    retargeted link to a decoy)."""
+    try:
+        if Path(source).is_symlink():
+            log.error("resume source %s became a symlink after admission — not settled", source)
+            return False
+        after = _read_candidate(Path(source), None)
+    except Exception:
+        return False
+    if after is None or not after.found:
+        return False
+    c = after.ckpt
+    if c.loop_id == successor_loop_id and c.is_complete():
+        return True
+    return bool(c.loop_id == source_loop_id and c.is_consumed()
+                and c.resumed_to_loop_id == successor_loop_id)
+
+
+def settle_resume_source(permit: "ResumePermit", *, successor_loop_id: str) -> bool:
+    """A successful resume must leave its SOURCE unable to replay (chunk-6
+    r2 HIGH 3): overwritten by the complete successor, or consumed in
+    place — consumed here when the re-read proves neither. ONE consumer,
+    the loop's own finalize (chunk 9; chunk 7 r1 Architect 3: the API path
+    claimed but never consumed, so a finished library resume left its
+    source claimed — refused later as live/superseded, correct but
+    opaque). False when the source still replays after our best effort:
+    the caller must not report done. Consumption is `consume_claimed`: a
+    compare-and-consume on the claim's nonce under the file lock."""
+    if source_is_settled(permit.source, source_loop_id=permit.source_loop_id,
+                         successor_loop_id=successor_loop_id):
+        return True
+    if not consume_claimed(permit, successor_loop_id=successor_loop_id):
+        return False
+    return source_is_settled(permit.source, source_loop_id=permit.source_loop_id,
+                             successor_loop_id=successor_loop_id)
+
+
 def release_own_claim(ckpt: Any) -> bool:
     """`release_checkpoint_claim` for the object a claim came back as."""
     src = getattr(ckpt, "resume_source", None)

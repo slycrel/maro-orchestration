@@ -485,6 +485,20 @@ def _build_result_and_finalize(
             log.warning("run worktree finalize error: %s", _wt_exc)
         ctx.run_worktree = None
 
+    # LAST status decision of Phase G (r1: it ran first, before the
+    # merge-backs above could demote done → partial and before fallible
+    # writes could raise — a consumed source with a run that then did not
+    # end done). Everything after this point is best-effort persistence
+    # that never changes the status.
+    _pre_settle_status = result.status
+    result.status, result.stuck_reason = settle_resume_claim(
+        ctx, result.status, result.stuck_reason)
+    if result.status != _pre_settle_status and not result.stop_verdict:
+        # Landing machinery failed after the goal work — infra, not a
+        # mid-goal shortfall (the merge-back demotions' precedent).
+        result.stop_verdict = "external-interrupt"
+        result.stop_evidence = clip(RESUME_UNSETTLED_REASON, 800)
+
     if result.stop_verdict and result.stop_verdict != _pre_merge_verdict:
         try:
             from memory_ledger import stamp_outcome_stop_verdict
@@ -581,6 +595,45 @@ def drain_deferred_maintenance(handle_id: str) -> int:
     return len(fns)
 
 
+RESUME_UNSETTLED_REASON = (
+    "resume completed, but the source checkpoint could not be marked consumed; "
+    "refusing a success status because the old resume id could replay external effects")
+
+
+def settle_resume_claim(ctx, loop_status: str, stuck_reason: Optional[str], *,
+                        successor_loop_id: str = ""):
+    """The ending of the claim a resumed run holds (chunk 9). Done → the
+    source must be settled (`checkpoint.settle_resume_source`: overwritten
+    by the complete successor, else consumed in place) or the run is NOT
+    done — `incomplete`, with the reason. Any other status keeps the
+    claim as it is: it is the replay barrier (live while this process
+    runs, superseded once the successor's file exists). Returns the
+    (status, stuck_reason) the run ends with. Runs at the LAST status
+    decision: the end of Phase G, after the merge-backs (r1), on the
+    parallel lane's result, and after an auto-recovery child returns
+    (`successor_loop_id` = the child that finished the work).
+
+    Deferred (`ctx.defer_resume_settlement`) when the CALLER owns the
+    terminal decision — the CLI runs closure verification after the loop
+    returns and can still demote done → incomplete, so it settles itself
+    afterwards with the same `settle_resume_source` (the `defer_learning`
+    shape: one function, called by whoever ends the run)."""
+    permit = getattr(ctx, "resume_claim_release", None)
+    if permit is None or loop_status != "done" or getattr(ctx, "defer_resume_settlement", False):
+        return loop_status, stuck_reason
+    try:
+        from checkpoint import settle_resume_source as _settle
+        ok = _settle(permit, successor_loop_id=successor_loop_id or ctx.loop_id)
+    except Exception as exc:
+        log.error("resume source settlement for %s raised: %s", ctx.loop_id, exc)
+        ok = False
+    if ok:
+        return loop_status, stuck_reason
+    log.warning("loop %s: %s (source %s)", ctx.loop_id, RESUME_UNSETTLED_REASON,
+                getattr(permit, "source", permit))
+    return "incomplete", RESUME_UNSETTLED_REASON
+
+
 def release_loop_resources(ctx) -> None:
     """Release what `_initialize_loop` acquired — the admission slot first
     (per-project flock), then the run lease, then the global informational
@@ -634,11 +687,12 @@ def finalize_refusal(ctx, result):
         # process exits and demand --reclaim for a run that did nothing).
         try:
             from checkpoint import release_checkpoint_claim as _release_claim
-            if not _release_claim(_rel[0], _rel[1]):
+            if not _release_claim(_rel.source, _rel.nonce):
                 log.warning("refused resume: the claim on %s could not be released — "
-                            "it reads as claimed until the operator reclaims it", _rel[0])
+                            "it reads as claimed until the operator reclaims it", _rel.source)
         except Exception as _rel_exc:
-            log.warning("refused resume: claim release on %s failed: %s", _rel[0], _rel_exc)
+            log.warning("refused resume: claim release on %s failed: %s",
+                        getattr(_rel, "source", _rel), _rel_exc)
         ctx.resume_claim_release = None
     if getattr(ctx, "container_clone", None) is not None:
         # Provisioned before the resume load (agent_loop Phase A), so a

@@ -167,7 +167,10 @@ def test_a_preloaded_checkpoint_is_used_without_a_second_read(monkeypatch, tmp_p
     res = al.run_agent_loop("pre", adapter=adapter, preset_steps=["x"], max_steps=2,
                             max_iterations=4, resume_checkpoint=ck)
     assert res.status == "done" and adapter.calls >= 1
-    assert reads[0] == (str(src), "lp-pre1") and len([r for r in reads if r[0] == str(src)]) == 1
+    # exactly ONE admission read (by id, before anything ran); the two
+    # reads after it are the loop's own settlement of the source (chunk
+    # 9: prove-or-consume, then prove — both by path, never by id)
+    assert [r[1] for r in reads if r[0] == str(src)] == ["lp-pre1", None, None], reads
     assert [st.text for st in res.steps] == ["Step one: fetch", "Step two: report"]
     assert res.steps[0].result == "r"                            # the carried row, not re-run
     calls_after_first = adapter.calls

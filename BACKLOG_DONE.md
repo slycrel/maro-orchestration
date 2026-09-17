@@ -1,5 +1,71 @@
 # Backlog — Completed Archive
 
+## The run that ends a resume settles its source — SHIPPED 2026-09-17 (LoopsBench chunk 9)
+
+**Found:** chunk-7 r1 Architect 3: the CLI proved-overwritten-or-consumed
+after a done resume, but a library resume (`run_agent_loop(
+resume_from_loop_id=)`) claimed its source in `_load_resume` and never
+consumed it — a finished API resume left the source claimed-not-consumed,
+so a later resume was refused as live/superseded (correct, but opaque, and
+a different answer from the CLI's "already resumed as X"). Two entry
+points, two endings for one fact.
+
+**Doctrine:** consumption belongs to whoever makes the run's LAST status
+decision, through ONE function (`checkpoint.settle_resume_source`): the
+loop's own finalize for library callers (the end of Phase G, after the
+merge-backs that can demote), the CLI for its lane (after its closure
+verification, which can demote). A run that ends other than done keeps
+its claim untouched: the claim IS the replay barrier. Consumption is a
+compare-and-consume on the claim's nonce under the file lock — the
+permit authorizes the mutation it represents.
+
+**Shipped:**
+- `checkpoint.ResumePermit` (source path, nonce, source_loop_id) replaces
+  the (source, permit) tuple in `ctx.resume_claim_release`
+  (`Optional[ResumePermit]`); `permit_of` builds it from a claimed object
+  (None without a claim or a loop id); `finalize_refusal` releases
+  through it.
+- `checkpoint.source_is_settled` (re-read of the PINNED canonical path —
+  never re-resolved, a symlink there is refused: the complete successor,
+  or the consumed source naming this successor; anything else False),
+  `consume_claimed` (under `locked_write(require=True)`: the file must
+  record the permit's loop AND a claim with the permit's nonce, and not
+  be consumed by another successor; checkpoint-module `atomic_write`, dir
+  fsync, read-back) and `settle_resume_source` (settled → True; else
+  consume, then re-prove — a consume that reports success without a
+  record is not trusted).
+- `loop_finalize.settle_resume_claim` at the LAST status decision of
+  Phase G (after both merge-back blocks; a demotion stamps
+  `external-interrupt` like they do), on the parallel lane's result in
+  `agent_loop`, and after an auto-recovery child returns
+  (`successor_loop_id` = the child that finished the work). Deferred by
+  `LoopContext.defer_resume_settlement` (new `run_agent_loop` kwarg,
+  threaded through `loop_init`).
+- `cli._cmd_resume` passes `defer_resume_settlement=True`, takes the
+  permit right after claiming (canonical path, before admission nulls the
+  object's permit) and settles with `settle_resume_source` right AFTER
+  `_closure_verdict_pass` and BEFORE deferred learning; not settled →
+  `incomplete` with `RESUME_UNSETTLED_REASON` + `external-interrupt`
+  stamped; the run's close status stays `error` until the settlement
+  decides. The CLI never consumes an alias.
+- `_load_resume` refuses a dry-run resume before any lookup or claim.
+
+**Review:** r1 Skeptic + Architect (7 + 7): the settlement sat at the HEAD of Phase G (consumed sources for runs the merge-backs then demoted), the CLI's verify-only path could not tell an overwritten source from a consumed one, the (source, permit) tuple was untyped, a dry run could claim and consume a real checkpoint — all fixed in the design above. r2 Skeptic on the fix diff (5 HIGH + 2 MED): cheap fixes landed — the CLI settles right after closure and BEFORE deferred learning, `_status` stays `error` until the settlement decides (an interrupt in between never closes the run as done), a CLI demotion stamps `external-interrupt`; `consume_claimed` locks with `require=True` (the fail-open escape hatch never applies to the compare-and-consume); the permit's canonical path is PINNED at admission — never re-resolved, a symlink appearing there is refused by proof and consume alike; four must-detects added. Design residue queued (below). STOP RULE: no r3.
+
+**Residue (BACKLOG, chunk-7 residue list):** a HANDLE resume overwrites
+its source with the successor's checkpoints before closure can demote
+(pre-existing chunk-7 shape; lead: provisional successor address until
+closure accepts); Phase G's artifacts / ledger / learning record `done`
+before the settlement can demote it (merge-back precedent; lead: a
+structural Phase-G split — gates, then settlement, then status-bearing
+records); the auto-recovery claim names the parent while settlement
+names the child (lead: transfer the claim to the child before recovery
+starts); the loop's checkpoint writer is still outside the per-file lock
+claim / release / consume share (identity-level admission ledger).
+
+Tests: tests/test_resume_settlement.py (13) + updates in
+test_resume_claim.py, test_resume_lookup.py, test_stranded_sweep.py.
+
 ## A NEXT.md mark a row still owes is durable state, settled from the checkpoint — SHIPPED 2026-09-17 (LoopsBench chunk 8)
 
 **Found:** chunk-5 r2 lead: a `mark_item` that failed at step time (NEXT.md

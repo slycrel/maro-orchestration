@@ -7466,13 +7466,34 @@ NOT closed:
       other). The shared fix is an identity-level admission ledger
       (one lock name per loop identity, every mutation of any home under
       it) or a monotonic generation in the file.
-    - *The API path claims but never consumes* (r1 Architect 3): the
-      CLI proves-overwritten-or-consumes after `done`; a library resume
-      that finishes leaves its source claimed-not-consumed (refused later
-      as live/superseded — correct but opaque). Queued design: ONE
-      resume-admission service returning a typed `ResumePermit`
-      (source path, digest, nonce, successor address) used by CLI and API,
-      with consumption in the loop's own finalize.
+    - ~~*The API path claims but never consumes* (r1 Architect 3)~~ —
+      **SHIPPED 2026-09-17 (LoopsBench chunk 9, BACKLOG_DONE):** typed
+      `checkpoint.ResumePermit`; ONE `settle_resume_source` called at the
+      LAST status decision (loop finalize for library callers, the CLI
+      after its closure pass, before deferred learning); compare-and-
+      consume on the nonce under a mandatory lock; pinned canonical path.
+      Chunk-9 r2 residue (design, not re-raised):
+      - *A handle resume overwrites its source before closure* (r2 1,
+        pre-existing chunk-7 shape): a handle resume reopens the handle's
+        run dir, so the successor's checkpoints land on the claimed file
+        before `_closure_verdict_pass` can demote — a closure-demoted
+        handle resume is then refused as "completed all its steps". Lead:
+        write the successor to a provisional address; replace the source
+        only when closure accepts done.
+      - *Phase G records `done` before the settlement can demote it*
+        (r2 2; same precedent as the merge-backs): manifest, run report,
+        loop log, decision journal, ledger row and immediate learning run
+        before `settle_resume_claim`; a failed consume returns
+        `incomplete` while those say done. Lead: a structural Phase-G
+        split — fallible gates and merge-backs, THEN settlement (the
+        immutable terminal status), THEN every status-bearing record.
+      - *The auto-recovery claim names the parent while settlement names
+        the child* (r2 4): success hides it; on consume failure the
+        supersession readers probe only the parent's addresses and point
+        the operator at a checkpoint whose work the child already did.
+        Lead: redirect the claim to the child under the permit nonce
+        before recovery starts; ONE authoritative terminal-successor
+        field read by status, heartbeat and settlement.
     - *Lossy listings hide a malformed claim* (r2 finding 9):
       `list_checkpoints` → `checkpoint list` / heartbeat skip a file whose
       `resume_claim` does not parse (it is LOOKUP_INVALID for an explicit

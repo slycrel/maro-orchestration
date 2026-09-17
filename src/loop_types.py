@@ -16,6 +16,10 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    from checkpoint import ResumePermit
 
 # terrain.py is stdlib-only and imports nothing from the loop — safe to
 # import at module load (this module's whole point is being import-safe).
@@ -275,6 +279,9 @@ class LoopResult:
     project: str
     goal: str
     status: str          # "done" | "stuck" | "error" | "interrupted" | "restart"
+                         # | "partial" (done, but a merge-back failed) | "incomplete"
+                         # (done, but the resume source could not be settled, or the
+                         # CLI's closure verdict refuted it)
     steps: List[StepOutcome] = field(default_factory=list)
     stuck_reason: Optional[str] = None
     # Typed stop verdict (stop_verdicts.py) + evidence. Empty = none recorded.
@@ -506,11 +513,14 @@ class LoopContext:
     # than being rediscovered from ambient run-dir context at finalize.
     measurement_class: str = ""
     handle_id: str = ""
-    # (source path, permit) of the resume claim THIS run holds — released
-    # by `finalize_refusal` when the run is refused before its first step
-    # (chunk 7 r2: a benign pre-execution refusal must not leave the
-    # source claimed). Kept — it is the replay barrier — once anything ran.
-    resume_claim_release: Any = None
+    # The `checkpoint.ResumePermit` of the resume claim THIS run holds —
+    # released by `finalize_refusal` when the run is refused before its
+    # first step (chunk 7 r2: a benign pre-execution refusal must not leave
+    # the source claimed); SETTLED by the loop's own finalize when the run
+    # ends done (chunk 9: the source is overwritten by the successor or
+    # consumed in place, else the run is `incomplete`). Kept as it is — the
+    # replay barrier — for any other ending.
+    resume_claim_release: Optional["ResumePermit"] = None
 
     # Execution state
     step_outcomes: List[StepOutcome] = field(default_factory=list)
@@ -639,6 +649,11 @@ class LoopContext:
     # defer_learning silently dropped their whole maintenance tail (Codex
     # 2-lens review of 6f58bf3, consensus HIGH). Only handle.py sets this.
     defer_maintenance: bool = False
+    # Chunk 9: the caller ends the run (the CLI's closure pass runs AFTER
+    # the loop returns and can demote done → incomplete), so the loop's
+    # finalize must not settle the resume source; the caller settles with
+    # `checkpoint.settle_resume_source` once its own status is final.
+    defer_resume_settlement: bool = False
 
     # Adaptive execution (Phase 64)
     steps_since_last_check: int = 0
