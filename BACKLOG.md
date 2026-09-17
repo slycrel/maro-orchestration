@@ -6411,3 +6411,23 @@ design sign-off before any public release. Still open:
 ---
 
 Full history in [BACKLOG_DONE.md](BACKLOG_DONE.md).
+
+## Jev (typesafe.ai) as the Tier-1 validator — decided 2026-09-17, implementation open
+
+- [ ] **Wire Jev as Tier 1b of the validation ladder** per `docs/LOCAL_VALIDATOR.md`
+  "Jev decision" section: `Choice(pass|fail)` over `{step, result, evidence}`,
+  hardened instruction, auto-pass at conf ≥ 0.9 only with evidence present,
+  0.6–0.9 RETRY/escalate, < 0.6 escalate; hosted LLM (hosted-free → paid)
+  remains the escalation and the outage fallback (never fail-open). Log
+  `p_pass`/`confidence`/evidence-present per verdict. Key `TYPESAFE_API_KEY` is
+  already in workspace secrets; SDK `typesafe-sdk` 0.6.0. Evidence + protocol:
+  `github.com/slycrel/jev-eval` (private).
+- [ ] **Deferred (Jeremy: "maybe, but not now"):** human-adjudicate the 21
+  Cclosure disagreements (goals `closure` passed that Jev failed, same evidence).
+  Turns "Jev is stricter" into "Jev is right/wrong". List is
+  `jev-eval/results/Cclosure.jsonl` filtered `label=true, choice=fail`.
+- [ ] **Backup lane:** hosted LLM stays the plan of record; the M1 via `m1` ssh
+  (ds4/Qwen3.8) is an interim experiment only — AC-power/AFK resource, degrade
+  gracefully when absent.
+- Known gaps to measure organically once wired: calibration in the 0.3–0.7
+  band; long states; injection under real worker output (probe was synthetic).
