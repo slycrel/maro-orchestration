@@ -231,6 +231,19 @@ type ConfigSnapshot struct {
 	// config is complete on its own record. The fold checks equality.
 	Policy     record.RecordID          `json:"policy"`
 	Mechanisms map[learn.Mechanism]bool `json:"mechanisms"`
+	// Judgment is the primary judgment provider every judge of this
+	// attempt asked through (§6 over the §4 seam). ABSENT = `llm`, the
+	// default and the behaviour that predates the seam — so an attempt
+	// on the default arm records exactly what it always did.
+	Judgment string `json:"judgment,omitempty"`
+	// JudgmentBackend is the wire provider's capability snapshot, present
+	// iff Judgment names one: the judge invocations of the attempt ran on
+	// IT, not on JudgeBackend (which still binds intent, plan and render).
+	JudgmentBackend *invoke.Capabilities `json:"judgment_backend,omitempty"`
+	// Shadow lists the providers asked the same questions for measurement
+	// only. Absent = none, the default: a shadow arm spends, so it is
+	// never on because the code shipped.
+	Shadow []string `json:"shadow,omitempty"`
 }
 
 // RunAttempt starts an attempt generation of a goal. Attempt 1 is the first

@@ -21,6 +21,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/experiment"
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/judgment"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/projector"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
@@ -60,6 +61,13 @@ type Options struct {
 	Frame string
 	// AskPath: the operator-question file every run's worker may write (run.Driver.AskPath).
 	AskPath string
+	// JudgeProvider / JudgeShadow / Providers are the judgment binding
+	// (run.Driver's fields of the same names): which provider every judge
+	// asks through, which providers shadow it for measurement, and the
+	// wire providers this process built. Empty = the llm arm, no shadow.
+	JudgeProvider string
+	JudgeShadow   []string
+	Providers     map[string]judgment.Provider
 }
 
 func (o Options) frame() string {
@@ -302,6 +310,7 @@ func (l *executor) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 	lastErr, repeats := "", 0
 	for {
 		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health, Lens: l.s.opts.Lens, Work: l.s.opts.Work, Frame: l.s.opts.frame(), AskPath: l.s.opts.AskPath,
+			JudgeProvider: l.s.opts.JudgeProvider, JudgeShadow: l.s.opts.JudgeShadow, Providers: l.s.opts.Providers,
 			Events: func(e run.Event) {
 				if e.Stage == "attempt" && e.Goal != "" {
 					l.s.conns.bind(e.Goal, e.Run) // the run's presentation goes to the client that submitted its goal

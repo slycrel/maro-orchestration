@@ -573,9 +573,9 @@ func TestTailSkipsCancelledArms(t *testing.T) {
 	judge := &invoke.Keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []invoke.Rule{
 		{Key: "intake of an orchestration engine", Answer: `{"clear": true, "interpretation": "two-level", "question": ""}`},
 		{Key: "planner", Answer: plan},
-		{Key: "## Step 1: sub-goal A", Answer: `{"outcome": "achieved", "confidence": 0.9, "why": "prime named", "falsifiers": []}`},
-		{Key: "closure judge", Answer: `{"outcome": "achieved", "confidence": 0.8, "why": "done", "falsifiers": []}`},
-	}, Def: `{"outcome": "done", "confidence": 0.9, "why": "the step's result matches the step"}`}
+		{Key: "### step 1\nsub-goal A", Answer: `{"outcome": {"type": "choice", "choice": "achieved", "confidence": 0.9, "why": "prime named", "falsifiers": []}}`},
+		{Key: "GOAL was achieved", Answer: `{"outcome": {"type": "choice", "choice": "achieved", "confidence": 0.8, "why": "done", "falsifiers": []}}`},
+	}, Def: `{"outcome": {"type": "choice", "choice": "done", "confidence": 0.9, "why": "the step's result matches the step"}}`}
 	d := &run.Driver{J: h.j, Store: h.st, Backend: exec, Judge: judge, Lane: run.LaneAgenda, Origin: run.CLIOrigin{W: io.Discard}, Timeout: time.Minute}
 	rep, err := d.Run(ctxBg, []byte("two-level"), run.DeliveryPolicy{Required: run.TransportAccepted})
 	close(hold)
@@ -688,8 +688,8 @@ func TestAgendaFoldsAfterTheTailsReceipt(t *testing.T) {
 	judge := &invoke.Keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []invoke.Rule{
 		{Key: "intake of an orchestration engine", Answer: `{"clear": true, "interpretation": "two steps", "question": ""}`},
 		{Key: "planner", Answer: `{"steps": ["Collect the numbers", "Write the summary"]}`},
-		{Key: "closure judge", Answer: `{"outcome": "achieved", "confidence": 0.8, "why": "done", "falsifiers": []}`},
-	}, Def: `{"outcome": "done", "confidence": 0.9, "why": "the step's result matches the step"}`}
+		{Key: "GOAL was achieved", Answer: `{"outcome": {"type": "choice", "choice": "achieved", "confidence": 0.8, "why": "done", "falsifiers": []}}`},
+	}, Def: `{"outcome": {"type": "choice", "choice": "done", "confidence": 0.9, "why": "the step's result matches the step"}}`}
 	d := &run.Driver{J: h.j, Store: h.st, Backend: exec, Judge: judge, Lane: run.LaneAgenda, Origin: run.CLIOrigin{W: io.Discard}, Timeout: time.Minute}
 	rep, err := d.Run(ctxBg, []byte("two steps"), run.DeliveryPolicy{Required: run.TransportAccepted})
 	if err != nil || rep.Mission.Outcome != run.MissionDelivered {

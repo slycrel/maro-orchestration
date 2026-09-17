@@ -174,9 +174,9 @@ func TestInterruptStopsAtTheNextBoundary(t *testing.T) {
 	judge := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-judge", Model: "judge"}, Calls: []invoke.ScriptedCall{
 		{Response: []byte(`{"clear": true, "interpretation": "two steps", "question": ""}`)},
 		{Response: []byte(`{"steps": ["one", "two"]}`)},
-		{Response: []byte(`{"outcome": "done", "confidence": 0.9, "why": "ok"}`)},
-		{Response: []byte(`{"outcome": "done", "confidence": 0.9, "why": "ok"}`)},
-		{Response: []byte(`{"outcome": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}`)},
+		{Response: []byte(`{"outcome": {"type": "choice", "choice": "done", "confidence": 0.9, "why": "ok"}}`)},
+		{Response: []byte(`{"outcome": {"type": "choice", "choice": "done", "confidence": 0.9, "why": "ok"}}`)},
+		{Response: []byte(`{"outcome": {"type": "choice", "choice": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}}`)},
 	}}
 	s := serve(t, a, exec, judge)
 	var evs []Event

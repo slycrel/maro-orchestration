@@ -11,6 +11,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/experiment"
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
+	"github.com/slycrel/maro-orchestration/go/internal/judgment"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/run"
@@ -140,6 +141,7 @@ func samples() map[record.Kind]any {
 		experiment.KindCommitment:   &experiment.CohortCommitment{Header: withSubject(withSchema(h, "cohort_commitment/1"), record.Ref{Kind: "experiment", ID: string(inv)}), Experiment: inv, Protocol: protocol(inv, inv, fixture), Units: cohort(inv), Root: experiment.CohortRoot(cohort(inv)), Count: 1},
 		experiment.KindAttestation:  &experiment.EffectAttestation{Header: withSubject(withSchema(h, "effect_attestation/1"), record.Ref{Kind: "experiment", ID: string(inv)}), Experiment: inv, Cohort: inv, Closure: inv, Protocol: protocol(inv, inv, fixture), Units: []experiment.UnitRow{{Unit: inv, Assignment: inv, Treatment: inv, Control: inv, TreatmentScore: 1, Exposed: true}}, Evaluator: experiment.Evaluator, Estimator: experiment.Estimator},
 		experiment.KindMeasurement:  &experiment.EffectMeasurement{Header: withSubject(withSchema(h, "effect_measurement/1"), record.Ref{Kind: "experiment", ID: string(inv)}), Experiment: inv, Attestation: inv, Hypothesis: learn.ItemRev{Item: learn.LearnedID(inv), Revision: inv}, Relation: experiment.ApplyItem, Assigned: 2, Analyzed: 2, Exposed: 2, Discordant: 1, TreatmentN: 1, ControlN: 1, Unjudgeable: 1, DeltaITT: 1, DeltaPP: 1, Verdict: experiment.TreatmentHelpful, ItemEffect: learn.ItemHelpful},
+		judgment.KindShadow:         &judgment.ShadowJudgment{Header: withSubject(withSchema(h, "shadow_judgment/1"), record.Ref{Kind: "verdict", ID: string(inv)}), Provider: judgment.ProviderJev, Primary: inv, Invocation: inv, Question: "outcome", Answer: &judgment.Answer{Type: judgment.Choice, Choice: "achieved", Confidence: 0.8, Probabilities: map[string]float64{"achieved": 0.8, "not_achieved": 0.2}}, LatencyMillis: 420, Usage: invoke.Usage{InputTokens: 1}},
 		run.KindDeliveryAcked:       &run.DeliveryAcked{Header: withSubject(withSchema(h, "delivery_acked/1"), record.Ref{Kind: "delivery", ID: string(inv)}), Delivery: inv, Token: strings.Repeat("a1", 16), PayloadHash: deliverable.Hash},
 	}
 }

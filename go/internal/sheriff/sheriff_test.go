@@ -147,7 +147,7 @@ func TestSheriffBasisNamesTheNewestStageRecord(t *testing.T) {
 	judge := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-judge", Model: "judge"}, Calls: []invoke.ScriptedCall{
 		{Response: []byte(`{"clear": true, "interpretation": "do it", "question": ""}`)},
 		{Response: []byte(`{"steps": ["one", "two"]}`)},
-		{Response: []byte(`{"outcome": "done", "confidence": 0.9, "why": "ok"}`)},
+		{Response: []byte(`{"outcome": {"type": "choice", "choice": "done", "confidence": 0.9, "why": "ok"}}`)},
 	}}
 	d := &run.Driver{J: j, Store: st, Backend: exec, Judge: judge, Lane: run.LaneAgenda, Origin: run.CLIOrigin{W: io.Discard}}
 	d.CrashAt = "after_step" // step 1 done; nothing after
