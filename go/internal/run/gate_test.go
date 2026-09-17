@@ -365,7 +365,7 @@ func TestAgendaForkThenExecuteSurvivesTheKill(t *testing.T) {
 				}
 			}
 			for _, r := range judge.Seen {
-				if bytes.Contains(r.Prompt, []byte("## Step\nIn parallel (all)")) {
+				if bytes.Contains(r.Prompt, []byte("### step\nIn parallel (all)")) {
 					forkJudged++
 				}
 			}
