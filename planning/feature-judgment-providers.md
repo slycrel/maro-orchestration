@@ -148,6 +148,29 @@ template; PCD stays experimental (`PCD_PMI` default moves to off — on the
 evaluation's benign documents PMI was the most over-asserting rule, and the
 replay is how it earns it back).
 
+**As landed (`jev-tiers`, same day).** Names, and the two places the code
+went past the text above:
+
+- Purpose `judge_fallback` (`invoke.PurposeJudgeFallback`) marks the
+  fallback's call; `judge` stays the primary's. Stages `judge_escalated`
+  (with the reason) and `judge_fallback_failed`. Flags `--judge-fallback`
+  (`judgment.fallback`, `llm`) and `--judge-escalate` (`judgment.escalate`,
+  0.6), both lanes; `ConfigSnapshot.JudgmentFallback` /
+  `JudgmentFallbackBackend` / `JudgmentEscalate` (omitempty).
+- The ladder is recorded — and in force — only when the primary is a wire
+  provider. The llm arm has no lower rung, so an attempt on the default arm
+  records byte-for-byte what it did before this branch.
+- A third escalation trigger, not in the text above: a primary answer the
+  boundary *refuses* (malformed, probabilities off, a choice outside the
+  vocabulary) is undecided too, and the fold admits the fallback's verdict for
+  it. Without this a wire provider that answers garbage would leave the step
+  unjudged while a working fallback sat idle.
+- On a resumed attempt the primary's landed call is reused as before; the
+  fallback's is asked again. One reuse path is enough to keep exact, and the
+  fallback is the cheap arm.
+- Evidence under fold parity: `StepJudgeRequest`/`ClosureJudgeRequest` take
+  the digest as a string; `judgment-llm/2` is the prompt version that names it.
+
 ## Where judgment goes next (not built tonight)
 
 - Intake clarity: both 2026-09-16 dispatches of the PCD goal stalled on

@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -23,6 +24,7 @@ type fakeWire struct {
 	first   bool // answer the FIRST option (the happy one) instead of the last
 	calls   int
 	models  []string // the model each request was asked in
+	conf    float64  // the confidence it answers with; 0 = 1.0
 }
 
 func (f *fakeWire) Name() string { return f.name }
@@ -53,7 +55,19 @@ func (f *fakeWire) Complete(ctx context.Context, req invoke.Request, sink invoke
 	if f.outcome != "" {
 		choice = f.outcome
 	}
-	body := `{"model":"fake","answers":{"outcome":{"type":"choice","choice":"` + choice + `","confidence":1.0,"probabilities":{"` + choice + `":1.0}}},"usage":{"input_tokens":10,"output_tokens":3}}`
+	// at confidence 1.0, or f.conf with the rest of the mass on the
+	// other end of the vocabulary (a wire answer's probabilities sum to 1)
+	probs := `{"` + choice + `":1.0}`
+	conf := "1.0"
+	if f.conf > 0 && f.conf < 1 {
+		other := opts[0].Name
+		if other == choice {
+			other = opts[len(opts)-1].Name
+		}
+		conf = fmt.Sprintf("%.2f", f.conf)
+		probs = fmt.Sprintf(`{"%s":%s,"%s":%.2f}`, choice, conf, other, 1-f.conf)
+	}
+	body := `{"model":"fake","answers":{"outcome":{"type":"choice","choice":"` + choice + `","confidence":` + conf + `,"probabilities":` + probs + `}},"usage":{"input_tokens":10,"output_tokens":3}}`
 	return &invoke.Result{Response: []byte(body), Terminal: invoke.TerminalComplete, Usage: invoke.Usage{InputTokens: 10, OutputTokens: 3, WallMillis: 4}}, nil
 }
 

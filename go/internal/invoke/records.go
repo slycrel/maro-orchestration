@@ -40,9 +40,16 @@ const (
 	// lens, and its usage is never the goal's cost. Nothing reads its
 	// answer but the judgment report.
 	PurposeShadowJudge Purpose = "shadow_judge"
+	// PurposeJudgeFallback is the goal's own judgment asked of the
+	// attempt's FALLBACK provider: the same question the primary was
+	// asked, asked again because the primary's call failed or its answer
+	// fell under the recorded escalate bar. Unlike a shadow it IS the
+	// goal's call — its answer is the verdict of record, its usage the
+	// goal's — and the fold admits it only when the record shows why.
+	PurposeJudgeFallback Purpose = "judge_fallback"
 )
 
-var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, PurposePlan: true, PurposeIntent: true, PurposeRender: true, PurposeDiagnose: true, PurposeEvaluate: true, PurposeLandscape: true, PurposeShadowJudge: true}
+var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, PurposePlan: true, PurposeIntent: true, PurposeRender: true, PurposeDiagnose: true, PurposeEvaluate: true, PurposeLandscape: true, PurposeShadowJudge: true, PurposeJudgeFallback: true}
 
 // Capabilities is what a backend declares about itself, snapshotted into the
 // Invocation at decision time so the decision and its receipt agree.

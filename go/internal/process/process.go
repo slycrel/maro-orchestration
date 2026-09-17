@@ -67,6 +67,10 @@ type Options struct {
 	// wire providers this process built. Empty = the llm arm, no shadow.
 	JudgeProvider string
 	JudgeShadow   []string
+	// JudgeFallback / JudgeEscalate are the ladder under a wire primary
+	// (see run.Driver).
+	JudgeFallback string
+	JudgeEscalate float64
 	Providers     map[string]judgment.Provider
 }
 
@@ -310,7 +314,7 @@ func (l *executor) Run(ctx context.Context, hb *supervise.Heartbeat) error {
 	lastErr, repeats := "", 0
 	for {
 		d := &run.Driver{J: l.s.j, Store: l.s.store, Backend: l.s.opts.Backend, Judge: l.s.opts.Judge, Origin: l.s.conns, Timeout: l.s.opts.Timeout, Health: l.s.sup.Health, Lens: l.s.opts.Lens, Work: l.s.opts.Work, Frame: l.s.opts.frame(), AskPath: l.s.opts.AskPath,
-			JudgeProvider: l.s.opts.JudgeProvider, JudgeShadow: l.s.opts.JudgeShadow, Providers: l.s.opts.Providers,
+			JudgeProvider: l.s.opts.JudgeProvider, JudgeShadow: l.s.opts.JudgeShadow, Providers: l.s.opts.Providers, JudgeFallback: l.s.opts.JudgeFallback, JudgeEscalate: l.s.opts.JudgeEscalate,
 			Events: func(e run.Event) {
 				if e.Stage == "attempt" && e.Goal != "" {
 					l.s.conns.bind(e.Goal, e.Run) // the run's presentation goes to the client that submitted its goal

@@ -35,7 +35,7 @@ def question_cache_key(question: Question) -> str:
 class PMICache:
     """Wraps an Engine and memoises its state-free ("baseline") candidate
     log-probs per (model_id, question hash). Thread-safe; safe to disable
-    entirely via `enabled=False` (PCD_PMI=0) for A/B comparison."""
+    entirely via `enabled=False` (the default; PCD_PMI=1 turns it on) for A/B comparison."""
 
     def __init__(self, engine, enabled: bool = True):
         self.engine = engine

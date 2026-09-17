@@ -64,6 +64,16 @@ const (
 	PCDModel      = "pcd-latest"
 	// DefaultTimeout bounds a wire judgment call.
 	DefaultTimeout = 60 * time.Second
+	// DefaultFallback is the provider asked the same judgment when a
+	// wire primary's call fails or answers under DefaultEscalate: the
+	// incumbent llm judge. Inert on the default arm (llm primary), so an
+	// attempt on it records exactly what it always did.
+	DefaultFallback = ProviderLLM
+	// DefaultEscalate is the confidence under which a wire primary's
+	// answer is UNDECIDED for the judgment and the fallback is asked. 0.6
+	// is the retired Python rung's min_certainty, set on the same
+	// 14-case validation corpus.
+	DefaultEscalate = 0.6
 	// Path is the System One endpoint both wire providers speak.
 	Path = "/v1/systemone"
 )

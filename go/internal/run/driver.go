@@ -127,6 +127,14 @@ type Driver struct {
 	// never change a verdict (its record is a control record the
 	// resolver cannot read).
 	JudgeShadow []string
+	// JudgeFallback names the provider asked the same judgment when a
+	// wire primary's call fails or answers under JudgeEscalate; its
+	// answer is the verdict of record. Recorded (and in force) only when
+	// JudgeProvider is a wire provider, so the default arm is untouched.
+	JudgeFallback string
+	// JudgeEscalate is the confidence under which a wire primary's answer
+	// is undecided and JudgeFallback is asked.
+	JudgeEscalate float64
 	// Lens is the persona lens every judge request of this driver's runs
 	// is rendered under (§13); "" or "neutral" = no prefix. Recorded in
 	// the attempt config; the fold checks each judge request begins with it.
@@ -345,6 +353,23 @@ func (d *Driver) config(lane Lane, pol *learn.PolicySelection) (ConfigSnapshot, 
 		}
 		caps := p.Capabilities()
 		c.Judgment, c.JudgmentBackend = d.JudgeProvider, &caps
+		// the ladder rides only a wire primary: the incumbent llm arm has
+		// no lower rung, and records nothing here
+		if d.JudgeFallback != "" && d.JudgeFallback != d.JudgeProvider {
+			c.JudgmentFallback, c.JudgmentEscalate = d.JudgeFallback, d.JudgeEscalate
+			if judgment.IsWire(d.JudgeFallback) {
+				fp := d.Providers[d.JudgeFallback]
+				if fp == nil {
+					return ConfigSnapshot{}, fmt.Errorf("%w: no judgment provider %q is wired for the fallback (known: %v)", ErrConfig, d.JudgeFallback, judgment.Known())
+				}
+				fc := fp.Capabilities()
+				c.JudgmentFallbackBackend = &fc
+			} else if d.JudgeFallback != judgment.ProviderLLM {
+				if d.Providers[d.JudgeFallback] == nil {
+					return ConfigSnapshot{}, fmt.Errorf("%w: no judgment provider %q is wired for the fallback (known: %v)", ErrConfig, d.JudgeFallback, judgment.Known())
+				}
+			}
+		}
 	}
 	if len(d.JudgeShadow) > 0 {
 		c.Shadow = append([]string{}, d.JudgeShadow...)
@@ -946,9 +971,10 @@ func (d *Driver) nowClosureJudge(ctx context.Context, rs *RunState, a *AttemptSt
 		evidence = stateEvidence(states[out.Invocation], d.Store)
 	}
 	sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n}
-	jreq, prompt, err := d.judgeRequest(a, func(model string) judgment.Request {
+	build := func(model string) judgment.Request {
 		return ClosureJudgeRequest(model, goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}, []string{evidence})
-	})
+	}
+	jreq, prompt, err := d.judgeRequest(a, build)
 	if err != nil {
 		return nil, err
 	}
@@ -961,15 +987,41 @@ func (d *Driver) nowClosureJudge(ctx context.Context, rs *RunState, a *AttemptSt
 		return nil, err
 	}
 	jo, err := sh.Invoke(ctx, p, req, nil)
-	if err != nil || jo.Err != nil || jo.Terminal == invoke.TerminalFailed {
+	if err != nil || jo.Err != nil {
 		return nil, err
 	}
-	jr, perr := d.judgeAnswer(a, jreq, jo.Response)
+	var presp []byte
+	if jo != nil {
+		presp = jo.Response
+	}
+	j, err := d.escalate(rs, a, build, jo, presp, jreq, func(purpose invoke.Purpose, prompt []byte) (*invoke.Outcome, []byte, error) {
+		fp, err := d.provider(a.Attempt.Config.JudgmentFallback, a)
+		if err != nil {
+			return nil, nil, err
+		}
+		fr, err := d.lensedRequest(prompt, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		fr.Purpose = purpose
+		o, err := sh.Invoke(ctx, fp, fr, nil)
+		if err != nil || o == nil {
+			return o, nil, err
+		}
+		return o, o.Response, o.Err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if j.o == nil || j.o.Terminal == invoke.TerminalFailed {
+		return nil, nil
+	}
+	jr, perr := d.judgeAnswerVia(a, j)
 	if perr != nil {
 		d.emit(rs, n, "closure_unjudged", Executing, perr.Error())
 		return nil, nil
 	}
-	v := &verdict.Verdict{Header: header(runRef(rs.Run), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: jo.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(jo.Receipt)}}}
+	v := &verdict.Verdict{Header: header(runRef(rs.Run), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: j.o.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(j.o.Receipt)}}}
 	for _, f := range jr.Falsifiers {
 		if strings.TrimSpace(f) == "" {
 			continue

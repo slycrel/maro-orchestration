@@ -7226,23 +7226,43 @@ both engines (R2 related → R1, R3 rerun → R1, R4 fresh, no call).
 
 Full history in [BACKLOG_DONE.md](BACKLOG_DONE.md).
 
-## Jev (typesafe.ai) as the Tier-1 validator — decided 2026-09-17, implementation open
+## Jev (typesafe.ai) as the Tier-1 validator — decided 2026-09-17; seam built, promotion open
 
-- [ ] **Wire Jev as Tier 1b of the validation ladder** per `docs/LOCAL_VALIDATOR.md`
-  "Jev decision" section: `Choice(pass|fail)` over `{step, result, evidence}`,
-  hardened instruction, auto-pass at conf ≥ 0.9 only with evidence present,
-  0.6–0.9 RETRY/escalate, < 0.6 escalate; hosted LLM (hosted-free → paid)
-  remains the escalation and the outage fallback (never fail-open). Log
-  `p_pass`/`confidence`/evidence-present per verdict. Key `TYPESAFE_API_KEY` is
-  already in workspace secrets; SDK `typesafe-sdk` 0.6.0. Evidence + protocol:
-  `github.com/slycrel/jev-eval` (private).
+The judgment seam exists on `successor` (`go/internal/judgment`: typed
+`Request`/`Response`, providers `llm|jev|hosted|pcd` as backends, shadow arm,
+attempt-recorded binding, fold parity; `planning/feature-judgment-providers.md`).
+Branch `jev-tiers` (2026-09-17, dev Mac) adds the three things the dev-Mac
+evaluation reduced to — merge target `successor` after real tests on the box:
+
+- [x] **The judge sees the evidence, not only the claim.** `invoke.Digest`
+  renders a step's committed `tool_effect`/`tool_effect_result`/terminal
+  records into the judge request's `evidence` section; driver and fold derive
+  it from the same records (`judgment.evidence.max_bytes`, no record change).
+- [x] **Confidence ladder, recorded in the attempt.** `judgment.escalate`
+  (0.6, `--judge-escalate`): a wire primary's answer under the bar — or refused
+  at the boundary — is undecided; the fallback is asked the same question and
+  its answer is the verdict of record (`ConfigSnapshot.JudgmentEscalate`).
+- [x] **Primary failure escalates; never verdict-less by default.**
+  `judgment.fallback` (`llm`, `--judge-fallback`): a failed wire primary asks
+  the fallback (purpose `judge_fallback`, stages `judge_escalated` /
+  `judge_fallback_failed`); only a fallback that also fails leaves the step
+  `unjudged`. The fold admits a fallback verdict only when the record shows a
+  failed, refused, or under-bar primary call for the same request. Inert on the
+  default llm arm — its attempts record nothing new.
+- [ ] **Promote Jev to primary** (`--judge-provider jev`) once the box runs
+  clean: `judgment replay` on the private corpus, a `now` run with jev primary +
+  llm shadow, and a forced-failure run (no key) to see the fallback take the
+  verdict. Log `p_pass`/confidence/evidence-present per verdict as it runs.
+  Key `TYPESAFE_API_KEY` is in workspace secrets; SDK `typesafe-sdk` 0.6.0.
+  Evidence + protocol: `github.com/slycrel/jev-eval` (private; no numbers in
+  this repo per the MCA guardrail).
 - [ ] **Deferred (Jeremy: "maybe, but not now"):** human-adjudicate the 21
   Cclosure disagreements (goals `closure` passed that Jev failed, same evidence).
   Turns "Jev is stricter" into "Jev is right/wrong". List is
   `jev-eval/results/Cclosure.jsonl` filtered `label=true, choice=fail`.
-- [ ] **Backup lane:** hosted LLM stays the plan of record; the M1 via `m1` ssh
-  (ds4/Qwen3.8) is an interim experiment only — AC-power/AFK resource, degrade
-  gracefully when absent.
+- [ ] **Backup lane:** hosted LLM stays the plan of record (it is the default
+  fallback above); the M1 via `m1` ssh (ds4/Qwen3.8) is an interim experiment
+  only — AC-power/AFK resource, degrade gracefully when absent.
 - Known gaps to measure organically once wired: calibration in the 0.3–0.7
   band; long states; injection under real worker output (probe was synthetic).
 

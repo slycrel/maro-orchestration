@@ -32,6 +32,8 @@ def load_config() -> Config:
         dtype=os.environ.get("PCD_DTYPE") or None,
         port=int(os.environ.get("PCD_PORT", "8765")),
         threads=int(threads_raw) if threads_raw else None,
-        pmi_enabled=_bool_env("PCD_PMI", True),
+        # off by default (2026-09-17): on the evaluation's benign documents PMI
+        # was the most over-asserting rule; the replay is how it earns it back
+        pmi_enabled=_bool_env("PCD_PMI", False),
         backend=os.environ.get("PCD_BACKEND", "torch"),
     )

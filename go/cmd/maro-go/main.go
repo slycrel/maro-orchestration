@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -253,6 +254,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	fresh := false
 	allowTools, denyTools := "", "WebFetch,WebSearch"
 	judgeProvider, judgeShadow, pcdURL := judgment.DefaultProvider, "", judgment.DefaultPCDURL
+	judgeFallback, judgeEscalate := judgment.DefaultFallback, judgment.DefaultEscalate
 	var hosted hostedSpec
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -322,6 +324,20 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			i++
 			if i < len(args) {
 				judgeShadow = args[i]
+			}
+		case "--judge-fallback":
+			i++
+			if i < len(args) {
+				judgeFallback = args[i]
+			}
+		case "--judge-escalate":
+			i++
+			if i < len(args) {
+				f, err := strconv.ParseFloat(args[i], 64)
+				if err != nil || f < 0 || f > 1 {
+					return fmt.Errorf("--judge-escalate wants a number in [0,1], got %q", args[i])
+				}
+				judgeEscalate = f
 			}
 		case "--pcd-url":
 			i++
@@ -419,12 +435,12 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			fmt.Fprintf(errw, "follows: run %s (goal %s, root %s)\n", after, lineage.Goal, lineage.Root)
 		}
 		shadow := splitNames(judgeShadow)
-		providers := buildProviders(append(shadow, judgeProvider), pcdURL, hosted)
+		providers := buildProviders(append(shadow, judgeProvider, judgeFallback), pcdURL, hosted)
 		// a NOW run judges its closure when a judge model is named OR a
 		// non-default provider is: `--judge-provider jev` alone is a judge
 		modelJudge := jb != nil || (judgeProvider != "" && judgeProvider != judgment.ProviderLLM)
 		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: modelJudge, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath,
-			JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: providers,
+			JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: providers, JudgeFallback: judgeFallback, JudgeEscalate: judgeEscalate,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}
@@ -729,6 +745,7 @@ func cmdServe(args []string, out, errw io.Writer) error {
 	model, judgeModel, lens, work := "haiku", "", "", ""
 	allowTools, denyTools := "", "WebFetch,WebSearch"
 	judgeProvider, judgeShadow, pcdURL := judgment.DefaultProvider, "", judgment.DefaultPCDURL
+	judgeFallback, judgeEscalate := judgment.DefaultFallback, judgment.DefaultEscalate
 	var hosted hostedSpec
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -771,6 +788,20 @@ func cmdServe(args []string, out, errw io.Writer) error {
 			i++
 			if i < len(args) {
 				judgeShadow = args[i]
+			}
+		case "--judge-fallback":
+			i++
+			if i < len(args) {
+				judgeFallback = args[i]
+			}
+		case "--judge-escalate":
+			i++
+			if i < len(args) {
+				f, err := strconv.ParseFloat(args[i], 64)
+				if err != nil || f < 0 || f > 1 {
+					return fmt.Errorf("--judge-escalate wants a number in [0,1], got %q", args[i])
+				}
+				judgeEscalate = f
 			}
 		case "--pcd-url":
 			i++
@@ -826,7 +857,7 @@ func cmdServe(args []string, out, errw io.Writer) error {
 	frame += "\n\n" + spine.AskInstructions(askPath)
 	shadow := splitNames(judgeShadow)
 	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens, Work: work, Frame: frame, AskPath: askPath,
-		JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: buildProviders(append(shadow, judgeProvider), pcdURL, hosted)})
+		JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: buildProviders(append(shadow, judgeProvider, judgeFallback), pcdURL, hosted), JudgeFallback: judgeFallback, JudgeEscalate: judgeEscalate})
 	if err != nil {
 		return err
 	}

@@ -59,6 +59,18 @@ func List() []Default {
 			Why:   "a judge is shown the recorded execution (tool effects and their outputs) next to the worker's claim, bounded: a judge state is one request, and past this the evidence is the run, not the step. Not a flag: the driver and the fold must derive the same bytes, so the bound is a constant both read.",
 		},
 		{
+			Key:   "judgment.fallback",
+			Value: judgment.DefaultFallback,
+			Flag:  "--judge-fallback",
+			Why:   "the provider asked the same judgment when a WIRE primary's call fails or its answer falls under judgment.escalate; its answer is the verdict of record (purpose judge_fallback) and the fold admits it only when the record shows the primary failed or fell under the bar. ON by default because a failed primary would otherwise leave a step unjudged, which is the one outcome worse than a second call. Inert on the default arm: the llm primary has no lower rung.",
+		},
+		{
+			Key:   "judgment.escalate",
+			Value: fmt.Sprint(judgment.DefaultEscalate),
+			Flag:  "--judge-escalate",
+			Why:   "the confidence under which a wire primary's answer is undecided for the judgment and the fallback is asked: 0.6 is the retired Python rung's min_certainty, set on the same 14-case validation corpus. Recorded in the attempt so the fold checks the bar that was in force.",
+		},
+		{
 			Key:   "judgment.timeout",
 			Value: judgment.DefaultTimeout.String(),
 			Flag:  "",

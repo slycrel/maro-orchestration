@@ -65,7 +65,7 @@ For each question:
    in one pass.
 5. Sum each candidate's per-token log-probabilities → one score per
    candidate for the *complete* candidate sequence.
-6. **PMI correction** (on by default, `PCD_PMI=0` to disable): divide each
+6. **PMI correction** (off by default, `PCD_PMI=1` to enable): divide each
    candidate's likelihood under the real state by its likelihood under a
    neutral, state-free version of the same prompt (`"(no state given)"`).
    The state-free baseline for a given `(model, question)` never changes
@@ -127,8 +127,8 @@ cacheable per `(model, question)` because it never depends on `state`.
   correct.
 - **PMI is a correction, not a proof.** It removes one well-known bias
   (surface form competition) but is not a general calibration guarantee.
-  `PCD_PMI=0` exists specifically so PMI-on vs PMI-off can be compared on
-  a labelled set (see `replay.py`).
+  `PCD_PMI` exists specifically so PMI-on vs PMI-off can be compared on
+  a labelled set (see `replay.py`); it is off until that comparison favours it.
 - **Small model, small context.** The default model
   (`Qwen/Qwen2.5-1.5B-Instruct`) is chosen for CPU-feasible latency, not
   peak judgment quality.
@@ -164,7 +164,7 @@ wheels: `pip install --index-url https://download.pytorch.org/whl/cpu torch`).
 | `PCD_DTYPE`   | (auto per device)               | `bf16`/`fp16`/`fp32` override                          |
 | `PCD_PORT`    | `8765`                          | listen port (binds `0.0.0.0`)                          |
 | `PCD_THREADS` | (torch default)                | `torch.set_num_threads(...)` on CPU                    |
-| `PCD_PMI`     | on                              | `0`/`false` disables the PMI correction                |
+| `PCD_PMI`     | off                             | `1`/`true` enables the PMI correction (off since 2026-09-17: the most over-asserting rule on benign documents in the replay) |
 | `PCD_BACKEND` | `torch`                         | `torch` or `mlx` (Apple Silicon only, best-effort)      |
 
 ## Testing

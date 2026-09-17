@@ -83,6 +83,15 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			}
 			b = p
 		}
+		if purpose == invoke.PurposeJudgeFallback {
+			// the ladder: the recorded fallback provider answers the same
+			// question the primary could not
+			p, err := d.provider(a.Attempt.Config.JudgmentFallback, a)
+			if err != nil {
+				return nil, nil, err
+			}
+			b = p
+		}
 		sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n, CrashAt: strings.TrimPrefix(d.CrashAt, "invoke:")}
 		if !strings.HasPrefix(d.CrashAt, "invoke:") {
 			sh.CrashAt = ""
@@ -93,12 +102,13 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			return nil, nil, err
 		}
 		req.Cwd = cwd
-		if purpose == invoke.PurposeJudge {
+		if purpose == invoke.PurposeJudge || purpose == invoke.PurposeJudgeFallback {
 			// a judge request is rendered under the attempt's lens (§13)
 			lr, err := d.lensedRequest(prompt, req.Tools)
 			if err != nil {
 				return nil, nil, err
 			}
+			lr.Purpose = purpose
 			req = lr
 		}
 		o, err := sh.Invoke(ctx, b, req, nil)
@@ -433,9 +443,10 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			// the fork's own judge call (and its verdict, when committed) is
 			// reused like any step's: the composition re-derives the same
 			// typed request bytes, so the reuse lookup matches by address
-			jreq, jprompt, err := d.judgeRequest(a, func(model string) judgment.Request {
+			build := func(model string) judgment.Request {
 				return StepJudgeRequest(model, goal, steps[k-1], composed, invoke.TerminalComplete, true, invoke.ForkEvidence(len(fs.Fork.Members)))
-			})
+			}
+			jreq, jprompt, err := d.judgeRequest(a, build)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -453,14 +464,20 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			if err := d.crash("after_fork_judge"); err != nil {
 				return nil, nil, err
 			}
-			if jo.Terminal != invoke.TerminalFailed {
-				if jr, perr := d.judgeAnswer(a, jreq, jresp); perr == nil {
+			j, err := d.escalate(rs, a, build, jo, jresp, jreq, func(purpose invoke.Purpose, prompt []byte) (*invoke.Outcome, []byte, error) {
+				return invoke_(purpose, prompt, false, false)
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+			if j.o != nil && j.o.Terminal != invoke.TerminalFailed {
+				if jr, perr := d.judgeAnswerVia(a, j); perr == nil {
 					var v *verdict.Verdict
-					if jby != n {
+					if jby != n && j.via == "" {
 						v = verdictOf(jo.Invocation)
 					}
 					if v == nil {
-						v = &verdict.Verdict{Header: header(stepRef(rs.Run, n, k), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindStep, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: jo.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(jo.Receipt)}}}
+						v = &verdict.Verdict{Header: header(stepRef(rs.Run, n, k), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindStep, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: j.o.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(j.o.Receipt)}}}
 						if err := d.commit(ctx, fmt.Sprintf("verdict/%s/%d/step/%d", rs.Run, n, k), v); err != nil {
 							return nil, nil, err
 						}
@@ -539,9 +556,10 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		var jresp []byte
 		var jby uint32 = n
 		evidence := outcomeEvidence(o, d.Store)
-		jreq, jprompt, err := d.judgeRequest(a, func(model string) judgment.Request {
+		build := func(model string) judgment.Request {
 			return StepJudgeRequest(model, goal, steps[k-1], resp, o.Terminal, false, evidence)
-		})
+		}
+		jreq, jprompt, err := d.judgeRequest(a, build)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -561,14 +579,20 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		if err := d.crash("after_step_judge"); err != nil {
 			return nil, nil, err
 		}
-		if jo.Terminal != invoke.TerminalFailed {
-			if jr, perr := d.judgeAnswer(a, jreq, jresp); perr == nil {
+		j, err := d.escalate(rs, a, build, jo, jresp, jreq, func(purpose invoke.Purpose, prompt []byte) (*invoke.Outcome, []byte, error) {
+			return invoke_(purpose, prompt, false, false)
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		if j.o != nil && j.o.Terminal != invoke.TerminalFailed {
+			if jr, perr := d.judgeAnswerVia(a, j); perr == nil {
 				var v *verdict.Verdict
-				if jby != n {
+				if jby != n && j.via == "" {
 					v = verdictOf(jo.Invocation)
 				}
 				if v == nil {
-					v = &verdict.Verdict{Header: header(stepRef(rs.Run, n, k), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindStep, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: jo.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(jo.Receipt)}}}
+					v = &verdict.Verdict{Header: header(stepRef(rs.Run, n, k), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindStep, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: j.o.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(j.o.Receipt)}}}
 					if err := d.commit(ctx, fmt.Sprintf("verdict/%s/%d/step/%d", rs.Run, n, k), v); err != nil {
 						return nil, nil, err
 					}
@@ -655,9 +679,10 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			return out, []*verdict.Verdict{v}, nil
 		}
 	}
-	creq, cprompt, err := d.judgeRequest(a, func(model string) judgment.Request {
+	cbuild := func(model string) judgment.Request {
 		return ClosureJudgeRequest(model, goal, steps, results, partial, evidence)
-	})
+	}
+	creq, cprompt, err := d.judgeRequest(a, cbuild)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -675,9 +700,15 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		return nil, nil, err
 	}
 	out.Usage = usage
-	if jo.Terminal != invoke.TerminalFailed {
-		if jr, perr := d.judgeAnswer(a, creq, jresp); perr == nil {
-			v := &verdict.Verdict{Header: header(runRef(rs.Run), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: jo.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(jo.Receipt)}}}
+	cj, err := d.escalate(rs, a, cbuild, jo, jresp, creq, func(purpose invoke.Purpose, prompt []byte) (*invoke.Outcome, []byte, error) {
+		return invoke_(purpose, prompt, false, false)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if cj.o != nil && cj.o.Terminal != invoke.TerminalFailed {
+		if jr, perr := d.judgeAnswerVia(a, cj); perr == nil {
+			v := &verdict.Verdict{Header: header(runRef(rs.Run), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: cj.o.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(cj.o.Receipt)}}}
 			for _, f := range jr.Falsifiers {
 				if strings.TrimSpace(f) == "" {
 					continue

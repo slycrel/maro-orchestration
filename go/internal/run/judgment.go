@@ -163,6 +163,12 @@ func judgmentBinding(cfg ConfigSnapshot) (string, invoke.Capabilities) {
 // through this same function — one renderer, no second spelling.
 func RenderJudgeRequest(cfg ConfigSnapshot, build func(model string) judgment.Request) (judgment.Request, []byte, error) {
 	name, caps := judgmentBinding(cfg)
+	return RenderJudgeRequestFor(name, caps, build)
+}
+
+// RenderJudgeRequestFor renders under a named provider and its backend
+// snapshot: the primary's binding, or the fallback's.
+func RenderJudgeRequestFor(name string, caps invoke.Capabilities, build func(model string) judgment.Request) (judgment.Request, []byte, error) {
 	req := build(modelOf(caps, name))
 	if judgment.IsWire(name) {
 		b, err := judgment.EncodeRequest(req)
@@ -172,10 +178,33 @@ func RenderJudgeRequest(cfg ConfigSnapshot, build func(model string) judgment.Re
 	return req, b, err
 }
 
+// fallbackBinding is the attempt's recorded fallback arm, when it has one:
+// the provider asked when the primary fails or answers under the escalate
+// bar, and the backend snapshot its invocations carry (a wire fallback's
+// own; the llm arm's is the attempt's judge backend).
+func fallbackBinding(cfg ConfigSnapshot) (string, invoke.Capabilities, bool) {
+	if cfg.JudgmentFallback == "" {
+		return "", invoke.Capabilities{}, false
+	}
+	caps := cfg.Backend
+	if cfg.Judge == JudgeModel && cfg.JudgeBackend.Name != "" {
+		caps = cfg.JudgeBackend
+	}
+	if cfg.JudgmentFallbackBackend != nil {
+		caps = *cfg.JudgmentFallbackBackend
+	}
+	return cfg.JudgmentFallback, caps, true
+}
+
 // ParseJudgeResponse reads a judge's answer under an attempt's binding.
 // A refusal is a refusal: the caller records `unjudged`, never a guess.
 func ParseJudgeResponse(cfg ConfigSnapshot, req judgment.Request, resp []byte) (JudgeResult, error) {
 	name, caps := judgmentBinding(cfg)
+	return ParseJudgeResponseFor(name, caps, req, resp)
+}
+
+// ParseJudgeResponseFor reads an answer under a named provider's binding.
+func ParseJudgeResponseFor(name string, caps invoke.Capabilities, req judgment.Request, resp []byte) (JudgeResult, error) {
 	var res judgment.Response
 	var err error
 	if judgment.IsWire(name) {
@@ -202,6 +231,82 @@ func (d *Driver) judgeRequest(a *AttemptState, build func(model string) judgment
 // judgeAnswer parses a primary judge response into the boundary product.
 func (d *Driver) judgeAnswer(a *AttemptState, req judgment.Request, resp []byte) (JudgeResult, error) {
 	return ParseJudgeResponse(a.Attempt.Config, req, resp)
+}
+
+// judged is the judge answer of record for one judgment: the primary's,
+// or — when the attempt has a fallback and the primary's call failed or
+// its answer fell under the escalate bar — the fallback's, with why.
+type judged struct {
+	o    *invoke.Outcome
+	resp []byte
+	req  judgment.Request // the request the answering provider was asked
+	via  string           // the fallback's name when it answered; "" = the primary
+	why  string           // the escalation reason; "" when the primary's answer stands
+}
+
+// escalate applies the ladder to a primary answer. A failed primary call,
+// a refused answer, or a confidence under the recorded bar makes the
+// judgment UNDECIDED: the fallback provider is asked the same question
+// (purpose judge_fallback) and its answer is the verdict of record. With
+// no fallback recorded the primary's answer stands as it is. A fallback
+// that also fails leaves the judgment unjudged — never a guess, never
+// fail-open. On a resumed attempt the primary's landed call is reused as
+// before; the fallback's is asked again (it is cheap, and one reuse path
+// is enough to keep exact).
+func (d *Driver) escalate(rs *RunState, a *AttemptState, build func(model string) judgment.Request, po *invoke.Outcome, presp []byte, preq judgment.Request,
+	ask func(purpose invoke.Purpose, prompt []byte) (*invoke.Outcome, []byte, error)) (judged, error) {
+	out := judged{o: po, resp: presp, req: preq}
+	name, caps, ok := fallbackBinding(a.Attempt.Config)
+	if !ok {
+		return out, nil
+	}
+	why := ""
+	switch {
+	case po == nil || po.Terminal == invoke.TerminalFailed:
+		why = "primary failed"
+		if po != nil && po.Reason != "" {
+			why += ": " + po.Reason
+		}
+	default:
+		jr, perr := d.judgeAnswer(a, preq, presp)
+		switch {
+		case perr != nil:
+			why = "primary answer refused: " + perr.Error()
+		case jr.Confidence < a.Attempt.Config.JudgmentEscalate:
+			why = fmt.Sprintf("primary confidence %.2f under the escalate bar %.2f", jr.Confidence, a.Attempt.Config.JudgmentEscalate)
+		}
+	}
+	if why == "" {
+		return out, nil
+	}
+	req2, prompt2, err := RenderJudgeRequestFor(name, caps, build)
+	if err != nil {
+		return out, err
+	}
+	n := a.Attempt.Attempt
+	d.emit(rs, n, "judge_escalated", Executing, name+": "+why)
+	o2, resp2, err := ask(invoke.PurposeJudgeFallback, prompt2)
+	if err != nil {
+		return out, err
+	}
+	if o2 == nil || o2.Terminal == invoke.TerminalFailed {
+		r := ""
+		if o2 != nil {
+			r = o2.Reason
+		}
+		d.emit(rs, n, "judge_fallback_failed", Executing, name+": "+r)
+	}
+	return judged{o: o2, resp: resp2, req: req2, via: name, why: why}, nil
+}
+
+// judgeAnswerVia parses the answer of record under the provider that gave
+// it.
+func (d *Driver) judgeAnswerVia(a *AttemptState, j judged) (JudgeResult, error) {
+	if j.via == "" {
+		return d.judgeAnswer(a, j.req, j.resp)
+	}
+	name, caps, _ := fallbackBinding(a.Attempt.Config)
+	return ParseJudgeResponseFor(name, caps, j.req, j.resp)
 }
 
 // shadow asks every configured shadow provider the SAME request the
