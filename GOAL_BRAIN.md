@@ -4150,3 +4150,24 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   artifacts as data, not embed them as Go constants. Engine mechanism/
   policy (e.g. the injection-guard scanner itself) staying code is fine;
   its LEARNED inputs are not.
+- **2026-09-17 (Jev / judgment providers — Jeremy, overnight decrees):**
+  (1) *Three providers, always* — whatever judged decision a seam takes
+  over (step judge, closure judge, intake clarity, routing…), the
+  EXISTING code is refactored to sit behind the same provider interface,
+  so every judgment has the incumbent `llm` (grounded baseline), `jev`,
+  and a no-Jev alternative; amended the same night: the alternative is a
+  cheap HOSTED model (`hosted`, gemini-flash-lite / groq by flag), not
+  the local 1.5B PCD sidecar — Jeremy's M1 sessions concluded that
+  approach does not work; the sidecar stays optional and experimental.
+  (2) Jev testing budget: up to $5 before asking again ($5/month plan +
+  purchased tokens). (3) Landing: branch `jev` is pushed, NOT merged into
+  `successor` until discussed; Jeremy wants test runs once systems are
+  in place. (4) Contract guardrails from his legal read of the TypeSafe
+  MCA: no Jev benchmark/perf numbers in any tracked file (they live under
+  `~/.maro/workspace/judgment/`); no distillation — Jev answers are never
+  labels or tuning material for any other model. Ordinary use as a
+  provider is intended use. Built the same night: the Go judgment seam
+  (`go/internal/judgment`, four providers, shadow arm, report/replay),
+  three adversarial rounds landed (4597e85a). Record:
+  `planning/feature-judgment-providers.md`,
+  `docs/history/2026-09-17-judgment-providers-adversarial-review.md`.
