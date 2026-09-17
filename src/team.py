@@ -143,7 +143,9 @@ def firewall_shared_ctx(
     from context_budget import clip as _clip
 
     scored: List[tuple] = []
-    for k, v in shared_ctx.items():
+    # Snapshot: a parallel peer's post-step effects land in this dict while
+    # this worker assembles its team context (chunk-5 r3).
+    for k, v in list(shared_ctx.items()):
         v_str = _clip(v, max_chars_per_entry)
         entry_words = _tok(k + " " + v_str)
         overlap = len(task_words & entry_words)

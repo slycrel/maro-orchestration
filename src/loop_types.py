@@ -477,6 +477,10 @@ class LoopContext:
     # gate then degrades every edge to soft. Persisted verbatim by every
     # checkpoint writer (checkpoint.Checkpoint.plan_items).
     plan_items: Optional[List[int]] = None
+    # Execution policy this run executes under (fan-out width; 0 =
+    # sequential) — persisted by every checkpoint writer so a resume runs
+    # the same way (`maro resume` re-enters the DAG lane).
+    parallel_fan_out: int = 0
     completed_context: List[str] = field(default_factory=list)
     iteration: int = 0
     step_idx: int = 0

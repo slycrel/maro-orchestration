@@ -1517,9 +1517,14 @@ def execute_step(
 
     # Phase 62: Inject structured artifacts from prior steps
     artifacts_block = ""
+    # Snapshot the items: in the DAG / fan-out lanes a peer's post-step
+    # effects (decisions, artifacts) land in this dict while another
+    # worker assembles its context — a live iteration raises "dictionary
+    # changed size during iteration" and the innocent peer ends blocked
+    # (chunk-5 r2). list(d.items()) is one C-level copy under the GIL.
     if shared_ctx:
         _art_entries = []
-        for _k, _v in shared_ctx.items():
+        for _k, _v in list(shared_ctx.items()):
             if _k.startswith("artifact:"):
                 # Format: "artifact:{step_idx}:{name}" → "{name} (from step {step_idx})"
                 _parts = _k.split(":", 2)
@@ -1539,7 +1544,7 @@ def execute_step(
     decisions_block = ""
     if shared_ctx:
         _dec_entries = []
-        for _k, _v in shared_ctx.items():
+        for _k, _v in list(shared_ctx.items()):
             if _k.startswith("decision:"):
                 _parts = _k.split(":", 2)
                 _dec_label = f"step {_parts[1]}" if len(_parts) >= 2 else _k

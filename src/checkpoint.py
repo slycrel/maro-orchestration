@@ -341,6 +341,11 @@ class Checkpoint:
     # before its first suffix step completes: every row is carried history)
     # must not fall back to reading stale item numbers as suffix positions.
     positioned: bool = False
+    # Execution policy (2026-09-16, chunk 5 review): the fan-out width the
+    # run executed under. A resume restores it so a DAG-written file
+    # re-enters the DAG lane through `maro resume` (the CLI passed no width
+    # and the loop's default is 0 = sequential). 0 = sequential.
+    parallel_fan_out: int = 0
     # Durable plan-node identity (2026-09-16, chunk 4). `step_items[i]` is
     # the NEXT.md item index of `steps[i]` (-1 = never mirrored), so a
     # resume restores the suffix WITH its items instead of paying a planner
@@ -475,6 +480,8 @@ class Checkpoint:
             d["regression"] = self.regression
         if self.positioned:
             d["positioned"] = True
+        if self.parallel_fan_out > 0:
+            d["parallel_fan_out"] = int(self.parallel_fan_out)
         if self.step_items is not None:
             d["step_items"] = list(self.step_items)
         if self.plan_items is not None:
@@ -529,6 +536,7 @@ class Checkpoint:
             # The marker is a JSON boolean or nothing — a hand-edited
             # "false" string must read as legacy, not as positioned.
             positioned=d.get("positioned") is True,
+            parallel_fan_out=max(0, _as_int(d.get("parallel_fan_out"), 0)),
             timestamp=d.get("timestamp", ""),
             parent_loop_id=d.get("parent_loop_id", ""),
             handle_id=d.get("handle_id", ""),
@@ -564,6 +572,7 @@ def write_checkpoint(
     regression: Optional[List[Dict[str, Any]]] = None,
     step_indices: Optional[List[int]] = None,
     plan_items: Optional[List[int]] = None,
+    parallel_fan_out: int = 0,
 ) -> None:
     """Write current loop progress to disk.
 
@@ -670,6 +679,7 @@ def write_checkpoint(
             # list.
             step_items=_ident_w[0],
             plan_items=_ident_w[1],
+            parallel_fan_out=max(0, _as_int(parallel_fan_out, 0)),
             handle_id=_run_handle_id(rd_path) if rd_path else "",
             in_flight=in_flight,
             # A mid-step crash has indeterminate provider state and may have
@@ -956,6 +966,7 @@ def branch_checkpoint(loop_id: str) -> Optional[str]:
         positioned=ckpt.positioned,
         step_items=list(ckpt.step_items) if ckpt.step_items else None,
         plan_items=list(ckpt.plan_items) if ckpt.plan_items else None,
+        parallel_fan_out=int(ckpt.parallel_fan_out or 0),
     )
     path = _checkpoint_path(new_loop_id)
     atomic_write(path, json.dumps(branch.to_dict(), indent=2))

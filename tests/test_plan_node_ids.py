@@ -523,7 +523,8 @@ def test_dag_lane_schedules_a_resumed_suffix_by_its_real_edges(monkeypatch, tmp_
     items = list(ck1.step_items)
     after = _next_items(ck1.project)
     assert [it.index for it in after] == [it.index for it in before], "DAG resume appended fresh items"
-    assert [s.index for s in second.steps] == items[1:]
+    # carried row leads (chunk 5: the lane returns the carried rows like the sequential lane)
+    assert [s.index for s in second.steps] == items
     states = {it.index: it.state for it in after}
     assert all(states[i] == "x" for i in items), states
 

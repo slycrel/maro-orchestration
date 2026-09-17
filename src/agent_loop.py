@@ -229,6 +229,12 @@ def run_agent_loop(
         adapter = ctx.adapter
         interrupt_queue = ctx.interrupt_queue
         _perm_ctx = ctx.perm_ctx
+        # Execution policy travels with every checkpoint (a resume re-enters
+        # the same lane).
+        try:
+            ctx.parallel_fan_out = max(0, int(parallel_fan_out or 0))
+        except (TypeError, ValueError):
+            ctx.parallel_fan_out = 0
 
         # Bind the run-scoped default cwd to this loop's project dir so EVERY
         # agentic subprocess (verify/quality_gate/pre_flight/refinement/claim_probe)
@@ -513,6 +519,7 @@ def run_agent_loop(
                 resumed=bool(_resume_completed),
                 declared=_pf.get("declared"),
                 pre_gated=_pf.get("pre_gated"),
+                carried_outcomes=list(_resume_completed or []),
             )
             if _parallel_result is not None:
                 # Record the fan-out itself and the terminal it returns from.

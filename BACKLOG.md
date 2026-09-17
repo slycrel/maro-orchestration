@@ -7293,11 +7293,67 @@ NOT closed:
     (`loop_planning.use_dag`), and `_run_parallel_path` always returns a
     LoopResult. The real gap is that the DAG / fan-out lane writes no
     checkpoint at all, so a crash mid-DAG resumes as nothing-done — and a DAG
-    resume was blocked on durable plan-node ids — SHIPPED 2026-09-16 (chunk
-    4): the lane now takes its items before Phase D and marks them, so a
-    per-node write under `results_lock` (carrying `ctx.step_indices` /
-    `ctx.plan_items`) is the next chunk; do not add a write to the dead
-    sequential branch.
+    resume was blocked on durable plan-node ids (chunk 4) — **SHIPPED
+    2026-09-16 (chunk 5; record in BACKLOG_DONE):** `_run_steps_dag` commits
+    every row through one `_commit` under `results_lock` and calls
+    `on_progress` in the same critical section; `_run_steps_parallel` calls
+    it per landed outcome; `_run_parallel_path._write_progress` marks the
+    node's item and writes the checkpoint (tagged plan, carried rows +
+    committed rows, items, binding), plus a final write; round-1 fixes
+    (same chunk): node effects (decisions / world facts / regression) run
+    BEFORE the row is durable, the NEXT.md mark records the last APPLIED
+    state and is retried, the status domain is closed at the lane boundary
+    (done/blocked/skipped), the fan-out lane commits every row through one
+    `_commit` with persistence excluded from the workers' deadline, and
+    execution policy travels with the checkpoint (`Checkpoint.parallel_fan_out`,
+    restored by `maro resume`). Remaining: no in-flight marker for the
+    parallel lanes (a missing row re-runs — the safe direction); the dead
+    sequential parallel-batch branch still exists; the two-file kill window
+    between a NEXT.md mark and the checkpoint `os.replace` (errs toward
+    re-running); `_fanout_timeout` is advisory (the pool's exit waits for
+    running workers; a hard per-worker bound needs cancellable processes).
+  - **A failed NEXT.md mark + a crash before the next snapshot = done row,
+    TODO item** (chunk-5 r2, both lanes): the parallel lane retries a failed
+    `mark_item` at every later snapshot, but nothing durable records the
+    debt, so a crash in between leaves the checkpoint saying done while
+    NEXT.md says TODO — later NEXT.md-driven work can execute the item
+    again. The sequential lane has the same two-file shape. Lead: a durable
+    "item sync pending" record (in the checkpoint row, e.g. `item_marked:
+    false`) that resume reconciles by re-marking from the checkpoint — the
+    checkpoint is the authoritative execution record, NEXT.md the mirror.
+  - **Decision-journal rows have no idempotency key** (chunk-5 r3):
+    `record_step_decisions` → `record_decision` mints a fresh UUID per call
+    and the thread brain is append-only, so any re-run of a step's effects
+    (a crash between a node's effects and its durable row; a resume that
+    re-executes a node whose row was lost) appends duplicate decisions.
+    The parallel lane now acknowledges effect families one by one (no
+    same-process bundle retry), but cross-process re-runs still duplicate.
+    Lead: a stable key `(loop_id, plan item, ordinal or content hash)` and
+    dedupe at the journal / brain append.
+  - **Worktree merge-back ignores the outcome status** (chunk-5 r3,
+    pre-existing): `_run_in_step_worktree` calls `merge_back`
+    unconditionally, so a blocked row — including the new execution-contract
+    row for a worker that returned None — merges its partial file changes
+    into the base checkout while the checkpoint re-runs the node on resume.
+    Decide the policy explicitly: skip merge for contract failures (keep the
+    worktree for diagnosis); if ordinary blocked outcomes intentionally merge
+    partial work, distinguish the two with a typed field.
+  - **A carried row's item can collide with a suffix item and finish an
+    unexecuted position** (chunk-5 r1, pre-existing, BOTH lanes): the
+    writer infers every row's current plan position from its item alone
+    (`_done_positions`), so a hand-edited carried row whose item equals a
+    suffix item is promoted from position 0 into that unexecuted suffix
+    position — actual work lost, the unsafe direction. Identity validation
+    checks uniqueness within `step_items` / `plan_items`, not carried rows
+    against the suffix. Lead: persist each row's provenance / position
+    (carried vs this-hop) instead of recomputing from item identity; a
+    carried row stays position 0 until a new outcome for that node commits.
+  - **Run report cardinality with carried rows** (chunk-5 r1, pre-existing,
+    both lanes): `_write_plan_manifest` counts every returned row against
+    the suffix's length ("4/3 done") and looks rows up by positional number
+    although `StepOutcome.index` is a NEXT.md item. Lead: separate
+    history rows from this attempt's rows in `LoopResult` (or count by
+    item ∩ suffix items) — same shape as sequential finalize.
   - **Duplicate step texts defeat the text-keyed interrupt re-pairing** (r2
     finding 2): `_check_loop_interrupts` re-pairs text ↔ item index by text
     (first unused occurrence), so a priority interrupt that injects a text

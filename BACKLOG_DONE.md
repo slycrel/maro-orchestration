@@ -1,5 +1,135 @@
 # Backlog — Completed Archive
 
+## Parallel lanes write the checkpoint — SHIPPED 2026-09-16 (LoopsBench chunk 5)
+
+**Found:** chunk-2 r1 finding 8 / chunk-3 re-examination: the sequential
+loop's parallel-batch branch is unreachable in production and the DAG /
+fan-out lane (`loop_parallel._run_parallel_path`, Phase D, returns before
+Phase E/F) wrote NO checkpoint — a crash mid-DAG resumed as nothing done and
+re-ran every finished node — and marked NEXT.md items only at the very end
+(a crash left every finished node TODO). Blocked on durable plan-node ids
+(chunk 4) until today.
+
+**Fix (doctrine: every finished node is durable, in every lane; one loader
+resumes both lanes' files):** `_run_steps_dag` routes every row commit
+(done, execution error, timeout, not-started, pre-gated, gated dependent)
+through one `_commit(step_idx, outcome)` under `results_lock`, which calls
+`on_progress(snapshot)` in the same critical section (two workers finishing
+together cannot race an older snapshot over a newer one);
+`_run_steps_parallel` calls `on_progress` on its coordinator thread per
+landed outcome. `_run_parallel_path(carried_outcomes=)` supplies
+`_write_progress`: marks each newly committed node's item once
+(`_mark_node`) and writes `write_checkpoint(TAGGED plan, carried rows + one
+`_fanout_row` per committed node, world_facts, regression,
+step_indices=items, plan_items=ctx.plan_items)`, plus a final write with
+every returned row. The plan is the tagged text because a resume re-parses
+`[after:N]` from it and verifies carried items against NEXT.md (which
+mirrors the tagged text). Carried rows now lead the lane's LoopResult too.
+Written only when the lane runs on real items; direct callers without
+`step_indices` keep the old behaviour (positional rows, no write).
+`agent_loop` passes `_resume_completed` into the lane.
+
+**Tests** `tests/test_parallel_checkpoint.py`: fresh DAG whose worker for D
+dies with a BaseException after A/B/C committed → three growing writes,
+the file resumes with only D remaining, A/B/C already marked, the resume
+finishes every item and its checkpoint is complete; resumed DAG suffix
+writes carry A's row in front with the suffix plan/items and the original
+binding; `_commit` unit: every commit path reaches `on_progress`, snapshots
+strictly grow, an `OSError` from the hook never fails the lane; fan-out
+lane per-outcome progress; direct call without items writes nothing.
+
+**Round-1 review (4 lenses, gpt-5.6-sol) → fixed in the same chunk:**
+(A) a node's row was durable BEFORE its decisions / world facts /
+regression obligations were recorded (the parallel path never harvested
+regression at all) — `_node_effects(k, oc)` now runs ONCE per done node
+before its row is written, direct callers included; (B) `_marked` was a
+once-only set recorded before `mark_item` succeeded — now `Dict[int,str]`
+= the last APPLIED NEXT state, so a failed mark is retried at the next
+snapshot and a DAG timeout row later replaced by the worker's real result
+moves the item `!` → `x`; (C) the status domain is closed at the lane
+boundary (`_TERMINAL_STATUSES = {done, blocked, skipped}`,
+`_normalize_outcome`: anything else → blocked with `stuck_reason
+"unrecognized outcome status …"`; `skipped` finishes its position AND
+marks its item done); (E) the fan-out lane's six result-mutation sites go
+through one coordinator-side `_commit`, persistence latency is excluded
+from the workers' deadline (`wait(FIRST_COMPLETED)` loop, deadline extended
+by each landed outcome's processing time), and a late future that RAISED is
+reconciled as `parallel execution error`, not left as a timeout; (F)
+execution policy travels with the checkpoint — `Checkpoint.parallel_fan_out`
+(persisted by every writer from the new `LoopContext.parallel_fan_out`),
+restored by `cli._cmd_resume`, so `maro resume` of a DAG-written file
+re-enters the DAG lane when the unfinished suffix still has a parallel
+level (a pure chain runs sequentially, correctly); (H) the whole
+`_write_progress` body incl. the final write and `_mark_node` is one
+non-fatal boundary. Seven more tests (12 total): timeout-then-late-success
+`['!','x']`; mark failure retried once; status domain; a committed node's
+world fact in its own write and in `ctx.world_facts` before the crash;
+marker RuntimeError on the final write contained; fan-out slow hook does
+not time out a finished peer + late raise → execution error; a REAL
+`cli._cmd_resume` of a DAG-written file (crash on D, suffix D..G with a
+parallel level) re-enters `_run_steps_dag` with exactly the four
+unfinished nodes and marks their items (by loop id through
+`cli._cmd_resume`; the parser / handle-id / `team:` origin is not on the
+test path).
+
+**Round-2 Skeptic on the fix → round 3 (the fix regressed two things):**
+(3) the DAG worker's `_commit` now runs `_node_effects` on the completing
+WORKER thread, so `record_step_decisions` mutated `loop_shared_ctx` while a
+peer iterated it in `step_exec` context assembly ("dictionary changed size
+during iteration" → the innocent peer ended as an execution-error row) —
+fixed at the readers (`list(shared_ctx.items())`, one C-level copy under
+the GIL; `WorldFactLedger` iterations likewise, since `observe()` can now
+run on a lane thread); (4) the DAG timeout path's check-and-commit was two
+lock sections after the `_commit` refactor, so a worker's real `done`
+landing in the gap was overwritten by the synthetic `blocked` — fixed with
+`_commit(..., only_if_absent=True)` (one critical section; the post-pool
+fill uses it too); (2) `_effects_done` was acknowledged BEFORE the effects
+ran, so a transient failure was never retried — acknowledged only after
+every effect ran without raising; (6) a worker returning None hit
+`AttributeError` in gating — `_contract_row` at the executor boundary in
+both workers, both `_commit`s and `_normalize_outcome`; (5) at the fan-out
+timeout a future that is already done is landed as itself (`_land`) before
+any synthetic row; the deadline extension stays (bounded by #outcomes ×
+hook time) and `_fanout_timeout` is advisory by construction — the pool's
+exit waits for running workers. Three more tests (15 total): None-returning
+worker → contract row in both lanes + its declared dependent gated; the
+deterministic legal interleaving (scheduler lock wrapped so the worker's
+`done` lands the first time the coordinator leaves the lock) → the row and
+snapshot stay `done`; a transient world-fact recorder failure → recorded on
+the retry.
+
+**Round-3 Skeptic on the round-2 fix (last round):** (1, HIGH) the
+status domain was closed AFTER scheduling — a `pending` prerequisite dict
+was committed unchanged, the scheduler did not see it as UNMET, and its
+declared dependent ran (the status-domain test faked the scheduler) —
+fixed: `_normalize_outcome` IS the executor boundary in both workers
+(non-dict and non-terminal alike) and at both `_commit`s; a real
+`_run_steps_dag` test asserts the dependent's adapter is never called;
+(2, HIGH) one live `loop_shared_ctx` iteration remained
+(`team.firewall_shared_ctx`, reachable from a worker's team-worker
+creation) — snapshotted; (3, MED) a whole-bundle effects retry re-appended
+decisions to the append-only journal — per-family acknowledgement
+(`decisions` / `facts` / `regression`), a family that ran is not re-run
+when a later one fails; (4, MED) `_run_in_step_worktree` merges back
+unconditionally, so a blocked (incl. contract) row's partial file changes
+merge — pre-existing policy, BACKLOG. Two more tests (17 total).
+
+**Residue → BACKLOG:** a failed NEXT.md mark followed by a crash before
+the next snapshot leaves a done row with a TODO item (process-local retry
+cannot cover it; a durable mark debt reconciled on resume is the lead —
+same two-file shape as the sequential lane); decision-journal rows have
+no idempotency key (a crash between a node's effects and its row, or any
+re-run, appends duplicates — `(loop_id, item, ordinal/content hash)` is
+the lead); worktree merge-back ignores the outcome status (a contract /
+blocked row's partial changes merge); no in-flight marker in the parallel lanes (a
+missing row re-runs — the safe direction); the dead sequential
+parallel-batch branch; a hand-forged carried row whose item collides with
+a suffix item promotes that suffix position (same shape in the sequential
+lane — row provenance / persisted position is the fix); the run report's
+"N/M done" counts carried rows against the suffix denominator (same shape
+as sequential finalize); the two-file kill window between a NEXT.md mark
+and the checkpoint `os.replace` (errs toward re-running).
+
 This is the history of shipped items. When something gets completed in BACKLOG.md, it moves here with its context intact so we keep the "why" / "how" / "source" for future reference.
 
 Live items are in [BACKLOG.md](BACKLOG.md). This file is ingested by the correspondence module so `dev-recall` can surface prior decisions, rejected approaches, and "already-tried" context during new work.

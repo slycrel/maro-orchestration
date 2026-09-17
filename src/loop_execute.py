@@ -302,6 +302,7 @@ def _execute_main_loop(
                     regression=ctx.regression.to_list(),
                     step_indices=step_indices,
                     plan_items=getattr(ctx, "plan_items", None),
+                    parallel_fan_out=getattr(ctx, "parallel_fan_out", 0),
                 )
             except Exception as _rotation_exc:
                 log.warning("executor session rotation checkpoint failed: %s",
@@ -701,7 +702,8 @@ def _execute_main_loop(
                                world_facts=ctx.world_facts.to_list(),
                                regression=ctx.regression.to_list(),
                                step_indices=step_indices,
-                               plan_items=getattr(ctx, "plan_items", None))
+                               plan_items=getattr(ctx, "plan_items", None),
+                               parallel_fan_out=getattr(ctx, "parallel_fan_out", 0))
                 except Exception as _gk_exc:
                     log.warning("gated-step checkpoint write failed: %s", _gk_exc)
                 continue
@@ -1188,7 +1190,8 @@ def _execute_main_loop(
                            world_facts=ctx.world_facts.to_list(),
                            regression=ctx.regression.to_list(),
                            step_indices=step_indices,
-                           plan_items=getattr(ctx, "plan_items", None))
+                           plan_items=getattr(ctx, "plan_items", None),
+                           parallel_fan_out=getattr(ctx, "parallel_fan_out", 0))
         except Exception as _if_exc:
             log.debug("in-flight checkpoint write failed (non-fatal): %s", _if_exc)
 

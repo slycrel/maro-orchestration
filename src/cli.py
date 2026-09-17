@@ -2716,6 +2716,9 @@ def _cmd_resume(args: argparse.Namespace) -> int:
                     ckpt.goal,
                     project=ckpt.project or None,
                     resume_from_loop_id=ckpt.loop_id,
+                    # The run's own execution policy: a DAG-written file
+                    # re-enters the DAG lane (0 would run it sequentially).
+                    parallel_fan_out=int(getattr(ckpt, "parallel_fan_out", 0) or 0),
                     verbose=args.verbose,
                     measurement_class=_measurement_class,
                     handle_id=handle_id,
