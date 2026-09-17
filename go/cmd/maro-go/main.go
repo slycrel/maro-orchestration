@@ -548,11 +548,18 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 		}
 		if len(args) > 0 && args[0] == "resume" {
 			// every provider is wired at its defaults so an attempt that
-			// was judged through jev/hosted/pcd can re-ask its judge
-			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out},
+			// was judged through jev/hosted/pcd can re-ask its judge; the
+			// production timeout and work dir so re-runs see what the
+			// original's did
+			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Work: a.Path("work"),
 				Providers: buildProviders([]string{judgment.ProviderJev, judgment.ProviderHosted, judgment.ProviderPCD}, judgment.DefaultPCDURL, hostedSpec{})}
 			s, err := invoke.NewSubprocess("haiku")
 			if err == nil {
+				// the same tool environment a run's backend gets (the secrets
+				// drop, the ask path): a resumed attempt's calls and re-runs
+				// see what the original's did
+				wireSecrets(s, a, errw)
+				wireAsk(s, a)
 				d.Backend = s
 			} else {
 				fmt.Fprintln(errw, "resume: no subprocess backend available; runs needing re-execution will fail honestly:", err)

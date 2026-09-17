@@ -53,6 +53,11 @@ type Subprocess struct {
 	HandOff *HandOff
 }
 
+// ToolEnv is the environment this backend's tool-bearing calls get beyond
+// the process's own (run.ToolEnver): a re-run of what they ran gets it too.
+// The per-call secrets hand-off file is not reproducible and is not here.
+func (s *Subprocess) ToolEnv() []string { return s.Env }
+
 // HandOff is the per-call secrets file the subprocess backend hands a
 // tool-bearing child (see Subprocess.HandOff).
 type HandOff struct {

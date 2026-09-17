@@ -668,6 +668,21 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 	if terminal == invoke.TerminalPartial {
 		out.Reason = "one or more steps ended partial"
 	}
+	// Regression obligations (LoopsBench item 2): what the done steps
+	// proved is re-run before the closure judge sees the results, and the
+	// observations reach the closure resolution (finish)
+	live, err := d.liveInvocations()
+	if err != nil {
+		return nil, nil, err
+	}
+	obligations, err := deriveObligations(d.Store, live, done, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	reruns, _, err := d.regress(ctx, rs, a, obligations)
+	if err != nil {
+		return nil, nil, err
+	}
 	// an earlier attempt's closure call and verdict are reused: judged once
 	var candidates []*verdict.Verdict
 	for _, p := range rs.Attempts {
@@ -680,7 +695,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		}
 	}
 	cbuild := func(model string) judgment.Request {
-		return ClosureJudgeRequest(model, goal, steps, results, partial, evidence)
+		return ClosureJudgeRequest(model, goal, steps, results, partial, evidence, regressionEvidence(reruns))
 	}
 	creq, cprompt, err := d.judgeRequest(a, cbuild)
 	if err != nil {

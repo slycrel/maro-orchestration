@@ -22,9 +22,13 @@ const (
 	CheckFabricationDiff CheckKind = "fabrication_diff"
 	CheckReceiptComplete CheckKind = "receipt_complete"
 	CheckClaimProbe      CheckKind = "claim_probe"
+	// CheckRegressionRerun re-runs what a done step proved (a test-runner
+	// invocation that passed) at closure: a failing re-run refutes an
+	// achieved closure (run/regression.go, LoopsBench item 2).
+	CheckRegressionRerun CheckKind = "regression_rerun"
 )
 
-var checks = set(CheckPathExists, CheckSymbolExists, CheckFabricationDiff, CheckReceiptComplete, CheckClaimProbe)
+var checks = set(CheckPathExists, CheckSymbolExists, CheckFabricationDiff, CheckReceiptComplete, CheckClaimProbe, CheckRegressionRerun)
 
 // applicability is the registered table of which verdict kinds a check can
 // settle. An observation joins only those groups; a refutation for one kind
@@ -35,6 +39,7 @@ var applicability = map[CheckKind][]VerdictKind{
 	CheckClaimProbe:      {KindProvenance},
 	CheckFabricationDiff: {KindFabrication},
 	CheckReceiptComplete: {KindFabrication},
+	CheckRegressionRerun: {KindClosure},
 }
 
 // Applies reports whether a check can settle a verdict kind.

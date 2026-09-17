@@ -19,7 +19,7 @@
       "used_for": "routing",
       "unknown_value": "rejected",
       "constraint": "defined",
-      "pattern": "^(goal|prompt|response|step_result|deliverable|lesson_text)$",
+      "pattern": "^(goal|prompt|response|step_result|deliverable|lesson_text|evidence)$",
       "rejects": "chunk",
       "measured_by": "internal/thought:TestAbsentAndUnknownKind"
     },

@@ -70,7 +70,10 @@ func StepJudgeRequest(model string, goal []byte, step string, result []byte, ter
 // ClosureJudgeRequest is the closure judge's question about the run. It
 // asks for falsifiers: the arm that can name them does, and the verdict
 // carries them exactly as before.
-func ClosureJudgeRequest(model string, goal []byte, steps []string, results [][]byte, partial []bool, evidence []string) judgment.Request {
+// regression is the closure re-runs' block (regressionEvidence); empty
+// when the attempt had no obligations, and then no section is added, so a
+// run without obligations renders exactly as before item 2 landed.
+func ClosureJudgeRequest(model string, goal []byte, steps []string, results [][]byte, partial []bool, evidence []string, regression string) judgment.Request {
 	state := judgment.Sect("goal", string(goal))
 	for i, s := range steps {
 		note := ""
@@ -90,7 +93,18 @@ func ClosureJudgeRequest(model string, goal []byte, steps []string, results [][]
 			judgment.Section{Key: fmt.Sprintf("result %d", i+1), Text: res + note},
 			judgment.Section{Key: fmt.Sprintf("evidence %d", i+1), Text: ev})
 	}
+	if regression != "" {
+		state.Sections = append(state.Sections, judgment.Section{Key: "regression", Text: regression})
+	}
 	return judgment.Ask1(model, state, QOutcome, judgment.Question{Type: judgment.Choice, Instructions: closureInstructions, Options: closureOptions(), Falsifiers: true})
+}
+
+// regressionEvidence is the closure judge's view of the regression re-runs
+// (LoopsBench item 2): regressionBlock without its prose heading, one line
+// per obligation. Driver and fold both derive it from the committed
+// regression_rerun records, so the closure request re-derives.
+func regressionEvidence(reruns []*RegressionRerun) string {
+	return strings.TrimSpace(strings.TrimPrefix(regressionBlock(reruns), "\n## Regression checks (what a step proved, re-run at closure)\n"))
 }
 
 // JudgmentResult turns a provider's answer into the judge boundary's

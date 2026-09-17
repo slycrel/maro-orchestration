@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "landscape",
+  "kind": "regression_rerun",
   "envelope": "production",
-  "schema": "landscape/1",
-  "go_type": "run.Landscape",
+  "schema": "regression_rerun/1",
+  "go_type": "run.RegressionRerun",
   "fields": [
     {
       "name": "header.ID",
@@ -78,93 +78,93 @@
       "from_header": true
     },
     {
-      "name": "Goal",
-      "wire": "goal",
+      "name": "Step",
+      "wire": "step",
+      "go_type": "int",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Invocation",
+      "wire": "invocation",
       "go_type": "record.RecordID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "AsOf",
-      "wire": "as_of",
-      "go_type": "uint64",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Rule",
-      "wire": "rule",
-      "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Floor",
-      "wire": "floor",
-      "go_type": "float64",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "TopK",
-      "wire": "top_k",
-      "go_type": "int",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Scanned",
-      "wire": "scanned",
-      "go_type": "int",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "BelowFloor",
-      "wire": "below_floor",
-      "go_type": "int",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Candidates",
-      "wire": "candidates",
-      "go_type": "[]run.LandscapeCandidate",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Relation",
-      "wire": "relation",
-      "go_type": "run.Relation",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Chosen",
-      "wire": "chosen",
-      "go_type": "record.RunID",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Reason",
-      "wire": "reason",
-      "go_type": "string",
-      "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Judge",
-      "wire": "judge",
+      "name": "Effect",
+      "wire": "effect",
       "go_type": "record.RecordID",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Argv",
+      "wire": "argv",
+      "go_type": "[]string",
       "omittable": true,
       "is_thought": false
     },
     {
-      "name": "PromptVer",
-      "wire": "prompt_ver",
+      "name": "Env",
+      "wire": "env",
+      "go_type": "[]string",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Dir",
+      "wire": "dir",
+      "go_type": "string",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Exit",
+      "wire": "exit",
       "go_type": "int",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "TimedOut",
+      "wire": "timed_out",
+      "go_type": "bool",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Truncated",
+      "wire": "truncated",
+      "go_type": "bool",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
+      "name": "Stdout",
+      "wire": "stdout",
+      "go_type": "*thought.Ref",
+      "omittable": true,
+      "is_thought": true
+    },
+    {
+      "name": "Stderr",
+      "wire": "stderr",
+      "go_type": "*thought.Ref",
+      "omittable": true,
+      "is_thought": true
+    },
+    {
+      "name": "Outcome",
+      "wire": "outcome",
+      "go_type": "regression.Outcome",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Why",
+      "wire": "why",
+      "go_type": "string",
       "omittable": true,
       "is_thought": false
     }
