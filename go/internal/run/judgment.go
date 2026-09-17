@@ -211,9 +211,14 @@ func (d *Driver) shadow(ctx context.Context, rs *RunState, a *AttemptState, v *v
 			d.emit(rs, n, "shadow_unavailable", Executing, err.Error())
 			continue
 		}
+		// the same question, asked in the shadow's own name: a provider
+		// answers as itself, and a wire provider refuses a model it does
+		// not serve (jev: HTTP 400 "Unknown model: sonnet", seen live).
+		ask := req
+		ask.Model = modelOf(p.Capabilities(), name)
 		sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n}
 		start := time.Now()
-		res, o, err := judgment.Ask(ctx, sh, p, invoke.PurposeShadowJudge, req, d.Timeout)
+		res, o, err := judgment.Ask(ctx, sh, p, invoke.PurposeShadowJudge, ask, d.Timeout)
 		latency := time.Since(start).Milliseconds()
 		sj := &judgment.ShadowJudgment{
 			Header:        header(v.Subject, rs.Run, n, "shadow_judgment/1"),

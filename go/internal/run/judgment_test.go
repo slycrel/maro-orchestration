@@ -21,6 +21,7 @@ type fakeWire struct {
 	outcome string
 	fail    bool
 	calls   int
+	models  []string // the model each request was asked in
 }
 
 func (f *fakeWire) Name() string { return f.name }
@@ -42,6 +43,7 @@ func (f *fakeWire) Complete(ctx context.Context, req invoke.Request, sink invoke
 	if err != nil {
 		return nil, err
 	}
+	f.models = append(f.models, parsed.Model)
 	opts := parsed.Questions[QOutcome].Options
 	choice := opts[len(opts)-1].Name
 	if f.outcome != "" {
@@ -238,5 +240,37 @@ func TestAnUnwiredProviderIsRefused(t *testing.T) {
 	_, err := d.Run(ctxBg, []byte("do one thing"), DeliveryPolicy{Required: TransportAccepted})
 	if err == nil || !strings.Contains(err.Error(), "no judgment provider") {
 		t.Fatalf("want a refusal, got %v", err)
+	}
+}
+
+// A shadow is asked in its OWN name. Found live: the arm forwarded the
+// primary's model, and the wire provider answered HTTP 400 "Unknown
+// model: sonnet" — the question travels, the model does not.
+func TestAShadowIsAskedInItsOwnModel(t *testing.T) {
+	sp := &fakeWire{name: judgment.ProviderJev}
+	h := open(t)
+	exec, judge := agendaBackends(
+		[]string{"Collected 12 rows of numbers", "Summary written: revenue flat"},
+		[]string{intentClear, planTwo, judgeDone, judgeDone, closureYes})
+	d := h.agenda(exec, judge)
+	d.JudgeShadow = []string{sp.Name()}
+	d.Providers = map[string]judgment.Provider{sp.Name(): sp}
+	if _, err := d.Run(ctxBg, []byte("two steps"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sp.models) == 0 {
+		t.Fatal("the shadow was never asked")
+	}
+	for i, m := range sp.models {
+		if m != sp.Capabilities().Model {
+			t.Fatalf("request %d asked in %q, not the provider's own %q", i, m, sp.Capabilities().Model)
+		}
+	}
+	// and the recorded prompt is the request as asked, so the arm is
+	// auditable without re-deriving it
+	for _, s := range shadowRecords(t, h.j) {
+		if s.Failed {
+			t.Fatalf("shadow failed: %s", s.Reason)
+		}
 	}
 }
