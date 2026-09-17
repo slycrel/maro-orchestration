@@ -2530,3 +2530,52 @@ Owed on this branch: fix F9 (riders into `stepPrompt` + fork children,
 prompt-template version bump, fold parity) and F20 (answer→follow-up as
 one recoverable sequence, or a retry verb); census r30's five HIGHs
 (6a09e8bd) against F19–F21.
+
+## Judgment — one typed seam, four providers, a shadow arm (2026-09-17, branch `jev`)
+
+A judgment is now a typed question with a typed answer, not a prompt
+string parsed by hope. `internal/judgment` carries the shape — Noul,
+Choice and Score questions, answers with a distribution and a confidence
+— and encodes it as TypeSafe's System One wire body exactly, so a
+sidecar that mimics that shape works through the same code with nothing
+added.
+
+Providers are `invoke.Backend`s, which is the whole trick: the
+invocation state machine, its receipts, usage accounting and the fold's
+parity checks apply to a judgment call exactly as to any other, and a
+new provider inherits all of it. Four are wired — `llm` (the incumbent
+generative judge over the run's own backend, default), `hosted` (a cheap
+OpenAI-compatible chat model behind the same prose template), `jev` and
+`pcd` (System One over HTTP, tool-less, cannot act outward, key from the
+secrets store by name and never printed).
+
+The three judges — AGENDA step, AGENDA closure, NOW closure — express
+their question as a Request instead of building their own prompt. One
+renderer serves both the driver and the fold, so byte-for-byte
+re-derivation cannot drift into two spellings; the prose template
+carries a version and the parse is strict (a malformed answer is a
+failed terminal, never a guess).
+
+The shadow arm asks every configured provider the same question after
+the primary answered, and commits a `shadow_judgment`. It cannot change
+a verdict, and not by discipline: the record lands in the CONTROL
+envelope and the resolver reads production only, which a scan asserts.
+Default is empty — a second opinion costs money and reaches the network,
+so it never turns itself on. `maro-go judgment report` renders the
+agreement, the disagreements and the latency; `judgment replay` runs a
+labelled corpus past any set of providers; an unreachable provider is a
+skipped line, never a failed run.
+
+- **116. A second opinion must be asked in its own name.** The first live
+  shadowed run forwarded the primary's model into the wire body and the
+  provider answered HTTP 400 for a model it does not serve. Recorded as a
+  failed shadow with the run untouched — the arm working exactly as
+  designed *and* a bug. The question, the state and the vocabulary
+  travel; the model belongs to the provider.
+- **117. A judgment's own defaults registry.** The Python
+  `docs/DEFAULTS.md` census demands a reader in `src/` for every dotted
+  key in a table row, so a Go key placed there fails the Python suite.
+  The Go engine gets `go/DEFAULTS.md` plus `internal/defaults`, censused
+  in both directions, and the Python doc points at it in prose. Two
+  engines, two registries, one rule: OFF when it spends, ON when it only
+  adds evidence.
