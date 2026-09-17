@@ -231,6 +231,33 @@ type ConfigSnapshot struct {
 	// config is complete on its own record. The fold checks equality.
 	Policy     record.RecordID          `json:"policy"`
 	Mechanisms map[learn.Mechanism]bool `json:"mechanisms"`
+	// Judgment is the primary judgment provider every judge of this
+	// attempt asked through (§6 over the §4 seam). ABSENT = `llm`, the
+	// default and the behaviour that predates the seam — so an attempt
+	// on the default arm records exactly what it always did.
+	Judgment string `json:"judgment,omitempty"`
+	// JudgmentBackend is the wire provider's capability snapshot, present
+	// iff Judgment names one: the judge invocations of the attempt ran on
+	// IT, not on JudgeBackend (which still binds intent, plan and render).
+	JudgmentBackend *invoke.Capabilities `json:"judgment_backend,omitempty"`
+	// Shadow lists the providers asked the same questions for measurement
+	// only. Absent = none, the default: a shadow arm spends, so it is
+	// never on because the code shipped.
+	Shadow []string `json:"shadow,omitempty"`
+	// JudgmentFallback is the provider asked the same judgment when the
+	// primary's call fails or answers under JudgmentEscalate; its answer
+	// is the verdict of record (purpose judge_fallback). Absent = none,
+	// and it is recorded only when the primary is a wire provider — the
+	// default arm records nothing here and behaves as it always did.
+	JudgmentFallback string `json:"judgment_fallback,omitempty"`
+	// JudgmentFallbackBackend is the fallback's capability snapshot when
+	// the fallback is itself a wire provider; absent = the llm arm over
+	// the attempt's judge backend.
+	JudgmentFallbackBackend *invoke.Capabilities `json:"judgment_fallback_backend,omitempty"`
+	// JudgmentEscalate is the confidence under which a primary answer is
+	// undecided and the fallback is asked. Recorded so the fold checks
+	// the bar that was in force, not a live default.
+	JudgmentEscalate float64 `json:"judgment_escalate,omitempty"`
 }
 
 // RunAttempt starts an attempt generation of a goal. Attempt 1 is the first

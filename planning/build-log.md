@@ -2878,3 +2878,84 @@ claims and settles the run it continues — audit §3 item 2), the ask
 grounding gate, work-dir binding, container executor + env-request
 strand; the resolution-completeness check (a Resolution naming ALL
 committed observations).
+
+## Judgment — one typed seam, four providers, a shadow arm (2026-09-17, branch `jev`)
+
+A judgment is now a typed question with a typed answer, not a prompt
+string parsed by hope. `internal/judgment` carries the shape — Noul,
+Choice and Score questions, answers with a distribution and a confidence
+— and encodes it as TypeSafe's System One wire body exactly, so a
+sidecar that mimics that shape works through the same code with nothing
+added.
+
+Providers are `invoke.Backend`s, which is the whole trick: the
+invocation state machine, its receipts, usage accounting and the fold's
+parity checks apply to a judgment call exactly as to any other, and a
+new provider inherits all of it. Four are wired — `llm` (the incumbent
+generative judge over the run's own backend, default), `hosted` (a cheap
+OpenAI-compatible chat model behind the same prose template), `jev` and
+`pcd` (System One over HTTP, tool-less, cannot act outward, key from the
+secrets store by name and never printed).
+
+The three judges — AGENDA step, AGENDA closure, NOW closure — express
+their question as a Request instead of building their own prompt. One
+renderer serves both the driver and the fold, so byte-for-byte
+re-derivation cannot drift into two spellings; the prose template
+carries a version and the parse is strict (a malformed answer is a
+failed terminal, never a guess).
+
+The shadow arm asks every configured provider the same question after
+the primary answered, and commits a `shadow_judgment`. It cannot change
+a verdict, and not by discipline: the record lands in the CONTROL
+envelope and the resolver reads production only, which a scan asserts.
+Default is empty — a second opinion costs money and reaches the network,
+so it never turns itself on. `maro-go judgment report` renders the
+agreement, the disagreements and the latency; `judgment replay` runs a
+labelled corpus past any set of providers; an unreachable provider is a
+skipped line, never a failed run.
+
+- **133. A second opinion must be asked in its own name.** The first live
+  shadowed run forwarded the primary's model into the wire body and the
+  provider answered HTTP 400 for a model it does not serve. Recorded as a
+  failed shadow with the run untouched — the arm working exactly as
+  designed *and* a bug. The question, the state and the vocabulary
+  travel; the model belongs to the provider.
+- **134. A judgment's own defaults registry.** The Python
+  `docs/DEFAULTS.md` census demands a reader in `src/` for every dotted
+  key in a table row, so a Go key placed there fails the Python suite.
+  The Go engine gets `go/DEFAULTS.md` plus `internal/defaults`, censused
+  in both directions, and the Python doc points at it in prose. Two
+  engines, two registries, one rule: OFF when it spends, ON when it only
+  adds evidence.
+- **135. Review r1 of the seam: the finding every seat found was the one
+  the tests could not.** Four Codex seats converged on the same HIGH from
+  independent probes: the AGENDA invocation closure sent every judge to
+  the incumbent backend whatever `--judge-provider` said. The
+  shadow-isolation test's adversary made the shadow path airtight and
+  left the primary path with no non-default coverage. Fixed at the
+  closure (a judge is asked through `d.primary(a)`), pinned by a run
+  whose judge backend scripts only intent + plan. Same round: the
+  resolved key is scrubbed from every byte a client hands the shell
+  (`invoke.Redact`, not a "bearer " prefix match); a provider's timeout
+  is a CEILING over the caller's twenty-minute budget and shadows ask
+  under the registered minute; a fork child inherits the judgment
+  binding through the one `childDriver` constructor; the decoder
+  requires EOF, refuses duplicate keys and un-normalised distributions;
+  the sidecar bounds its framing. Record:
+  `docs/history/2026-09-17-judgment-providers-adversarial-review.md`.
+- **136. A true finding can still be out of scope.** "Old journals no
+  longer fold" was correct and was settled with binaries, not argument:
+  the `successor` engine already refuses the live shadow-go journal at
+  the intent prompt (84a7c12a changed it on 09-07 with no version
+  dispatch). Journal↔template versioning is an engine gap, recorded as a
+  lead, not a fix bolted onto this seam.
+- **137. Three rounds, each one deeper into the fix layer.** r2 found the
+  r1 scrub applied to one representation (bytes after the parse, the
+  reason after the clip); r3 found the r2 scrub blind to a `\u`-escaped
+  key and the r2 fold blind to Unicode (`ſcore` is `score` to
+  `encoding/json`). The answer both times was to move the operation to
+  where the meaning is: redact decoded string VALUES and re-encode
+  (`invoke.RedactJSON`), fold by `unicode.SimpleFold` orbits (`foldKey`),
+  refuse a key too short to be one before dispatch. Stopped at three by
+  the round budget; every finding in r3 was in the r2 diff, none in the
+  chunk under it.

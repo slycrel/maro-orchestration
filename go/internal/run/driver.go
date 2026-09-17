@@ -15,6 +15,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/judgment"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
@@ -113,6 +114,27 @@ type Driver struct {
 	// recorded input that rides into every intent, plan and NOW execute
 	// request. Nil = none.
 	Context []byte
+	// JudgeProvider is the primary judgment provider name (llm | jev |
+	// pcd); "" = llm, the existing generative judge over the existing
+	// judge backend, so behaviour is unchanged unless it is set.
+	JudgeProvider string
+	// Providers are the wire judgment providers this process built (by
+	// name). The llm arm needs no entry: it is the attempt's own judge
+	// backend.
+	Providers map[string]judgment.Provider
+	// JudgeShadow names providers asked every judgment the primary was
+	// asked, for measurement only. Empty by default; a shadow answer can
+	// never change a verdict (its record is a control record the
+	// resolver cannot read).
+	JudgeShadow []string
+	// JudgeFallback names the provider asked the same judgment when a
+	// wire primary's call fails or answers under JudgeEscalate; its
+	// answer is the verdict of record. Recorded (and in force) only when
+	// JudgeProvider is a wire provider, so the default arm is untouched.
+	JudgeFallback string
+	// JudgeEscalate is the confidence under which a wire primary's answer
+	// is undecided and JudgeFallback is asked.
+	JudgeEscalate float64
 	// Lens is the persona lens every judge request of this driver's runs
 	// is rendered under (§13); "" or "neutral" = no prefix. Recorded in
 	// the attempt config; the fold checks each judge request begins with it.
@@ -260,6 +282,22 @@ func (d *Driver) validate() error {
 	if d.Judge == nil {
 		d.Judge = d.Backend
 	}
+	// the judgment providers: a name nothing wired is a misconfiguration,
+	// not a silent fallback to the default arm
+	for _, name := range append([]string{d.JudgeProvider}, d.JudgeShadow...) {
+		if name == "" || name == judgment.ProviderLLM {
+			continue
+		}
+		if d.Providers[name] == nil {
+			return fmt.Errorf("%w: no judgment provider %q is wired (known: %v)", ErrConfig, name, judgment.Known())
+		}
+	}
+	// a wire provider is asked in JSON, and a persona lens is prose that
+	// every judge request must BEGIN with (§13): the two cannot both be
+	// true, so the driver says so instead of mangling one of them.
+	if d.lensName() != "" && judgment.IsWire(d.JudgeProvider) {
+		return fmt.Errorf("%w: judgment provider %q takes a JSON request and cannot carry the prose lens %q — run the lens on the llm arm", ErrConfig, d.JudgeProvider, d.lensName())
+	}
 	if d.MaxDeliveryAttempts < 0 || d.MaxAttempts < 0 {
 		return fmt.Errorf("%w: bounds must be positive (0 = default)", ErrConfig)
 	}
@@ -303,6 +341,38 @@ func (d *Driver) config(lane Lane, pol *learn.PolicySelection) (ConfigSnapshot, 
 		c.Judge, c.PlanCardinality, c.JudgeBackend = JudgeModel, 0, judge.Capabilities()
 	} else if d.ModelJudge {
 		c.Judge, c.JudgeBackend = JudgeModel, judge.Capabilities()
+	}
+	// the judgment binding: which provider the attempt's judges asked
+	// through, and (for a wire provider) the backend snapshot its judge
+	// invocations carry. The llm arm is recorded as absent: it is the
+	// default, and an attempt on it records what it always did.
+	if d.JudgeProvider != "" && d.JudgeProvider != judgment.ProviderLLM {
+		p := d.Providers[d.JudgeProvider]
+		if p == nil {
+			return ConfigSnapshot{}, fmt.Errorf("%w: no judgment provider %q is wired (known: %v)", ErrConfig, d.JudgeProvider, judgment.Known())
+		}
+		caps := p.Capabilities()
+		c.Judgment, c.JudgmentBackend = d.JudgeProvider, &caps
+		// the ladder rides only a wire primary: the incumbent llm arm has
+		// no lower rung, and records nothing here
+		if d.JudgeFallback != "" && d.JudgeFallback != d.JudgeProvider {
+			c.JudgmentFallback, c.JudgmentEscalate = d.JudgeFallback, d.JudgeEscalate
+			if judgment.IsWire(d.JudgeFallback) {
+				fp := d.Providers[d.JudgeFallback]
+				if fp == nil {
+					return ConfigSnapshot{}, fmt.Errorf("%w: no judgment provider %q is wired for the fallback (known: %v)", ErrConfig, d.JudgeFallback, judgment.Known())
+				}
+				fc := fp.Capabilities()
+				c.JudgmentFallbackBackend = &fc
+			} else if d.JudgeFallback != judgment.ProviderLLM {
+				if d.Providers[d.JudgeFallback] == nil {
+					return ConfigSnapshot{}, fmt.Errorf("%w: no judgment provider %q is wired for the fallback (known: %v)", ErrConfig, d.JudgeFallback, judgment.Known())
+				}
+			}
+		}
+	}
+	if len(d.JudgeShadow) > 0 {
+		c.Shadow = append([]string{}, d.JudgeShadow...)
 	}
 	return c, nil
 }
@@ -904,21 +974,68 @@ func (d *Driver) nowClosureJudge(ctx context.Context, rs *RunState, a *AttemptSt
 			return nil, err
 		}
 	}
+	// the one call's recorded execution, read from the journal (the fold
+	// reads the same records)
+	evidence := invoke.EvidenceUnavailable
+	if out.Invocation != "" {
+		states, err := journalStates(d.J, map[record.RecordID]bool{out.Invocation: true})
+		if err != nil {
+			return nil, err
+		}
+		evidence = stateEvidence(states[out.Invocation], d.Store)
+	}
 	sh := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n}
-	req, err := d.lensedRequest(append(closurePrompt(goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}), regressionBlock(a.Regression)...), false)
+	build := func(model string) judgment.Request {
+		return ClosureJudgeRequest(model, goal, []string{string(goal)}, [][]byte{resp}, []bool{out.Terminal == invoke.TerminalPartial}, []string{evidence}, regressionEvidence(a.Regression))
+	}
+	jreq, prompt, err := d.judgeRequest(a, build)
 	if err != nil {
 		return nil, err
 	}
-	jo, err := sh.Invoke(ctx, d.judge(a), req, nil)
-	if err != nil || jo.Err != nil || jo.Terminal == invoke.TerminalFailed {
+	req, err := d.lensedRequest(prompt, false)
+	if err != nil {
 		return nil, err
 	}
-	jr, perr := ParseJudge(jo.Response, "achieved", "not_achieved", "unknown")
+	p, err := d.primary(a)
+	if err != nil {
+		return nil, err
+	}
+	jo, err := sh.Invoke(ctx, p, req, nil)
+	if err != nil || jo.Err != nil {
+		return nil, err
+	}
+	var presp []byte
+	if jo != nil {
+		presp = jo.Response
+	}
+	j, err := d.escalate(rs, a, build, jo, presp, jreq, func(purpose invoke.Purpose, prompt []byte) (*invoke.Outcome, []byte, error) {
+		fp, err := d.provider(a.Attempt.Config.JudgmentFallback, a)
+		if err != nil {
+			return nil, nil, err
+		}
+		fr, err := d.lensedRequest(prompt, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		fr.Purpose = purpose
+		o, err := sh.Invoke(ctx, fp, fr, nil)
+		if err != nil || o == nil {
+			return o, nil, err
+		}
+		return o, o.Response, o.Err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if j.o == nil || j.o.Terminal == invoke.TerminalFailed {
+		return nil, nil
+	}
+	jr, perr := d.judgeAnswerVia(a, j)
 	if perr != nil {
 		d.emit(rs, n, "closure_unjudged", Executing, perr.Error())
 		return nil, nil
 	}
-	v := &verdict.Verdict{Header: header(runRef(rs.Run), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: jo.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(jo.Receipt)}}}
+	v := &verdict.Verdict{Header: header(runRef(rs.Run), rs.Run, n, "verdict/1"), VerdictKind: verdict.KindClosure, Outcome: jr.Outcome, Confidence: jr.Confidence, Source: verdict.Source{Standing: verdict.StandingJudge, Ref: j.o.Invocation}, Direction: verdict.Both, Basis: []record.Ref{{Kind: invoke.KindReceipt, ID: string(j.o.Receipt)}}}
 	for _, f := range jr.Falsifiers {
 		if strings.TrimSpace(f) == "" {
 			continue
@@ -933,6 +1050,9 @@ func (d *Driver) nowClosureJudge(ctx context.Context, rs *RunState, a *AttemptSt
 		return nil, err
 	}
 	a.Verdicts = append(a.Verdicts, v)
+	if err := d.shadow(ctx, rs, a, v, jreq); err != nil {
+		return nil, err
+	}
 	return v, nil
 }
 

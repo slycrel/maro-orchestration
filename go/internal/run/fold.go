@@ -13,6 +13,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/judgment"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
@@ -1148,8 +1149,20 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 		return nil
 	}
 	st := inv[v.Source.Ref]
-	if st == nil || st.Invocation.RunID != rs.Run || st.Invocation.Purpose != invoke.PurposeJudge || st.Receipt == nil {
+	if st == nil || st.Invocation.RunID != rs.Run || (st.Invocation.Purpose != invoke.PurposeJudge && st.Invocation.Purpose != invoke.PurposeJudgeFallback) || st.Receipt == nil {
 		return fmt.Errorf("run: %s attempt %d judge verdict %s cites %s, which is not a judge call of the run with a receipt", rs.Run, v.Attempt, v.ID, v.Source.Ref)
+	}
+	// the arm that answered: the primary's binding, or — for a fallback
+	// call — the recorded fallback's; a fallback call with no fallback
+	// recorded is not a judgment of this attempt
+	via, viaCaps := judgmentBinding(a.Attempt.Config)
+	fallback := st.Invocation.Purpose == invoke.PurposeJudgeFallback
+	if fallback {
+		name, caps, ok := fallbackBinding(a.Attempt.Config)
+		if !ok {
+			return fmt.Errorf("run: %s attempt %d judge verdict %s cites a fallback call %s but the attempt records no fallback", rs.Run, v.Attempt, v.ID, v.Source.Ref)
+		}
+		via, viaCaps = name, caps
 	}
 	if len(v.Basis) != 1 || v.Basis[0].ID != string(st.Receipt.ID) {
 		return fmt.Errorf("run: %s attempt %d judge verdict %s does not cite its receipt as basis", rs.Run, v.Attempt, v.ID)
@@ -1163,7 +1176,8 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 		return err
 	}
 	var want []byte
-	var allowed []string
+	var jreq judgment.Request
+	var build func(model string) judgment.Request
 	switch v.VerdictKind {
 	case verdict.KindStep:
 		var n uint32
@@ -1181,10 +1195,16 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 		// invocation whose request re-derives as step k's prompt
 		var judged []byte
 		var term invoke.TerminalState = invoke.TerminalComplete
+		evidence := invoke.EvidenceUnavailable
 		if k-1 < len(results) {
 			judged = results[k-1]
 			if partial[k-1] {
 				term = invoke.TerminalPartial
+			}
+			// the step is committed: its evidence is what the step record says
+			// it was, from the same states the driver read
+			if k-1 < len(a.Steps) && a.Steps[k-1].Ordinal == k {
+				evidence = stepEvidence(a.Steps[k-1], forkMembersIn(forks, a.Steps[k-1].Fork), func(id record.RecordID) *invoke.State { return inv[id] }, store)
 			}
 		} else if a.Plan.ParallelAt(k) != nil {
 			var fs *ForkState
@@ -1201,6 +1221,7 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 				return err
 			}
 			judged = b
+			evidence = invoke.ForkEvidence(len(fs.Fork.Members))
 		} else {
 			wantReq, err := stepRequest(rs, a, k, learned, store)
 			if err != nil {
@@ -1215,6 +1236,7 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 							return err
 						}
 						judged, term, found = b, es.Terminal.State, true
+						evidence = stateEvidence(es, store)
 					}
 				}
 			}
@@ -1222,20 +1244,33 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 				return fmt.Errorf("run: %s attempt %d step verdict %s judges step %d before any execute of it", rs.Run, v.Attempt, v.ID, k)
 			}
 		}
-		want, allowed = stepJudgePrompt(goal, steps[k-1], judged, term, a.Plan.ParallelAt(k) != nil), []string{"done", "blocked", "unclear"}
+		fork := a.Plan.ParallelAt(k) != nil
+		build = func(model string) judgment.Request {
+			return StepJudgeRequest(model, goal, steps[k-1], judged, term, fork, evidence)
+		}
 	case verdict.KindClosure:
-		allowed = []string{"achieved", "not_achieved", "unknown"}
+		// the closure judge sees the regression re-runs (what the done
+		// steps proved, re-run at closure) before judging
+		reruns, err := closureReruns(rs, a, inv, store)
+		if err != nil {
+			return err
+		}
+		regression := regressionEvidence(reruns)
 		if a.Plan != nil {
 			steps, results, partial, err := planTexts(a, store)
 			if err != nil {
 				return err
 			}
-			want = closurePrompt(goal, steps, results, partial)
+			evidence := planEvidence(a, func(id record.RecordID) int { return forkMembersIn(forks, id) }, func(id record.RecordID) *invoke.State { return inv[id] }, store)
+			build = func(model string) judgment.Request {
+				return ClosureJudgeRequest(model, goal, steps, results, partial, evidence, regression)
+			}
 		} else {
 			// a NOW run with the model judge: the goal is its own one step and
 			// the judged result is the newest execute receipt of the run
 			var judged []byte
 			var term invoke.TerminalState
+			evidence := invoke.EvidenceUnavailable
 			found := false
 			for _, p := range rs.Attempts {
 				if p.Attempt.Attempt > a.Attempt.Attempt {
@@ -1248,24 +1283,25 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 							return err
 						}
 						judged, term, found = b, es.Terminal.State, true
+						evidence = stateEvidence(es, store)
 					}
 				}
 			}
 			if !found {
 				return fmt.Errorf("run: %s attempt %d closure verdict %s before any execute receipt", rs.Run, v.Attempt, v.ID)
 			}
-			want = closurePrompt(goal, []string{string(goal)}, [][]byte{judged}, []bool{term == invoke.TerminalPartial})
+			build = func(model string) judgment.Request {
+				return ClosureJudgeRequest(model, goal, []string{string(goal)}, [][]byte{judged}, []bool{term == invoke.TerminalPartial}, []string{evidence}, regression)
+			}
 		}
-		// the closure judge sees the regression re-runs (what the done
-		// steps proved, re-run at closure) before judging
-		reruns, err := closureReruns(rs, a, inv, store)
-		if err != nil {
-			return err
-		}
-		want = append(want, regressionBlock(reruns)...)
 	default:
 		return nil
 	}
+	req, b, err := RenderJudgeRequestFor(via, viaCaps, build)
+	if err != nil {
+		return fmt.Errorf("run: %s attempt %d judge verdict %s: %w", rs.Run, v.Attempt, v.ID, err)
+	}
+	jreq, want = req, b
 	if lt := a.Attempt.Config.LensText; lt != nil {
 		// the attempt judges under a lens: the prompt is the CONFIGURED lens
 		// text over the same facts (§13) — the binding, not whatever the
@@ -1279,11 +1315,53 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 	if st.Invocation.Request != thought.Address(thought.Prompt, want) {
 		return fmt.Errorf("run: %s attempt %d judge verdict %s: invocation %s was not asked this judgement's prompt", rs.Run, v.Attempt, v.ID, v.Source.Ref)
 	}
-	jr, perr := ParseJudge(resp, allowed...)
+	jr, perr := ParseJudgeResponseFor(via, viaCaps, jreq, resp)
 	if perr != nil || jr.Outcome != v.Outcome || jr.Confidence != v.Confidence {
 		return fmt.Errorf("run: %s attempt %d judge verdict %s does not re-derive from response %s (%v)", rs.Run, v.Attempt, v.ID, st.Receipt.Response.Hash, perr)
 	}
-	return nil
+	if !fallback {
+		return nil
+	}
+	// a fallback verdict is admissible only when the record shows why:
+	// a primary call for this same judgment — the primary's rendering of
+	// the same request — that ended failed, or answered under the
+	// recorded escalate bar, or answered something the primary's parser
+	// refuses. Anything else is a verdict that bypassed the primary.
+	pname, pcaps := judgmentBinding(a.Attempt.Config)
+	preq, pb, err := RenderJudgeRequestFor(pname, pcaps, build)
+	if err != nil {
+		return err
+	}
+	if lt := a.Attempt.Config.LensText; lt != nil {
+		lb, err := store.Get(*lt)
+		if err != nil {
+			return err
+		}
+		pb = Lensed(lb, pb)
+	}
+	paddr := thought.Address(thought.Prompt, pb)
+	for _, p := range rs.Attempts {
+		if p.Attempt.Attempt > a.Attempt.Attempt {
+			break
+		}
+		for _, ps := range p.Invocations {
+			if ps.Invocation.Purpose != invoke.PurposeJudge || ps.Invocation.Request != paddr {
+				continue
+			}
+			if ps.Terminal == nil || ps.Terminal.State == invoke.TerminalFailed || ps.Receipt == nil {
+				return nil // the primary's call failed: escalation justified
+			}
+			pr, err := store.Get(ps.Receipt.Response)
+			if err != nil {
+				return err
+			}
+			pjr, perr := ParseJudgeResponseFor(pname, pcaps, preq, pr)
+			if perr != nil || pjr.Confidence < a.Attempt.Config.JudgmentEscalate {
+				return nil // refused, or under the bar: escalation justified
+			}
+		}
+	}
+	return fmt.Errorf("run: %s attempt %d judge verdict %s was answered by the fallback %s with no failed or under-bar primary call in the record", rs.Run, v.Attempt, v.ID, via)
 }
 
 // checkTransition executes the cross-record rules a transition claims.
@@ -1325,13 +1403,14 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 			agenda := a.Attempt.Config.Lane == LaneAgenda
 			if agenda {
 				// usage is what the goal cost so far: every receipt of every
-				// attempt — except the tail's diagnose calls, which are the
-				// tail's cost, land after the outcome is recorded, and must
-				// not change it
+				// attempt — except the calls made BESIDE the goal (the
+				// tail's diagnosis, the evaluator's score, the shadow
+				// arm's measurement), which are not its cost and must not
+				// change its recorded outcome
 				var sum invoke.Usage
 				for _, p := range rs.Attempts {
 					for _, is := range p.Invocations {
-						if is.Receipt != nil && is.Invocation.Purpose != invoke.PurposeDiagnose && is.Invocation.Purpose != invoke.PurposeEvaluate {
+						if is.Receipt != nil && !asideOfTheGoal(is.Invocation.Purpose) {
 							sum = add(sum, is.Receipt.Usage)
 						}
 					}
@@ -1731,10 +1810,23 @@ func checkBackend(rs *RunState, a *AttemptState, is *invoke.State) error {
 	switch inv.Purpose {
 	case invoke.PurposeExecute:
 		want = cfg.Backend
+	case invoke.PurposeJudgeFallback:
+		name, caps, ok := fallbackBinding(cfg)
+		if !ok {
+			return fmt.Errorf("run: %s attempt %d fallback judge invocation %s but the attempt records no fallback", rs.Run, a.Attempt.Attempt, inv.ID)
+		}
+		_ = name
+		want = caps
 	case invoke.PurposeJudge, invoke.PurposePlan, invoke.PurposeIntent, invoke.PurposeRender:
 		want = cfg.Backend
 		if cfg.Judge == JudgeModel && cfg.JudgeBackend.Name != "" {
 			want = cfg.JudgeBackend
+		}
+		// a JUDGE call runs on the judgment provider when the attempt
+		// was configured with a wire one; intent, plan and render stay
+		// on the judge backend, which is the only one that can do them
+		if inv.Purpose == invoke.PurposeJudge && cfg.JudgmentBackend != nil {
+			want = *cfg.JudgmentBackend
 		}
 	default:
 		return nil
@@ -1827,4 +1919,13 @@ func carriesRelated(rs *RunState, st *invoke.State, store *thought.Store) error 
 		return fmt.Errorf("request %s does not carry the related prior run", st.Invocation.Request.Hash)
 	}
 	return nil
+}
+
+// forkMembersIn is a settled fork's member count by fork id, from the
+// folded forks; 0 when unknown.
+func forkMembersIn(forks map[record.RecordID]*ForkState, id record.RecordID) int {
+	if f := forks[id]; f != nil && f.Fork != nil {
+		return len(f.Fork.Members)
+	}
+	return 0
 }

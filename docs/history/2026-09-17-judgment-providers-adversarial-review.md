@@ -1,0 +1,205 @@
+---
+status: record
+name: 2026-09-17-judgment-providers-adversarial-review
+description: Adversarial review of the Go judgment-provider seam (branch jev, successor..HEAD) — 4 Codex seats, REJECT with verification ledger, fixes + pins same session, round 2 on the fix diff.
+---
+
+# Adversarial review — judgment providers (branch `jev`, `successor..3b162cdc`)
+
+Date: 2026-09-17 (overnight). Four seats (Skeptic, Architect, Minimalist,
+Expert QA) on Codex, opposite-model, all four exited 0 with numbered
+findings in the final message. Artifacts: `/tmp/adversarial-review.2zTbqH/`
+(five per seat, transcripts included). The Go tests could not run inside
+the reviewers' read-only sandbox (`/tmp` build cache), so their Go findings
+are source-traced; the sidecar findings ran as in-memory handler probes.
+
+Per the TypeSafe guardrails, nothing here quotes a Jev agreement, latency
+or cost number; the private replay lives under `~/.maro/workspace/judgment/`.
+
+## Intent
+
+One typed judgment seam (`go/internal/judgment`) behind which the engine's
+three judges ask their one question — with the incumbent LLM judge
+refactored to be a provider like the new ones (`llm`, default), a cheap
+hosted model (`hosted`), TypeSafe Jev (`jev`) and the experimental local
+sidecar (`pcd`). A shadow arm asks configured second opinions the same
+question and records them where the resolver cannot read. Fresh installs
+behave exactly as before.
+
+## Verdict: REJECT → fixed same session; rounds 2 and 3 on the fix diffs, then stop
+
+All four seats converged on the same five HIGHs from independent probes
+(source census of the invocation closure, `git show successor:` of the
+old renderer, `rg` of the terminal guards and the transcript path). The
+convergence is not counted as evidence; each entry below was re-probed
+in the tree.
+
+## Verification Ledger (HIGHs)
+
+1. **AGENDA never asks the configured primary provider** — **VERIFIED.**
+   `agenda_driver.go:72` chose `d.judge(a)` for every tool-less call,
+   `PurposeJudge` included; `d.primary(` was called only by the NOW
+   closure (`driver.go:931`). `agenda --judge-provider jev` would have
+   rendered the wire body and posted it to the subprocess judge, and the
+   fold would then have refused the recorded binding. In range
+   (70eba74d). **FIXED:** the closure selects `d.primary(a)` for a judge;
+   pin `TestAnAgendaPrimaryProviderIsTheOneAsked` (the judge backend
+   scripts only intent + plan, so any judge reaching it exhausts the
+   script; the run folds).
+2. **Existing judged journals no longer fold** — **OUT-OF-SCOPE
+   (pre-existing class).** Settling probe run: the `successor` binary
+   (efda42f0) on a copy of the live `~/.maro/workspace/shadow-go` journal
+   fails at the FIRST run with `intent invocation … was not asked the
+   intent prompt` — the 2026-09-07 intake-prompt change (84a7c12a)
+   already did this, with no version dispatch. The `jev` binary fails at
+   the same record. This chunk breaks nothing that folds today. Lead
+   recorded below: journal↔template versioning is an engine-level gap.
+3. **Validation after the terminal is committed; partial replies can
+   verdict** — **OUT-OF-SCOPE** for the guards (`!= TerminalFailed` at
+   the three AGENDA sites and the NOW closure are byte-identical on
+   `successor`); the invocation terminal is the transport's outcome and a
+   parse refusal is `unjudged`, as designed. The one new exposure —
+   hosted `finish_reason: length` with a parseable body — errs toward
+   accepting a JSON object that did fully parse. Accepted, recorded.
+4. **The resolved key could reach a transcript** — **VERIFIED.**
+   `openai.go:121` stored the raw error body as `Transcript`, which
+   `shell.go:277` persists; both scrubs matched only a literal
+   `"bearer "` prefix. Both files in range. **FIXED:** `invoke.Redact`
+   strips the resolved key VALUE (and any bearer token) from the reason,
+   the transcript and the body in both clients; pins
+   `TestAnEchoedKeyNeverReachesTheTranscript`,
+   `TestAnEchoedKeyNeverLeavesTheProvider`, `TestRedact…`.
+5. **The registered one-minute judgment timeout was twenty minutes in
+   production** — **VERIFIED.** The shadow passed `d.Timeout` (20 min
+   from both CLI constructions) and both HTTP clients preferred
+   `req.Timeout` over their own. **FIXED:** a provider's timeout is a
+   ceiling over the caller's budget (both clients), and the shadow asks
+   under `judgment.DefaultTimeout`; the registry entry now says so; pins
+   `TestTheProviderTimeoutIsACeilingOverTheRequestBudget`,
+   `TestTheHostedTimeoutIsACeiling`. Shadows still run inline after the
+   primary — bounded now to one minute per shadow, which is the accepted
+   cost of measurement on this branch.
+
+## Fixed mediums
+
+- **Fork children and `runs resume` dropped the judgment binding**
+  (fork.go:583, main.go:531) — VERIFIED. Child construction extracted to
+  `childDriver` (the one place a child inherits from its parent) and the
+  binding inherited; resume wires every provider at its defaults. Pin
+  `TestAForkChildInheritsTheJudgmentBinding`.
+- **`now --judge-provider X` without `--judge-model` never judged**
+  (main.go:423 `ModelJudge: jb != nil`) — VERIFIED; a non-default
+  provider now switches the NOW closure judge on.
+- **"Strict" decoder: `Decoder.More()` is not EOF; duplicate keys are
+  last-wins; a distribution's total was never checked** — VERIFIED
+  (encoding/json semantics). EOF required, duplicate keys refused at any
+  depth, distributions must sum to 1 ± 0.05; six refusal fixtures and a
+  rounding negative control added.
+- **Sidecar framing** (server.py:111) — VERIFIED by the reviewers'
+  executed probe. Bounded non-negative `Content-Length` (413 past 4 MiB),
+  a 30 s socket read deadline (408), invalid UTF-8 → 400; two tests
+  including a body that never arrives.
+- **Report hid the unmeasured population** — the summary now counts
+  judge verdicts with no shadow record (`Unshadowed`), so a shadow lost
+  between the primary verdict and its control record is visible as a
+  gap. Crash-time re-asking of a shadow is deliberately NOT added:
+  measurement is never re-run to look complete.
+
+## Round 2 — one Codex seat on the fix diff (`3b162cdc..0458ac4a`)
+
+Status 0, numbered findings. Ledger:
+
+1. **The redaction scrubbed one representation, not every outgoing
+   field** — **VERIFIED, a regression class in the fix layer.** The
+   hosted client parsed the body before `Complete` scrubbed it, so a
+   200 reply echoing the key reached `Result.Response` raw; the wire
+   client clipped the reason to 200 bytes before scrubbing, so a key
+   straddling the boundary left its prefix. Both r1 pins used short 401
+   bodies and passed. **FIXED:** the hosted client redacts inside `post`
+   before the parse (content and finish_reason are derived from clean
+   bytes); the wire client scrubs before it clips. Pins: a 200 reply
+   whose content and finish_reason echo the key; a key beginning at byte
+   190. Settling the fix also found that a one-character key mangles the
+   JSON it is scrubbed from — value replacement now needs 8+ characters.
+2. **`runs resume` rebuilds the driver without the attempt's binding**
+   — **OUT-OF-SCOPE (pre-existing class).** The resume constructor on
+   `successor` already carries no judge model, lens or mechanisms; the
+   replacement attempt's config is rebuilt from the live driver, not the
+   recorded one. Wiring the providers (r1) is kept so a restored binding
+   can find them; restoring per-run config at resume is an engine lead.
+3. **Duplicate-key guard blind to case folding** — **VERIFIED**
+   (`encoding/json` matches struct fields by folded name, so
+   `"Choice"` lands on `choice`). **FIXED:** keys compared folded at
+   every depth; fixture added, plus the negative control the r1 fixtures
+   lacked (same key in different objects, objects inside arrays).
+4. **The sidecar's deadline was an idle timeout** — **VERIFIED.** A peer
+   trickling a byte every few seconds never trips `settimeout`, and
+   `BufferedReader.read(n)` loops raw recvs until it has n bytes.
+   **FIXED:** one absolute monotonic deadline across the body, each
+   socket wait given only the remainder, `read1` so the deadline is
+   re-checked per chunk. Pin: a peer sending one byte per 0.3 s against a
+   1 s budget is answered 408 within it.
+
+Noted, not changed: `Unshadowed` counts verdicts with ZERO shadow
+records, so a crash after provider A's record and before B's is not
+visible per provider — the metric is defined that way and says so.
+
+## Round 3 — one Codex seat on the round-2 fix diff (`0458ac4a..cf3609d2`)
+
+Status 0. The last round on this chunk (Jeremy's 2026-09-16 budget:
+2–3 rounds the norm). Ledger:
+
+1. **A `\u`-escaped echo defeats byte-level redaction; the decoder
+   restores the key** — **VERIFIED, regression class in the r2 fix.**
+   `ReplaceAll` on the serialized bytes cannot see a key whose one
+   character is spelled `s`; `json.Unmarshal` then rebuilt it in
+   the content and finish_reason, and the transcript kept a reversible
+   spelling. **FIXED:** `invoke.RedactJSON` — a body that decodes is
+   redacted on its decoded string values at every depth and re-encoded
+   (HTML escaping off, so the marker survives); one that does not decode
+   is scrubbed as text. Both clients use it. Pin: content and
+   finish_reason echo an escaped key; the transcript is still JSON.
+2. **`strings.ToLower` is not `encoding/json`'s fold** — **VERIFIED**
+   (the decoder matches struct fields by `unicode.SimpleFold` orbits, so
+   `ſcore` is `score`). **FIXED:** `foldKey` canonicalises each rune to
+   the smallest member of its fold orbit, which is exactly
+   `bytes.EqualFold` equivalence; `Request.Validate` refuses question
+   ids that collide the same way, so the encoder and decoder agree.
+   Fixtures: `score`/`ſcore`, a fold duplicate three arrays deep.
+3. **The pre-parse text scrub broke a valid answer that quoted a
+   `Bearer` example** — **VERIFIED**; the same JSON-aware redaction
+   fixes it (the value is scrubbed, the re-encoder escapes it). Pinned
+   in the same test.
+4. **The 8-character exception silently unprotected a short key** —
+   **VERIFIED as the wrong direction.** A key shorter than 8 characters
+   is now refused BEFORE dispatch (`invoke.MinKeyLen`) in both clients,
+   and `Redact` has no length exception; the tests use realistic keys.
+   No listed provider issues a shorter key, and the boundary now says so
+   instead of recording one.
+
+Also tightened from the r3 read: the trickle test's elapsed bound now
+fails a 3-second deadline (was `< 4`).
+
+## Out-of-scope leads
+
+- Journal ↔ prompt-template versioning: every prompt-template change on
+  `successor` since 84a7c12a orphans earlier journals at the fold. The
+  live shadow-go workspace is already in that state. Either a recorded
+  template version with legacy renderers kept, or an explicit "journals
+  are per engine version" decree with the workspace rotated on upgrade.
+- Partial judge terminals: whether a `partial` judge reply should ever
+  verdict is a successor-wide question, not this seam's.
+- `runs resume` rebuilds every replacement attempt's configuration from
+  the live driver (no judge model, lens, mechanisms, or judgment
+  binding); recovery should read the recorded attempt config instead.
+
+## What went well
+
+- The shadow-isolation test's adversary (a wire provider that always
+  answers the LAST option) meant the one finding it could not catch was
+  precisely the one every seat found: the primary path had no
+  non-default coverage. The new pin closes that hole rather than adding
+  another shadow case.
+- Reviewers settled the "old journals" HIGH with a `git show
+  successor:` probe; the ledger settled it further with the binaries.
+  A finding that is true and pre-existing routes to a lead, not a fix.

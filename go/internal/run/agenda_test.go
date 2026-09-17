@@ -8,6 +8,7 @@ import (
 
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/judgment"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/record"
 	"github.com/slycrel/maro-orchestration/go/internal/thought"
@@ -37,10 +38,10 @@ func (h *harness) agenda(exec, judge invoke.Backend) *Driver {
 const (
 	intentClear   = `{"clear": true, "interpretation": "Collect the numbers, then summarize them.", "question": ""}`
 	planTwo       = `{"steps": ["Collect the numbers", "Write the summary"]}`
-	judgeDone     = `{"outcome": "done", "confidence": 0.9, "why": "the step's result matches the step"}`
-	judgeBlocked  = `{"outcome": "blocked", "confidence": 0.95, "why": "the resource does not exist"}`
-	closureYes    = "```json\n" + `{"outcome": "achieved", "confidence": 0.8, "why": "both steps produced what the goal asked", "falsifiers": ["the summary omits the revenue line"]}` + "\n```"
-	closureUnsure = `{"outcome": "unknown", "confidence": 0.5, "why": "cannot tell", "falsifiers": []}`
+	judgeDone     = `{"outcome": {"type": "choice", "choice": "done", "confidence": 0.9, "why": "the step's result matches the step"}}`
+	judgeBlocked  = `{"outcome": {"type": "choice", "choice": "blocked", "confidence": 0.95, "why": "the resource does not exist"}}`
+	closureYes    = "```json\n" + `{"outcome": {"type": "choice", "choice": "achieved", "confidence": 0.8, "why": "both steps produced what the goal asked", "falsifiers": ["the summary omits the revenue line"]}}` + "\n```"
+	closureUnsure = `{"outcome": {"type": "choice", "choice": "unknown", "confidence": 0.5, "why": "cannot tell", "falsifiers": []}}`
 )
 
 // The behavior suite's agenda-happy-path, driven through this engine:
@@ -159,7 +160,7 @@ func TestAgendaBoundariesRefuseMalformedOutputs(t *testing.T) {
 		t.Fatalf("%v %+v", err, rep.Mission)
 	}
 	h2 := open(t)
-	exec2, judge2 := agendaBackends([]string{"r1"}, []string{intentClear, `{"steps": ["one"]}`, `not json at all`, `{"outcome": "achieved", "confidence": 7, "why": "x"}`})
+	exec2, judge2 := agendaBackends([]string{"r1"}, []string{intentClear, `{"steps": ["one"]}`, `not json at all`, `{"outcome": {"type": "choice", "choice": "achieved", "confidence": 7, "why": "x"}}`})
 	d2 := h2.agenda(exec2, judge2)
 	rep2, err := d2.Run(ctxBg, []byte("do one thing"), DeliveryPolicy{Required: TransportAccepted})
 	if err != nil || rep2.Mission.Outcome != MissionDelivered || rep2.Mission.Closure != "unknown" {
@@ -443,9 +444,28 @@ func TestAgendaInvocationSequenceAndForgedStages(t *testing.T) {
 	}
 	goal := []byte("two steps")
 	steps := []string{"Collect the numbers", "Write the summary"}
+	// the judge requests are the judgment seam's rendering of the typed
+	// question, not a second copy of the template kept in the test
+	rendered := func(build func(string) judgment.Request) []byte {
+		_, b, err := RenderJudgeRequest(a.Attempt.Config, build)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	// the evidence a step of this run carries: the exec fake announces no
+	// effects, so it is the digest of a call that offered tools iff the
+	// fake acts outward — the same function the driver and the fold use
+	ev := invoke.Digest(exec.Capabilities().ActsOutward, nil, nil, invoke.TerminalComplete, "", nil, invoke.EvidenceMaxBytes)
+	stepJudge := rendered(func(m string) judgment.Request {
+		return StepJudgeRequest(m, goal, steps[1], []byte("r2"), invoke.TerminalComplete, false, ev)
+	})
+	closure := rendered(func(m string) judgment.Request {
+		return ClosureJudgeRequest(m, goal, steps, [][]byte{[]byte("r1"), []byte("r2")}, []bool{false, false}, []string{ev, ev}, "")
+	})
 	if !bytes.Equal(judge.Seen[0].Prompt, intentPrompt(goal, nil)) || !bytes.Equal(judge.Seen[1].Prompt, planPrompt(goal, "Collect the numbers, then summarize them.", nil, nil)) ||
-		!bytes.Equal(exec.Seen[1].Prompt, stepPrompt(goal, steps, nil, 2, [][]byte{[]byte("r1")}, nil)) || !bytes.Equal(judge.Seen[3].Prompt, stepJudgePrompt(goal, steps[1], []byte("r2"), invoke.TerminalComplete, false)) ||
-		!bytes.Equal(judge.Seen[4].Prompt, closurePrompt(goal, steps, [][]byte{[]byte("r1"), []byte("r2")}, []bool{false, false})) {
+		!bytes.Equal(exec.Seen[1].Prompt, stepPrompt(goal, steps, nil, 2, [][]byte{[]byte("r1")}, nil)) || !bytes.Equal(judge.Seen[3].Prompt, stepJudge) ||
+		!bytes.Equal(judge.Seen[4].Prompt, closure) {
 		t.Fatal("a request is not its template")
 	}
 	// forged stage records: each is door-valid and cites real invocations

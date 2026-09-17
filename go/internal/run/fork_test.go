@@ -143,9 +143,9 @@ func judgeRules(policy JoinPolicy) []rule {
 	return []rule{
 		{Key: "intake of an orchestration engine", Answer: intentClear},
 		{Key: "planner", Answer: planForPolicy(policy)},
-		{Key: "## Step 1: sub-goal A", Answer: `{"outcome": "achieved", "confidence": 0.9, "why": "prime named", "falsifiers": []}`},
-		{Key: "## Step 1: sub-goal B", Answer: `{"outcome": "not_achieved", "confidence": 0.9, "why": "no square", "falsifiers": []}`},
-		{Key: "closure judge", Answer: closureYes},
+		{Key: "### step 1\nsub-goal A", Answer: `{"outcome": {"type": "choice", "choice": "achieved", "confidence": 0.9, "why": "prime named", "falsifiers": []}}`},
+		{Key: "### step 1\nsub-goal B", Answer: `{"outcome": {"type": "choice", "choice": "not_achieved", "confidence": 0.9, "why": "no square", "falsifiers": []}}`},
+		{Key: "GOAL was achieved", Answer: closureYes},
 	}
 }
 
@@ -450,10 +450,10 @@ func TestAsymmetricChildCrashAndThreeMembers(t *testing.T) {
 	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []rule{
 		{Key: "intake of an orchestration engine", Answer: intentClear},
 		{Key: "planner", Answer: plan},
-		{Key: "## Step 1: sub-goal A", Answer: `{"outcome": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}`},
-		{Key: "## Step 1: sub-goal B", Answer: `{"outcome": "not_achieved", "confidence": 0.9, "why": "no", "falsifiers": []}`},
-		{Key: "## Step 1: sub-goal C", Answer: `{"outcome": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}`},
-		{Key: "closure judge", Answer: closureYes},
+		{Key: "### step 1\nsub-goal A", Answer: `{"outcome": {"type": "choice", "choice": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}}`},
+		{Key: "### step 1\nsub-goal B", Answer: `{"outcome": {"type": "choice", "choice": "not_achieved", "confidence": 0.9, "why": "no", "falsifiers": []}}`},
+		{Key: "### step 1\nsub-goal C", Answer: `{"outcome": {"type": "choice", "choice": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}}`},
+		{Key: "GOAL was achieved", Answer: closureYes},
 	}, Def: judgeDone}
 	d := h.agenda(exec, judge)
 	rep, err := d.Run(ctxBg, []byte("three"), DeliveryPolicy{Required: TransportAccepted})
@@ -478,7 +478,7 @@ func TestForkIdentityDecisionsAndPanics(t *testing.T) {
 	h := open(t)
 	plan := `{"steps": ["Warm up", {"parallel": ["sub-goal A: name a prime", "sub-goal A: name a prime"], "join": "all"}, "Wrap up"]}`
 	exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(), Def: "?"}
-	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []rule{{Key: "intake of an orchestration engine", Answer: intentClear}, {Key: "planner", Answer: plan}, {Key: "closure judge", Answer: closureYes}}, Def: judgeDone}
+	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: []rule{{Key: "intake of an orchestration engine", Answer: intentClear}, {Key: "planner", Answer: plan}, {Key: "GOAL was achieved", Answer: closureYes}}, Def: judgeDone}
 	d := h.agenda(exec, judge)
 	rep, err := d.Run(ctxBg, []byte("twins"), DeliveryPolicy{Required: TransportAccepted})
 	if err != nil || rep.Mission.Outcome != MissionDelivered {

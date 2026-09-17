@@ -24,7 +24,7 @@ import (
 // observation and the closure resolves not_achieved mechanically; with
 // one that passes, the observation supports it and achieved stands.
 
-const closureAchievedSure = `{"outcome": "achieved", "confidence": 0.9, "why": "both steps done", "falsifiers": ["the tests fail"]}`
+const closureAchievedSure = `{"outcome": {"type": "choice", "choice": "achieved", "confidence": 0.9, "why": "both steps done", "falsifiers": ["the tests fail"]}}`
 
 var outwardExec = invoke.Capabilities{Name: "scripted-exec", Model: "exec", ActsOutward: true}
 
@@ -107,7 +107,8 @@ func TestRegressionRerunRefutesAnAchievedClosure(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "## Regression checks (what a step proved, re-run at closure)\n- `make test` in " + work + " passed at step 1 and "
+			// the typed closure request carries the re-runs as its own section
+			want := "### regression\n- `make test` in " + work + " passed at step 1 and "
 			if !bytes.Contains(cp, []byte(want)) {
 				t.Fatalf("closure prompt: %s", cp)
 			}
@@ -177,7 +178,7 @@ func TestRegressionObligationNeedsPositiveEvidence(t *testing.T) {
 			// and the closure prompt is byte-for-byte the one without the block
 			a := h.only().Latest()
 			cp, _ := h.st.Get(a.Invocations[len(a.Invocations)-1].Invocation.Request)
-			if bytes.Contains(cp, []byte("Regression checks")) {
+			if bytes.Contains(cp, []byte("### regression")) {
 				t.Fatalf("closure prompt: %s", cp)
 			}
 		})

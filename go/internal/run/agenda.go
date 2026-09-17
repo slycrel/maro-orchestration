@@ -503,37 +503,6 @@ func stepPrompt(goal []byte, steps []string, after [][]int, ordinal int, prior [
 	return []byte(b.String())
 }
 
-func stepJudgePrompt(goal []byte, step string, result []byte, terminal invoke.TerminalState, fork bool) []byte {
-	note := ""
-	if terminal == invoke.TerminalPartial {
-		note = "\n\nNOTE: the executor's stream ended PARTIAL — the result below may be truncated.\n"
-	}
-	if fork {
-		note += "\n\nNOTE: this step ran its sub-goals in parallel; the result lists each member's whole answer under a '### Member' heading. The step is done when the sub-goals were answered.\n"
-	}
-	return []byte("You are a judge. Given the goal, one planned step, and the executor's result for that step, decide whether THIS STEP is done. " +
-		"Judge only this step: later steps of the plan handle the rest of the goal, and a step that does its own part is done even when the goal is not yet complete.\n" +
-		"Reply with ONE JSON object and nothing else: {\"outcome\": \"done\"|\"blocked\"|\"unclear\", \"confidence\": <0..1>, \"why\": \"<one sentence>\"}\n\n## Goal\n" + string(goal) + "\n\n## Step\n" + step + "\n\n## Result" + note + "\n" + string(result) + "\n")
-}
-
-func closurePrompt(goal []byte, steps []string, results [][]byte, partial []bool) []byte {
-	var b strings.Builder
-	b.WriteString("You are the closure judge. Given the goal and every step's result, decide whether the GOAL was achieved — not whether work happened. Name what would prove you wrong.\n" +
-		"Reply with ONE JSON object and nothing else: {\"outcome\": \"achieved\"|\"not_achieved\"|\"unknown\", \"confidence\": <0..1>, \"why\": \"<one sentence>\", \"falsifiers\": [\"<observation that would refute this verdict>\", ...]}\n\n## Goal\n")
-	b.Write(goal)
-	for i, s := range steps {
-		fmt.Fprintf(&b, "\n## Step %d: %s\n", i+1, s)
-		if i < len(partial) && partial[i] {
-			b.WriteString("(the executor's stream ended PARTIAL; this result may be truncated)\n")
-		}
-		if i < len(results) {
-			b.Write(results[i])
-			b.WriteString("\n")
-		}
-	}
-	return []byte(b.String())
-}
-
 // ordinals renders "1, 3".
 func ordinals(ks []int) string {
 	parts := make([]string, len(ks))

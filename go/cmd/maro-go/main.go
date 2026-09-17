@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/slycrel/maro-orchestration/go/internal/experiment"
 	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/journal"
+	"github.com/slycrel/maro-orchestration/go/internal/judgment"
 	"github.com/slycrel/maro-orchestration/go/internal/learn"
 	"github.com/slycrel/maro-orchestration/go/internal/pack"
 	"github.com/slycrel/maro-orchestration/go/internal/process"
@@ -80,6 +82,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdAnswer(args[1:], stdout, stderr)
 	case "asks":
 		err = cmdAsks(args[1:], stdout, stderr)
+	case "judgment":
+		err = cmdJudgment(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return 2
@@ -92,7 +96,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status | secrets list|check [--json]|get <name> | answer <handle> [--source s] [--backend b] [--model m] <text> | asks [--json]")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--judge-provider llm|jev|hosted|pcd] [--judge-shadow a,b] [--judge-fallback p] [--judge-escalate 0.6] [--pcd-url u] [--hosted-url u --hosted-model m --hosted-key NAME] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--judge-provider llm|jev|hosted|pcd] [--judge-shadow a,b] [--judge-fallback p] [--judge-escalate 0.6] [--pcd-url u] [--hosted-url u --hosted-model m --hosted-key NAME] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status | secrets list|check [--json]|get <name> | answer <handle> [--source s] [--backend b] [--model m] <text> | asks [--json] | judgment report [--json]|ask --provider p --state-file f --questions-file q|replay --corpus f --providers llm,jev,hosted,pcd")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -249,6 +253,9 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	var lens, target, why, work, after, contextPath string
 	fresh := false
 	allowTools, denyTools := "", "WebFetch,WebSearch"
+	judgeProvider, judgeShadow, pcdURL := judgment.DefaultProvider, "", judgment.DefaultPCDURL
+	judgeFallback, judgeEscalate := judgment.DefaultFallback, judgment.DefaultEscalate
+	var hosted hostedSpec
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--fresh":
@@ -307,6 +314,50 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			i++
 			if i < len(args) {
 				judgeModel = args[i]
+			}
+		case "--judge-provider":
+			i++
+			if i < len(args) {
+				judgeProvider = args[i]
+			}
+		case "--judge-shadow":
+			i++
+			if i < len(args) {
+				judgeShadow = args[i]
+			}
+		case "--judge-fallback":
+			i++
+			if i < len(args) {
+				judgeFallback = args[i]
+			}
+		case "--judge-escalate":
+			i++
+			if i < len(args) {
+				f, err := strconv.ParseFloat(args[i], 64)
+				if err != nil || f < 0 || f > 1 {
+					return fmt.Errorf("--judge-escalate wants a number in [0,1], got %q", args[i])
+				}
+				judgeEscalate = f
+			}
+		case "--pcd-url":
+			i++
+			if i < len(args) {
+				pcdURL = args[i]
+			}
+		case "--hosted-url":
+			i++
+			if i < len(args) {
+				hosted.url = args[i]
+			}
+		case "--hosted-model":
+			i++
+			if i < len(args) {
+				hosted.model = args[i]
+			}
+		case "--hosted-key":
+			i++
+			if i < len(args) {
+				hosted.keyName = args[i]
 			}
 		case "--ack":
 			policy.Required = spine.UserAcknowledged
@@ -383,7 +434,13 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			}
 			fmt.Fprintf(errw, "follows: run %s (goal %s, root %s)\n", after, lineage.Goal, lineage.Root)
 		}
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: jb != nil, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath,
+		shadow := splitNames(judgeShadow)
+		providers := buildProviders(append(shadow, judgeProvider, judgeFallback), pcdURL, hosted)
+		// a NOW run judges its closure when a judge model is named OR a
+		// non-default provider is: `--judge-provider jev` alone is a judge
+		modelJudge := jb != nil || (judgeProvider != "" && judgeProvider != judgment.ProviderLLM)
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: modelJudge, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath,
+			JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: providers, JudgeFallback: judgeFallback, JudgeEscalate: judgeEscalate,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}
@@ -490,7 +547,12 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 			return nil
 		}
 		if len(args) > 0 && args[0] == "resume" {
-			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Work: a.Path("work")}
+			// every provider is wired at its defaults so an attempt that
+			// was judged through jev/hosted/pcd can re-ask its judge; the
+			// production timeout and work dir so re-runs see what the
+			// original's did
+			d := &spine.Driver{J: j, Store: st, Backend: &invoke.Scripted{Caps: invoke.Capabilities{Name: "resume-only", Model: "none"}}, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Work: a.Path("work"),
+				Providers: buildProviders([]string{judgment.ProviderJev, judgment.ProviderHosted, judgment.ProviderPCD}, judgment.DefaultPCDURL, hostedSpec{})}
 			s, err := invoke.NewSubprocess("haiku")
 			if err == nil {
 				// the same tool environment a run's backend gets (the secrets
@@ -689,6 +751,9 @@ func cmdLearn(args []string, out io.Writer) error {
 func cmdServe(args []string, out, errw io.Writer) error {
 	model, judgeModel, lens, work := "haiku", "", "", ""
 	allowTools, denyTools := "", "WebFetch,WebSearch"
+	judgeProvider, judgeShadow, pcdURL := judgment.DefaultProvider, "", judgment.DefaultPCDURL
+	judgeFallback, judgeEscalate := judgment.DefaultFallback, judgment.DefaultEscalate
+	var hosted hostedSpec
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--work":
@@ -720,6 +785,50 @@ func cmdServe(args []string, out, errw io.Writer) error {
 			i++
 			if i < len(args) {
 				judgeModel = args[i]
+			}
+		case "--judge-provider":
+			i++
+			if i < len(args) {
+				judgeProvider = args[i]
+			}
+		case "--judge-shadow":
+			i++
+			if i < len(args) {
+				judgeShadow = args[i]
+			}
+		case "--judge-fallback":
+			i++
+			if i < len(args) {
+				judgeFallback = args[i]
+			}
+		case "--judge-escalate":
+			i++
+			if i < len(args) {
+				f, err := strconv.ParseFloat(args[i], 64)
+				if err != nil || f < 0 || f > 1 {
+					return fmt.Errorf("--judge-escalate wants a number in [0,1], got %q", args[i])
+				}
+				judgeEscalate = f
+			}
+		case "--pcd-url":
+			i++
+			if i < len(args) {
+				pcdURL = args[i]
+			}
+		case "--hosted-url":
+			i++
+			if i < len(args) {
+				hosted.url = args[i]
+			}
+		case "--hosted-model":
+			i++
+			if i < len(args) {
+				hosted.model = args[i]
+			}
+		case "--hosted-key":
+			i++
+			if i < len(args) {
+				hosted.keyName = args[i]
 			}
 		}
 	}
@@ -753,7 +862,9 @@ func cmdServe(args []string, out, errw io.Writer) error {
 	frame := spine.DefaultFrame + wireSecrets(b, a, errw)
 	askPath := wireAsk(b, a)
 	frame += "\n\n" + spine.AskInstructions(askPath)
-	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens, Work: work, Frame: frame, AskPath: askPath})
+	shadow := splitNames(judgeShadow)
+	srv, err := process.Serve(context.Background(), process.Options{Root: a, Backend: b, Judge: jb, Timeout: 20 * time.Minute, Log: errw, Lens: lens, Work: work, Frame: frame, AskPath: askPath,
+		JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: buildProviders(append(shadow, judgeProvider, judgeFallback), pcdURL, hosted), JudgeFallback: judgeFallback, JudgeEscalate: judgeEscalate})
 	if err != nil {
 		return err
 	}

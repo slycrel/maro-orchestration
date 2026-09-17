@@ -4478,3 +4478,25 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
 - **2026-09-13 (`executor.container: require` on the runtime box — Jeremy: "let's add the require lane then test it with a re-auth"):** the 09-12 finding (auth-volume expiry → `on`'s degrade-to-host → worker decrypted the whole secrets store beside the age key) closed the way it should: `require` set in the live config with the breaker still tripped and the refusal proven (`ContainerUnavailable` → environmental pause, no host lane possible), Jeremy re-seeded `maro-claude-auth` by interactive `/login` (07:17Z), the breaker cleared itself on the next resolve, and run 520e1b8c repeated the IMAP inbox check with every executor call in a `maro-exec-` container (uid 1001, `YAHOO_*` via container env, no hand-off file, 32 messages / five newest, $2.70). The worker inside went looking for the store and sops/age and found neither — the container is the wall, the frame wording is only the fence. Still owed (BACKLOG): auth liveness probe (expiry is monthly; a run is still the first casualty), typed `container-auth-expired` pause, and the yahoo project's `docs/mail_yahoo.md` "sops fallback" recipe that the 09-12 host-lane worker left behind.
 - **2026-09-13 (Container-auth residuals closed the same day — system record):** the `require` refusal for a dead session is now its own type (`ContainerAuthExpired`, marker `container_auth`) → typed pause `container-auth-expired` on the first refusal (before: classified by text, run churned blocked-step retries), and the heartbeat records the auth volume's `refreshTokenExpiresAt` (timestamps only, 6 h cadence) so the `container_auth` health probe warns ≤ 3 days before the monthly expiry instead of a run being the first casualty (live: valid until 2026-10-12). Backend-auth (dead API key) stays deliberately unmapped — the container session is the one auth shape a human heals in place.
 - **2026-09-13 (Review loops: flip the roles after 4–5 rounds — Jeremy: "after 4-5 rounds let's flip the script -- outsource the code change to codex and we can review it, rather than the opposite with the adversarial review"; "17 rounds is pretty rough"):** the landscape-binding chunk's adversarial loop ran 17 rounds (1–7 on the binding, 8–17 on the run's finish line — the same acknowledgment rule found at one more sender each round). Standing rule: after 4–5 rounds with HIGHs still landing, codex writes the fix (writable `codex exec` in its own worktree, the verified findings as the task) and Claude reviews the diff, runs the suites, and lands — the fixer's blind spot is what repeats, so swap the fixer. Applied from round 17 of this chunk on; the loop itself continues to its fixpoint. Also: the leaked test run dir `c1234567-patient-yarrow` deleted by Jeremy's call.
+
+- **2026-09-17 (Jev / judgment providers — Jeremy, overnight decrees):**
+  (1) *Three providers, always* — whatever judged decision a seam takes
+  over (step judge, closure judge, intake clarity, routing…), the
+  EXISTING code is refactored to sit behind the same provider interface,
+  so every judgment has the incumbent `llm` (grounded baseline), `jev`,
+  and a no-Jev alternative; amended the same night: the alternative is a
+  cheap HOSTED model (`hosted`, gemini-flash-lite / groq by flag), not
+  the local 1.5B PCD sidecar — Jeremy's M1 sessions concluded that
+  approach does not work; the sidecar stays optional and experimental.
+  (2) Jev testing budget: up to $5 before asking again ($5/month plan +
+  purchased tokens). (3) Landing: branch `jev` is pushed, NOT merged into
+  `successor` until discussed; Jeremy wants test runs once systems are
+  in place. (4) Contract guardrails from his legal read of the TypeSafe
+  MCA: no Jev benchmark/perf numbers in any tracked file (they live under
+  `~/.maro/workspace/judgment/`); no distillation — Jev answers are never
+  labels or tuning material for any other model. Ordinary use as a
+  provider is intended use. Built the same night: the Go judgment seam
+  (`go/internal/judgment`, four providers, shadow arm, report/replay),
+  three adversarial rounds landed (4597e85a). Record:
+  `planning/feature-judgment-providers.md`,
+  `docs/history/2026-09-17-judgment-providers-adversarial-review.md`.

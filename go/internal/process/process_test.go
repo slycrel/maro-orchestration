@@ -26,7 +26,7 @@ var ctxBg = context.Background()
 
 func root(t *testing.T) *workspace.Announced {
 	t.Helper()
-	t.Setenv(workspace.EnvOverride, filepath.Join(t.TempDir(), "ws"))
+	t.Setenv(workspace.EnvOverride, filepath.Join(shortTempDir(t), "ws"))
 	r, _ := workspace.Resolve()
 	a, err := r.Announce(io.Discard)
 	if err != nil {
@@ -174,9 +174,9 @@ func TestInterruptStopsAtTheNextBoundary(t *testing.T) {
 	judge := &invoke.Scripted{Caps: invoke.Capabilities{Name: "scripted-judge", Model: "judge"}, Calls: []invoke.ScriptedCall{
 		{Response: []byte(`{"clear": true, "interpretation": "two steps", "question": ""}`)},
 		{Response: []byte(`{"steps": ["one", "two"]}`)},
-		{Response: []byte(`{"outcome": "done", "confidence": 0.9, "why": "ok"}`)},
-		{Response: []byte(`{"outcome": "done", "confidence": 0.9, "why": "ok"}`)},
-		{Response: []byte(`{"outcome": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}`)},
+		{Response: []byte(`{"outcome": {"type": "choice", "choice": "done", "confidence": 0.9, "why": "ok"}}`)},
+		{Response: []byte(`{"outcome": {"type": "choice", "choice": "done", "confidence": 0.9, "why": "ok"}}`)},
+		{Response: []byte(`{"outcome": {"type": "choice", "choice": "achieved", "confidence": 0.9, "why": "ok", "falsifiers": []}}`)},
 	}}
 	s := serve(t, a, exec, judge)
 	var evs []Event
@@ -580,4 +580,22 @@ func TestTailSurvivesTheExecutorsResume(t *testing.T) {
 			t.Fatalf("tail lane: %+v", l)
 		}
 	}
+}
+
+// shortTempDir is t.TempDir() unless the socket that will live under it
+// would exceed the unix sun_path limit (104 bytes on macOS, 108 on Linux);
+// then a directory under /tmp. The test name is part of t.TempDir(), so
+// long test names alone push macOS over the limit.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if len(filepath.Join(dir, "ws", SocketName)) < 100 {
+		return dir
+	}
+	short, err := os.MkdirTemp("/tmp", "maro-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(short) })
+	return short
 }
