@@ -13,6 +13,11 @@ note: local rung REMOVED 2026-07-21 (swarm-review chunk 1, Jeremy decree
   2026-09-17: re-touched from the dev Mac (ds4/Qwen3.8 on the M1 + a
   parallel-constrained-decoding repo). Verdict UNCHANGED — the rung stays
   out. See "2026-09-17 re-touch" below before spending time here again.
+  2026-09-17 (later, same day): SUPERSEDED. Jev (typesafe.ai) evaluated under a
+  pre-registered protocol on the July corpus (measurements withheld per the
+  TypeSafe MCA guardrail). DECISION (Jeremy): Jev gets a real shot
+  as the Tier-1 validator; the hosted LLM call stays the backup. See the
+  "Jev decision" section below. Eval: github.com/slycrel/jev-eval (private).
 ---
 
 # Local Validator — zero-cost first-pass validation (RETIRED 2026-07-21)
@@ -26,7 +31,7 @@ die, breakers trip chronically): the re-entry path is the bakeoff
 methodology below + the kept corpus `tests/fixtures/validation_cases.json`
 + this doc's implementation record in git history (pre-2026-07-21).
 
-## 2026-09-17 re-touch — still not the time
+## 2026-09-17 re-touch — still not the time *(superseded the same day — see next section)*
 
 Revisited from the dev Mac after installing `antirez/ds4` (DwarfStar) and
 evaluating a small-model structured-extraction repo. **No change to the
@@ -97,6 +102,54 @@ Note also that the original decree's rationale was **token cost**, which a local
 classifier sidesteps entirely — so the 2026-07-21 reasoning does not tell you
 whether this version would pay. That stays open, and per `CAPABILITIES.md` the
 standing instruction for this family is **re-test, don't rebuild**.
+
+## 2026-09-17, later: Jev evaluated — decision: it gets a real shot
+
+Hours after the section above concluded "the time still isn't right", access to
+typesafe.ai's Jev arrived and it was evaluated against this doc's own July
+bake-off corpus and protocol, pre-registered (hypotheses and labels committed
+before any call). **Per the TypeSafe MCA guardrail recorded in
+`planning/feature-judgment-providers.md`, no Jev measurements are published
+here** — the numbers live in the private evaluation repo and under the
+workspace root. This section records only the decision and its shape.
+
+**What it is.** A hosted "System One" model: typed `Choice`/`Score`/`Noul`
+decisions with per-option probabilities and a confidence. Not an LLM; it does
+not generate text and does not execute code. Key: `TYPESAFE_API_KEY` in the
+workspace secrets. Sub-second from the box; priced per input token.
+
+**What the evaluation established, qualitatively.** On the July corpus and
+protocol it met the bar the July winner set, at latency in a different class.
+It was calibrated on a construction-labelled corpus, deterministic across
+repeats, robust to instruction rewording, and immune to prompt injection
+through the result text in a dedicated probe (its only misses there were false
+*fails* — the safe direction). Against `closure` on the same evidence it is
+strictly stricter: it never passed a closure fail and failed a substantial
+share of closure passes; not shown to be right (few human labels) —
+adjudication deferred (Jeremy: "maybe, but not now").
+
+**The edge that scopes it — Jev judges evidence, not code.** Reading code
+alone it confidently passed semantically wrong functions; with the real test
+output in the state it did not miss. Step wording alone flipped one case. **No
+confidence threshold catches the code-semantics miss; evidence in the state
+does.** The validator must run over `{step, result, evidence}` where evidence
+is what Tier 0 already produced — never over a bare claim.
+
+**Decision (Jeremy, 2026-09-17):** Jev gets a real shot as the Tier-1
+validator. Because it is a new hosted vendor in the verdict path, **a real
+backup is required**: the hosted LLM call that has served this rung before
+(hosted-free → paid) remains the fallback. The M1 via the `m1` ssh alias is an
+interim experiment on that lane, not the plan of record.
+
+**Shape to implement** (recommendation): Tier 1 = Jev `Choice(pass|fail)` over
+`{step, result, evidence}` with an evidence-first instruction; auto-pass only
+at high confidence **and** evidence present; mid-band → RETRY/escalate as
+today; low → escalate; escalation target unchanged (hosted-free, then paid);
+Jev unreachable/429/529/timeout → same path, never fail-open; record
+`p_pass`, `confidence`, evidence-present per verdict so the mid-band gets
+measured organically. The `jev` branch's judgment seam is the implementation
+surface. **Not shown:** the mid-confidence band, long states, real step-level
+volume, injection under real worker output.
 
 Poe's highest-volume LLM call is **validation** ("did this step result satisfy
 the goal?"). Those calls are frequent and mostly easy, so paying a frontier API
