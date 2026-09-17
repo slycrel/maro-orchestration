@@ -33,9 +33,16 @@ const (
 	PurposeDiagnose  Purpose = "diagnose"  // the tail's model lens over a recorded run
 	PurposeEvaluate  Purpose = "evaluate"  // the experiment evaluator's blinded score of a unit's deliverable
 	PurposeLandscape Purpose = "landscape" // the run's relation to prior runs, decided before its first attempt
+	// PurposeShadowJudge is a judgment asked of a SHADOW provider: the
+	// same question the primary already answered, asked again for
+	// measurement. Like diagnose and evaluate it is not the goal's call —
+	// it is not bound to the attempt's judge backend, carries no persona
+	// lens, and its usage is never the goal's cost. Nothing reads its
+	// answer but the judgment report.
+	PurposeShadowJudge Purpose = "shadow_judge"
 )
 
-var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, PurposePlan: true, PurposeIntent: true, PurposeRender: true, PurposeDiagnose: true, PurposeEvaluate: true, PurposeLandscape: true}
+var purposes = map[Purpose]bool{PurposeExecute: true, PurposeJudge: true, PurposePlan: true, PurposeIntent: true, PurposeRender: true, PurposeDiagnose: true, PurposeEvaluate: true, PurposeLandscape: true, PurposeShadowJudge: true}
 
 // Capabilities is what a backend declares about itself, snapshotted into the
 // Invocation at decision time so the decision and its receipt agree.
