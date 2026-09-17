@@ -27,8 +27,17 @@ agreement are NOT recorded in this repo — see guardrails.)
    (step judge, closure judge, intake clarity, routing…), the *existing*
    code is refactored to sit behind the same provider interface. So every
    judged decision has `llm` (the incumbent generative judge), `jev`, and
-   `pcd` (the local sidecar). The incumbent is the grounded baseline;
-   the cost is that shadow work is harder to double up.
+   a no-Jev alternative. The incumbent is the grounded baseline; the cost
+   is that shadow work is harder to double up.
+   **Amended ~02:30:** the alternative is a *cheap hosted model*
+   (`hosted`: gemini-flash-lite via the OpenAI-compatible endpoint, groq
+   by config — the 2026-07-16 hosted-free decision, made on the same
+   14-case corpus), not the local PCD sidecar. Jeremy's M1 sessions
+   concluded the 1.5B PCD approach does not work; their write-up joins
+   the existing local-LLM notes. The sidecar stays as an optional,
+   experimental `pcd` provider measured by the same replay. A classifier
+   trained on Maro's own labelled outcomes is a direction to revisit if
+   the data grows.
 2. **Budget:** up to $5 of Jev testing in various capacities before
    asking again (plan is $5/month plus purchased tokens).
 3. **Landing:** push branch `jev`; no merge into `successor` until
@@ -78,7 +87,7 @@ agreement are NOT recorded in this repo — see guardrails.)
   cannot emit an invalid verdict and whose confidence comes from a
   distribution rather than from the model writing down a number.
 
-## The local sidecar (`tools/pcd-sidecar/`)
+## The local sidecar (`tools/pcd-sidecar/`) — experimental, not the drop-in
 
 A stdlib HTTP server speaking the same wire contract, scoring candidates
 from a small open model's logits (prefill once, batch every candidate's
