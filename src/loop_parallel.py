@@ -7,10 +7,12 @@ import os
 import sys
 import time
 import contextvars
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from typing import Any, Dict, List, Optional
 
 from loop_types import (
+    MARK_APPLIED,
+    MARK_PENDING,
     LoopContext,
     LoopResult,
     StepOutcome,
@@ -109,6 +111,29 @@ def _run_in_step_worktree(step_label: str, run_fn):
     return outcome
 
 
+
+
+def _say(msg: str) -> None:
+    """Progress output that can never be fatal (review round 4, 2026-09-13:
+    a closed stderr raised BrokenPipeError out of a worker, replacing its
+    refusal — and the pause — with "execution error", and out of the batch
+    coordinator before the pause was stamped). Presentation never stands
+    between an outcome and its consequences."""
+    try:
+        print(msg, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def _environmental_pause(outcome) -> str:
+    """The typed pause a blocked outcome calls for (stop_verdicts seam)."""
+    try:
+        from stop_verdicts import environmental_pause_for
+        return environmental_pause_for(outcome)
+    except Exception:
+        return ""
+
+
 def _run_parallel_batch(
     ctx: LoopContext,
     step_text: str,
@@ -143,7 +168,7 @@ def _run_parallel_batch(
     iteration += len(_batch_steps)
     _batch_start = time.monotonic()
     if ctx.verbose:
-        print(f"[maro] parallel batch: {len(_batch_steps)} steps at level", file=sys.stderr, flush=True)
+        _say(f"[maro] parallel batch: {len(_batch_steps)} steps at level")
 
     # §6 injection seam: this batch is one delivery boundary — drain pending
     # contributions once; every step in the batch sees the same rendering.
@@ -208,6 +233,8 @@ def _run_parallel_batch(
             iteration=iteration,
             tokens_in=_batch_oc.get("tokens_in", 0),
             tokens_out=_batch_oc.get("tokens_out", 0),
+            cache_read_tokens=_batch_oc.get("cache_read_tokens", 0) or 0,
+            provider_cost_usd=float(_batch_oc.get("provider_cost_usd", 0.0) or 0.0),
             elapsed_ms=_b_elapsed,
             confidence=_batch_oc.get("confidence", "unverified"),
             injected_steps=_batch_oc.get("inject_steps", []),
@@ -226,7 +253,10 @@ def _run_parallel_batch(
                 try:
                     _o = _orch()
                     _o.mark_item(ctx.project, _b_item_idx, _o.STATE_DONE)
+                    step_outcomes[-1].item_mark = MARK_APPLIED
                 except Exception as _mark_exc:
+                    # The row stays pending (chunk 8): the next snapshot's
+                    # settler applies the mark.
                     log.debug("parallel batch mark_item failed: %s", _mark_exc)
             _b_result = _batch_oc.get("result", "")
             _b_excerpt = _b_result[:800] if _b_result else ""
@@ -239,15 +269,23 @@ def _run_parallel_batch(
             record_step_decisions(ctx, str(step_idx), _batch_oc, loop_shared_ctx)
             record_step_world_facts(ctx, str(step_idx), _batch_oc)
             if ctx.verbose:
-                print(f"[maro] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}", file=sys.stderr, flush=True)
+                _say(f"[maro] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}")
             _bi_inject = _batch_oc.get("inject_steps", [])
             if _bi_inject and isinstance(_bi_inject, list):
                 _batch_injected.extend(
                     str(s).strip() for s in _bi_inject if str(s).strip()
                 )
         elif _b_status == "blocked":
+            # Environmental refusal (§13e): stamp the typed pause here; the
+            # caller ends the loop `interrupted` when it sees it (review
+            # 2026-09-13 — the batch path only logged blocked members).
+            # Stamp BEFORE the progress print (round 4: presentation must
+            # not stand between the outcome and its pause).
+            _env = _environmental_pause(_batch_oc)
+            if _env and hasattr(ctx, "stamp_pause"):
+                ctx.stamp_pause(_env)
             if ctx.verbose:
-                print(f"[maro] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}", file=sys.stderr, flush=True)
+                _say(f"[maro] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}")
 
     # Inject collected steps from batch
     if _batch_injected:
@@ -269,8 +307,7 @@ def _run_parallel_batch(
                  len(_capped_inject))
         if ctx.verbose:
             for _s in _capped_inject:
-                print(f"[maro] injected step (from parallel batch): {_s[:80]}",
-                      file=sys.stderr, flush=True)
+                _say(f"[maro] injected step (from parallel batch): {_s[:80]}",)
 
     # Log batch cost
     try:
@@ -282,6 +319,76 @@ def _run_parallel_batch(
 
     return (iteration, step_idx, _tokens_in_delta, _tokens_out_delta,
             _cache_read_delta, _provider_cost_delta)
+
+
+# The outcome statuses a lane may return. `done` and `skipped` FINISH a
+# plan position (checkpoint._FINISHED_STATUSES); `blocked` does not (a
+# resume re-runs it). Anything else is not a terminal outcome and must not
+# become a silent success: it reads as blocked, with the original status in
+# the reason (chunk-5 review: a `pending` / `DONE` dict left the run `done`
+# while the checkpoint still held remaining work).
+_TERMINAL_STATUSES = frozenset({"done", "blocked", "skipped"})
+# The post-step effect families a done node owes, acknowledged one by one.
+_EFFECT_FAMILIES = frozenset({"decisions", "facts", "regression"})
+
+
+def _contract_row(position: int, oc: Any) -> dict:
+    """A worker that returned something other than an outcome dict (None,
+    a string) broke the execution contract: a blocked row that says so,
+    never an AttributeError inside the scheduler (chunk-5 r2)."""
+    return {
+        "status": "blocked",
+        "stuck_reason": (f"execution contract: step {position} returned "
+                         f"{type(oc).__name__}, not an outcome"),
+        "result": "", "tokens_in": 0, "tokens_out": 0,
+    }
+
+
+def _normalize_outcome(oc: Any, position: int) -> dict:
+    """One status domain at the lane boundary: a terminal dict passes
+    through; a non-terminal or unknown status becomes a blocked row whose
+    reason names what the executor actually returned; a non-dict becomes
+    a contract row."""
+    if not isinstance(oc, dict):
+        return _contract_row(position, oc)
+    st = oc.get("status", "blocked")
+    if st in _TERMINAL_STATUSES:
+        return oc
+    fixed = dict(oc)
+    fixed["status"] = "blocked"
+    fixed["stuck_reason"] = (f"unrecognized outcome status {st!r} for step {position}"
+                             + (f" — {oc.get('stuck_reason')}" if oc.get("stuck_reason") else ""))
+    return fixed
+
+
+def _fanout_row(step_text: str, item: int, position: int, oc: dict, *,
+                item_mark: Optional[str] = None) -> StepOutcome:
+    """One returned/checkpointed row for a fan-out / DAG outcome dict.
+    `item` is the NEXT.md item (or the position for direct callers).
+    `item_mark`: the lane's mirror state for the row (chunk 8) — None
+    means "not recorded" (a terminal row on a real item is born pending)."""
+    return step_from_decompose(
+        step_text, item,
+        status=oc.get("status", "blocked"),
+        result=oc.get("result", ""),
+        iteration=position,
+        tokens_in=oc.get("tokens_in", 0),
+        tokens_out=oc.get("tokens_out", 0),
+        # Round 11: both fields defaulted to zero here, so the fan-out /
+        # DAG lanes' returned steps (and the log built from them) lost
+        # the refusal's billed spend and cache attribution.
+        cache_read_tokens=oc.get("cache_read_tokens", 0) or 0,
+        provider_cost_usd=float(oc.get("provider_cost_usd", 0.0) or 0.0),
+        confidence=oc.get("confidence", "unverified"),
+        injected_steps=oc.get("inject_steps", []),
+        call_record=oc.get("call_record", ""),
+        item_mark=item_mark,
+        # 2026-07-08 adversarial review (finding #2): no elapsed_ms is
+        # tracked per fan-out worker at all here (defaults to 0) — ended_ts=""
+        # keeps the run-visibility report's timeline in its approximate
+        # fallback rather than rendering these as false zero-duration steps.
+        ended_ts="",
+    )
 
 
 def _run_parallel_path(
@@ -297,29 +404,206 @@ def _run_parallel_path(
     loop_shared_ctx: Dict[str, Any],
     use_dag: bool,
     resolve_tools_fn,
+    resumed: bool = False,
+    declared: Optional[Dict[int, set]] = None,
+    pre_gated: Optional[Dict[int, str]] = None,
+    step_indices: Optional[List[int]] = None,
+    carried_outcomes: Optional[List[StepOutcome]] = None,
 ) -> Optional[LoopResult]:
     """Phase D: Parallel fan-out early return path.
+
+    `step_indices`: the NEXT.md item per step (`_mirror_plan_items`, run
+    before this lane). Outcome rows carry the item as their index and
+    each item is marked done/blocked in NEXT.md, as the sequential lane
+    does; without it (direct callers) rows carry positions, as before.
+
+    `carried_outcomes`: the rows a resume carried in. They lead the
+    returned steps and every checkpoint this lane writes, as in the
+    sequential lane (`_execute_main_loop` seeds `step_outcomes` with them).
+
+    Checkpoint: the lanes call `on_progress` (under their results lock)
+    after every committed node, and this path writes the full row set once
+    more at the end, so a crash mid-DAG resumes at the unfinished nodes
+    instead of "nothing done" (chunk 5, 2026-09-16 — the lane wrote no
+    checkpoint at all; the sequential lane's parallel-batch branch is
+    unreachable in production, so the write lives here). Written only when
+    the lane runs on real items (`step_indices` pairs 1:1): a positional
+    checkpoint would resume by the legacy row-count rule.
+
+    `resumed`: the plan is a checkpoint suffix re-numbered from 1 while its
+    `[after:N]` tags still name the original plan. When preflight re-keyed
+    the suffix's edges through the carried plan binding
+    (`step_gate.remap_suffix_deps` — `deps`, `declared` and `pre_gated` are
+    then suffix-numbered), the DAG gate enforces them as on a fresh plan;
+    without a binding it enforces nothing (same rule as
+    `step_gate.plan_identity_intact`).
 
     Returns LoopResult if parallel execution was used, None otherwise
     (caller falls through to sequential execution).
     """
     from llm import LLMTool
 
+    # The checkpoint's plan is the TAGGED text (`steps`), as in the
+    # sequential lane: a resume re-parses `[after:N]` from the checkpoint
+    # and verifies the carried items against NEXT.md, which mirrors the
+    # tagged text. `clean_steps` is the DAG lane's display/execution form
+    # (same length — tags are stripped, never split).
+    _lane_texts = list(steps)
+    _items = (list(step_indices)
+              if step_indices is not None and len(step_indices) == len(_lane_texts)
+              else None)
+    _carried: List[StepOutcome] = list(carried_outcomes or [])
+    # NEXT.md state last APPLIED per node (recorded only after mark_item
+    # returned): a failed mark is retried at the next snapshot, and a
+    # provisional row (DAG timeout → the worker's real result later) moves
+    # the item blocked → done (chunk-5 review: a once-only set remembered
+    # the first attempt, so the file said done while the item stayed
+    # blocked or TODO).
+    _marked: Dict[int, str] = {}
+    # Post-step effects applied per node — decisions, world facts and
+    # regression obligations land BEFORE the node's done row is durable,
+    # so a resume that skips the row does not lose them (chunk-5 review
+    # finding 1: they ran only after the whole lane returned).
+    # position -> the effect families that ran without raising (r3: a
+    # whole-bundle retry re-appended decisions to the journal)
+    _effects_done: Dict[int, set] = {}
+
+    def _mark_node(k: int, st: str) -> None:
+        if _items is None or st not in _TERMINAL_STATUSES:
+            return
+        _want = _orch().STATE_BLOCKED if st == "blocked" else _orch().STATE_DONE
+        if _marked.get(k) == _want:
+            return
+        _item = _items[k - 1]
+        if _item < 0 or not ctx.project:
+            _marked[k] = _want
+            return
+        try:
+            _orch().mark_item(ctx.project, _item, _want)
+        except Exception as _mk_exc:
+            log.warning("mark_item(%s) failed for parallel %s#%d (retried at the next "
+                        "snapshot): %s", st, ctx.project, _item, _mk_exc)
+            return
+        _marked[k] = _want
+
+    def _row_mark(k: int, st: str) -> str:
+        """The mirror state a row for node k carries (chunk 8): applied
+        ⇔ `_mark_node` recorded this very state (a provisional blocked row
+        later moved to done owes `x` until the move is applied). Direct
+        callers (no items) have nothing to mirror. ONE rule for the
+        checkpoint rows and the returned rows (r1: the result rows were
+        built with the default and disagreed with the file)."""
+        if _items is None:
+            return MARK_APPLIED
+        from loop_planning import item_mark_state
+        _want = item_mark_state(st) if st in _TERMINAL_STATUSES else ""
+        return MARK_APPLIED if (not _want or _marked.get(k) == _want) else MARK_PENDING
+
+    def _node_effects(k: int, oc: dict) -> None:
+        """Once per node whose outcome is done: decisions, world facts and
+        regression obligations (the sequential lane's post-step effects),
+        keyed by position so the final pass is idempotent. Runs for direct
+        callers too (no items → no checkpoint, effects still recorded)."""
+        if oc.get("status") != "done":
+            return
+        _done = _effects_done.setdefault(k, set())
+        if _done >= _EFFECT_FAMILIES:
+            return
+        _text = _lane_texts[k - 1] if 1 <= k <= len(_lane_texts) else ""
+        _item = _items[k - 1] if _items is not None else k
+        # Each family is acknowledged only after it ran without raising: a
+        # transient failure is retried at the next snapshot / the final
+        # pass (chunk-5 r2: acknowledging first re-created the lost-effects
+        # bug on the error path), and a family that already ran is NOT
+        # re-run when a later one fails (r3: the decision journal is
+        # append-only, so a bundle retry duplicated its rows). The
+        # recorders' own swallowed storage failures are theirs (same
+        # contract the sequential lane runs on).
+        from loop_post_step import record_step_decisions, record_step_world_facts
+        if "decisions" not in _done:
+            try:
+                record_step_decisions(ctx, str(k), oc, loop_shared_ctx)
+                _done.add("decisions")
+            except Exception as _fx_exc:
+                log.warning("parallel step %d decisions failed (retried at the "
+                            "next snapshot): %s", k, _fx_exc)
+        if "facts" not in _done:
+            try:
+                record_step_world_facts(ctx, str(k), oc)
+                _done.add("facts")
+            except Exception as _fx_exc:
+                log.warning("parallel step %d world facts failed (retried at the "
+                            "next snapshot): %s", k, _fx_exc)
+        if "regression" not in _done:
+            try:
+                from regression_ledger import regression_enabled as _rg_on
+                if _rg_on() and oc.get("tool_events"):
+                    _rg_new = ctx.regression.harvest(
+                        oc.get("tool_events"), step_index=_item, step_no=k, iteration=k,
+                        step_text=_text, executor_cwd=oc.get("executor_cwd") or proj_fanout_dir or None)
+                    if _rg_new:
+                        log.info("regression obligations step=%d recorded: %s", k, "; ".join(_rg_new))
+                _done.add("regression")
+            except Exception as _rg_exc:
+                log.warning("regression harvest failed for parallel step %d (retried at the "
+                            "next snapshot): %s", k, _rg_exc)
+
+    def _write_progress(committed: Dict[int, dict]) -> None:
+        """One checkpoint per committed node — the lane's snapshot, taken
+        under its lock, becomes rows behind the carried ones. Per new row,
+        in this order: the node's effects, its NEXT.md mark, then the file.
+        Nothing here raises into the lane (write_checkpoint swallows its
+        own errors; this guards everything else, the final call included)."""
+        try:
+            keys = [_k for _k in sorted(committed) if 1 <= _k <= len(_lane_texts)]
+            normal = {_k: _normalize_outcome(committed[_k], _k) for _k in keys}
+            for _k in keys:
+                _node_effects(_k, normal[_k])
+            if _items is None:
+                return
+            for _k in keys:
+                _mark_node(_k, str(normal[_k].get("status", "blocked")))
+            # Marks the carried rows still owe (a resume whose settlement
+            # failed) are retried here too; the lane's own nodes are
+            # `_mark_node`'s.
+            if any(getattr(_r, "item_mark", MARK_APPLIED) == MARK_PENDING for _r in _carried):
+                from loop_planning import settle_item_marks as _settle_marks
+                _settle_marks(ctx.project or "", _carried)
+            from checkpoint import write_checkpoint as _lane_ckpt
+            rows = list(_carried)
+            for _k in keys:
+                _st = str(normal[_k].get("status", "blocked"))
+                rows.append(_fanout_row(_lane_texts[_k - 1], _items[_k - 1], _k, normal[_k],
+                                        item_mark=_row_mark(_k, _st)))
+            _lane_ckpt(
+                ctx.loop_id, ctx.goal, ctx.project or "", list(_lane_texts), rows,
+                world_facts=ctx.world_facts.to_list(),
+                regression=ctx.regression.to_list(),
+                step_indices=list(_items),
+                plan_items=getattr(ctx, "plan_items", None),
+                parallel_fan_out=getattr(ctx, "parallel_fan_out", 0),
+            )
+        except Exception as _ck_exc:
+            log.warning("parallel lane progress write failed (loop stays resumable only "
+                        "from the last good write): %s", _ck_exc)
+
     # §6 injection seam: one delivery boundary for the whole fan-out (empty in
     # practice today — nothing appends before Phase D — but structurally closed).
     _fanout_incremental, _fanout_ancestry = _drain_pending_context(ctx)
     if use_dag:
         if ctx.verbose:
-            print(
-                f"[maro] dag: running {len(clean_steps)} steps with dep-aware scheduling "
-                f"(max_workers={parallel_fan_out}, levels={len(levels)}, "
-                f"parallel_levels={len(parallel_levels)})",
-                file=sys.stderr, flush=True,
-            )
+            _say(f"[maro] dag: running {len(clean_steps)} steps with dep-aware scheduling "
+                 f"(max_workers={parallel_fan_out}, levels={len(levels)}, "
+                 f"parallel_levels={len(parallel_levels)})")
+        _remapped = resumed and declared is not None
         _fanout_outcomes = _run_steps_dag(
             goal=ctx.goal,
             steps=clean_steps,
             deps=deps,
+            tagged_steps=steps,
+            identity_intact=(not resumed) or _remapped,
+            declared=declared if _remapped else None,
+            pre_gated=pre_gated if _remapped else None,
             adapter=ctx.adapter,
             ancestry_context=_fanout_ancestry,
             tools=[LLMTool(**t) for t in resolve_tools_fn()],
@@ -328,11 +612,12 @@ def _run_parallel_path(
             project_dir=proj_fanout_dir,
             shared_ctx=loop_shared_ctx,
             incremental_context=_fanout_incremental,
+            on_progress=_write_progress,
         )
         _fanout_step_texts = clean_steps
     else:
         if ctx.verbose:
-            print(f"[maro] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})", file=sys.stderr, flush=True)
+            _say(f"[maro] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})")
         _fanout_outcomes = _run_steps_parallel(
             goal=ctx.goal,
             steps=steps,
@@ -344,50 +629,74 @@ def _run_parallel_path(
             project_dir=proj_fanout_dir,
             shared_ctx=loop_shared_ctx,
             incremental_context=_fanout_incremental,
+            on_progress=_write_progress,
         )
         _fanout_step_texts = steps
 
-    # Build LoopResult from parallel/dag outcomes
-    _fanout_step_outcomes: List[StepOutcome] = []
+    # Build LoopResult from parallel/dag outcomes (one status domain first)
+    _fanout_outcomes = [_normalize_outcome(_oc, _k) for _k, _oc in enumerate(_fanout_outcomes, 1)]
+    _fanout_step_outcomes: List[StepOutcome] = list(_carried)
     _fanout_tokens_in = 0
     _fanout_tokens_out = 0
     _fanout_loop_status = "done"
     _fanout_stuck_reason = None
     for _i, (_step_text, _oc) in enumerate(zip(_fanout_step_texts, _fanout_outcomes), 1):
         _st = _oc.get("status", "blocked")
-        _fanout_step_outcomes.append(step_from_decompose(
-            _step_text, _i,
-            status=_st,
-            result=_oc.get("result", ""),
-            iteration=_i,
-            tokens_in=_oc.get("tokens_in", 0),
-            tokens_out=_oc.get("tokens_out", 0),
-            confidence=_oc.get("confidence", "unverified"),
-            injected_steps=_oc.get("inject_steps", []),
-            call_record=_oc.get("call_record", ""),
-            # 2026-07-08 adversarial review (finding #2): no elapsed_ms is
-            # tracked per fan-out worker at all here (defaults to 0) — ended_ts=""
-            # keeps the run-visibility report's timeline in its approximate
-            # fallback rather than rendering these as false zero-duration steps.
-            ended_ts="",
-        ))
-        if _st == "done":
-            # DECISION fan-out (chunk-3 review finding: the fan-out/DAG path
-            # bypassed _process_done_step, silently dropping decisions).
-            from loop_post_step import record_step_decisions, \
-                record_step_world_facts
-            record_step_decisions(ctx, str(_i), _oc, loop_shared_ctx)
-            record_step_world_facts(ctx, str(_i), _oc)
+        _item = _items[_i - 1] if _items is not None else _i
+        _node_effects(_i, _oc)                    # idempotent — committed nodes already did
+        _mark_node(_i, _st)                       # fill rows / a failed mark's retry
+        # Ledger parity (round 12): the batch path records every member;
+        # the fan-out / DAG lanes never did, so run cards omitted their
+        # spend — a refusal's included.
+        try:
+            from metrics import record_step_cost
+            record_step_cost(
+                step_text=_step_text,
+                tokens_in=_oc.get("tokens_in", 0),
+                tokens_out=_oc.get("tokens_out", 0),
+                status=_st,
+                goal=ctx.goal,
+                model=getattr(ctx.adapter, "model_key", ""),
+                elapsed_ms=0,
+                cache_read_tokens=_oc.get("cache_read_tokens", 0) or 0,
+                loop_id=getattr(ctx, "loop_id", "") or "",
+                provider_cost_usd=float(_oc.get("provider_cost_usd", 0.0) or 0.0),
+            )
+        except Exception as _cost_exc:
+            log.debug("fan-out record_step_cost failed (non-critical): %s", _cost_exc)
+        _fanout_step_outcomes.append(_fanout_row(_step_text, _item, _i, _oc,
+                                                 item_mark=_row_mark(_i, _st)))
         _fanout_tokens_in += _oc.get("tokens_in", 0)
         _fanout_tokens_out += _oc.get("tokens_out", 0)
         if _st == "blocked":
-            _fanout_loop_status = "stuck"
-            _fanout_stuck_reason = _oc.get("stuck_reason", f"step {_i} blocked")
+            _env = _environmental_pause(_oc)
+            if _env:
+                # §13e: the environment stopped this step (dead backend, dead
+                # container session) — the run pauses typed and resumable,
+                # it is not `stuck` (review 2026-09-13). The schedulers
+                # themselves stop submitting on the first such outcome
+                # (round 2); peers already running finish on their own.
+                if hasattr(ctx, "stamp_pause"):
+                    ctx.stamp_pause(_env)
+                _fanout_loop_status = "interrupted"
+                _fanout_stuck_reason = _oc.get("stuck_reason") or f"environmental pause: {_env}"
+            elif _fanout_loop_status != "interrupted":
+                _fanout_loop_status = "stuck"
+                _fanout_stuck_reason = _oc.get("stuck_reason", f"step {_i} blocked")
         if ctx.step_callback is not None:
             try:
                 ctx.step_callback(_i, _step_text, _oc.get("result", "")[:120], _st)
             except Exception as _cb_exc:
                 log.debug("step_callback raised on parallel step %d: %s", _i, _cb_exc)
+    # Final write: every row as returned (fill rows included), so the
+    # checkpoint and the LoopResult agree — including the mirror state
+    # after this pass's own mark retry (r2 finding 4: a retry that
+    # succeeded only here left the returned rows saying pending).
+    _write_progress({_k: _oc for _k, _oc in enumerate(_fanout_outcomes, 1)})
+    # This hop's rows only: the carried prefix is not indexed by node (r3
+    # finding 2: refreshing it from node 1 read another node's mark).
+    for _i, _row in enumerate(_fanout_step_outcomes[len(_carried):], 1):
+        _row.item_mark = _row_mark(_i, str(getattr(_row, "status", "") or ""))
     elapsed = int((time.monotonic() - ctx.started_at) * 1000)
     return LoopResult(
         loop_id=ctx.loop_id,
@@ -399,6 +708,7 @@ def _run_parallel_path(
         total_tokens_out=_fanout_tokens_out,
         elapsed_ms=elapsed,
         stuck_reason=_fanout_stuck_reason,
+        pause_reason=str(getattr(ctx, "pause_reason", "") or ""),
     )
 
 
@@ -414,8 +724,13 @@ def _run_steps_parallel(
     project_dir: str = "",
     shared_ctx: Optional[Dict[str, Any]] = None,
     incremental_context: str = "",
+    on_progress=None,
 ) -> List[dict]:
     """Execute steps concurrently using ThreadPoolExecutor.
+
+    `on_progress(snapshot)`: called on the coordinator thread with a copy
+    of the committed outcomes after each one lands (the caller's
+    checkpoint write).
 
     Each step gets its own adapter instance (thread-safe: no shared state).
     completed_context is empty for all parallel steps (no inter-step dependencies
@@ -427,26 +742,71 @@ def _run_steps_parallel(
 
     Returns outcomes list in step-index order.
     """
+    # Round-2 review 2026-09-13: an environmental refusal (dead container
+    # session, dead backend) used to be discovered only after the whole
+    # fan-out drained — every queued step was still started and refused in
+    # turn. The first such outcome halts the pool: the flag is set IN the
+    # worker (a pool thread picks its next queued task before the main
+    # thread ever sees the refusal, so cancelling from outside is not
+    # enough), every task that starts afterwards returns a not-started
+    # outcome without calling the adapter, and the main thread cancels
+    # what it still can. Peers already running finish on their own.
+    _halt = {"reason": ""}
+
+    def _not_started(step_idx: int) -> dict:
+        return {
+            "status": "blocked",
+            "stuck_reason": f"not started — environmental pause: {_halt['reason']}",
+            "result": "",
+            "summary": f"step {step_idx} not started (environmental pause)",
+            "tokens_in": 0,
+            "tokens_out": 0,
+        }
+
     def _run_one(step_idx: int, step_text: str) -> tuple[int, dict]:
+        if _halt["reason"]:
+            return step_idx, _not_started(step_idx)
         # Execution floor is MID (2026-07-20 decree) — parallel steps run on
         # the session adapter; the per-step cheap downgrade was removed.
         step_adapter = adapter
 
-        # _execute_step handles prefetch internally
-        outcome = _run_in_step_worktree(f"step{step_idx}", lambda: _execute_step(
-            goal=goal,
-            step_text=step_text,
-            step_num=step_idx,
-            total_steps=len(steps),
-            completed_context=[],
-            adapter=step_adapter,
-            tools=tools,
-            verbose=verbose,
-            ancestry_context=ancestry_context,
-            project_dir=project_dir,
-            shared_ctx=shared_ctx,
-            incremental_context=incremental_context,
-        ))
+        def _publish_halt(oc: dict) -> None:
+            # Published the moment the step's outcome exists — BEFORE the
+            # worktree wrapper's merge-back/cleanup (review round 13: that
+            # finalization can wait on the repo lock, and a peer finishing
+            # meanwhile admitted a queued step against the dead session).
+            if not _halt["reason"]:
+                _env = _environmental_pause(oc)
+                if _env:
+                    _halt["reason"] = _env
+                    log.warning("parallel step %d refused by the environment (%s) — "
+                                "queued steps will not start", step_idx, _env)
+
+        def _run_step() -> dict:
+            # _execute_step handles prefetch internally
+            oc = _execute_step(
+                goal=goal,
+                step_text=step_text,
+                step_num=step_idx,
+                total_steps=len(steps),
+                completed_context=[],
+                adapter=step_adapter,
+                tools=tools,
+                verbose=verbose,
+                ancestry_context=ancestry_context,
+                project_dir=project_dir,
+                shared_ctx=shared_ctx,
+                incremental_context=incremental_context,
+            )
+            # THE executor boundary (chunk-5 r2/r3): the status domain is
+            # closed HERE, before the scheduler sees the row — a `pending`
+            # prerequisite is blocked (UNMET) when its dependents are gated,
+            # not only when the lane returns.
+            oc = _normalize_outcome(oc, step_idx)
+            _publish_halt(oc)
+            return oc
+
+        outcome = _run_in_step_worktree(f"step{step_idx}", _run_step)
 
         # Post-step security scan — parallel fan-out skips the main loop's
         # _post_step_checks, so we do a lightweight scan here.  Ralph verify
@@ -476,15 +836,56 @@ def _run_steps_parallel(
                     pass  # security module optional; never block legitimate parallel work
 
         if verbose:
-            status_label = outcome.get("status", "?")
-            summary = outcome.get("summary", "")[:80]
-            print(f"[maro] parallel step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
+            # Presentation last, and never fatal: a closed stderr
+            # (BrokenPipeError) must not replace the outcome — or the halt —
+            # with "parallel execution error" (review round 4).
+            _say(f"[maro] parallel step {step_idx} {outcome.get('status', '?')}: "
+                 f"{outcome.get('summary', '')[:80]}")
         return step_idx, outcome
 
     n_workers = min(max_workers, len(steps))
     outcomes_by_idx: Dict[int, dict] = {}
 
     _fanout_timeout = int(os.environ.get("MARO_STEP_TIMEOUT", "600"))  # 10 min default
+
+    def _commit(idx: int, outcome: dict) -> None:
+        """THE result commit for this lane (coordinator thread only): every
+        row lands here and the caller's write sees the snapshot — normal,
+        error, cancelled, timeout, late replacement and fill rows alike
+        (chunk-5 review: five sites bypassed the hook)."""
+        outcome = _normalize_outcome(outcome, idx)
+        outcomes_by_idx[idx] = outcome
+        if on_progress is not None:
+            try:
+                on_progress(dict(outcomes_by_idx))
+            except Exception as _op_exc:
+                log.warning("fan-out on_progress failed for step %d: %s", idx, _op_exc)
+
+    def _error_row(i: int, exc: BaseException) -> dict:
+        return {
+            "status": "blocked",
+            "stuck_reason": f"parallel execution error: {exc}",
+            "result": "",
+            "summary": f"step {i + 1} failed in fan-out",
+            "tokens_in": 0,
+            "tokens_out": 0,
+        }
+
+    def _land(f) -> None:
+        """Commit one finished future as what it is: cancelled → not
+        started, raised → execution error, else its outcome."""
+        i = futures[f]
+        try:
+            if f.cancelled():
+                _commit(i + 1, _not_started(i + 1))
+                return
+            idx, outcome = f.result(timeout=30)
+            _commit(idx, outcome)
+            if _halt["reason"]:
+                for _g in futures:
+                    _g.cancel()
+        except Exception as exc:
+            _commit(i + 1, _error_row(i, exc))
 
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         # copy_context: pool threads don't inherit ContextVars (run-dir,
@@ -494,42 +895,75 @@ def _run_steps_parallel(
             pool.submit(contextvars.copy_context().run, _run_one, i + 1, s): i
             for i, s in enumerate(steps)
         }
-        try:
-            for f in as_completed(futures, timeout=_fanout_timeout):
+        # The execution deadline is the workers' budget: time the
+        # coordinator spends persisting a landed outcome is added back, so
+        # a slow checkpoint cannot time out a peer that already finished
+        # (chunk-5 review).
+        pending = set(futures)
+        deadline = time.monotonic() + _fanout_timeout
+        _timed_out = False
+        while pending:
+            _remaining = deadline - time.monotonic()
+            if _remaining <= 0:
+                _timed_out = True
+                break
+            done_now, pending = wait(pending, timeout=_remaining, return_when=FIRST_COMPLETED)
+            if not done_now:
+                _timed_out = True
+                break
+            for f in done_now:
+                _t0 = time.monotonic()
                 try:
-                    idx, outcome = f.result(timeout=30)
-                    outcomes_by_idx[idx] = outcome
-                except Exception as exc:
-                    i = futures[f]
-                    outcomes_by_idx[i + 1] = {
-                        "status": "blocked",
-                        "stuck_reason": f"parallel execution error: {exc}",
-                        "result": "",
-                        "summary": f"step {i + 1} failed in fan-out",
-                        "tokens_in": 0,
-                        "tokens_out": 0,
-                    }
-        except TimeoutError:
-            # Some futures didn't complete within the timeout — mark them as blocked
+                    _land(f)
+                finally:
+                    deadline += time.monotonic() - _t0
+        if _timed_out:
+            # Some futures didn't complete within the timeout — mark them as
+            # blocked. A future that finished while the coordinator was
+            # persisting a peer is landed as itself first (chunk-5 r2): a
+            # finished worker never gets a synthetic timeout row.
             for f, i in futures.items():
-                if (i + 1) not in outcomes_by_idx:
-                    outcomes_by_idx[i + 1] = {
-                        "status": "blocked",
-                        "stuck_reason": f"parallel fan-out timeout ({_fanout_timeout}s)",
-                        "result": "",
-                        "summary": f"step {i + 1} timed out in fan-out",
-                        "tokens_in": 0,
-                        "tokens_out": 0,
-                    }
-                    log.warning("parallel step %d timed out after %ds", i + 1, _fanout_timeout)
+                if (i + 1) in outcomes_by_idx:
+                    continue
+                if f.done():
+                    _land(f)
+                    continue
+                _commit(i + 1, {
+                    "status": "blocked",
+                    "stuck_reason": f"parallel fan-out timeout ({_fanout_timeout}s)",
+                    "result": "",
+                    "summary": f"step {i + 1} timed out in fan-out",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                })
+                log.warning("parallel step %d timed out after %ds", i + 1, _fanout_timeout)
+
+    # Round 4: the pool's exit waited for the workers still running past
+    # the deadline; their REAL outcomes (spend, and the environmental
+    # refusal that set the halt) replace the synthetic timeout rows instead
+    # of being discarded — the operator was told "timeout" when the process
+    # had since learned the actual cause. A late worker that RAISED is an
+    # execution error, not a timeout (chunk-5 review).
+    for f, i in futures.items():
+        if not f.done() or f.cancelled():
+            continue
+        _row = outcomes_by_idx.get(i + 1) or {}
+        if not str(_row.get("stuck_reason", "")).startswith("parallel fan-out timeout"):
+            continue
+        try:
+            idx, outcome = f.result(timeout=0)
+        except Exception as exc:
+            _commit(i + 1, _error_row(i, exc))
+            continue
+        _commit(idx, outcome)
 
     # Fill any missing indices (shouldn't happen, but defensive)
     for i in range(len(steps)):
         if (i + 1) not in outcomes_by_idx:
-            outcomes_by_idx[i + 1] = {
+            _commit(i + 1, {
                 "status": "blocked", "stuck_reason": "missing from fan-out results",
                 "result": "", "tokens_in": 0, "tokens_out": 0,
-            }
+            })
 
     return [outcomes_by_idx[i + 1] for i in range(len(steps))]
 
@@ -547,8 +981,17 @@ def _run_steps_dag(
     project_dir: str = "",
     shared_ctx: Optional[Dict[str, Any]] = None,
     incremental_context: str = "",
+    tagged_steps: Optional[List[str]] = None,
+    identity_intact: bool = True,
+    declared: Optional[Dict[int, set]] = None,
+    pre_gated: Optional[Dict[int, str]] = None,
+    on_progress=None,
 ) -> List[dict]:
     """Dep-aware parallel execution — semaphore-gated pool with auto-unblock.
+
+    `on_progress(snapshot)`: called under `results_lock` with a copy of the
+    committed results after EVERY commit (`_commit` is the one place a row
+    lands) — the caller's checkpoint write.
 
     Unlike _run_steps_parallel (which requires ALL steps to be independent),
     this handles arbitrary DAG topologies:
@@ -562,14 +1005,121 @@ def _run_steps_dag(
     Args:
         steps: Clean step strings (tags stripped by parse_dependencies).
         deps:  1-based step index → set of dep indices (from parse_dependencies).
+        tagged_steps: the same steps WITH their [after:] tags, so the gate
+            below can tell a declared edge from the sequential default.
+        declared: pre-computed declared edges in THIS plan's numbering
+            (a resumed suffix re-keyed by step_gate.remap_suffix_deps);
+            when given, the tags are not re-read — they name the original
+            plan.
+        pre_gated: step index → blocked-row reason for steps whose enforced
+            prerequisite finished blocked/skipped BEFORE this run (carried
+            checkpoint rows); recorded blocked up front, never submitted,
+            and gating their own dependents transitively.
+
+    Prerequisite gate (step_gate.py, 2026-09-16): a dep that completes
+    blocked/skipped does NOT release its dependents. A dependent whose
+    edge to it was DECLARED (`[after:N]`) — or any edge when
+    execution.gate_implicit_prerequisites is on — is recorded blocked
+    ("not executed — declared prerequisite not met: step N ended
+    blocked") without an adapter call, transitively; a sequential-default
+    edge is logged and released (soft), the same classes the sequential
+    lane applies. Before this, a completed dep was discarded from
+    `remaining_deps` regardless of its outcome and the whole graph ran on
+    a foundation that never landed.
 
     Returns outcomes list in step-index order.
     """
     import threading as _threading
+    from step_gate import (explicit_deps as _explicit_deps,
+                           gate_implicit_enabled as _gate_implicit,
+                           UNMET_STATUSES as _UNMET)
+
+    _tagged = list(tagged_steps) if tagged_steps and len(tagged_steps) == len(steps) else None
+    _declared: Dict[int, set] = {}
+    if declared is not None:
+        for _i, _d in declared.items():
+            try:
+                _declared[int(_i)] = {int(x) for x in _d}
+            except (TypeError, ValueError):
+                continue
+    elif _tagged is not None and identity_intact:
+        for _i, _t in enumerate(_tagged, 1):
+            _d = _explicit_deps(_t)
+            if _d:
+                _declared[_i] = set(_d)
+    _gate_all = _gate_implicit() and identity_intact
+    if not identity_intact:
+        # Scheduling ORDER still follows the re-parsed edges (pre-existing:
+        # the DAG lane has always scheduled a resumed suffix by its
+        # re-numbered tags — BACKLOG lead); only the outcome GATE is off.
+        log.warning("dag prerequisite gate: plan identity not intact (resumed suffix) — "
+                    "declared edges do not gate outcomes for this fan-out "
+                    "(scheduling still follows the re-parsed tags)")
+
+    def _gate_dependents(failed_idx: int, failed_status: str) -> None:
+        """Mark every not-yet-started dependent of `failed_idx` blocked when
+        its edge is enforced; recurse so a gated step gates its own
+        dependents. Caller holds no lock; results_lock taken here."""
+        frontier = [(failed_idx, failed_status)]
+        while frontier:
+            dep_idx, dep_status = frontier.pop()
+            for i in range(1, n + 1):
+                if dep_idx not in deps.get(i, set()):
+                    continue
+                with results_lock:
+                    if i in results or i in active.values():
+                        continue
+                    enforced = _gate_all or dep_idx in _declared.get(i, set())
+                    if not enforced:
+                        log.info("dag prerequisite gate (soft): step %d runs despite "
+                                 "step %d ended %s", i, dep_idx, dep_status)
+                        continue
+                _commit(i, {
+                    "status": "blocked",
+                    "stuck_reason": (f"not executed — declared prerequisite not met: "
+                                     f"step {dep_idx} ended {dep_status}"),
+                    "result": "", "tokens_in": 0, "tokens_out": 0,
+                })
+                log.warning("dag prerequisite gate: step %d not executed — step %d ended %s",
+                            i, dep_idx, dep_status)
+                frontier.append((i, "blocked"))
+            # A gated step never passes through the future path, so nothing
+            # else discards it from its dependents' remaining deps; release
+            # its SOFT dependents here (the coordinator submits after this).
+            if dep_idx != failed_idx:
+                for j in range(1, n + 1):
+                    remaining_deps.get(j, set()).discard(dep_idx)
 
     n = len(steps)
     results: Dict[int, dict] = {}
+    # Round-2 review 2026-09-13: a completed dep used to be released to its
+    # dependents regardless of its outcome, so an environmental refusal
+    # walked the whole graph (each dependent started and refused in turn)
+    # before the caller saw the pause. Once set (in the worker, so an
+    # already-submitted peer sees it too), nothing further is submitted and
+    # nothing further calls the adapter; in-flight peers drain.
+    _halt = {"reason": ""}
     results_lock = _threading.Lock()
+
+    def _commit(step_idx: int, outcome: dict, *, only_if_absent: bool = False) -> bool:
+        """THE result commit: every row lands here, under the lock, and
+        the caller's write sees the snapshot in the same critical section
+        (two workers finishing together must not race an older snapshot
+        over a newer one). `only_if_absent` is the synthetic rows' mode
+        (timeout, fill): check-and-insert in ONE critical section, so a
+        worker's real `done` landing in between is never overwritten by a
+        synthetic `blocked` (chunk-5 r2). Returns whether the row landed."""
+        outcome = _normalize_outcome(outcome, step_idx)
+        with results_lock:
+            if only_if_absent and step_idx in results:
+                return False
+            results[step_idx] = outcome
+            if on_progress is not None:
+                try:
+                    on_progress(dict(results))
+                except Exception as _op_exc:
+                    log.warning("dag on_progress failed for step %d: %s", step_idx, _op_exc)
+        return True
 
     # Mutable copy — we discard entries as deps complete
     remaining_deps: Dict[int, Any] = {
@@ -579,6 +1129,17 @@ def _run_steps_dag(
     _fanout_timeout = int(os.environ.get("MARO_STEP_TIMEOUT", "600"))
 
     def _run_one(step_idx: int) -> tuple:
+        if _halt["reason"]:
+            _not_started = {
+                "status": "blocked",
+                "stuck_reason": f"not started — environmental pause: {_halt['reason']}",
+                "result": "", "tokens_in": 0, "tokens_out": 0,
+            }
+            # Commit it (review round 5): a coordinator that hit its deadline
+            # has stopped consuming futures, and its synthetic "dag timeout"
+            # row would otherwise stand for a step that never ran.
+            _commit(step_idx, _not_started)
+            return step_idx, _not_started
         step_text = steps[step_idx - 1]
         # Build completed_context from direct dep results (already done when we start)
         dep_ctx: List[str] = []
@@ -594,29 +1155,74 @@ def _run_steps_dag(
         # session adapter; the per-step cheap downgrade was removed.
         step_adapter = adapter
 
-        outcome = _run_in_step_worktree(f"dagstep{step_idx}", lambda: _execute_step(
-            goal=goal,
-            step_text=step_text,
-            step_num=step_idx,
-            total_steps=n,
-            completed_context=dep_ctx,
-            adapter=step_adapter,
-            tools=tools,
-            verbose=verbose,
-            ancestry_context=ancestry_context,
-            project_dir=project_dir,
-            shared_ctx=shared_ctx,
-            incremental_context=incremental_context,
-        ))
+        def _publish_halt(oc: dict) -> None:
+            # Set the halt HERE, in the worker (review round 3: the
+            # coordinator only learns of the refusal after it consumes the
+            # future, and a pool thread picks its next already-submitted
+            # root before that) — and BEFORE the worktree wrapper's
+            # merge-back/cleanup (review round 13: finalization can wait on
+            # the repo lock while a peer admits a queued root).
+            if not _halt["reason"]:
+                _env = _environmental_pause(oc)
+                if _env:
+                    _halt["reason"] = _env
+                    log.warning("dag step %d refused by the environment (%s) — "
+                                "submitted-but-unstarted steps will not run", step_idx, _env)
+
+        def _run_step() -> dict:
+            oc = _execute_step(
+                goal=goal,
+                step_text=step_text,
+                step_num=step_idx,
+                total_steps=n,
+                completed_context=dep_ctx,
+                adapter=step_adapter,
+                tools=tools,
+                verbose=verbose,
+                ancestry_context=ancestry_context,
+                project_dir=project_dir,
+                shared_ctx=shared_ctx,
+                incremental_context=incremental_context,
+            )
+            # THE executor boundary (chunk-5 r2/r3): the status domain is
+            # closed HERE, before the scheduler sees the row — a `pending`
+            # prerequisite is blocked (UNMET) when its dependents are gated,
+            # not only when the lane returns.
+            oc = _normalize_outcome(oc, step_idx)
+            _publish_halt(oc)
+            return oc
+
+        outcome = _run_in_step_worktree(f"dagstep{step_idx}", _run_step)
+        _commit(step_idx, outcome)
         if verbose:
-            status_label = outcome.get("status", "?")
-            summary = outcome.get("summary", "")[:80]
-            print(f"[maro] dag step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
-        with results_lock:
-            results[step_idx] = outcome
+            # Presentation AFTER the commit, never fatal (round 4: a closed
+            # stderr replaced the refusal with an execution error and the
+            # DAG carried on).
+            _say(f"[maro] dag step {step_idx} {outcome.get('status', '?')}: "
+                 f"{outcome.get('summary', '')[:80]}")
         return step_idx, outcome
 
     active: Dict[Any, int] = {}  # Future → step_idx
+
+    # Pre-gated steps (resume remap): the enforced prerequisite ended
+    # blocked/skipped before this run and is not in this plan, so nothing
+    # here will ever "complete" it. Record the refusal now, release the
+    # soft dependents (no future will do it), and gate the enforced ones.
+    for _pg_idx, _pg_reason in sorted((pre_gated or {}).items()):
+        try:
+            _pg_i = int(_pg_idx)
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= _pg_i <= n or _pg_i in results:
+            continue
+        _commit(_pg_i, {
+            "status": "blocked", "stuck_reason": str(_pg_reason),
+            "result": "", "tokens_in": 0, "tokens_out": 0,
+        })
+        log.warning("dag prerequisite gate: step %d %s", _pg_i, _pg_reason)
+        _gate_dependents(_pg_i, "blocked")
+        for _j in range(1, n + 1):
+            remaining_deps.get(_j, set()).discard(_pg_i)
 
     def _submit_ready(pool) -> None:
         """Submit all tasks whose deps are now fully satisfied."""
@@ -645,25 +1251,42 @@ def _run_steps_dag(
 
             if _timed_out:
                 for _f, _idx in list(active.items()):
-                    if _idx not in results:
-                        results[_idx] = {
-                            "status": "blocked",
-                            "stuck_reason": f"dag timeout ({_fanout_timeout}s)",
-                            "result": "", "tokens_in": 0, "tokens_out": 0,
-                        }
+                    if _commit(_idx, {
+                        "status": "blocked",
+                        "stuck_reason": f"dag timeout ({_fanout_timeout}s)",
+                        "result": "", "tokens_in": 0, "tokens_out": 0,
+                    }, only_if_absent=True):
                         log.warning("dag step %d timed out after %ds", _idx, _fanout_timeout)
                 break
 
             completed_idx = active.pop(_completed_f)
             try:
+                if _completed_f.cancelled():
+                    raise RuntimeError("cancelled")
                 _completed_f.result(timeout=30)
             except Exception as exc:
-                with results_lock:
-                    results[completed_idx] = {
-                        "status": "blocked",
-                        "stuck_reason": f"dag execution error: {exc}",
-                        "result": "", "tokens_in": 0, "tokens_out": 0,
-                    }
+                _commit(completed_idx, {
+                    "status": "blocked",
+                    "stuck_reason": (f"not started — environmental pause: {_halt['reason']}"
+                                     if _halt["reason"] and _completed_f.cancelled()
+                                     else f"dag execution error: {exc}"),
+                    "result": "", "tokens_in": 0, "tokens_out": 0,
+                })
+
+            if _halt["reason"]:
+                # Set by the worker above; nothing further is released or
+                # submitted. Already-submitted tasks return not-started
+                # outcomes on entry; running peers drain.
+                for _g in list(active):
+                    _g.cancel()
+                continue
+
+            # A dep that ended blocked/skipped gates its enforced dependents
+            # BEFORE the release below; the soft ones are released as before.
+            with results_lock:
+                _completed_status = str(results.get(completed_idx, {}).get("status", "") or "")
+            if _completed_status in _UNMET:
+                _gate_dependents(completed_idx, _completed_status)
 
             # Unblock tasks whose only remaining dep was the just-completed one
             for step_idx in range(1, n + 1):
@@ -672,13 +1295,14 @@ def _run_steps_dag(
 
             _submit_ready(pool)
 
-    # Fill any unreached tasks (deps of a timed-out step)
+    # Fill any unreached tasks (deps of a timed-out step, or everything
+    # behind an environmental pause)
     for i in range(1, n + 1):
-        if i not in results:
-            results[i] = {
-                "status": "blocked",
-                "stuck_reason": "dag: upstream dep did not complete",
-                "result": "", "tokens_in": 0, "tokens_out": 0,
-            }
+        _commit(i, {
+            "status": "blocked",
+            "stuck_reason": (f"not started — environmental pause: {_halt['reason']}"
+                             if _halt["reason"] else "dag: upstream dep did not complete"),
+            "result": "", "tokens_in": 0, "tokens_out": 0,
+        }, only_if_absent=True)
 
     return [results[i] for i in range(1, n + 1)]

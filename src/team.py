@@ -96,6 +96,9 @@ class TeamResult:
     stuck_reason: Optional[str] = None
     tokens_in: int = 0
     tokens_out: int = 0
+    provider_cost_usd: float = 0.0  # the ticket call's billed cost (round 10)
+    error_class: str = ""           # llm_errors class of an adapter failure (round 11)
+    cache_read_tokens: int = 0      # subset of tokens_in served from cache (round 12)
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +143,9 @@ def firewall_shared_ctx(
     from context_budget import clip as _clip
 
     scored: List[tuple] = []
-    for k, v in shared_ctx.items():
+    # Snapshot: a parallel peer's post-step effects land in this dict while
+    # this worker assembles its team context (chunk-5 r3).
+    for k, v in list(shared_ctx.items()):
         v_str = _clip(v, max_chars_per_entry)
         entry_words = _tok(k + " " + v_str)
         overlap = len(task_words & entry_words)
@@ -165,6 +170,19 @@ def _build_persona(role: str, persona_override: Optional[str]) -> str:
     return _GENERIC_PERSONA_TEMPLATE.format(role=role)
 
 
+def _is_policy_signal(exc: BaseException) -> bool:
+    """A typed environmental refusal (container-auth expiry, provider down,
+    credits gone) must reach the parent step's pause seam, not be
+    stringified into a blocked TeamResult the parent reported as DONE
+    (review round 9, 2026-09-13). Never raises."""
+    try:
+        from llm_errors import classify_error
+        from stop_verdicts import pause_reason_for_error_class
+        return bool(pause_reason_for_error_class(str(classify_error(exc).error_class or "")))
+    except Exception:
+        return False
+
+
 def create_team_worker(
     role: str,
     task: str,
@@ -173,6 +191,7 @@ def create_team_worker(
     adapter=None,
     dry_run: bool = False,
     shared_ctx: Optional[Dict[str, Any]] = None,
+    cwd: Optional[str] = None,
 ) -> TeamResult:
     """Spin up a specialist worker with the given role and task.
 
@@ -218,6 +237,12 @@ def create_team_worker(
                 _shared_block = "\n\nRelevant context from prior steps:\n" + "\n".join(_entries)
         user_msg = f"Ticket: {task}{_shared_block}\n\nComplete this ticket. Call deliver_result when done."
 
+        # Executor-lane container contract — the same guard as the step_exec
+        # and workers seams (review round 9, 2026-09-13: this lane had
+        # neither the guard nor `executor=True`, so under `require` a
+        # specialist's ticket ran against the HOST session).
+        from container_exec import enforce_backend_container_contract
+        enforce_backend_container_contract(adapter, executor=True)
         # agentic: team worker executes its ticket (real work) and reports via deliver_result/flag_blocked
         resp = adapter.complete(
             [
@@ -229,21 +254,41 @@ def create_team_worker(
             max_tokens=2048,
             temperature=0.3,
             purpose="team-worker",  # EDGE 6: agentic seam, was unlabeled in call records
+            executor=True,  # specialist ticket = agentic executor lane (container when on)
+            cwd=cwd,
         )
     except Exception as exc:
         # A token-runaway kill is a policy signal, not a worker-level failure:
         # converting it to a generic blocked TeamResult hides it from the
         # no-retry handling that exists to stop the ingest being replayed.
-        from llm_errors import TokenRunawayError as _TRE
-        if isinstance(exc, _TRE):
+        from llm_errors import TokenRunawayError as _TRE, BudgetRunawayError as _BRE
+        if isinstance(exc, (_TRE, _BRE)) or _is_policy_signal(exc):
+            # Both runaway classes (round 10: the run-wide cost breaker's
+            # stop verdict has no pause mapping by design, so it needs its
+            # own re-raise) and every typed environmental refusal.
             raise
         log.warning("team.create_worker failed role=%r: %s", role, exc)
+        # An ordinary failure keeps what the ticket left behind (round 11:
+        # this branch returned "" and zero accounting — a killed specialist's
+        # partial output and paid usage vanished before the parent saw them).
+        _ecls, _ev = "", {"partial": "", "tokens_in": 0, "tokens_out": 0, "cache_read": 0, "cost": 0.0}
+        try:
+            from llm_errors import classify_error, call_usage_evidence
+            _ecls = str(classify_error(exc).error_class or "")
+            _ev = call_usage_evidence(exc)
+        except Exception:
+            pass
         return TeamResult(
             role=role,
             task=task,
             status="blocked",
-            result="",
+            result=_ev["partial"],
             stuck_reason=f"LLM call failed: {exc}",
+            tokens_in=_ev["tokens_in"] + _ev["cache_read"],
+            tokens_out=_ev["tokens_out"],
+            provider_cost_usd=_ev["cost"],
+            error_class=_ecls,
+            cache_read_tokens=_ev["cache_read"],
         )
 
     if resp.tool_calls:
@@ -256,6 +301,8 @@ def create_team_worker(
                 result=tc.arguments.get("result", resp.content),
                 tokens_in=resp.input_tokens,
                 tokens_out=resp.output_tokens,
+                provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
+                cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0),
             )
         elif tc.name == "flag_blocked":
             return TeamResult(
@@ -266,6 +313,8 @@ def create_team_worker(
                 stuck_reason=tc.arguments.get("reason", "unknown"),
                 tokens_in=resp.input_tokens,
                 tokens_out=resp.output_tokens,
+                provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
+                cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0),
             )
 
     # Fallback: treat content as result
@@ -277,6 +326,8 @@ def create_team_worker(
             result=resp.content,
             tokens_in=resp.input_tokens,
             tokens_out=resp.output_tokens,
+                provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
+                cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0),
         )
 
     return TeamResult(
@@ -285,6 +336,10 @@ def create_team_worker(
         status="blocked",
         result="",
         stuck_reason="Worker produced no useful output",
+        tokens_in=resp.input_tokens,
+        tokens_out=resp.output_tokens,
+        provider_cost_usd=float(getattr(resp, "cost_usd", 0.0) or 0.0),
+        cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0),
     )
 
 

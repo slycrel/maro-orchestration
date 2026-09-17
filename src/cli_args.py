@@ -144,6 +144,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="handle_id (run dir) or loop_id of the crashed run")
     p_resume.add_argument("--verbose", "-v", action="store_true", default=True)
     p_resume.add_argument("--format", choices=["text", "json"], default="text")
+    p_resume.add_argument("--reclaim", action="store_true", default=False,
+                          help="override an UNRESOLVED resume claim (a previous resume "
+                               "of this checkpoint died without leaving a checkpoint) "
+                               "and resume from this checkpoint anyway")
+
+    p_answer = sub.add_parser(
+        "answer",
+        help="Answer a paused run's operator question and resume it by handle (operator_ask)")
+    p_answer.add_argument("run_id", help="handle_id of the run that asked")
+    p_answer.add_argument("text", nargs="?", default="",
+                          help="the answer (or --stdin)")
+    p_answer.add_argument("--stdin", action="store_true",
+                          help="read the answer from stdin")
+    p_answer.add_argument("--retry", action="store_true",
+                          help="re-drive an answered run whose resume never ran "
+                               "(refused_busy); reuses the recorded answer when no text is given")
+    p_answer.add_argument("--detach", action="store_true",
+                          help="queue the resume and return; the next queue drain runs it")
+    p_answer.add_argument("--source", default="cli",
+                          help="who answered (recorded on the run)")
+    p_answer.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_asks = sub.add_parser(
+        "asks",
+        help="List every operator question runs have asked (pending/answered/expired); --sweep expires past time boxes")
+    p_asks.add_argument("--sweep", action="store_true",
+                        help="stamp expired on pending asks past their deadline")
+    p_asks.add_argument("--limit", type=int, default=50)
+    p_asks.add_argument("--json", action="store_true")
+
+    p_reconcile = sub.add_parser(
+        "reconcile-runs",
+        help="Stamp runs whose worker process died mid-flight (no ended_at, dead pid) as `stranded`; --dry-run lists them")
+    p_reconcile.add_argument("--dry-run", action="store_true",
+                             help="list the candidates, stamp nothing")
+    p_reconcile.add_argument("--limit", type=int, default=20)
+    p_reconcile.add_argument("--grace-s", type=float, default=None,
+                             help="minimum metadata age before a dead pid counts (default 600)")
+    p_reconcile.add_argument("--json", action="store_true")
 
     p_evolver = sub.add_parser("evolver", help="Run meta-evolver — analyze outcomes + propose improvements (§19)")
     p_evolver.add_argument("--dry-run", action="store_true", help="Analyze without writing suggestions")
@@ -416,6 +455,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mem_record.add_argument("--task-type", default="general")
     p_mem_record.add_argument("--outcome", choices=["done", "stuck"], default="done")
     p_mem_record.add_argument("--tier", choices=["medium", "long"], default="medium")
+    p_mem_record.add_argument("--lineage", default="", metavar="HANDLE_ID", help="Scope the lesson to a run lineage (its root handle_id); default workspace-wide")
     p_mem_canon = memory_sub.add_parser("canon-candidates", help="Show long-tier lessons eligible for identity promotion (human review; door = canon-promote)")
     p_mem_canon.add_argument("--min-hits", type=int, default=10, help="Minimum times_applied (default 10)")
     p_mem_canon.add_argument("--min-task-types", type=int, default=3, help="Minimum distinct task types seen (default 3)")
@@ -455,6 +495,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_knowledge_status = knowledge_sub.add_parser("opstatus", help="Full crystallization dashboard")
     p_knowledge_status.add_argument("--stage", type=int, choices=[2, 3, 4, 5], help="Show only one stage")
     knowledge_sub.add_parser("promote", help="List available promotion actions (read-only)")
+
+    p_secrets = sub.add_parser(
+        "secrets",
+        help="Maro's secrets store (sops + age): init, list, check, get, set, "
+             "unset, migrate, edit, recipients — docs/SECRETS_DESIGN.md")
+    secrets_sub = p_secrets.add_subparsers(dest="secrets_cmd")
+    p_s_init = secrets_sub.add_parser("init", help="Create the age identity, an empty store and the inject policy under ~/.maro/secrets")
+    p_s_init.add_argument("--force", action="store_true", help="Regenerate the identity even if one exists (the old store becomes unreadable)")
+    secrets_sub.add_parser("list", help="Secret NAMES with their metadata (never values)")
+    p_s_check = secrets_sub.add_parser("check", help="Tool/store/identity/policy status; plaintext residue in the lookup chain")
+    p_s_check.add_argument("--json", action="store_true")
+    p_s_get = secrets_sub.add_parser("get", help="Print ONE value (the only verb that does)")
+    p_s_get.add_argument("name")
+    p_s_set = secrets_sub.add_parser("set", help="Add or replace a value; reads it from --value, --stdin, or a prompt")
+    p_s_set.add_argument("name")
+    p_s_set.add_argument("--value", help="The value (prefer --stdin so it stays out of shell history)")
+    p_s_set.add_argument("--stdin", action="store_true", help="Read the value from stdin (first line)")
+    p_s_set.add_argument("--service", help="What it is for (yahoo, nvidia, ...) — shown to workers")
+    p_s_set.add_argument("--note", help="Free-text note, shown in list/check")
+    p_s_set.add_argument("--maro", action="store_true", help="Record origin=maro (a value Maro derived) instead of operator")
+    p_s_set.add_argument("--run", help="Run handle that derived it (with --maro)")
+    p_s_unset = secrets_sub.add_parser("unset", help="Remove a name (and its metadata)")
+    p_s_unset.add_argument("name")
+    p_s_mig = secrets_sub.add_parser("migrate", help="Fold a plaintext dotenv (default: the legacy credentials .env) into the store; the plaintext is NOT deleted")
+    p_s_mig.add_argument("--source", help="Dotenv file to migrate (default: config.credentials_env_file())")
+    p_s_mig.add_argument("--overwrite", action="store_true", help="Replace values the store already holds")
+    secrets_sub.add_parser("edit", help="Open the store in $EDITOR via sops")
+    p_s_rec = secrets_sub.add_parser("recipients", help="List age recipients, or add one (another box's public key)")
+    p_s_rec.add_argument("add", nargs="?", help="age1... recipient to add")
 
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")

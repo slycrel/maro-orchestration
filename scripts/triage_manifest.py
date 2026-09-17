@@ -63,13 +63,20 @@ _add("markdown", """
  pack.py:_append_conflicts_note.add_once pack.py:_review_section
  loop_report.py:_parse_reading_queue
  playbook.py:_replace_alarm playbook.py:_expire_text playbook.py:_dedup_text""")
+# 2026-09-13 (landscape review r6): the sibling allocator's `_claim` rewrites
+# the FIRST line of the NEXT.md it staged itself moments earlier (the header
+# names the project; the mission line and everything after are carried
+# verbatim by `split("\n", 1)`); no parse, nothing dropped, the file is the
+# allocator's own staging copy until the rename publishes it.
+_add("markdown", """
+ handle.py:_free_project_name._claim""")
 _add("subprocess", """
  llm.py:_run_subprocess_safe
  heartbeat.py:_is_interactive_session_active
  build_loop_runner.py:_worker_session_already_active
- container_exec.py:_reseed_probe worktree.py:_sanitize_untrusted_git""")
+ container_exec.py:_credentials_expiry_probe worktree.py:_sanitize_untrusted_git""")
 _add("stream", """
- llm.py:_parse_stream_json llm.py:_stream_events llm.py:_is_plain_missing_session_error
+ llm.py:_stream_events llm.py:_is_plain_missing_session_error
  orch_bridges.py:_tail_lines orch_bridges.py:_extract_session_result_from_text
  orch_bridges.py:command_execution_bridge orch_bridges.py:command_execution_bridge._execute
  orch_bridges.py:review_command_validation_bridge
@@ -78,8 +85,13 @@ _add("derived-index", """
  memory_sqlite.py:_catch_up
  memory_ledger.py:_update_memory_index loop_report.py:_render_devlog_html
  portability.py:main""")
+# 2026-09-17 (LoopsBench chunk 8): `normalize_item_text` is a pure predicate —
+# the identity form of a NEXT.md item text (first non-blank line, tag and
+# whitespace collapsed) that compare-and-mark compares; nothing is written.
 _add("read-only", """
+ orch_items.py:normalize_item_text
  metrics.py:_reverse_readline convo_miner.py:scan_session_logs
+ secrets_store.py:recipient secrets_store.py:recipients
  correspondence.py:render_transcript
  playbook.py:parse_entries playbook.py:_valid_compression
  knowledge_lens.py:load_standing_rules knowledge_lens.py:load_hypotheses
@@ -87,7 +99,7 @@ _add("read-only", """
  evolver_scans.py:_load_baselines evolver_scans.py:_load_dated_diagnoses
  evolver_scans.py:_record_suggestion_outcomes graduation.py:scan_candidates
  graduation.py:_already_proposed graduation.py:verify_graduation_rules
- shadow_lane.py:_today_ledger_count shadow_lane.py:_status
+ shadow_lane.py:_today_ledger_count
  router.py:_count_skill_stats
  memory_quality.py:_load_corpus_from_workspace memory_quality.py:_load_paraphrase_queries
  navigator_shadow.py:_load_navigator_events memory_jsonl.py:_replay

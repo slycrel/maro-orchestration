@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from context_budget import clip, VERDICT_PROSE_CAP
-from loop_types import LoopContext, StepOutcome, _orch, step_from_decompose
+from loop_types import (LoopContext, StepOutcome, _orch, step_from_decompose,
+                        MARK_APPLIED, MARK_ATTEMPT, MARK_PENDING)
 from loop_planning import _is_combined_exec_analyze, _shape_steps, _split_exec_analyze
 from step_exec import generate_refinement_hint as _generate_refinement_hint
 
@@ -274,6 +275,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             print(f"[maro] step {step_idx+1} blocked ({_br[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
         step_outcomes.append(step_from_decompose(
             step_text, item_index,
+            item_mark=MARK_ATTEMPT,   # an attempt row, not the item's verdict (chunk 8 r2/r3)
             status="blocked", result=step_result, iteration=iteration,
             tokens_in=outcome.get("tokens_in", 0),
             tokens_out=outcome.get("tokens_out", 0),
@@ -323,6 +325,11 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                 # string round-tripped through all three blocked branches —
                 # adversarial review 2026-07-15 caught this one narrowed).
                 ctx.pending_context.extend(list(blk.delivered_contributions))
+                # The sub-steps carry this step's work forward (item index
+                # -1 each); its blocked row below must not read as an unmet
+                # prerequisite to dependents of this plan number.
+                if item_index >= 0:
+                    ctx.gate_superseded.add(item_index)
                 if ctx.verbose:
                     print(
                         f"[maro] step {step_idx} re-decomposed into {len(_sub_shaped)} sub-steps "
@@ -331,6 +338,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                     )
                 step_outcomes.append(step_from_decompose(
                     step_text, item_index,
+                    item_mark=MARK_ATTEMPT,   # an attempt row, not the item's verdict (chunk 8 r2/r3)
                     status="blocked", result=step_result, iteration=iteration,
                     tokens_in=outcome.get("tokens_in", 0),
                     tokens_out=outcome.get("tokens_out", 0),
@@ -399,6 +407,9 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
         # step's context (adversarial review 2026-07-15).
         ctx.pending_context.extend(list(blk.delivered_contributions))
         replan_count += 1
+        # Split halves carry the work forward — see the re-decompose branch.
+        if item_index >= 0:
+            ctx.gate_superseded.add(item_index)
         if ctx.verbose:
             print(
                 f"[maro] step {step_idx} timed out — split into {len(_decision.split_into)} steps "
@@ -407,6 +418,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             )
         step_outcomes.append(step_from_decompose(
             step_text, item_index,
+            item_mark=MARK_ATTEMPT,   # an attempt row, not the item's verdict (chunk 8 r2/r3)
             status="blocked", result=step_result, iteration=iteration,
             tokens_in=outcome.get("tokens_in", 0),
             tokens_out=outcome.get("tokens_out", 0),
@@ -464,10 +476,16 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
     # measured p99 bound, marked cut (caps sweep 2026-08-21).
     failure_chain.append(f"step {step_idx} terminal: {clip(_stuck_reason, 600)}")
     if item_index >= 0:
+        # The row the caller builds from `outcome` carries the mirror state
+        # (chunk 8 r2: unrecorded, the row was born pending and the
+        # snapshot re-marked an item someone else may have flipped since).
         try:
             o.mark_item(ctx.project, item_index, o.STATE_BLOCKED)
+            outcome["item_mark"] = MARK_APPLIED
         except OSError as _mark_exc:  # FileLockTimeout: ledger contended — the run result matters more than the checkbox
-            log.warning("mark_item(BLOCKED) failed for %s#%d: %s", ctx.project, item_index, _mark_exc)
+            log.warning("mark_item(BLOCKED) failed for %s#%d (the row keeps the mark owed): %s",
+                        ctx.project, item_index, _mark_exc)
+            outcome["item_mark"] = MARK_PENDING
     if ctx.verbose:
         if _decision.advance:
             print(f"[maro] step {step_idx} abandoned ({_stuck_reason[:120]}) — continuing with remaining steps",

@@ -694,7 +694,10 @@ class TestStorePersistence:
         d.mkdir(parents=True, exist_ok=True)
         base = {"task_type": "research", "outcome": "done", "source_goal": "g",
                 "confidence": 0.5, "tier": "medium", "score": 9.9,
-                "last_reinforced": "2026-08-16"}
+                # dated TODAY: a hardcoded "2026-08-16" rotted with the
+                # calendar (found 2026-09-07 — the rows decayed instead of
+                # promoting once they aged past the window)
+                "last_reinforced": __import__("datetime").date.today().isoformat()}
         (d / "lessons.jsonl").write_text("\n".join(json.dumps(r) for r in [
             dict(base, lesson_id="L-good", lesson="fine", sessions_validated=5),
             dict(base, lesson_id="L-sv", lesson="string", sessions_validated="3"),

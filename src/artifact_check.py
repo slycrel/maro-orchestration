@@ -135,7 +135,8 @@ def extract_write_claims(text: str) -> List[str]:
 
 
 def files_modified_since(root: Optional[str | os.PathLike], since_iso: str,
-                         *, limit: int = 20) -> List[str]:
+                         *, limit: int = 20,
+                         until_ts: Optional[float] = None) -> List[str]:
     """Relpaths under `root` modified at/after `since_iso` (UTC ISO string).
 
     The resume-side half of the fabrication-guard diff: when a step crashed
@@ -149,7 +150,11 @@ def files_modified_since(root: Optional[str | os.PathLike], since_iso: str,
     except (ValueError, TypeError):
         return []
     snap = snapshot_dir(root)
-    changed = sorted(rel for rel, mtime in snap.items() if mtime >= ts)
+    # review r31: out-of-window files cannot consume the bounded result slots.
+    changed = sorted(
+        rel for rel, mtime in snap.items()
+        if mtime >= ts and (until_ts is None or mtime <= until_ts)
+    )
     return changed[:limit]
 
 

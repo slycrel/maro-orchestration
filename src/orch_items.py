@@ -687,7 +687,40 @@ def _read_doing_pids(slug: str) -> dict:
         return {}
 
 
-def mark_item(slug: str, item_index: int, new_state: str) -> None:
+_ITEM_TEXT_TAG_RE = re.compile(r"\[boundary\]")
+
+
+def normalize_item_text(text: object) -> str:
+    """The identity form of an item's text for compare-and-mark (chunk 8
+    r2): the FIRST physical line only (`append_next_items` writes a
+    multi-line text verbatim and `parse_next` reads one line per item),
+    the planner's `[boundary]` tag removed (the loop strips it before
+    executing the step), whitespace collapsed. Both sides of a comparison
+    go through this; `[after:N]` tags stay (both sides carry them)."""
+    _raw = str(text or "")
+    _lines = [_l for _l in _raw.splitlines() if _l.strip()]
+    _first = _lines[0] if _lines else ""
+    return " ".join(_ITEM_TEXT_TAG_RE.sub("", _first).split())
+
+
+class ItemIdentityError(ValueError):
+    """The item a caller named is not there, or no longer carries the text
+    the caller expects (chunk 8, 2026-09-17): an identity failure, not a
+    transient one — a retry cannot fix it, only a person can."""
+
+
+def mark_item(slug: str, item_index: int, new_state: str, *,
+              expected_text: Optional[str] = None) -> None:
+    """Flip one NEXT.md item's state.
+
+    `expected_text` (chunk 8): compare-and-mark — the item must still carry
+    exactly this text (stripped) and the text must be unique in the ledger,
+    checked UNDER the same lock the rewrite holds; otherwise
+    `ItemIdentityError` and nothing is written. An item index is a line
+    number, so a mark applied after time has passed (a snapshot's retry, a
+    resume) must prove the line is still the step it thinks it is; a
+    check made before taking the lock proves nothing (r1 Skeptic 3).
+    """
     if new_state not in VALID_STATES:
         raise ValueError(f"invalid new state: {new_state}")
     # Parse + rewrite under NEXT.md's lock: two concurrent markers (e.g.
@@ -699,7 +732,17 @@ def mark_item(slug: str, item_index: int, new_state: str) -> None:
         lines, items = parse_next(slug)
         item = next((it for it in items if it.index == item_index), None)
         if item is None:
-            raise ValueError(f"item_index {item_index} not found in NEXT.md for {slug}")
+            raise ItemIdentityError(f"item_index {item_index} not found in NEXT.md for {slug}")
+        if expected_text is not None:
+            _want = normalize_item_text(expected_text)
+            _have = normalize_item_text(item.text)
+            if _have != _want:
+                raise ItemIdentityError(
+                    f"item {item_index} of {slug} names {_have[:80]!r}, not {_want[:80]!r}")
+            _twins = sum(1 for it in items if normalize_item_text(it.text) == _want)
+            if _twins > 1:
+                raise ItemIdentityError(
+                    f"{slug} carries {_twins} items named {_want[:80]!r} — ambiguous")
         lines[item.index] = re.sub(r"\[(.)\]", f"[{new_state}]", lines[item.index], count=1)
         write_next_lines(slug, lines)
         # PID stamp for DOING (same lock — the stamp and the state flip are

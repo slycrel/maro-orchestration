@@ -323,6 +323,15 @@ def brief_for_goal(goal: str, *, exclude_handle_id: str = "") -> str:
     render. Returns "" when disabled, on first attempts, and on any error."""
     if not brief_enabled():
         return ""
+    # Reconcile before reading: a worker killed mid-flight has no ended_at
+    # and would read below as "possibly still in flight" (2026-09-07, the
+    # navigator bound a dispatch to a dead attempt's project). Metadata +
+    # pid checks only; fail-soft.
+    try:
+        from audit_repair import sweep_dead_runs
+        sweep_dead_runs(limit=5)
+    except Exception as exc:
+        log.debug("rerun: dead-run sweep skipped: %s", exc)
     try:
         return render_brief(prior_attempts(goal, exclude_handle_id=exclude_handle_id))
     except Exception as exc:

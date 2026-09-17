@@ -42,7 +42,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -432,11 +432,31 @@ def _probe_container_auth(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
             "unknown (resolve fails open; a dead session re-trips). "
             "Inspect memory/container_auth_breaker.json"), obs
     if state is None:
-        # Honest claim only: clear means NO auth failure has been observed
-        # since the last trip/clear — it does not prove the session is live
-        # (zero-token probe contract; review 2026-08-13).
+        # Breaker clear = no auth failure observed since the last trip/clear.
+        # Liveness (2026-09-13): the heartbeat records the session's own
+        # refresh-token expiry (container_exec.refresh_auth_liveness — the
+        # ~30-day lifetime whose end is the monthly outage); this probe reads
+        # that record only (no docker, no token) and warns while there is
+        # still time to re-seed, instead of the first run being the casualty.
+        from container_exec import auth_liveness_state, auth_liveness_verdict
+        level, detail = auth_liveness_verdict(auth_liveness_state())
+        obs["liveness"] = level
+        if level in ("warn", "expired"):
+            return SILENT, (
+                f"container session {'EXPIRED' if level == 'expired' else 'expiring'} "
+                f"(mode {mode}, breaker clear) — {detail}"), obs
+        if level != "ok":
+            # No usable expiry evidence (never recorded, stale, or the
+            # latest probe failed with nothing good to fall back on) is
+            # UNKNOWN, not OK: run_health_probes narrates RECOVERED on
+            # OK-after-SILENT, so mapping "we lost sight of it" to OK told
+            # the operator a docker outage had healed the session (review
+            # round 2, 2026-09-13). UNKNOWN keeps the narrated warning
+            # standing until affirmative evidence arrives.
+            return UNKNOWN, (f"container lane armed (mode {mode}) — reactive "
+                             f"breaker clear; session expiry not established: {detail}"), obs
         return OK, (f"container lane armed (mode {mode}) — no auth failure "
-                    "observed (reactive breaker clear)"), obs
+                    f"observed (reactive breaker clear); {detail}"), obs
     tripped_at = state.get("tripped_at")
     try:
         when = datetime.fromtimestamp(
@@ -506,7 +526,8 @@ DECLARED_PROCESSES: List[ProcessDeclaration] = [
         name="container_auth",
         description="containerized executor auth session (maro-claude-auth volume)",
         expectation=("no unresolved auth failure on the container lane "
-                     "(reactive breaker clear; liveness is not probed)"),
+                     "(reactive breaker clear) and the session's refresh "
+                     "token not within 3 days of expiry (heartbeat-recorded)"),
         probe=_probe_container_auth,
     ),
 ]
@@ -516,8 +537,15 @@ DECLARED_PROCESSES: List[ProcessDeclaration] = [
 # Probe cycle
 # ---------------------------------------------------------------------------
 
-def run_health_probes(*, verbose: bool = False) -> Dict[str, Any]:
+def run_health_probes(*, verbose: bool = False,
+                      only: Optional[Iterable[str]] = None) -> Dict[str, Any]:
     """Run all declared probes, persist the snapshot, narrate transitions.
+
+    ``only`` (review round 5, 2026-09-13) restricts the cycle to the named
+    processes — the heartbeat narrates the container-auth expiry warning
+    through this same edge-triggered machinery without running the streak
+    probes off their goal-run cadence. A partial cycle shares the lock,
+    the snapshot and the narrated= state; it does not advance ``cycle``.
 
     Rides loop_finalize beside run_skill_maintenance. Never raises; each
     probe is individually shielded (a broken probe reports UNKNOWN, it
@@ -541,16 +569,30 @@ def run_health_probes(*, verbose: bool = False) -> Dict[str, Any]:
         # of both reading narrated=None and double-narrating / last-writer-
         # winning the history (atomic_write alone does not lock). Probes
         # only READ other stores, so no lock-ordering cycle is possible.
-        from file_lock import locked_write
+        from file_lock import locked_write, FileLockTimeout
         pending_narrations: List[Tuple[ProcessDeclaration, str, str]] = []
-        with locked_write(_snapshot_path()):
+        try:
+            _guard = locked_write(_snapshot_path(), require=True)
+            _guard.__enter__()
+        except FileLockTimeout as exc:
+            # require=True (review round 6): under MARO_FILELOCK_FAIL_OPEN the
+            # default contract proceeds UNLOCKED on contention — two cycles
+            # would then race the narrated= state (double or lost
+            # narration). A busy lock means this cycle is skipped whole:
+            # no probe, no write, no narration.
+            summary["skipped"] = f"snapshot lock busy: {str(exc)[:120]}"
+            return summary
+        try:
             snapshot = load_snapshot()
             processes = snapshot.get("processes")
             if not isinstance(processes, dict):
                 processes = {}
                 snapshot["processes"] = processes
 
+            _only = set(only) if only is not None else None
             for decl in DECLARED_PROCESSES:
+                if _only is not None and decl.name not in _only:
+                    continue
                 prior = processes.get(decl.name)
                 prior = prior if isinstance(prior, dict) else {}
                 try:
@@ -595,17 +637,24 @@ def run_health_probes(*, verbose: bool = False) -> Dict[str, Any]:
                     print(f"[health] {decl.name}: {status} — {evidence}")
 
             snapshot["updated_at"] = datetime.now(timezone.utc).isoformat()
-            snapshot["cycle"] = int(snapshot.get("cycle", 0) or 0) + 1
+            if _only is None:
+                snapshot["cycle"] = int(snapshot.get("cycle", 0) or 0) + 1
             _write_snapshot(snapshot)
 
-        # Narrate only after the snapshot recording narrated= persisted:
-        # a failed write must not leave the log claiming the user was told
-        # while the state machine forgot (it would re-narrate forever).
-        # The reverse trade — write succeeds, log append fails, the line
-        # is lost — is accepted: the snapshot still shows SILENT.
-        summary["transitions"] = len(pending_narrations)
-        for decl, status, evidence in pending_narrations:
-            _narrate_transition(decl, status, evidence)
+            # Narrate only after the snapshot recording narrated= persisted:
+            # a failed write must not leave the log claiming the user was
+            # told while the state machine forgot (it would re-narrate
+            # forever). The reverse trade — write succeeds, log append
+            # fails, the line is lost — is accepted: the snapshot still
+            # shows SILENT. STILL UNDER THE LOCK (review round 7): released
+            # first, an older cycle's SILENT could land in the log after a
+            # newer cycle's RECOVERED — the last line the operator reads
+            # contradicting the snapshot, with nothing left to correct it.
+            summary["transitions"] = len(pending_narrations)
+            for decl, status, evidence in pending_narrations:
+                _narrate_transition(decl, status, evidence)
+        finally:
+            _guard.__exit__(None, None, None)
     except Exception as exc:
         logger.debug("health probe cycle failed (non-fatal): %s", exc)
         summary["error"] = str(exc)[:200]

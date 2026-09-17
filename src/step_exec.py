@@ -13,6 +13,7 @@ import json
 import hashlib
 import logging
 import os
+from pathlib import Path
 import re
 import sys
 import textwrap
@@ -302,7 +303,8 @@ EXECUTE_SYSTEM = (
 
 
 def execute_system_for_lane(adapter=None) -> str:
-    """The execute prompt for the lane this call is CONFIGURED for.
+    """The execute prompt for the lane this call is CONFIGURED for, plus
+    the secrets presence index for that lane (`_secrets_block`).
 
     Same cheap gate as the introspection mount-view notice: config says
     container and the run hasn't suppressed it. The actual containerize
@@ -321,6 +323,88 @@ def execute_system_for_lane(adapter=None) -> str:
     the true TOCTOU (lane dies between this render and dispatch) — loud
     command-not-found, worker falls back.
     """
+    base = _lane_prompt(adapter)
+    container = base is not EXECUTE_SYSTEM
+    blocks = [b for b in (_secrets_block(container=container),
+                          _ask_block(container=container),
+                          _env_block(container=container)) if b]
+    return base + "\n\n" + "\n\n".join(blocks) if blocks else base
+
+
+def _env_block(*, container: bool) -> str:
+    """The `## Installing what you need` paragraph (env_request.instructions):
+    container lane only — a worker on the host has its own user-level
+    installers. Empty when no run scratch exists or the lane is off."""
+    if not container:
+        return ""
+    try:
+        import env_request as _er
+        import container_exec as _ce
+        if not _er.enabled() or not _ce.run_scratch_dir():
+            return ""
+        return _er.instructions(_er.CONTAINER_REQUEST_PATH)
+    except Exception as exc:
+        log.warning("env-request block skipped: %s", exc)
+        return ""
+
+
+def _ask_block(*, container: bool) -> str:
+    """The `## Asking the operator` paragraph (operator_ask.instructions):
+    the one sanctioned way a worker asks — a file in the run scratch, read
+    after the step; the run pauses typed and resumes by handle with the
+    answer. Empty when no run scratch exists (nothing to read back)."""
+    try:
+        import operator_ask as _oa
+        import container_exec as _ce
+        scratch = _ce.run_scratch_dir()
+        if not scratch:
+            return ""
+        path = _oa.CONTAINER_ASK_PATH if container else str(_oa.ask_path(scratch))
+        answer = _oa.CONTAINER_ANSWER_PATH if container else str(_oa.answer_path(scratch))
+        return _oa.instructions(path, answer)
+    except Exception as exc:
+        log.warning("operator-ask block skipped: %s", exc)
+        return ""
+
+
+def _secrets_block(*, container: bool) -> str:
+    """The `## Secrets` paragraph for the execute frame (secrets_store
+    .presence_block): which credential names exist on this machine, which
+    are injected into this step's environment, and where to drop a
+    credential the worker obtains. Empty without a store. Never raises —
+    a torn store must not take the step's prompt down. Container lane:
+    injected = the operator's policy set + the hosted-free keys under
+    their own gate; the drop path is the container's /tmp (the run
+    scratch bind). Host lane: the same policy set, handed over as a 0600
+    file in the run scratch (not env), drop path host-side."""
+    try:
+        import secrets_store as _ss
+        import container_exec as _ce
+        # What the mechanism will ACTUALLY deliver (container_env decrypts,
+        # cached per store mtime), not what the policy would allow: a
+        # process where sops is missing must not promise the variables.
+        policy = set(_ss.injectable(_ss.names()))
+        injected = set(_ss.container_env().keys())
+        undelivered = sorted(policy - injected)
+        why = _ss.decrypt_problem() or ""
+        drop = None
+        scratch = _ce.run_scratch_dir()
+        if container:
+            injected |= set(_ce.hosted_free_container_env())
+            if scratch:
+                drop = Path("/tmp") / _ss.DROP_NAME
+            return _ss.presence_block(injected, host=False, drop=drop,
+                                      undelivered=undelivered, undelivered_why=why)
+        drop = _ss.drop_path(scratch)
+        return _ss.presence_block(injected, host=True, drop=drop,
+                                  file=_ss.file_path(scratch),
+                                  undelivered=undelivered, undelivered_why=why)
+    except Exception as exc:
+        log.warning("secrets presence block skipped: %s", exc)
+        return ""
+
+
+def _lane_prompt(adapter=None) -> str:
     try:
         import container_exec as _ce
         if _ce.container_mode() != "off" and not _ce.container_suppressed():
@@ -1202,6 +1286,8 @@ def _summarize_tool_events(tool_events: List[dict]) -> List[dict]:
             "output": out_full[:_TRANSCRIPT_OUTPUT_CAP],
             "is_error": bool(te.get("is_error", False)),
         }
+        if "result_seen" in te:
+            entry["result_seen"] = bool(te.get("result_seen"))
         if len(out_full) > _TRANSCRIPT_OUTPUT_CAP:
             entry["output"] += (f"\n…[output truncated: +{len(out_full) - _TRANSCRIPT_OUTPUT_CAP}"
                                 f" chars in the full transcript artifact]")
@@ -1253,6 +1339,100 @@ def _persist_tool_transcript(tool_events: List[dict], project_dir: str, step_num
 # ---------------------------------------------------------------------------
 # Step execution
 # ---------------------------------------------------------------------------
+
+def _schema_to_tool(schema: Any):
+    """A resolved deferred-tool schema dict (tool_registry.to_schema: name /
+    description / parameters — tests and older callers say input_schema) as
+    the LLMTool every adapter iterates (`t.name`, `t.parameters`). Review
+    round 7 (2026-09-13): the re-call concatenated raw dicts onto the
+    LLMTool list, so the real adapter raised AttributeError building the
+    prompt and EVERY production tool_search re-call failed — falling
+    through to "unrecognised tool: tool_search"."""
+    from llm import LLMTool
+    if isinstance(schema, LLMTool):
+        return schema
+    if not isinstance(schema, dict) or not schema.get("name"):
+        raise ValueError(f"deferred tool schema without a name: {type(schema).__name__}")
+    params = schema.get("parameters")
+    if not isinstance(params, dict):
+        params = schema.get("input_schema")
+    if not isinstance(params, dict):
+        params = {"type": "object", "properties": {}}
+    return LLMTool(name=str(schema["name"]), description=str(schema.get("description") or ""),
+                   parameters=params)
+
+
+def _blocked_outcome_from_exc(exc: BaseException, *, partial_result: Optional[str] = None,
+                              tokens_in: int = 0, tokens_out: int = 0,
+                              provider_cost_usd: float = 0.0,
+                              cache_read_tokens: int = 0) -> Dict[str, Any]:
+    """The blocked outcome an adapter exception becomes — ONE implementation
+    for both adapter calls in execute_step (the initial call and the
+    tool_search re-call; review round 2, 2026-09-13: the re-call's handler
+    sits outside the initial call's `except`, so a re-raise there escaped
+    execute_step). Carries the structured error class instead of
+    stringifying it away (BACKEND_RESILIENCE_DESIGN §2) and any spend the
+    step already incurred (a runaway kill's own ingest is ADDED to that —
+    round 3: replacing it undercounted the re-call). Never raises."""
+    try:
+        from llm_errors import call_usage_evidence
+        _ev = call_usage_evidence(exc)
+    except Exception:  # documented never-raises; the class still wins over the accounting
+        _ev = {"partial": "", "tokens_in": 0, "tokens_out": 0, "cache_read": 0, "cost": 0.0}
+    _partial, _fresh, _fresh_cost = _ev["partial"], _ev["tokens_in"], _ev["cost"]
+    if partial_result is None:
+        # A killed subprocess's partial output (llm.py attaches it on
+        # timeout/runaway kills) is the only record of what the step did
+        # before dying — the tail, not "", becomes the blocked result.
+        partial_result = _partial
+    try:
+        from llm_errors import classify_error, is_actionable
+        _einfo = classify_error(exc)
+        _stuck = (
+            f"LLM call failed ({_einfo.error_class}): {_einfo.user_action}"
+            if is_actionable(_einfo) else f"LLM call failed: {exc}"
+        )
+        _blocked: Dict[str, Any] = {
+            "status": "blocked",
+            "stuck_reason": _stuck,
+            "error_class": _einfo.error_class,
+            "user_action": _einfo.user_action,
+            "result": partial_result,
+            "tokens_in": int(tokens_in or 0),
+            "tokens_out": int(tokens_out or 0),
+        }
+        if provider_cost_usd:
+            _blocked["provider_cost_usd"] = float(provider_cost_usd)
+        if cache_read_tokens:
+            _blocked["cache_read_tokens"] = int(cache_read_tokens)
+        # A token-runaway kill is the one failure whose whole point is that
+        # it consumed a lot. Recording it as a zero-token step would hide
+        # the spend from run totals, cost reports and skill telemetry —
+        # exactly the accounting the brake exists to protect.
+        # Evidence is read through the failover wrapper's cause chain
+        # (round 9), so the attributes may live on the cause, not on
+        # `exc`; every counter counts on its own (round 10: a wrapped
+        # failure with zero fresh input lost its cost and output tokens).
+        if (_fresh or _fresh_cost or _ev["tokens_out"] or _ev["cache_read"]
+                or getattr(exc, "fresh_input_tokens", None) is not None):
+            # tokens_in is TOTAL input, cache reads included (the
+            # LLMResponse / StepOutcome / estimate_cost convention — round
+            # 11: fresh-only here priced a cache-only failure at zero).
+            _blocked["tokens_in"] = int(tokens_in or 0) + _fresh + _ev["cache_read"]
+            _blocked["tokens_out"] = int(tokens_out or 0) + _ev["tokens_out"]
+            _blocked["provider_cost_usd"] = float(provider_cost_usd or 0.0) + _fresh_cost
+            if _ev["cache_read"] or cache_read_tokens:
+                _blocked["cache_read_tokens"] = int(cache_read_tokens or 0) + _ev["cache_read"]
+        return _blocked
+    except Exception:
+        return {
+            "status": "blocked",
+            "stuck_reason": f"LLM call failed: {exc}",
+            "result": partial_result or "",
+            "tokens_in": int(tokens_in or 0),
+            "tokens_out": int(tokens_out or 0),
+        }
+
 
 def execute_step(
     goal: str,
@@ -1337,9 +1517,14 @@ def execute_step(
 
     # Phase 62: Inject structured artifacts from prior steps
     artifacts_block = ""
+    # Snapshot the items: in the DAG / fan-out lanes a peer's post-step
+    # effects (decisions, artifacts) land in this dict while another
+    # worker assembles its context — a live iteration raises "dictionary
+    # changed size during iteration" and the innocent peer ends blocked
+    # (chunk-5 r2). list(d.items()) is one C-level copy under the GIL.
     if shared_ctx:
         _art_entries = []
-        for _k, _v in shared_ctx.items():
+        for _k, _v in list(shared_ctx.items()):
             if _k.startswith("artifact:"):
                 # Format: "artifact:{step_idx}:{name}" → "{name} (from step {step_idx})"
                 _parts = _k.split(":", 2)
@@ -1359,7 +1544,7 @@ def execute_step(
     decisions_block = ""
     if shared_ctx:
         _dec_entries = []
-        for _k, _v in shared_ctx.items():
+        for _k, _v in list(shared_ctx.items()):
             if _k.startswith("decision:"):
                 _parts = _k.split(":", 2)
                 _dec_label = f"step {_parts[1]}" if len(_parts) >= 2 else _k
@@ -1625,6 +1810,17 @@ def execute_step(
         # adapter's own docker-down ContainerUnavailable.
         from container_exec import enforce_backend_container_contract
         enforce_backend_container_contract(adapter, executor=True)
+        # The cwd the executor's shell calls will start in — the adapter's
+        # own precedence (explicit cwd, else the run-scoped default, else
+        # the launch cwd). Stamped on the outcome beside tool_events so a
+        # transcript consumer (regression_ledger) records where a command
+        # RAN, not where it guesses.
+        try:
+            from llm import get_default_subprocess_cwd as _default_cwd
+            _effective_cwd = (_call_kwargs.get("cwd") or _default_cwd()
+                              or os.getcwd())
+        except Exception:
+            _effective_cwd = _call_kwargs.get("cwd") or ""
         # agentic: the worker executor step — tools do the real work (executor=True)
         resp = adapter.complete(
             [
@@ -1655,45 +1851,11 @@ def execute_step(
         # A killed subprocess's partial output (llm.py attaches it on
         # timeout/runaway kills) is the only record of what the step did
         # before dying — the tail, not "", becomes the blocked result so
-        # DEAD_ENDS "Attempted:" and recovery see real evidence.
-        _partial = str(getattr(exc, "maro_partial_output", "") or "")
-        _partial_result = (
-            f"[partial output before kill]\n{_partial[-2000:]}" if _partial else ""
-        )
-        try:
-            from llm_errors import classify_error, is_actionable
-            _einfo = classify_error(exc)
-            _stuck = (
-                f"LLM call failed ({_einfo.error_class}): {_einfo.user_action}"
-                if is_actionable(_einfo) else f"LLM call failed: {exc}"
-            )
-            _blocked = {
-                "status": "blocked",
-                "stuck_reason": _stuck,
-                "error_class": _einfo.error_class,
-                "user_action": _einfo.user_action,
-                "result": _partial_result,
-                "tokens_in": 0,
-                "tokens_out": 0,
-            }
-            # A token-runaway kill is the one failure whose whole point is that
-            # it consumed a lot. Recording it as a zero-token step would hide
-            # the spend from run totals, cost reports and skill telemetry —
-            # exactly the accounting the brake exists to protect.
-            _fresh = getattr(exc, "fresh_input_tokens", None)
-            if _fresh is not None:
-                _blocked["tokens_in"] = int(_fresh)
-                _blocked["provider_cost_usd"] = float(
-                    getattr(exc, "estimated_cost_usd", 0.0) or 0.0)
-            return _stamp_flavor(_blocked)
-        except Exception:
-            return _stamp_flavor({
-                "status": "blocked",
-                "stuck_reason": f"LLM call failed: {exc}",
-                "result": _partial_result,
-                "tokens_in": 0,
-                "tokens_out": 0,
-            })
+        # DEAD_ENDS "Attempted:" and recovery see real evidence. The
+        # builder owns that read (round 10: this handler's own shallow
+        # read passed "" explicitly and overrode the builder's chain-aware
+        # one for a wrapped failure).
+        return _stamp_flavor(_blocked_outcome_from_exc(exc))
 
     _provider_cost_usd = safe_float(getattr(resp, "cost_usd", 0.0))
     _executor_session_id = str(getattr(resp, "session_id", "") or "")
@@ -1709,6 +1871,35 @@ def execute_step(
     _outcome: Dict[str, Any]
     _tool_name_used: Optional[str] = None
 
+    def _no_tool_call_outcome(_r) -> Dict[str, Any]:
+        """The outcome of a response with no tool call — ONE implementation
+        for the initial call and the tool_search re-call."""
+        _n = len(_r.content) if _r.content else 0
+        _t = int(getattr(_r, "input_tokens", 0) or 0) + int(getattr(_r, "output_tokens", 0) or 0)
+        if _r.content and len(_r.content) > 20:
+            # No tool call — treat content as result (some models don't always call tools)
+            log.info("step %d DONE (content fallback, %d chars) tokens=%d elapsed=%.1fs",
+                     step_num, _n, _t, time.monotonic() - _step_t0)
+            return {
+                "status": "done",
+                "result": _r.content,
+                "summary": step_text,
+                "tokens_in": _r.input_tokens,
+                "tokens_out": _r.output_tokens,
+                "cache_read_tokens": getattr(_r, "cache_read_tokens", 0),
+            }
+        log.warning("step %d BLOCKED (no tool call, content=%d chars) tokens=%d elapsed=%.1fs content=%r",
+                    step_num, _n, _t, time.monotonic() - _step_t0, (_r.content or "")[:120])
+        return {
+            "status": "blocked",
+            "stuck_reason": "LLM did not call a tool and produced no useful content",
+            "result": _r.content,
+            "tokens_in": _r.input_tokens,
+            "tokens_out": _r.output_tokens,
+            "cache_read_tokens": getattr(_r, "cache_read_tokens", 0),
+        }
+
+    _recall_prose = False
     if resp.tool_calls:
         tc = resp.tool_calls[0]
         _tool_name_used = tc.name
@@ -1721,14 +1912,42 @@ def execute_step(
             log.debug("step %d tool_search query=%r", step_num, _ts_query)
             _resolved_schemas: List[dict] = []
             try:
-                from tool_search import resolve_deferred_tools, format_tool_search_result
+                from tool_search import resolve_deferred_tools, format_tool_search_result, _tool_field
                 _resolved_schemas = resolve_deferred_tools(_ts_query)
+                # The caller's tool list IS this step's permission context
+                # (role + deny patterns were applied when it was built); the
+                # resolver has no such context and answers from the whole
+                # registry (review round 9, 2026-09-13: a denied deferred
+                # tool came back advertised and callable, and the admitted
+                # one was duplicated beside its stub). Only the stubs the
+                # caller admitted may expand, each REPLACING its stub.
+                _admitted = {str(_tool_field(_t, "name") or "") for _t in _active_tools}
+                _dropped = [str(_s.get("name")) for _s in _resolved_schemas
+                            if not isinstance(_s, dict) or str(_s.get("name") or "") not in _admitted]
+                _resolved_schemas = [_s for _s in _resolved_schemas
+                                     if isinstance(_s, dict) and str(_s.get("name") or "") in _admitted]
+                if _dropped:
+                    log.warning("step %d tool_search: %d match(es) outside this step's tool list dropped: %s",
+                                step_num, len(_dropped), ", ".join(_dropped)[:200])
             except Exception as _ts_exc:
                 log.warning("step %d tool_search failed: %s", step_num, _ts_exc)
+            _expanded_tools = None
             if _resolved_schemas:
-                # Re-call the LLM with expanded tool list
-                _expanded_tools = _active_tools + _resolved_schemas
-                _ts_result_block = format_tool_search_result(_resolved_schemas)
+                # Re-call the LLM with expanded tool list — as LLMTool
+                # objects (round 7), built BEFORE the call so a malformed
+                # schema is a resolution failure (fall through), not a
+                # failure of the invoked call.
+                try:
+                    _expanded_names = {str(_s.get("name")) for _s in _resolved_schemas}
+                    _expanded_tools = ([_t for _t in _active_tools
+                                        if str(_tool_field(_t, "name") or "") not in _expanded_names]
+                                       + [_schema_to_tool(_s) for _s in _resolved_schemas])
+                    _ts_result_block = format_tool_search_result(_resolved_schemas)
+                except Exception as _ts_exc:
+                    _expanded_tools = None
+                    log.warning("step %d tool_search: could not build the expanded tool list: %s",
+                                step_num, _ts_exc)
+            if _expanded_tools is not None:
                 try:
                     # A changed tool contract cannot safely resume. Rotate the
                     # segment explicitly and keep the expanded one-off call
@@ -1736,6 +1955,14 @@ def execute_step(
                     # forces a second opaque rotation on the following step.
                     if executor_session is not None:
                         executor_session.clear()
+                    # The first call's usage is part of this step's spend
+                    # whatever the re-call does (review round 4: a successful
+                    # re-call replaced `resp`, and every outcome constructor
+                    # below reads tokens from `resp` alone — cost summed,
+                    # tokens dropped).
+                    _first_in = int(getattr(resp, "input_tokens", 0) or 0)
+                    _first_out = int(getattr(resp, "output_tokens", 0) or 0)
+                    _first_cache = int(getattr(resp, "cache_read_tokens", 0) or 0)
                     # agentic: same worker executor step re-called with expanded tools
                     resp = adapter.complete(
                         [
@@ -1758,6 +1985,14 @@ def execute_step(
                     )
                     _provider_cost_usd += safe_float(
                         getattr(resp, "cost_usd", 0.0))
+                    try:
+                        import dataclasses as _dc
+                        resp = _dc.replace(resp, input_tokens=resp.input_tokens + _first_in,
+                                           output_tokens=resp.output_tokens + _first_out,
+                                           cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0)
+                                           + _first_cache)  # round 12: cache attribution folds too
+                    except Exception:
+                        log.debug("step %d tool_search: could not fold first-call usage", step_num)
                     _executor_session_id = (
                         str(getattr(resp, "session_id", "") or "")
                         or _executor_session_id
@@ -1769,21 +2004,43 @@ def execute_step(
                     _tok = resp.input_tokens + resp.output_tokens
                     _tool_name_used = resp.tool_calls[0].name if resp.tool_calls else None
                     tc = resp.tool_calls[0] if resp.tool_calls else tc
+                    # A prose-only re-call is the step's answer, judged the
+                    # way the initial call's prose would be (review round 9,
+                    # 2026-09-13: it kept the FIRST response's tool_search
+                    # call and ended "unrecognised tool: tool_search" with
+                    # an empty result — completed output lost, false blame).
+                    _recall_prose = not resp.tool_calls
                     log.debug("step %d tool_search re-call done: tool=%r", step_num, _tool_name_used)
                 except Exception as _rerun_exc:
-                    # Runaway kills must not be absorbed into "fall through and
-                    # carry on": the nested call already ingested past the
-                    # ceiling, and swallowing the typed error here means the
-                    # no-retry policy downstream never sees it.
-                    from llm_errors import TokenRunawayError as _TRE
-                    if isinstance(_rerun_exc, _TRE):
-                        raise
-                    log.warning("step %d tool_search re-call failed: %s", step_num, _rerun_exc)
-                    # Fall through to original response handling
+                    # The INVOKED re-call failed. This handler is OUTSIDE the
+                    # initial call's `except`, so a re-raise escaped
+                    # execute_step (round 2: uncaught on the sequential
+                    # driver, stringified by the fan-out pool; round 3: the
+                    # token-brake re-raise did the same). Rounds 2–3 typed
+                    # only an allow-list of terminal classes and let the
+                    # rest "fall through" to the first response — which
+                    # could only ever become "unrecognised tool:
+                    # tool_search": a killed re-call lost its timeout
+                    # diagnosis and its partial output that way (round 7).
+                    # Every failure of the invoked call is now the same
+                    # typed blocked outcome the initial call would have
+                    # produced, with the first call's spend on the books;
+                    # only RESOLUTION failures (no schema, a bad schema)
+                    # fall through above.
+                    log.warning("step %d tool_search re-call ended the step: %s",
+                                step_num, _rerun_exc)
+                    return _stamp_flavor(_blocked_outcome_from_exc(
+                        _rerun_exc,
+                        tokens_in=int(getattr(resp, "input_tokens", 0) or 0),
+                        tokens_out=int(getattr(resp, "output_tokens", 0) or 0),
+                        provider_cost_usd=_provider_cost_usd,
+                        cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0)))
             else:
                 log.debug("step %d tool_search: no matches for %r", step_num, _ts_query)
 
-        if tc.name == "complete_step":
+        if _recall_prose:
+            _outcome = _no_tool_call_outcome(resp)
+        elif tc.name == "complete_step":
             _confidence = tc.arguments.get("confidence", "") or ""
             _result_text = tc.arguments.get("result", resp.content)
             if not isinstance(_result_text, str):
@@ -1828,6 +2085,7 @@ def execute_step(
             _tool_events = getattr(resp, "tool_events", None) or []
             if _tool_events:
                 _outcome["tool_events"] = _summarize_tool_events(_tool_events)
+                _outcome["executor_cwd"] = _effective_cwd
                 _t_handle = _persist_tool_transcript(_tool_events, project_dir, step_num)
                 if _t_handle:
                     _outcome.setdefault("artifacts", {})["tool_transcript"] = _t_handle
@@ -1964,6 +2222,7 @@ def execute_step(
                     persona=_tw_persona,
                     adapter=adapter,
                     shared_ctx=shared_ctx,
+                    cwd=_call_kwargs.get("cwd"),
                 )
                 _tw_result_text = format_team_result_for_injection(_tw_res)
                 # Write result into shared_ctx so subsequent workers in this loop don't re-fetch
@@ -1981,18 +2240,48 @@ def execute_step(
                     _tw_ctx.add(_tw_res.result)
                     shared_ctx[_sm_key] = _tw_ctx.render()
             except Exception as _tw_exc:
-                _tw_result_text = f"[team-worker failed: {_tw_exc}]"
-                log.warning("step %d create_team_worker failed role=%r: %s", step_num, _tw_role, _tw_exc)
-            log.info("step %d DONE (create_team_worker) role=%r tokens=%d elapsed=%.1fs",
-                     step_num, _tw_role, _tok, time.monotonic() - _step_t0)
+                # create_team_worker absorbs ordinary failures into a blocked
+                # TeamResult; what ESCAPES it is a policy signal (a token-
+                # runaway kill, a typed environmental refusal — review round
+                # 9, 2026-09-13: both were stringified here into a DONE step,
+                # so a nested container-auth refusal never reached the pause
+                # seam). Same typed blocked outcome the step's own adapter
+                # call would have produced, with the parent's spend.
+                log.warning("step %d create_team_worker ended the step role=%r: %s",
+                            step_num, _tw_role, _tw_exc)
+                return _stamp_flavor(_blocked_outcome_from_exc(
+                    _tw_exc,
+                    tokens_in=int(getattr(resp, "input_tokens", 0) or 0),
+                    tokens_out=int(getattr(resp, "output_tokens", 0) or 0),
+                    provider_cost_usd=_provider_cost_usd,
+                    cache_read_tokens=int(getattr(resp, "cache_read_tokens", 0) or 0)))
+            # The specialist's status is the step's status: a blocked ticket
+            # is not a done step (round 9 — the parent stamped `done`
+            # unconditionally, so a nested refusal read as successful work).
+            _tw_blocked = getattr(_tw_res, "status", "") == "blocked"
+            # The specialist's spend is this step's spend (round 10: only
+            # the parent call's tokens reached the budgets and the report).
+            _tw_in = int(getattr(_tw_res, "tokens_in", 0) or 0)
+            _tw_out = int(getattr(_tw_res, "tokens_out", 0) or 0)
+            _tw_cache = int(getattr(_tw_res, "cache_read_tokens", 0) or 0)
+            _provider_cost_usd += safe_float(getattr(_tw_res, "provider_cost_usd", 0.0))
+            _tok += _tw_in + _tw_out
+            log.info("step %d %s (create_team_worker) role=%r tokens=%d elapsed=%.1fs",
+                     step_num, "BLOCKED" if _tw_blocked else "DONE", _tw_role, _tok,
+                     time.monotonic() - _step_t0)
             _outcome = {
-                "status": "done",
+                "status": "blocked" if _tw_blocked else "done",
                 "result": _tw_result_text,
                 "summary": f"Team worker [{_tw_role}]: {_tw_task[:60]}",
-                "tokens_in": resp.input_tokens,
-                "tokens_out": resp.output_tokens,
-                "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
+                "tokens_in": resp.input_tokens + _tw_in,
+                "tokens_out": resp.output_tokens + _tw_out,
+                "cache_read_tokens": int(getattr(resp, "cache_read_tokens", 0) or 0) + _tw_cache,
             }
+            if _tw_blocked:
+                _outcome["stuck_reason"] = (f"team worker [{_tw_role}] blocked: "
+                                           f"{getattr(_tw_res, 'stuck_reason', '') or 'no reason given'}")
+                if getattr(_tw_res, "error_class", ""):
+                    _outcome["error_class"] = str(_tw_res.error_class)
         elif tc.name == "schedule_run":
             _sched_goal = tc.arguments.get("goal", "")
             _sched_when = tc.arguments.get("when", "in 1 hour")
@@ -2132,30 +2421,8 @@ def execute_step(
                     "tokens_out": resp.output_tokens,
                     "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
                 }
-    elif resp.content and len(resp.content) > 20:
-        # No tool call — treat content as result (some models don't always call tools)
-        log.info("step %d DONE (content fallback, %d chars) tokens=%d elapsed=%.1fs",
-                 step_num, _content_len, _tok, time.monotonic() - _step_t0)
-        _outcome = {
-            "status": "done",
-            "result": resp.content,
-            "summary": step_text,
-            "tokens_in": resp.input_tokens,
-            "tokens_out": resp.output_tokens,
-            "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
-        }
     else:
-        log.warning("step %d BLOCKED (no tool call, content=%d chars) tokens=%d elapsed=%.1fs content=%r",
-                    step_num, _content_len, _tok, time.monotonic() - _step_t0,
-                    (resp.content or "")[:120])
-        _outcome = {
-            "status": "blocked",
-            "stuck_reason": "LLM did not call a tool and produced no useful content",
-            "result": resp.content,
-            "tokens_in": resp.input_tokens,
-            "tokens_out": resp.output_tokens,
-            "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
-        }
+        _outcome = _no_tool_call_outcome(resp)
 
     # Byte-level record cross-reference (BACKLOG #0 rung-4 unification): when
     # record-mode captured this call, carry the record path on the outcome so

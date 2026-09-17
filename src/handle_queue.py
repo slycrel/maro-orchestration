@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from ancestry import Origin
+# review r26: resumes preserve the exact recorded directory identity.
+from runs import recorded_project_verbatim
 from context_budget import clip, VERDICT_PROSE_CAP
 
 log = logging.getLogger("maro.handle")
@@ -145,6 +147,19 @@ def handle_task(
             log.info("continuation RESUME of %s (pause_reason=%r)",
                      _parent_handle, _parent_meta.get("pause_reason"))
             set_current_run_dir(_resume_rd)
+            # An operator's answer often lands while the asking worker is
+            # still in its post-pause tail (curation, lesson extraction —
+            # ~3 min on 2026-09-07, run 084d3c1f): the project slot is
+            # still held and an immediate resume is refused_busy, which
+            # left the run paused with a recorded answer nobody re-drove.
+            # The answer waits for the slot instead (ask.resume_wait_s).
+            _wait_s = None
+            if str(_origin.get("source") or "") == "operator_answer":
+                try:
+                    from config import get as _cfg_get
+                    _wait_s = float(_cfg_get("ask.resume_wait_s", 900) or 0)
+                except Exception:
+                    _wait_s = 900.0
             try:
                 _result = run_agent_loop(
                     _cont_goal,
@@ -155,6 +170,19 @@ def handle_task(
                     ancestry_context_extra=_filtered_ctx,
                     measurement_class=str(_origin.get("measurement_class") or ""),
                     handle_id=_parent_handle,
+                    admission_wait_s=_wait_s,
+                    # same run, same project: the run's recorded project
+                    # (bound by the landscape, the operator, the navigator
+                    # …) carries through — loop init would otherwise
+                    # re-derive a goal slug and stamp it over the binding
+                    # (review 2026-09-13 round 8); a legacy record with no
+                    # project keeps today's derivation
+                    # only a recorded STRING is a project identity; anything
+                    # else is a malformed record — `str()` would manufacture
+                    # a directory name from it (review r12) — and today's
+                    # derivation decides (None)
+                    # review r20: RESUME preserves the run's recorded identity verbatim.
+                    project=recorded_project_verbatim(_parent_meta),
                 )
             finally:
                 # Drain-batch hygiene the old scoped_run_dir(None) provided:
@@ -382,9 +410,17 @@ def handle_task(
             # the filesystem check keeps it honest (1bfd0894: "finish and
             # correct the tire..." minted a fresh slug while the prior brief
             # lived in another project, so finish silently became start-over).
-            if (_nav_decision is not None
-                    and getattr(_nav_decision, "move", "") == "execute"):
+            # Binds on ANY move that carries a pick (2026-09-07, run
+            # 38cfec83: the navigator chose "extend" — plan first — and
+            # named the prior project only in prose; the execute-only
+            # check here dropped the pick and the follow-up landed in a
+            # fresh project whose container could not see the logged-in
+            # browser profile the goal depended on). Which move the
+            # navigator makes is orthogonal to where the work lives.
+            if _nav_decision is not None:
                 try:
+                    # (the navigator's PICK is normalized — it is a menu
+                    # answer, not yet a recorded identity; review r21)
                     _cand = str((getattr(_nav_decision, "payload", {}) or {})
                                 .get("project") or "").strip()
                     if _cand and "/" not in _cand and "\\" not in _cand \

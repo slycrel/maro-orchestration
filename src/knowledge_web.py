@@ -186,6 +186,14 @@ class TieredLesson:
     # score so novel one-offs survive decay long enough to be tested; wrong novel
     # guesses still die by decay. Old rows without this field deserialize to 0.0.
     novelty: float = 0.0
+    # Lineage scope (2026-09-05, feature-lineage-memory): the root handle_id
+    # of the run lineage this lesson was minted in. "" = workspace-wide
+    # (every pre-existing row, operator/pack rows). Recall walks own → parents
+    # → root → workspace, so a lineage-scoped lesson reaches every goal in its
+    # lineage and no goal outside it. Distinct from `scope` (portability
+    # method/world stamp, census-only). Write-once at mint; never a ranking
+    # input — a filter on the candidate pool, applied before the ranker.
+    lineage: str = ""
     # Per-step learning (2026-07-27): True for lessons extracted from
     # individually-verified steps of a run whose run-level outcome failed the
     # learnability gate. Provisional lessons are excluded from every injection
@@ -482,6 +490,7 @@ def record_tiered_lesson(
     grounding: Optional[List[Dict[str, Any]]] = None,
     source_evidence: str = "",
     scope: str = "",
+    lineage: str = "",
 ) -> TieredLesson:
     """Record a new lesson at the given tier.
 
@@ -576,7 +585,11 @@ def record_tiered_lesson(
     if tier == MemoryTier.MEDIUM:
         for ex in load_tiered_lessons(tier=MemoryTier.LONG, task_type=None, limit=None):
             sim = _text_similarity(ex.lesson, lesson_text)
-            if ex.task_type == task_type and sim > 0.8:
+            # Lineage is part of a lesson's identity: a lineage's re-learning
+            # of another lineage's lesson is a new row in ITS scope, never a
+            # reinforcement of a row it cannot recall (review 2026-09-05).
+            # Cross-lineage convergence is the promotion slice's, explicitly.
+            if ex.task_type == task_type and sim > 0.8 and _same_lineage(ex, lineage):
                 if minted_from == "prompt":
                     # Least-privilege: an instruction-derived re-record must
                     # not reinforce, confirm, or clear anything.
@@ -601,7 +614,7 @@ def record_tiered_lesson(
     with locked_write(_tiered_lessons_path(tier)):
         for ex in load_tiered_lessons(tier=tier, task_type=None, limit=None):
             sim = _text_similarity(ex.lesson, lesson_text)
-            if ex.task_type == task_type and sim > 0.8:
+            if ex.task_type == task_type and sim > 0.8 and _same_lineage(ex, lineage):
                 if minted_from == "prompt":
                     # Same least-privilege rule as the LONG pre-scan above.
                     log.info("prompt-derived re-record of %s ignored "
@@ -668,6 +681,7 @@ def record_tiered_lesson(
             evidence_sources=evidence_sources or [],
             lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
             scope=_scope_or_warn(scope, lesson_id),
+            lineage=str(lineage or ""),
             novelty=round(novelty, 4),
             provisional=provisional,
             minted_from=minted_from,
@@ -754,6 +768,20 @@ def _append_tiered_lesson(tl: TieredLesson, *, tier: str) -> None:
 
 
 _REINFORCE_EVIDENCE_CAP = 8  # distinct evidence refs kept per row (first N sightings)
+
+
+def _same_lineage(tl: TieredLesson, lineage: Optional[str]) -> bool:
+    """Whether a stored lesson belongs to ``lineage`` ("" = workspace-wide)."""
+    return str(getattr(tl, "lineage", "") or "") == str(lineage or "")
+
+
+def _visible_in_lineage(tl: TieredLesson, lineage: Optional[str]) -> bool:
+    """The one lineage-visibility rule every injection surface applies:
+    workspace-wide rows ("") are visible to all; a lineage-scoped row only
+    to a caller asking for that lineage. ``None`` = no lineage context =
+    a stranger to every lineage (workspace rows alone) — never everything."""
+    own = str(getattr(tl, "lineage", "") or "")
+    return not own or (lineage is not None and own == lineage)
 
 
 def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
@@ -1638,6 +1666,7 @@ def search_graveyard(
     max_score: float = 0.4,
     limit: int = 10,
     resurrect: bool = False,
+    lineage: Optional[str] = None,
 ) -> List[TieredLesson]:
     """Find decayed lessons matching *topic* before triggering a sub-goal re-acquisition.
 
@@ -1678,6 +1707,8 @@ def search_graveyard(
             # 2026-07-27).
             if tl.provisional or _is_quarantined(tl) or _is_contested(tl):
                 continue
+            if not _visible_in_lineage(tl, lineage):
+                continue  # another lineage's lesson: neither shown nor reinforced
             text = tl.lesson.lower()
             match_ratio = sum(1 for kw in keywords if kw in text) / max(len(keywords), 1)
             if match_ratio > 0:
@@ -1693,6 +1724,8 @@ def search_graveyard(
             continue
         if tl.provisional or _is_quarantined(tl) or _is_contested(tl):
             continue  # same exclusion as the live scan above
+        if not _visible_in_lineage(tl, lineage):
+            continue
         text = tl.lesson.lower()
         match_ratio = sum(1 for kw in keywords if kw in text) / max(len(keywords), 1)
         if match_ratio > 0:
@@ -3207,6 +3240,7 @@ def inject_tiered_lessons(
     max_medium: int = 3,
     include_short: bool = False,
     track_applied: bool = True,
+    lineage: Optional[str] = None,
 ) -> str:
     """Build a lessons injection string that respects tier priority.
 
@@ -3243,6 +3277,7 @@ def inject_tiered_lessons(
         limit=None,
     ) if not (t.provisional or _is_quarantined(t) or _is_contested(t)
               or _is_delta_demoted(t) or _is_delta_inert(t))
+    and _visible_in_lineage(t, lineage)
     ][:max_long * _pool_multiplier]
     if goal and len(long_candidates) > max_long:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
@@ -3271,6 +3306,7 @@ def inject_tiered_lessons(
         limit=None,
     ) if not (t.provisional or _is_quarantined(t) or _is_contested(t)
               or _is_delta_demoted(t) or _is_delta_inert(t))
+    and _visible_in_lineage(t, lineage)
     ][:max_medium * _pool_multiplier]
     if goal and len(medium_candidates) > max_medium:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
@@ -3312,6 +3348,8 @@ def query_lessons_scored(
     include_provisional: bool = False,
     include_quarantined: bool = False,
     include_contested: bool = False,
+    lineage: Optional[str] = None,
+    diagnostics: Optional[dict] = None,
 ) -> List[tuple]:
     """(lesson, score) variant of query_lessons — same pool, same ranking,
     same truncation; the ranker's internal score is surfaced instead of
@@ -3347,6 +3385,16 @@ def query_lessons_scored(
             pool = [t for t in pool if not _is_quarantined(t)]
         if not include_contested:
             pool = [t for t in pool if not _is_contested(t)]
+        # Lineage scope: workspace-wide rows ("") always; lineage-scoped rows
+        # only for the lineage asked for. A caller with no lineage (None) is
+        # a stranger to every lineage — it sees the workspace rows alone.
+        if diagnostics is not None:
+            # distinct rows, so a caller running several queries over the
+            # same store counts a scoped row once
+            ids = diagnostics.setdefault("lineage_excluded_ids", set())
+            ids.update(t.lesson_id for t in pool if not _visible_in_lineage(t, lineage))
+            diagnostics["lineage_excluded"] = len(ids)
+        pool = [t for t in pool if _visible_in_lineage(t, lineage)]
         candidates.extend(pool)
 
     if not candidates:
@@ -3367,6 +3415,7 @@ def query_lessons(
     include_provisional: bool = False,
     include_quarantined: bool = False,
     include_contested: bool = False,
+    lineage: Optional[str] = None,
 ) -> List[TieredLesson]:
     """Retrieve the top-N lessons most relevant to `query` via hybrid retrieval.
 
@@ -3400,6 +3449,7 @@ def query_lessons(
         include_provisional=include_provisional,
         include_quarantined=include_quarantined,
         include_contested=include_contested,
+        lineage=lineage,
     )]
 
 

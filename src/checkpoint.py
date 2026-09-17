@@ -29,15 +29,18 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from file_lock import atomic_write
 
 log = logging.getLogger("maro.checkpoint")
 
@@ -152,18 +155,228 @@ def _runs_root() -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 
+# Row statuses that FINISH a plan position (a resume skips the step). Every
+# other status — blocked (retry-requeued or superseded by sub-steps), stuck,
+# failed — leaves the step to be re-attempted on resume.
+_FINISHED_STATUSES = frozenset({"done", "skipped"})
+
+
+def _as_int(value: Any, default: int) -> int:
+    """Integer identity or `default` — never a guess.
+
+    Accepts ints and integral floats/strings ("13", 13.0). Refuses bools,
+    None, non-integral or non-finite numbers and anything else: a
+    position of 1.9 must not become position 1 (review r2 finding 4).
+    """
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return default
+    return default
+
+
+_INT_MISSING = object()
+
+
+def _int_list(value: Any, expect_len: Optional[int] = None) -> Optional[List[int]]:
+    """A persisted list of NEXT.md item indices, or None when it is not one.
+
+    Every entry must be an integer identity (`_as_int` rules — no bools,
+    None, fractions); with `expect_len` the length must match exactly. A
+    list that does not pair 1:1 with its plan is no identity at all and
+    the file reads as "not carried" (the safe direction: a resume then
+    appends fresh items and the gate degrades to soft, as before this field
+    existed) rather than pairing rows with the wrong steps.
+    """
+    if not isinstance(value, list) or not value:
+        return None
+    out: List[int] = []
+    for v in value:
+        i = _as_int(v, _INT_MISSING)  # type: ignore[arg-type]
+        if i is _INT_MISSING:
+            return None
+        out.append(i)  # type: ignore[arg-type]
+    if expect_len is not None and len(out) != expect_len:
+        return None
+    return out
+
+
+def validate_identity(
+    step_items: Optional[List[int]],
+    plan_items: Optional[List[int]],
+) -> Tuple[Optional[List[int]], Optional[List[int]]]:
+    """THE identity validator — writer, loader and the resume restore all
+    call it, so an ambiguous identity is dropped at every boundary the
+    same way (round-1 review, 2026-09-16: per-list type/length checks let
+    a duplicated or swapped binding through, and the gate then REFUSED
+    work on it — the wrong direction; uncertain identity must run softly).
+
+    Rules: an identity is a non-negative item or exactly -1 (an unmirrored
+    slot, may repeat) — any other negative is corruption and drops the
+    list. `plan_items` — every item unique AND strictly increasing (the
+    mirror appends the plan as consecutive NEXT.md lines, so the original
+    binding is monotone by construction; a reordered binding resolves a
+    number to the wrong item — r2 Skeptic finding 1); `step_items` — every
+    item unique; and relationally, the step items that ARE bound must
+    appear in strictly increasing original plan order (a swapped pairing
+    changes the graph). Unbound step items (interrupt additions,
+    sub-steps) are allowed. A failing list becomes None; a failing relation
+    drops `step_items` (the binding itself is the verbatim original and
+    stays).
+    """
+    def _unique(xs: Optional[List[int]], *, increasing: bool = False) -> Optional[List[int]]:
+        if not xs:
+            return None
+        seen: set = set()
+        last = -1
+        for x in xs:
+            if x == -1:
+                continue
+            if x < -1 or x in seen:
+                return None
+            if increasing and x <= last:
+                return None
+            seen.add(x)
+            last = x
+        return list(xs)
+
+    plan = _unique(plan_items, increasing=True)
+    steps = _unique(step_items)
+    if plan is not None and steps is not None:
+        pos = {item: k for k, item in enumerate(plan, 1) if item >= 0}
+        last = 0
+        for it in steps:
+            k = pos.get(it) if it >= 0 else None
+            if k is None:
+                continue
+            if k <= last:
+                steps = None
+                break
+            last = k
+    return steps, plan
+
+
+# The grammar of a loop id / run handle wherever one is interpolated into a
+# path (the CLI's resume ref, a claim's handle_id): one path segment, no
+# separators, no leading dot.
+ID_REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def resume_lock_name(identity: str) -> str:
+    """Stable, path-safe admission-lock name for one resumable run — the
+    CLI and the API loader serialize a resume's admission on it."""
+    return "resume-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+
+
+def _claim_dict(raw: Any) -> Optional[Dict[str, Any]]:
+    """A resume claim as written by `mark_checkpoint_claimed`. None when the
+    field is absent (null). A PRESENT but malformed claim raises: the claim
+    is the replay barrier, and a barrier that cannot be read is not "no
+    barrier" (r1 Architect finding 5 — unknown is not absent). `from_dict`
+    propagates the error, so the file reads as LOOKUP_INVALID."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"resume_claim is a {type(raw).__name__}, not a claim")
+    handle = raw.get("handle_id")
+    pid = raw.get("pid")
+    if not isinstance(handle, str) or not ID_REF_RE.fullmatch(handle):
+        raise ValueError(f"resume_claim.handle_id {handle!r} is not a run handle")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        raise ValueError(f"resume_claim.pid {pid!r} is not a pid")
+    out: Dict[str, Any] = {"handle_id": handle, "pid": pid,
+                           "claimed_at": str(raw.get("claimed_at") or "")}
+    for key in ("token", "nonce", "successor_loop_id", "successor_path"):
+        val = raw.get(key)
+        if val is None or val == "":
+            continue
+        if not isinstance(val, str):
+            raise ValueError(f"resume_claim.{key} {val!r} is not a string")
+        if key == "successor_loop_id" and not ID_REF_RE.fullmatch(val):
+            raise ValueError(f"resume_claim.successor_loop_id {val!r} is not a loop id")
+        if key == "successor_path" and not os.path.isabs(val):
+            raise ValueError(f"resume_claim.successor_path {val!r} is not an absolute path")
+        out[key] = val
+    return out
+
+
+def _fsync_dir(path: Path) -> None:
+    """Persist a directory entry (the rename `atomic_write` made)."""
+    fd = os.open(str(path.parent), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+# The literal states that survive a round trip: the two owed states and
+# "attempt" (a row that is not a verdict, r3). Everything else reads applied.
+_PERSISTED_MARK_STATES = frozenset({"pending", "drifted", "attempt"})
+
+
+def _mark_state(value: Any) -> str:
+    """A persisted `item_mark`: only the literal non-default states survive
+    a round trip; everything else (absent, bool, other strings) is "applied"."""
+    return str(value) if isinstance(value, str) and value in _PERSISTED_MARK_STATES else "applied"
+
+
+def _coerce_row(c: Dict[str, Any], n_steps: int) -> Optional["CompletedStep"]:
+    """Build a CompletedStep from a persisted dict, tolerating hand edits
+    and older shapes: `index` defaults to -1, `position` to 0, and a
+    position outside 1..n_steps reads as 0 (not a plan step). A row that
+    still cannot be built is dropped rather than crashing the load — the
+    resume path treats a load error as "start fresh", which re-executes
+    everything (review round 1, finding 6)."""
+    known = {f.name for f in fields(CompletedStep)}
+    row = {k: v for k, v in c.items() if k in known}
+    row["index"] = _as_int(row.get("index"), -1)
+    pos = _as_int(row.get("position"), 0)
+    row["position"] = pos if 0 < pos <= n_steps else 0
+    row["text"] = str(row.get("text", "") or "")
+    row["status"] = str(row.get("status", "") or "")
+    row["item_mark"] = _mark_state(row.get("item_mark"))
+    try:
+        return CompletedStep(**row)
+    except TypeError:
+        return None
+
+
 @dataclass
 class CompletedStep:
-    index: int
+    index: int             # NEXT.md item index the loop assigned (-1 for recovery sub-steps)
     text: str
     status: str
     result: str = ""
+    # 1-based position in `Checkpoint.steps` (0 = not a plan step: a
+    # recovery sub-step, or a row carried in from an earlier attempt whose
+    # plan this checkpoint no longer holds). Added 2026-09-16: `index` is
+    # the NEXT.md item number, never a plan position — live checkpoints
+    # held [13, 49, 11, 12] for 2–7-step plans, so `remaining_steps`
+    # (which compared it to 1..n) returned the WHOLE plan and a resume
+    # re-executed finished steps. Resume selects by this field.
+    position: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
     elapsed_ms: int = 0
     provider_cost_usd: float = 0.0
     executor_session_id: str = ""
     executor_session_resumed: bool = False
+    # NEXT.md mirror state (chunk 8): "applied" (nothing owed), "pending"
+    # (the row's terminal state was never applied to its item — settled by
+    # the writer's later snapshots or by a resume,
+    # `loop_planning.settle_item_marks`), "drifted" (owed, but the item no
+    # longer names this row — surfaced, never retried). Only the literal
+    # strings "pending" / "drifted" are owed states: a missing field
+    # (older file), a boolean or any other value reads "applied" — a
+    # checkpoint cannot manufacture a mark obligation out of a hand edit.
+    item_mark: str = "applied"
 
 
 @dataclass
@@ -189,29 +402,145 @@ class Checkpoint:
     # retained checkpoint remains inspectable but can never replay effects.
     consumed_at: str = ""
     resumed_to_loop_id: str = ""
+    # A resume CLAIMS its source before it executes anything (LoopsBench
+    # chunk 7, 2026-09-16): {"handle_id": successor run, "pid": claimant,
+    # "token": claimant's start token, "claimed_at": iso}. Present and
+    # unconsumed ⇒ a resume is in progress (pid alive), or happened and
+    # left a record (successor checkpoint under that run → superseded), or
+    # happened and left NO record (unresolved: refuse, `--reclaim` is the
+    # operator's override). Cleared by consumption or by the successor's
+    # own first write when it shares the file.
+    resume_claim: Optional[Dict[str, Any]] = None
+    # Transient (never serialized): the nonce of the claim THIS object's
+    # holder wrote, handed from admission to the loop. A claim reads as our
+    # own only when its nonce matches — never because the pid matches (a
+    # long-lived process must not authorize its own later attempts).
+    resume_permit: Optional[str] = field(default=None, compare=False, repr=False)
+    # Transient: the exact file the claim was written to (the release
+    # target when the run is refused before its first step).
+    resume_source: Optional[Path] = field(default=None, compare=False, repr=False)
     # Run-scoped world-fact ledger rows (WORLD_FACTS_DESIGN slice 1) — a
     # resume must see the facts, not just the surviving steps.
     world_facts: Optional[List[Dict[str, Any]]] = None
+    # Regression obligations (regression_ledger rows) — a resume must keep
+    # re-verifying what the pre-pause steps proved.
+    regression: Optional[List[Dict[str, Any]]] = None
+    # Provenance of the rows' `position` field (2026-09-16 review, round 1):
+    # True ⇒ the writer mapped rows to plan positions and a position of 0
+    # means "not a plan step"; False ⇒ an older file whose `index` is read
+    # as a position (pre-fix semantics). Checkpoint-level on purpose — a
+    # positioned file whose rows ALL sit at 0 (a resume's in-flight write
+    # before its first suffix step completes: every row is carried history)
+    # must not fall back to reading stale item numbers as suffix positions.
+    positioned: bool = False
+    # Execution policy (2026-09-16, chunk 5 review): the fan-out width the
+    # run executed under. A resume restores it so a DAG-written file
+    # re-enters the DAG lane through `maro resume` (the CLI passed no width
+    # and the loop's default is 0 = sequential). 0 = sequential.
+    parallel_fan_out: int = 0
+    # Durable plan-node identity (2026-09-16, chunk 4). `step_items[i]` is
+    # the NEXT.md item index of `steps[i]` (-1 = never mirrored), so a
+    # resume restores the suffix WITH its items instead of paying a planner
+    # call and appending a second copy of the plan to NEXT.md.
+    # `plan_items[k-1]` is the item the ORIGINAL plan's step k bound to —
+    # what an `[after:k]` tag names — carried UNCHANGED across every resume
+    # so a suffix keeps its declared edges (step_gate resolves tags through
+    # it; loop_planning re-keys the DAG lane's edges through it). None =
+    # not carried: an older file, or a plan whose numbering was never bound
+    # (reshaped by step splitting, or a duplicate item index).
+    step_items: Optional[List[int]] = None
+    plan_items: Optional[List[int]] = None
 
     def __post_init__(self):
         if not self.timestamp:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
+    def _done_positions(self) -> set:
+        """1-based plan positions a resume must NOT re-execute.
+
+        Positioned file (`positioned` is True — written by this build): a
+        position counts only when its LATEST row ended in a FINISHED
+        status (`_FINISHED_STATUSES`; latest-row-wins matches export_human).
+        A blocked row never counts, whatever produced it (review r1
+        finding 3, r2 finding 1):
+          - retry: the loop requeued the step — resume must start AT it;
+          - superseded by sub-steps: the sub-steps are not plan steps
+            (position 0), so a crash mid-way would otherwise lose them —
+            the step re-decomposes on resume (wasteful, never lost);
+          - prerequisite gate: a resume is the operator's retry of the
+            failed prerequisite, and the dependent must be re-decided
+            against the fresh outcome, not frozen by the old refusal.
+        The direction of error is deliberate — re-running a blocked step is
+        a retry, re-running a done step is the duplicate-effects bug.
+
+        Legacy file (`positioned` False): every row's `index` is read as a
+        position — the pre-fix behaviour, kept so an old file resumes
+        exactly as it did rather than as nothing-done.
+        """
+        if self.positioned:
+            n = len(self.steps)
+            latest: Dict[int, str] = {}   # position → status of its LATEST row
+            for s in self.completed:
+                pos = _as_int(getattr(s, "position", 0), 0)
+                if 0 < pos <= n:
+                    latest[pos] = s.status
+            return {pos for pos, st in latest.items() if st in _FINISHED_STATUSES}
+        return {s.index for s in self.completed}
+
     @property
     def next_step_index(self) -> int:
-        """Zero-based index of the next step to execute."""
-        if not self.completed:
-            return 0
-        return max(s.index for s in self.completed)
+        """Zero-based index of the next step to execute.
+
+        Positioned: the first remaining position (len(steps) when nothing
+        remains). Legacy: max recorded index, as before.
+        """
+        done = self._done_positions()
+        if self.positioned:
+            for i in range(1, len(self.steps) + 1):
+                if i not in done:
+                    return i - 1
+            return len(self.steps)
+        return max(done) if done else 0
 
     @property
     def remaining_steps(self) -> List[str]:
-        """Steps not yet completed (by position in steps list)."""
-        done_indices = {s.index for s in self.completed}
-        return [s for i, s in enumerate(self.steps, 1) if i not in done_indices]
+        """Steps not yet completed (by plan position)."""
+        done = self._done_positions()
+        return [s for i, s in enumerate(self.steps, 1) if i not in done]
+
+    @property
+    def remaining_items(self) -> Optional[List[int]]:
+        """NEXT.md item per `remaining_steps` entry, in the same order —
+        None when the file carries no clean per-step item list."""
+        if not self.step_items or len(self.step_items) != len(self.steps):
+            return None
+        done = self._done_positions()
+        return [it for i, it in enumerate(self.step_items, 1) if i not in done]
+
+    @property
+    def done_count(self) -> int:
+        """Plan steps with a finished outcome — for progress displays.
+
+        Positioned: unique finished positions (carried-in history rows and
+        sub-steps sit at position 0 and do not count). Legacy: rows whose
+        status is done, as export_human always counted.
+        """
+        if self.positioned:
+            return len(self._done_positions())
+        return sum(1 for s in self.completed if s.status == "done")
 
     def is_complete(self) -> bool:
-        """True if all steps have an outcome."""
+        """True if nothing remains to execute.
+
+        Positioned: every plan position has a finished row. Legacy: row
+        count reaches the plan length (pre-fix rule, kept for old files).
+        After a resume `steps` is the SUFFIX and `completed` also holds the
+        carried-in rows, so a row count over-reports (review round 1,
+        finding 1: a second resume was refused as "completed all its
+        steps" while suffix work remained).
+        """
+        if self.positioned:
+            return not self.remaining_steps
         return len(self.completed) >= len(self.steps)
 
     def is_consumed(self) -> bool:
@@ -237,16 +566,41 @@ class Checkpoint:
         if self.consumed_at:
             d["consumed_at"] = self.consumed_at
             d["resumed_to_loop_id"] = self.resumed_to_loop_id
+        if self.resume_claim:
+            d["resume_claim"] = dict(self.resume_claim)
         if self.world_facts:
             d["world_facts"] = self.world_facts
+        if self.regression:
+            d["regression"] = self.regression
+        if self.positioned:
+            d["positioned"] = True
+        if self.parallel_fan_out > 0:
+            d["parallel_fan_out"] = int(self.parallel_fan_out)
+        if self.step_items is not None:
+            d["step_items"] = list(self.step_items)
+        if self.plan_items is not None:
+            d["plan_items"] = list(self.plan_items)
         return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Checkpoint":
-        completed = [
-            CompletedStep(**c) if isinstance(c, dict) else c
-            for c in d.get("completed", [])
-        ]
+        steps = d.get("steps", [])
+        if not isinstance(steps, list):
+            steps = []
+        if any(not isinstance(_st, str) for _st in steps):
+            # A JSON-valid file whose plan holds non-strings is not a
+            # checkpoint (round-1 QA finding 5: it "restored" and then
+            # crashed dependency parsing outside the refusal path). Raising
+            # here makes `_load_from` read it as unreadable → an explicit
+            # resume refuses with the path.
+            raise ValueError("checkpoint steps must be strings")
+        raw_rows = d.get("completed", [])
+        if not isinstance(raw_rows, list):
+            raw_rows = []
+        # Only dict rows are rows; anything else is a hand edit or a torn
+        # write and must not count toward "done" (r2 finding 4).
+        completed = [_coerce_row(c, len(steps)) for c in raw_rows if isinstance(c, dict)]
+        completed = [c for c in completed if c is not None]
         raw_session = d.get("executor_session")
         executor_session = None
         if isinstance(raw_session, dict):
@@ -265,12 +619,28 @@ class Checkpoint:
                     "signature": signature,
                     "turns": turns,
                 }
+        _ident = validate_identity(_int_list(d.get("step_items"), len(steps)),
+                                   _int_list(d.get("plan_items")))
+        # Identity and goal are the two fields nothing downstream can
+        # default: an empty / non-string loop_id made a handle-addressed
+        # file FOUND and then resumed "loop ''" — which the loop read as
+        # no resume at all and started fresh (chunk-6 r1, all lenses).
+        _lid = d.get("loop_id")
+        if not isinstance(_lid, str) or not _lid:
+            raise ValueError("checkpoint loop_id must be a non-empty string")
+        _goal = d.get("goal")
+        if not isinstance(_goal, str):
+            raise ValueError("checkpoint goal must be a string")
         return cls(
-            loop_id=d["loop_id"],
-            goal=d["goal"],
+            loop_id=_lid,
+            goal=_goal,
             project=d.get("project", ""),
-            steps=d.get("steps", []),
+            steps=steps,
             completed=completed,
+            # The marker is a JSON boolean or nothing — a hand-edited
+            # "false" string must read as legacy, not as positioned.
+            positioned=d.get("positioned") is True,
+            parallel_fan_out=max(0, _as_int(d.get("parallel_fan_out"), 0)),
             timestamp=d.get("timestamp", ""),
             parent_loop_id=d.get("parent_loop_id", ""),
             handle_id=d.get("handle_id", ""),
@@ -278,7 +648,14 @@ class Checkpoint:
             executor_session=executor_session,
             consumed_at=str(d.get("consumed_at") or ""),
             resumed_to_loop_id=str(d.get("resumed_to_loop_id") or ""),
+            resume_claim=_claim_dict(d.get("resume_claim")),
             world_facts=d.get("world_facts") or None,
+            regression=d.get("regression") or None,
+            # Identity lists are all-or-nothing (see _int_list): a torn or
+            # hand-edited list reads as "not carried", never as a partial
+            # pairing.
+            step_items=_ident[0],
+            plan_items=_ident[1],
         )
 
 
@@ -297,6 +674,10 @@ def write_checkpoint(
     in_flight_index: Optional[int] = None,
     executor_session: Optional[Dict[str, Any]] = None,
     world_facts: Optional[List[Dict[str, Any]]] = None,
+    regression: Optional[List[Dict[str, Any]]] = None,
+    step_indices: Optional[List[int]] = None,
+    plan_items: Optional[List[int]] = None,
+    parallel_fan_out: int = 0,
 ) -> None:
     """Write current loop progress to disk.
 
@@ -321,11 +702,47 @@ def write_checkpoint(
         executor_session: Compatible clean between-step Claude session state.
             It is retained beside the checkpoint, never treated as sufficient
             without the adapter's configuration-signature check.
+        step_indices: NEXT.md item per plan step (the loop's own mapping).
+            Besides positioning the rows it is persisted as `step_items`
+            when it pairs 1:1 with `steps`, so a resume keeps the items.
+        plan_items: the ORIGINAL plan's number→item binding (LoopContext
+            .plan_items) — persisted verbatim, never recomputed here.
     """
+    _target: Any = "<unresolved>"
     try:
+        # item index → 1-based plan position, from the loop's own mapping
+        # (`step_indices[i]` is the NEXT.md item of plan step i+1). A row
+        # whose item is not in the mapping (recovery sub-step, or a row
+        # carried in from an earlier attempt) gets position 0.
+        _pos_of_item: Dict[int, int] = {}
+        _dup_items: List[int] = []
+        for _pos, _item in enumerate(step_indices or (), 1):
+            _item_i = _as_int(_item, -1)
+            if _item_i < 0:
+                continue
+            if _item_i in _pos_of_item:
+                _dup_items.append(_item_i)
+                continue
+            _pos_of_item[_item_i] = _pos
+        for _item_i in _dup_items:
+            # An item that names two positions is an ambiguous identity:
+            # its rows get position 0 (= re-run), never the first slot
+            # (r2 finding 3 — the first slot would skip work that never ran).
+            _pos_of_item.pop(_item_i, None)
+        if step_indices is not None and (len(step_indices) != len(steps) or _dup_items):
+            # Rows the mapping cannot place resolve to position 0 (= not
+            # done) — the safe direction — but a malformed mapping means
+            # the writer's plan and item lists drifted apart; say so.
+            log.warning(
+                "checkpoint %s: step_indices does not map the plan cleanly "
+                "(%d indices for %d steps, duplicate items %s) — rows of "
+                "unmapped or duplicated items will be re-executed on resume",
+                loop_id, len(step_indices), len(steps), _dup_items or "none",
+            )
         completed = [
             CompletedStep(
-                index=getattr(s, "index", i + 1),
+                index=_as_int(getattr(s, "index", i + 1), -1),
+                position=_pos_of_item.get(_as_int(getattr(s, "index", -1), -1), 0),
                 text=getattr(s, "text", ""),
                 status=getattr(s, "status", ""),
                 result=getattr(s, "result", ""),
@@ -336,6 +753,7 @@ def write_checkpoint(
                 executor_session_id=str(getattr(s, "executor_session_id", "") or ""),
                 executor_session_resumed=bool(
                     getattr(s, "executor_session_resumed", False)),
+                item_mark=_mark_state(getattr(s, "item_mark", None)),
             )
             for i, s in enumerate(step_outcomes)
         ]
@@ -346,6 +764,13 @@ def write_checkpoint(
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "pid": os.getpid(),
             }
+        # Identity travels only when it validates (same rules as the
+        # loader); a drifted mapping (warned above) or a garbage entry is
+        # positioned-but-unidentified: the next resume appends fresh items
+        # rather than trusting a misaligned list. Never manufacture -1.
+        _ident_w = validate_identity(
+            _int_list(list(step_indices), len(steps)) if step_indices is not None else None,
+            _int_list(list(plan_items)) if plan_items else None)
         rd_path = _rundir_checkpoint_path()
         ckpt = Checkpoint(
             loop_id=loop_id,
@@ -353,6 +778,14 @@ def write_checkpoint(
             project=project,
             steps=steps,
             completed=completed,
+            positioned=step_indices is not None,
+            # Identity travels only when it pairs cleanly; a drifted mapping
+            # (warned above) is positioned-but-unidentified, so the next
+            # resume appends fresh items rather than trusting a misaligned
+            # list.
+            step_items=_ident_w[0],
+            plan_items=_ident_w[1],
+            parallel_fan_out=max(0, _as_int(parallel_fan_out, 0)),
             handle_id=_run_handle_id(rd_path) if rd_path else "",
             in_flight=in_flight,
             # A mid-step crash has indeterminate provider state and may have
@@ -361,16 +794,35 @@ def write_checkpoint(
             executor_session=(dict(executor_session or {}) or None)
             if in_flight is None else None,
             world_facts=list(world_facts) if world_facts else None,
+            regression=list(regression) if regression else None,
         )
         if rd_path is not None:
             rd_path.parent.mkdir(parents=True, exist_ok=True)
             path = rd_path
         else:
             path = _checkpoint_path(loop_id)
-        path.write_text(json.dumps(ckpt.to_dict(), indent=2), encoding="utf-8")
-        log.debug("checkpoint written: %s (%d/%d steps)", loop_id, len(completed), len(steps))
+        _target = path
+        # Process-kill safe: a kill mid-write used to leave a torn file that
+        # the resume path then read as "no checkpoint" (BACKLOG residue since
+        # the LoopsBench chunk-1 QA round; same helper mark_checkpoint_consumed
+        # already used). mkstemp beside the target + fsync + os.replace: a
+        # reader sees the old file or the new one, never a partial. Not
+        # claimed: power-loss durability (durable=False — no directory
+        # fsync) and a symlinked target (os.replace swaps the link itself).
+        # Needs a WRITABLE PARENT DIRECTORY, which a plain in-place write
+        # did not; a failure here is logged at WARNING below.
+        atomic_write(path, json.dumps(ckpt.to_dict(), indent=2))
+        log.debug("checkpoint written: %s (%d/%d steps done, %d rows)",
+                  loop_id, ckpt.done_count, len(steps), len(completed))
     except Exception as exc:
-        log.debug("checkpoint write failed (non-fatal): %s", exc)
+        # WARNING, not debug (chunk-3 review): a full disk or an unwritable
+        # directory used to look exactly like successful checkpointing. Still
+        # non-fatal — the loop continues; a crash resumes from the last
+        # checkpoint that DID land, and if none did this run is not
+        # resumable.
+        log.warning("checkpoint write failed for %s at %s (non-fatal; a crash resumes "
+                    "from the last successful checkpoint, if any — otherwise this run "
+                    "is not resumable): %s", loop_id, _target, exc)
 
 
 def _load_from(path: Path, loop_id: Optional[str] = None) -> Optional[Checkpoint]:
@@ -379,6 +831,8 @@ def _load_from(path: Path, loop_id: Optional[str] = None) -> Optional[Checkpoint
         data = json.loads(path.read_text(encoding="utf-8"))
         ckpt = Checkpoint.from_dict(data)
         if loop_id is not None and ckpt.loop_id != loop_id:
+            log.warning("checkpoint %s names loop %s, not the requested %s — ignored",
+                        path, ckpt.loop_id, loop_id)
             return None
         return ckpt
     except FileNotFoundError:
@@ -388,62 +842,595 @@ def _load_from(path: Path, loop_id: Optional[str] = None) -> Optional[Checkpoint
         return None
 
 
-def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
-    """Load a checkpoint by loop_id. Returns None if not found or corrupt.
+# Discriminated lookup states (LoopsBench chunk 6, 2026-09-16). An explicit
+# resume may start fresh ONLY on ABSENT; every other non-found state names
+# the file and refuses, because "could not read it" is not "there is none".
+LOOKUP_FOUND = "found"
+LOOKUP_ABSENT = "absent"
+LOOKUP_INVALID = "invalid"        # exists, not a checkpoint (torn / hand-damaged)
+LOOKUP_MISMATCH = "mismatch"      # exists at the id's own address, names another loop
+LOOKUP_IO_ERROR = "io_error"      # exists (or may exist) but the read / lookup failed
 
-    Search order: the active run dir (if any), then the non-run-dir
-    checkpoint dir (current location first, then pre-move locations), then
-    a newest-first scan of all run dirs (resume usually happens in a fresh
-    process where no run-dir contextvar is set).
-    """
-    rd_path = _rundir_checkpoint_path()
-    if rd_path is not None:
-        ckpt = _load_from(rd_path, loop_id)
-        if ckpt is not None:
-            return ckpt
 
-    found = _find_checkpoint_path(loop_id)
-    if found is not None:
-        ckpt = _load_from(found)
-        if ckpt is not None:
-            return ckpt
+@dataclass
+class CheckpointLookup:
+    """What a loop-id lookup found. `ckpt` only when `state == found`;
+    `path` names the file the state is about (the damaged one, or the
+    found one); `detail` is the operator-readable reason."""
+    state: str
+    ckpt: Optional[Checkpoint] = None
+    path: Optional[Path] = None
+    detail: str = ""
+    # sha256 of the BYTES a FOUND read parsed — the compare-and-swap key
+    # for the resume claim (semantic equality is not: a file with no
+    # `timestamp` reads as "now" on every parse).
+    digest: str = ""
 
-    root = _runs_root()
-    if root is not None and root.is_dir():
+    @property
+    def found(self) -> bool:
+        return self.state == LOOKUP_FOUND
+
+
+def _classify_missing(path: Path) -> str:
+    """Why a `FileNotFoundError` came back for `path`: "absent" when the
+    first component that cannot be stat'ed (top-down) does not exist at
+    all; "dangling" when something DOES exist there (a symlink whose
+    target is gone — at the file itself or at any ancestor such as
+    `build -> missing-dir`). A full-path `lexists` alone misses the
+    ancestor case (r3 HIGH 5)."""
+    parts = [path] + list(path.parents)
+    for comp in reversed(parts):          # root first
         try:
-            candidates = sorted(
-                root.glob("*/build/checkpoint.json"),
-                key=lambda p: p.stat().st_mtime, reverse=True,
-            )
-        except Exception:
+            os.stat(comp)
+        except FileNotFoundError:
+            return "dangling" if os.path.lexists(comp) else "absent"
+        except OSError:
+            return "dangling"             # cannot traverse: not "no file"
+    return "absent"
+
+
+def _read_candidate(path: Path, loop_id: Optional[str]) -> CheckpointLookup:
+    """Classify ONE file: absent / io_error / invalid / mismatch / found.
+    `loop_id=None` skips the identity check (a handle-addressed file)."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        if _classify_missing(path) == "dangling":
+            # A dangling symlink AT the checkpoint address or on the way to
+            # it: something was there and is not readable — not "no
+            # checkpoint" (r2 HIGH 1, r3 HIGH 5).
+            return CheckpointLookup(LOOKUP_IO_ERROR, path=path,
+                                    detail=f"checkpoint {path} is behind a dangling link")
+        return CheckpointLookup(LOOKUP_ABSENT, path=path, detail=f"no file at {path}")
+    except OSError as exc:
+        return CheckpointLookup(LOOKUP_IO_ERROR, path=path,
+                                detail=f"checkpoint {path} could not be read ({exc})")
+    try:
+        # Decoding is part of parsing: invalid UTF-8 is a damaged file
+        # (INVALID), not a failed read (r1 QA: UnicodeDecodeError is a
+        # ValueError and used to escape the classifier).
+        ckpt = Checkpoint.from_dict(json.loads(raw.decode("utf-8")))
+    except Exception as exc:
+        return CheckpointLookup(LOOKUP_INVALID, path=path,
+                                detail=f"checkpoint {path} is not a readable checkpoint ({exc})")
+    if loop_id is not None and ckpt.loop_id != loop_id:
+        return CheckpointLookup(
+            LOOKUP_MISMATCH, path=path,
+            detail=f"checkpoint {path} names loop {ckpt.loop_id}, not {loop_id}")
+    return CheckpointLookup(LOOKUP_FOUND, ckpt=ckpt, path=path,
+                            digest=hashlib.sha256(raw).hexdigest())
+
+
+def _run_dir_loop_ids(build_ckpt_path: Path) -> Optional[set]:
+    """The loop ids a run dir's metadata attributes to it (plural
+    `loop_ids` + singular `loop_id`), or None when the metadata cannot
+    say (missing / unreadable) — the run dir is then UNATTRIBUTABLE."""
+    try:
+        meta = json.loads((build_ckpt_path.parent.parent / "metadata.json")
+                          .read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(meta, dict):
+        return None
+    # Schema-checked: a string `loop_ids` iterated as characters used to
+    # attribute the run to loops "a", "b", … and rule the real loop OUT
+    # (r1 HIGH). Any shape the writer never produces means "cannot say".
+    raw_ids = meta.get("loop_ids")
+    if raw_ids is None:
+        raw_ids = []
+    if not isinstance(raw_ids, list) or any(
+            not isinstance(l, str) or not l for l in raw_ids):
+        return None
+    ids = set(raw_ids)
+    single = meta.get("loop_id")
+    if single is not None:
+        if not isinstance(single, str) or not single:
+            return None
+        ids.add(single)
+    return ids or None
+
+
+def find_checkpoint(loop_id: str) -> CheckpointLookup:
+    """Discriminated checkpoint lookup by loop_id (the ONE loader).
+
+    Search order: the active run dir (if any), then the id-addressed file
+    (`ckpt_<id>.json`, current dir first, then pre-move locations), then a
+    newest-first scan of all run dirs (resume usually happens in a fresh
+    process where no run-dir contextvar is set).
+
+    Attribution rules — the difference between "not ours" and "unknown":
+    - the id-addressed file decides on its own: a torn / unreadable one is
+      INVALID / IO_ERROR, one naming another loop is MISMATCH (chunk-3 r2
+      finding 2), never "absent, keep looking";
+    - a run-dir file that parses and names another loop is simply not
+      ours; a damaged run-dir file is ours (INVALID / IO_ERROR) when the run
+      dir's metadata names this loop, not ours when it names only others,
+      and UNATTRIBUTABLE when the metadata cannot say — an unattributable
+      damaged file cannot rule this loop out, so the lookup reports it
+      (with its path) instead of ABSENT; the operator repairs or removes it;
+    - a lookup that raises (stat / scandir / unreadable runs root or
+      checkpoint dir) is IO_ERROR, not absent — this function calls the
+      raw helpers, not the lossy `_rundir_checkpoint_path` /
+      `_runs_root` wrappers that turn any exception into None (r1 HIGH:
+      an unreadable runs root read as "no checkpoint").
+    """
+    try:
+        from runs import current_run_dir, runs_root
+        rd_path = None
+        _rd = current_run_dir()
+        if _rd is not None:
+            rd_path = Path(_rd) / "build" / "checkpoint.json"
+        if rd_path is not None:
+            lk = _read_candidate(rd_path, loop_id)
+            if lk.state in (LOOKUP_FOUND, LOOKUP_INVALID, LOOKUP_IO_ERROR):
+                return lk
+            # absent / another run's own file: keep looking
+
+        # Every id address is READ, never existence-checked first:
+        # `Path.exists()` / `is_file()` follow links and turn EACCES / a
+        # dangling link into False, which read as absent (r2 HIGH 1).
+        _addrs = [_checkpoint_path(loop_id)]
+        # The pre-move root is read UNFILTERED (`_old_checkpoint_dirs` drops
+        # a dir whose `is_dir()` is False — which is also what an unreadable
+        # parent returns); a missing old root simply reads ABSENT.
+        from orch_items import orch_root
+        _old_root = orch_root() / _CHECKPOINT_DIR_NAME
+        if _old_root != _checkpoint_dir():
+            _addrs.append(_old_root / f"ckpt_{loop_id}.json")
+        for _addr in _addrs:
+            lk = _read_candidate(_addr, loop_id)
+            if lk.state != LOOKUP_ABSENT:
+                return lk
+
+        unattributed: List[CheckpointLookup] = []
+        root = runs_root()
+        try:
+            os.stat(root)                  # not `is_dir()`: that swallows EACCES
+            _have_root = True
+        except FileNotFoundError:
+            if _classify_missing(root) == "dangling":
+                raise
+            _have_root = False             # no runs root: nothing to scan
+        if _have_root:
+            # os.scandir, not Path.glob: glob swallows PermissionError and
+            # would present an unreadable runs root as empty.
             candidates = []
-        for p in candidates:
-            ckpt = _load_from(p, loop_id)
-            if ckpt is not None:
-                return ckpt
-    return None
+            with os.scandir(root) as _it:
+                for _entry in _it:
+                    _cand = Path(_entry.path) / "build" / "checkpoint.json"
+                    try:
+                        _st = _cand.stat()
+                    except (FileNotFoundError, NotADirectoryError):
+                        if _classify_missing(_cand) == "dangling":
+                            raise          # dangling link at / on the way to the address
+                        continue           # a run dir with no checkpoint (normal)
+                    # any other OSError (EACCES on the run dir / build/)
+                    # propagates → io_error, not "skipped"
+                    candidates.append((_st.st_mtime, _cand))
+            candidates.sort(key=lambda t: t[0], reverse=True)
+            for _mtime, cand in candidates:
+                lk = _read_candidate(cand, loop_id)
+                if lk.state == LOOKUP_FOUND:
+                    return lk
+                if lk.state in (LOOKUP_INVALID, LOOKUP_IO_ERROR):
+                    owners = _run_dir_loop_ids(cand)
+                    if owners is None:
+                        unattributed.append(lk)
+                    elif loop_id in owners:
+                        return lk
+                # mismatch / absent / attributed to others: not ours
+        if unattributed:
+            first = unattributed[0]
+            return CheckpointLookup(
+                first.state, path=first.path,
+                detail=(f"{first.detail}; its run dir's metadata cannot say whether "
+                        f"it is loop {loop_id}'s ({len(unattributed)} unattributable "
+                        "damaged checkpoint(s) — repair or remove to resume)"))
+    except Exception as exc:
+        return CheckpointLookup(LOOKUP_IO_ERROR,
+                                detail=f"checkpoint lookup for {loop_id} failed ({exc})")
+    return CheckpointLookup(LOOKUP_ABSENT, detail=f"no checkpoint found for {loop_id}")
 
 
-def mark_checkpoint_consumed(loop_id: str, *, resumed_to_loop_id: str) -> bool:
+def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
+    """Load a checkpoint by loop_id. Returns None if not found or corrupt —
+    the lossy view; callers that must tell absent from damaged use
+    `find_checkpoint`."""
+    lk = find_checkpoint(loop_id)
+    if lk.state != LOOKUP_FOUND and lk.state != LOOKUP_ABSENT:
+        log.warning("checkpoint lookup %s: %s", lk.state, lk.detail)
+    return lk.ckpt
+
+
+def mark_checkpoint_consumed(loop_id: str, *, resumed_to_loop_id: str,
+                             path: Optional[Path] = None) -> bool:
     """Retain but irrevocably consume a successful resume source checkpoint.
 
     This is intentionally narrower than deletion: closure-demoted/stuck runs
     keep resumable state, while a successfully-resumed checkpoint cannot be
-    invoked a second time to replay the same external effects.
+    invoked a second time to replay the same external effects. `path` is
+    the exact file the resume was read from (a run-dir file is not at the
+    id address); without it the id address is consumed.
     """
-    path = _find_checkpoint_path(loop_id) or _checkpoint_path(loop_id)
+    path = path or _find_checkpoint_path(loop_id) or _checkpoint_path(loop_id)
+    # Consume the FILE that supplied the bytes: atomic_write on a symlink
+    # address would replace the link and leave the target resumable (r3
+    # HIGH 4).
+    path = Path(os.path.realpath(path))
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if str(data.get("loop_id") or "") != loop_id:
             return False
         data["consumed_at"] = datetime.now(timezone.utc).isoformat()
         data["resumed_to_loop_id"] = resumed_to_loop_id
-        from file_lock import atomic_write
         atomic_write(path, json.dumps(data, indent=2))
         return True
     except Exception as exc:
         log.error("checkpoint consume failed for %s: %s", loop_id, exc)
         return False
+
+
+def mark_checkpoint_claimed(loop_id: str, *, path: Path, handle_id: str,
+                            expected: "CheckpointLookup", successor_loop_id: str = "",
+                            successor_path: str = "",
+                            reclaim: bool = False) -> Optional["Checkpoint"]:
+    """Record, in the SOURCE file, that this process is resuming it as run
+    `handle_id` / loop `successor_loop_id` — BEFORE anything executes — as
+    a compare-and-swap against `expected`, the FOUND read the caller
+    admitted (r1 Skeptic 3/4, Architect 1): the file is re-read, and the
+    claim is written only if its bytes are the SAME bytes (digest), the file
+    is neither complete nor consumed, and no other claim gates it
+    (`reclaim` lets an `unresolved` claim be replaced — the operator's
+    override). The write is power-loss durable (the directory entry is
+    fsynced: this record is what forbids a replay). The file is then read
+    BACK and must carry exactly this claim.
+
+    Returns the claimed snapshot as read back from disk, carrying the
+    permit (`resume_permit`) that makes the claim read as our own — that
+    object, and only that object, is what the loop executes. None on ANY
+    failure: the caller refuses to execute (a resume whose claim cannot be
+    made durable cannot later prove what it did — chunk-6 r3 finding 2).
+    """
+    from process_identity import process_start_token
+    nonce = uuid.uuid4().hex
+    claim: Dict[str, Any] = {"handle_id": str(handle_id), "pid": os.getpid(),
+                             "claimed_at": datetime.now(timezone.utc).isoformat(),
+                             "nonce": nonce}
+    if successor_loop_id:
+        claim["successor_loop_id"] = str(successor_loop_id)
+    if successor_path:
+        # Where the successor's checkpoint writer will actually land (an
+        # API resume under an ambient run dir writes THERE, not at its own
+        # handle's address — r3 finding 7).
+        claim["successor_path"] = str(successor_path)
+    token = process_start_token(os.getpid())
+    if token:
+        claim["token"] = token
+    try:
+        # The proposed claim must parse as one BEFORE it is written: a bad
+        # handle would turn a valid source into LOOKUP_INVALID (r2 finding 4).
+        if _claim_dict(claim) != claim:
+            log.error("checkpoint claim refused for %s: proposed claim is malformed (%r)",
+                      loop_id, claim)
+            return None
+        real = Path(os.path.realpath(path))
+        refusal: List[str] = []
+
+        def _commit(cur_text: str) -> Optional[str]:
+            # Runs UNDER the per-file lock (file_lock.locked_rmw): the
+            # read that decides and the write that claims are one section
+            # against every other locked mutation of this file (release,
+            # consume) — r3 finding 5.
+            raw = cur_text.encode("utf-8", errors="surrogateescape")
+            if not raw:
+                refusal.append(f"{real} is empty")
+                return None
+            try:
+                cur_ckpt = Checkpoint.from_dict(json.loads(raw.decode("utf-8")))
+            except Exception as exc:
+                refusal.append(f"{real} is not a readable checkpoint ({exc})")
+                return None
+            if cur_ckpt.loop_id != loop_id:
+                refusal.append(f"{real} names loop {cur_ckpt.loop_id}, not {loop_id}")
+                return None
+            if cur_ckpt.is_consumed() or cur_ckpt.is_complete():
+                refusal.append("the file is " + ("consumed" if cur_ckpt.is_consumed() else "complete"))
+                return None
+            if not expected.digest or hashlib.sha256(raw).hexdigest() != expected.digest:
+                refusal.append(f"{real} changed since it was admitted")
+                return None
+            state, _ = resume_claim_status(cur_ckpt)
+            if state is not None and not (reclaim and state == RESUME_CLAIM_UNRESOLVED):
+                refusal.append(f"already claimed ({state})")
+                return None
+            data = json.loads(raw.decode("utf-8"))
+            data["resume_claim"] = claim
+            return json.dumps(data, indent=2)
+
+        from file_lock import locked_rmw
+        locked_rmw(real, _commit)
+        if refusal:
+            log.error("checkpoint claim refused for %s: %s", loop_id, refusal[0])
+            return None
+        _fsync_dir(real)                       # power-loss durable: this record forbids a replay
+        back = _read_candidate(real, loop_id)
+        if not back.found or back.ckpt.resume_claim != claim:
+            log.error("checkpoint claim for %s did not read back from %s (%s)",
+                      loop_id, real, back.detail or "another writer replaced it")
+            return None
+        back.ckpt.resume_permit = nonce
+        back.ckpt.resume_source = real
+        return back.ckpt
+    except Exception as exc:
+        log.error("checkpoint claim failed for %s at %s: %s", loop_id, path, exc)
+        return None
+
+
+def release_checkpoint_claim(path: Path, permit: str) -> bool:
+    """Remove OUR claim (the one whose nonce is `permit`) from `path` —
+    only for a run refused BEFORE its first step (nothing ran, so nothing
+    to prove later). True when the file no longer carries our claim
+    (removed now, or already gone); False when it still does (the write
+    failed): the file then reads as claimed until the operator reclaims it.
+    Never touches another claim, and never a consumed file's record."""
+    try:
+        real = Path(os.path.realpath(path))
+
+        def _commit(cur_text: str) -> Optional[str]:
+            # Under the per-file lock (r3 finding 5): a file another writer
+            # replaced in the meantime no longer carries our nonce → left
+            # exactly as it is (None = no write), never overwritten with
+            # the stale snapshot we read.
+            try:
+                data = json.loads(cur_text)
+            except Exception:
+                return None
+            claim = data.get("resume_claim") if isinstance(data, dict) else None
+            if not isinstance(claim, dict) or claim.get("nonce") != permit:
+                return None
+            del data["resume_claim"]
+            return json.dumps(data, indent=2)
+
+        from file_lock import locked_rmw
+        locked_rmw(real, _commit)
+        _fsync_dir(real)
+        back = json.loads(real.read_bytes().decode("utf-8"))
+        return (back.get("resume_claim") or {}).get("nonce") != permit
+    except Exception as exc:
+        log.error("checkpoint claim release failed at %s: %s", path, exc)
+        return False
+
+
+@dataclass(frozen=True)
+class ResumePermit:
+    """What a run holds on the source it resumed (chunk 9): the exact file
+    the claim was written to, the claim's nonce (the claim reads as ours
+    only when it matches — never by pid), and the loop the source records
+    (what consumption names). Handed from admission (the CLI's claim or
+    `_load_resume`'s) to the loop; released by `finalize_refusal` when the
+    run is refused before its first step, SETTLED by the loop's own
+    finalize when it ends done (`settle_resume_source`)."""
+    source: Path
+    nonce: str
+    source_loop_id: str
+
+
+def permit_of(ckpt: "Checkpoint") -> Optional["ResumePermit"]:
+    """The permit a claimed object carries, or None when it carries none —
+    or names no loop (an empty id could never match a file, r1 Architect 7)."""
+    src = getattr(ckpt, "resume_source", None)
+    nonce = getattr(ckpt, "resume_permit", None)
+    loop_id = str(getattr(ckpt, "loop_id", "") or "")
+    if not src or not nonce or not loop_id:
+        return None
+    return ResumePermit(Path(src), str(nonce), loop_id)
+
+
+def consume_claimed(permit: "ResumePermit", *, successor_loop_id: str) -> bool:
+    """Consume the source `permit` names, ONLY while it still carries OUR
+    claim (r1 Architect 3: the typed permit must authorize the mutation it
+    represents): under the per-file lock the file must record
+    `permit.source_loop_id` and a `resume_claim` whose nonce is
+    `permit.nonce` — a file another writer replaced (a fresh unconsumed
+    snapshot of the same loop, another run's claim) is left exactly as it
+    is. The lock is mandatory (`require=True`), the path is the pinned
+    canonical address (a symlink there is refused), the write is the
+    checkpoint module's `atomic_write` (its failures are this module's
+    failures) and the record is read back: True only when the bytes say
+    consumed to this successor."""
+    try:
+        real = Path(permit.source)          # pinned at admission; never re-resolved
+        if real.is_symlink():
+            log.error("resume source %s became a symlink after admission — not consumed", real)
+            return False
+        from file_lock import locked_write
+        # require=True: the operator's fail-open escape hatch must not turn
+        # this compare-and-consume into an unlocked read-then-write (r2).
+        with locked_write(real, require=True):
+            data = json.loads(real.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or str(data.get("loop_id") or "") != permit.source_loop_id:
+                log.error("resume source %s no longer records loop %s — not consumed",
+                          real, permit.source_loop_id)
+                return False
+            claim = data.get("resume_claim")
+            if not isinstance(claim, dict) or claim.get("nonce") != permit.nonce:
+                log.error("resume source %s no longer carries this run's claim — not consumed", real)
+                return False
+            if data.get("consumed_at") and str(data.get("resumed_to_loop_id") or "") != successor_loop_id:
+                log.error("resume source %s is already consumed by %s — not consumed",
+                          real, data.get("resumed_to_loop_id"))
+                return False
+            data["consumed_at"] = datetime.now(timezone.utc).isoformat()
+            data["resumed_to_loop_id"] = successor_loop_id
+            atomic_write(real, json.dumps(data, indent=2))
+            _fsync_dir(real)
+        back = json.loads(real.read_bytes().decode("utf-8"))
+        return bool(back.get("consumed_at")) and str(back.get("resumed_to_loop_id") or "") == successor_loop_id
+    except Exception as exc:
+        log.error("resume source %s could not be consumed: %s", permit.source, exc)
+        return False
+
+
+def source_is_settled(source: Path, *, source_loop_id: str, successor_loop_id: str) -> bool:
+    """True when the SOURCE file can no longer replay: the successor
+    durably overwrote it with a complete checkpoint (a handle resume
+    writes into the same run dir — proven by re-reading the exact source
+    path, since checkpoint writes swallow their own failures), or it is
+    consumed in place naming this successor. A re-read failure is False.
+    `source` is the PINNED canonical address the claim was written to
+    (admission resolved the alias once): it is not resolved again, and a
+    symlink appearing there is refused (r2: re-resolving followed a
+    retargeted link to a decoy)."""
+    try:
+        if Path(source).is_symlink():
+            log.error("resume source %s became a symlink after admission — not settled", source)
+            return False
+        after = _read_candidate(Path(source), None)
+    except Exception:
+        return False
+    if after is None or not after.found:
+        return False
+    c = after.ckpt
+    if c.loop_id == successor_loop_id and c.is_complete():
+        return True
+    return bool(c.loop_id == source_loop_id and c.is_consumed()
+                and c.resumed_to_loop_id == successor_loop_id)
+
+
+def settle_resume_source(permit: "ResumePermit", *, successor_loop_id: str) -> bool:
+    """A successful resume must leave its SOURCE unable to replay (chunk-6
+    r2 HIGH 3): overwritten by the complete successor, or consumed in
+    place — consumed here when the re-read proves neither. ONE consumer,
+    the loop's own finalize (chunk 9; chunk 7 r1 Architect 3: the API path
+    claimed but never consumed, so a finished library resume left its
+    source claimed — refused later as live/superseded, correct but
+    opaque). False when the source still replays after our best effort:
+    the caller must not report done. Consumption is `consume_claimed`: a
+    compare-and-consume on the claim's nonce under the file lock."""
+    if source_is_settled(permit.source, source_loop_id=permit.source_loop_id,
+                         successor_loop_id=successor_loop_id):
+        return True
+    if not consume_claimed(permit, successor_loop_id=successor_loop_id):
+        return False
+    return source_is_settled(permit.source, source_loop_id=permit.source_loop_id,
+                             successor_loop_id=successor_loop_id)
+
+
+def release_own_claim(ckpt: Any) -> bool:
+    """`release_checkpoint_claim` for the object a claim came back as."""
+    src = getattr(ckpt, "resume_source", None)
+    permit = getattr(ckpt, "resume_permit", None)
+    if not src or not permit:
+        return True
+    return release_checkpoint_claim(src, permit)
+
+
+RESUME_CLAIM_LIVE = "live"                  # the claimant process is still running
+RESUME_CLAIM_SUPERSEDED = "superseded"      # the claimant wrote a successor checkpoint
+RESUME_CLAIM_UNRESOLVED = "unresolved"      # claimant dead, successor PROVEN absent
+RESUME_CLAIM_INDETERMINATE = "indeterminate"  # claimant dead, successor record unreadable
+
+
+def _successor_addresses(ckpt: "Checkpoint",
+                         claim: Dict[str, Any]) -> List[Tuple[Path, Optional[str]]]:
+    """Every (address, expected loop id) the claimed successor's checkpoint
+    can live at: the claimed run dir's file (no identity — a handle resume
+    shares it with the source, so "another loop" is the test), and (an API
+    resume with no run dir, or an `open_run` that failed — r1 Skeptic 8)
+    the id-addressed file of the successor loop the claim names, which
+    must name THAT loop (a stale file naming a third loop is not proof —
+    r2 finding 6)."""
+    from runs import run_dir
+    out: List[Tuple[Path, Optional[str]]] = [
+        (run_dir(claim["handle_id"]) / "build" / "checkpoint.json", None)]
+    succ_id = claim.get("successor_loop_id") or ""
+    if succ_id and succ_id != ckpt.loop_id:
+        p = _checkpoint_path(succ_id)
+        if p != out[0][0]:
+            out.append((p, succ_id))
+    succ_path = claim.get("successor_path") or ""
+    if succ_path and Path(succ_path) not in [a for a, _ in out]:
+        out.append((Path(succ_path), succ_id or None))
+    return out
+
+
+def resume_claim_status(ckpt: "Checkpoint") -> Tuple[Optional[str], str]:
+    """What an unconsumed checkpoint's `resume_claim` means for a NEW resume,
+    as (state, detail): None (no claim, or the claim THIS object's holder
+    wrote — `resume_permit` matches the nonce), `live`, `superseded` (a
+    successor checkpoint naming another loop exists — resume THAT),
+    `unresolved` (claimant dead, every successor address PROVEN absent:
+    what it executed is unknown, and unknown is not "nothing" — the
+    operator decides with `--reclaim`), or `indeterminate` (claimant dead
+    and a successor address could not be read: no override opens it; the
+    detail names the address)."""
+    claim = ckpt.resume_claim
+    if not claim or ckpt.is_consumed():
+        return None, ""
+    if ckpt.resume_permit and claim.get("nonce") == ckpt.resume_permit:
+        return None, ""
+    pid = int(claim.get("pid") or 0)
+    from process_identity import owner_is_current
+    if owner_is_current(pid, claim.get("token")):
+        return RESUME_CLAIM_LIVE, ""
+    try:
+        addresses = _successor_addresses(ckpt, claim)
+    except Exception as exc:
+        return RESUME_CLAIM_INDETERMINATE, f"successor address for run {claim.get('handle_id')}: {exc}"
+    unreadable = ""
+    for addr, want in addresses:
+        succ = _read_candidate(addr, want)
+        if succ.found:
+            if succ.ckpt.loop_id != ckpt.loop_id:
+                return RESUME_CLAIM_SUPERSEDED, ""
+            continue          # the source itself (a handle resume shares the file)
+        if succ.state != LOOKUP_ABSENT and not unreadable:
+            unreadable = succ.detail or f"{addr} could not be read"
+    if unreadable:
+        return RESUME_CLAIM_INDETERMINATE, unreadable
+    return RESUME_CLAIM_UNRESOLVED, ""
+
+
+def resume_claim_state(ckpt: "Checkpoint") -> Optional[str]:
+    return resume_claim_status(ckpt)[0]
+
+
+def resume_claim_detail(ckpt: "Checkpoint", state: str, extra: str = "") -> str:
+    claim = ckpt.resume_claim or {}
+    h, p = claim.get("handle_id", "?"), claim.get("pid", "?")
+    if state == RESUME_CLAIM_LIVE:
+        return (f"a resume of loop {ckpt.loop_id} is in progress as run {h} "
+                f"(pid {p}) — wait for it")
+    if state == RESUME_CLAIM_SUPERSEDED:
+        return (f"loop {ckpt.loop_id} was already resumed as run {h}, which has its "
+                f"own checkpoint — resume that instead: maro resume {h}")
+    if state == RESUME_CLAIM_INDETERMINATE:
+        return (f"loop {ckpt.loop_id} was claimed by a resume as run {h} (pid {p}, now "
+                f"dead) whose checkpoint cannot be read ({extra}) — repair or remove "
+                "that record before resuming this checkpoint (--reclaim does not apply)")
+    return (f"loop {ckpt.loop_id} was claimed by a resume as run {h} (pid {p}, now "
+            "dead) that left no checkpoint — what it executed is unknown; inspect "
+            f"run {h}, then re-run with --reclaim to resume from this checkpoint anyway")
 
 
 def delete_checkpoint(loop_id: str) -> None:
@@ -525,10 +1512,9 @@ def export_human(loop_id: str) -> Optional[str]:
     if ckpt is None:
         return None
 
-    done_count = sum(1 for s in ckpt.completed if s.status == "done")
+    done_count = ckpt.done_count
     blocked_count = sum(1 for s in ckpt.completed if s.status == "blocked")
     total = len(ckpt.steps)
-    completed_indices = {s.index for s in ckpt.completed}
 
     status_parts = [f"{done_count}/{total} steps done"]
     if blocked_count:
@@ -550,14 +1536,23 @@ def export_human(loop_id: str) -> Optional[str]:
         "",
     ]
 
-    # Build an index of completed steps by their 1-based index
-    completed_by_index: Dict[int, CompletedStep] = {s.index: s for s in ckpt.completed}
+    # Completed steps by their 1-based plan position (older files: index);
+    # a positioned file's history rows (position 0) never claim a slot.
+    completed_by_index: Dict[int, CompletedStep] = {}
+    for s in ckpt.completed:
+        _key = s.position if ckpt.positioned else s.index
+        if _key > 0:
+            completed_by_index[_key] = s
 
     for i, step_text in enumerate(ckpt.steps, 1):
         cs = completed_by_index.get(i)
         if cs is not None:
             icon = "✓" if cs.status == "done" else "✗"
             status_label = cs.status
+            if cs.item_mark == "pending":
+                status_label += " (NEXT.md mark pending)"
+            elif cs.item_mark == "drifted":
+                status_label += " (NEXT.md mark not applied — the item no longer names this step)"
         else:
             icon = "·"
             status_label = "pending"
@@ -595,6 +1590,18 @@ def branch_checkpoint(loop_id: str) -> Optional[str]:
     if ckpt is None:
         log.warning("branch_checkpoint: no checkpoint found for %s", loop_id)
         return None
+    if ckpt.is_consumed():
+        # A consumed source was resumed successfully; a branch of it would
+        # carry the same remaining plan without the marker (r3 HIGH 3).
+        log.warning("branch_checkpoint: %s was already resumed as %s — not branching",
+                    loop_id, ckpt.resumed_to_loop_id or "a newer loop")
+        return None
+    if ckpt.resume_claim:
+        # A claimed source is being (or was) resumed; a branch would drop
+        # the claim and carry the same remaining plan (r1 Skeptic 2).
+        log.warning("branch_checkpoint: %s is claimed by a resume as run %s — not branching",
+                    loop_id, ckpt.resume_claim.get("handle_id"))
+        return None
 
     new_loop_id = uuid.uuid4().hex[:8]
     branch = Checkpoint(
@@ -605,11 +1612,19 @@ def branch_checkpoint(loop_id: str) -> Optional[str]:
         completed=list(ckpt.completed),
         parent_loop_id=loop_id,
         world_facts=list(ckpt.world_facts) if ckpt.world_facts else None,
+        regression=list(ckpt.regression) if ckpt.regression else None,
+        # The rows travel with their position semantics — a branch of a
+        # positioned file read as legacy would take item numbers for
+        # positions (the very bug `positioned` exists to name).
+        positioned=ckpt.positioned,
+        step_items=list(ckpt.step_items) if ckpt.step_items else None,
+        plan_items=list(ckpt.plan_items) if ckpt.plan_items else None,
+        parallel_fan_out=int(ckpt.parallel_fan_out or 0),
     )
     path = _checkpoint_path(new_loop_id)
-    path.write_text(json.dumps(branch.to_dict(), indent=2), encoding="utf-8")
-    log.info("branch_checkpoint: %s -> %s (%d/%d steps carried over)",
-             loop_id, new_loop_id, len(branch.completed), len(branch.steps))
+    atomic_write(path, json.dumps(branch.to_dict(), indent=2))
+    log.info("branch_checkpoint: %s -> %s (%d/%d steps done carried over, %d rows)",
+             loop_id, new_loop_id, branch.done_count, len(branch.steps), len(branch.completed))
     return new_loop_id
 
 
@@ -646,7 +1661,7 @@ def _cli_main() -> None:
             print("No checkpoints found.")
             return
         for c in ckpts:
-            done = len(c.completed)
+            done = c.done_count
             total = len(c.steps)
             branch_tag = f"  [branch of {c.parent_loop_id}]" if c.parent_loop_id else ""
             print(f"{c.loop_id}  {done}/{total}  {c.timestamp[:19]}  {c.goal[:55]}{branch_tag}")

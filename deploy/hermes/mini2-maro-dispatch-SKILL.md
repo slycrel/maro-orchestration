@@ -211,12 +211,88 @@ ssh maro-dispatch "status <job_id>"
 Non-`done` outcomes carry their own explanation (added 2026-07-16):
 
 - `clarification_needed` → `clarification_question` holds the exact question
-  Maro needs answered. Relay it to the user verbatim, then re-dispatch the
-  goal with the answer appended.
+  Maro needs answered. Relay it to the user verbatim, then pass their reply
+  back with `answer` (below) — the SAME run resumes. Do not re-dispatch the
+  goal: a re-dispatch is a new run that has to rediscover everything.
 - `incomplete` → `goal_verdict_gaps` lists what the verifier found missing
   (the truncated `goal_verdict_summary` alone can be misleading).
 - Any preflight-terminated run → `result_excerpt` carries the full result
   text (question, guard refusal, or error detail).
+
+## Answer a question (added 2026-09-06)
+
+```bash
+ssh maro-dispatch "answer <job_id|handle_id> <the user's answer, verbatim>"
+```
+
+A run that cannot proceed without something only the user has (a code sent
+to them, a choice that is theirs, a credential the box lacks) PAUSES and
+pushes an `operator_question` event (`.question`, `.why`,
+`.no_input_alternative` = what Maro tried first, `.deadline`, `.handle_id`).
+Relay the question; when the user replies, send their words with `answer`.
+The response is a dispatch record (`job_id`, `handle_id`, `late`) for the
+resume — poll it like any dispatch. The run resumes under its own
+identity with the answer in its next step's context; nothing is re-planned
+from scratch. `late: true` means the time box had passed — the resume still
+happens. Asking is Maro's rare exception, not a step: if a run asks for a
+decision or permission it could have made itself, say so to Jeremy — every
+ask is a counted, reviewed event (`maro asks` on the box).
+
+## Live questions (added 2026-09-07)
+
+An `operator_question` event with `.live: true` is not a paused run: the
+worker is still running and polling for the answer for at most `.wait_s`
+seconds (a 2FA code it just had sent — `.sent` says how). Relay it the
+moment it lands, lead with the minutes left, and pass the reply back with
+the same verb:
+
+```
+ssh maro-dispatch "answer <handle_id> <the code or reply>"
+```
+
+The gate answers `{"status": "delivered"}` — the waiting step reads it;
+there is no resume job to watch. If the window closed before the reply,
+the same question is now a normal pause and the same verb resumes the run
+(`"status": "dispatched"`). Maro checks its own questions before sending
+them (links must resolve; a code request must say how delivery was
+triggered); when `.unverified` is present, say plainly what it could not
+verify.
+
+## Decide an install request (added 2026-09-07)
+
+A containerized run that lacks a tool asks the ENGINE for it, not you: in
+policy (ordinary apt/pip/npm packages) the box builds a per-project image
+layer and re-runs the step on its own — you hear nothing. Out of policy
+(a source not enabled, or a package on the deny list: sudo, ssh, docker,
+systemd, cron…) the run pauses and pushes an `escalation` event with
+`.point == env_request` and `.audience == orchestrator`. **That decision is
+yours** (decree 2026-09-07: the orchestrator guides in place of the user;
+the user gets involved only if they must):
+
+```bash
+ssh maro-dispatch "answer <handle_id> allow"            # grants + builds + resumes
+ssh maro-dispatch "answer <handle_id> deny <why>"       # resumes without it
+```
+
+Allow ordinary tooling for the stated need (`.request` by source,
+`.summary` = what for, `.reason` = why policy escalated) and tell Jeremy in
+one line what you allowed. Deny packages unrelated to the need, ones that
+replace the box's services with no stated reason, or enormous ones. Involve
+Jeremy only when the request touches his accounts, money, or the box's
+role. `allow` records a project grant on the box, so the same package never
+escalates again for that project; `maro asks` lists these as `[install]`.
+
+## Run-report identity and stale-loop diagnosis
+
+When a user asks whether a Maro web report is the right run—or says its goal is right but its step results/conclusion are wrong—**do not infer identity from a report URL or a dispatch list alone.** Resolve the dispatched job first:
+
+1. Run `status <job_id>` and then `result <job_id>`. Record `handle_id`, `nickname`, terminal status, `result_path`, and `goal_verdict_*` fields.
+2. The expected web run directory is `<handle_id>-<nickname>`; compare it with the report URL path. A match establishes the **handle**, not automatically the correct loop attempt.
+3. Compare the report URL's `loop-<id>-report.html` with the final `run_card.result_path` and the run's loop lineage. One handle may contain an initial loop plus recovery/closure loops; an earlier loop can have correct goal text but stale steps and a misleading conclusion.
+4. Say precisely which mismatch is observed: different handle, different loop within the same handle, or no evidence yet. Never claim a routing/model problem merely from a stale report link.
+5. If the report/index is wrong, inspect the index generator before proposing a fix. The safe rendering contract is: row click targets the latest ledger loop's report; if it was not rendered, target the curated final result and label earlier reports explicitly. Add a regression test with lexically misleading loop IDs.
+
+See [run-report identity reference](references/run-report-identity.md) for a verified 2026-08 example and acceptance checks.
 
 ## Pushed events — check the inbox FIRST (added 2026-07-17)
 
@@ -247,6 +323,8 @@ file to `processed/`.
   `~/.hermes/inbox/maro/processed/`.
 - No event file for a job you dispatched = the run is still going (or the
   push leg failed) — THEN use `status <job_id>` over ssh.
+- An `operator_question` event means the run is PAUSED waiting on the user:
+  relay it as a question, and send the reply back with `answer` (above).
 
 ## Fetch the final result
 

@@ -108,6 +108,14 @@ worker transcripts actually use.
 > Fallback for hosts where the image can't be built: mount the host binary —
 > proven in the trial, documented as the degraded mode.
 
+**Per-project layers (2026-09-07, `docs/ENV_REQUEST_DESIGN.md`):** the base
+image above stays fixed; a run that lacks a tool requests it by file and the
+engine builds `maro-executor:p-<project>-l<N>-<cli>-r<rev>` from a generated
+Dockerfile (`FROM <base>` + package lines) under
+`<workspace>/executor-layers/<project>/`. Root at build time only; the
+runtime `--user` line is unchanged. `llm._run_subprocess_safe` picks the
+project image when one exists for the current base.
+
 ### Auth — the trap, named
 
 The claude CLI's OAuth state lives under `~/.claude` and the CLI **writes**
@@ -151,6 +159,866 @@ carries a `container_auth` liveness row (SILENT while tripped). Operator
 tip learned during the 08-13 re-seed: the interactive `/login` URL
 truncates when the TUI wraps it at terminal width — `stty cols 400` first,
 or de-wrap the copied URL in an editor.
+
+**Recurred 2026-09-12.** The volume re-seeded 2026-08-13 expired again
+(~30 days: the refresh token's lifetime, so expect this monthly until a
+liveness probe or a re-seed cadence exists). Run 68cbde81 paused
+`llm-unreachable` (honest); 90 s later the breaker had tripped and run
+154ec06a's steps ran on the HOST under `on`'s degrade — where the worker
+decrypted the secrets store with the age identity instead of reading the
+hand-off file (`docs/SECRETS_DESIGN.md` §9). Two conclusions: `on`'s
+degrade-to-host was designed when the box held no store worth protecting
+and is now the wrong default — `require` (refuse → typed pause) is the
+recommended setting; and the breaker is reactive by design ("liveness is
+not probed"), so the first casualty of every expiry is a real run. Re-seed
+recipe unchanged: interactive `/login` inside the container (`stty cols
+400` first so the URL survives the TUI wrap).
+
+**`require` on the runtime box (2026-09-13, Jeremy: "let's add the require
+lane then test it with a re-auth").** Flipped `executor.container: require`
+in the live config while the breaker was still tripped and proved the
+refusal path first (`resolve_container_run(executor=True)` →
+`ContainerUnavailable: executor.container=require but the container lane is
+unavailable: container auth breaker tripped (...)`) — no host degrade
+possible any more. Jeremy re-seeded the volume by interactive `/login`
+(07:17Z; note `claude /login` always starts a fresh login and never checks
+for an existing one, so a second invocation prompts again — harmless, Ctrl-C
+out). The breaker cleared on its own at the next resolve (credentials file
+live-shaped and newer than the trip; state file removed), a direct
+`claude -p` probe in the image answered, and run 520e1b8c (the same IMAP
+inbox check as 154ec06a) executed all seven executor calls in
+`maro-exec-520e1b8c-<pid>-{0..6}` containers: uid 1001, project-layer
+image `p-weve-used-chrome-on-the-l3`, auth volume mounted, `YAHOO_*` names
+arriving through the container env (no `secrets.env` hand-off file in the
+run's scratch — the host path was never taken). Same deliverable as the
+host-lane run (32 messages, five newest) at $2.70. Best evidence for the
+wall: step 2's worker went looking for the store and the sops/age tooling
+(the project's own `docs/mail_yahoo.md`, written by the 09-12 host-lane
+worker, still describes a "sops fallback") and found neither — the
+container mounts no `~/.maro/secrets` and ships no `sops`/`age`. Wording
+is a fence; the container is the wall. Residuals unchanged: typed pause
+`container-auth-expired` (today `require` surfaces as `ContainerUnavailable`
+→ the generic environmental pause), and an auth liveness probe so the
+monthly expiry is caught before a run is.
+
+**Both residuals closed the same day (2026-09-13).** (a) *Typed pause.* A
+`require` refusal caused by the breaker now raises
+`ContainerAuthExpired(ContainerUnavailable)` carrying the type marker
+`maro_error_class = "container_auth"`; `llm_errors.classify_error` keys on
+the marker (never on text — a worker step that merely mentions auth cannot
+ride it) and returns a pause-shaped policy (no retry, no failover: the API
+lane would run the worker *outside* the container the contract demands);
+`stop_verdicts.pause_reason_for_error_class` maps it to the new
+`container-auth-expired` reason, so loop_execute ends the run `interrupted`
+with the typed pause on the first refusal — one step, no blocked-step churn
+— and the continuation lane's resume test accepts it once the operator
+re-seeds and the breaker self-clears (on the first executor call after its
+300 s recheck cadence; shape-only when the volume's expiry is unknown).
+Before this the refusal was
+classified FATAL/auth by text and the run churned retries. Docker-down keeps
+the base `ContainerUnavailable` and its old handling. (b) *Liveness.* The
+breaker stays reactive, but the session's own end is knowable in advance:
+the volume's credentials carry `refreshTokenExpiresAt` — the ~30-day
+lifetime whose end IS the monthly outage (the access token is refreshed by
+every run). The heartbeat records it on its own cadence
+(`container_exec.refresh_auth_liveness`: one read-only docker run per 6 h,
+**timestamps only** — credential bytes never transit to the host, same rule
+as the re-seed probe — into `memory/container_auth_liveness.json`), and the
+`container_auth` health probe reads that file (no docker in a probe) and
+goes SILENT — captain's log + the health card — while there are ≤ 3 days
+left (`AUTH_EXPIRY_WARN_DAYS`: covers a weekend, is not standing noise the
+other 27 days) or the token is gone. Live on the runtime box: "refresh token
+valid until 2026-10-12 04:21Z (29 d)". Doctor's `--live` login probe is
+unchanged (it spends a token; the record does not).
+
+*Review round 1 (2026-09-13, codex ×4) found the typed pause unwired on
+the literal path and the recorder too trusting; both fixed before landing.*
+(i) The worker's real adapter stack is `FailoverAdapter([ClaudeSubprocess…])`,
+and the wrapper re-raises an actionable failure as `BackendError(info)` —
+re-classifying the *wrapper's text* lost the marker and the refusal came
+back as a generic auth failure. `classify_error` now returns a
+`BackendError`'s own `ErrorInfo` first (the wrapper already decided);
+`test_pause_reasons.py::TestContainerAuthPauseThroughTheRealWrapper` pins the
+literal composition (no subprocess launched, no circuit trip, no host
+`/login` alert). (ii) The fan-out/DAG path turned a blocked `container_auth`
+outcome into `stuck` and the batch path only logged it; every path now
+consults one seam, `stop_verdicts.environmental_pause_for(outcome)`, stamps
+`ctx.pause_reason`, and ends the loop `interrupted` — the sequential driver
+also stops scheduling after a paused batch. (iii) `_reseed_probe` counted
+`refreshToken` key *text* (`grep -c`), so a wiped file keeping
+`"refreshToken": null` read as re-seeded; both the re-seed probe and the
+liveness recorder now share one exact-field reader (a python one-liner in
+the read-only container printing four integers: mtime, refresh-present
+flag, the two expiries; never a traceback that could carry bytes). The host
+parser accepts exactly that frame and nothing else. (iv) The liveness record
+is validated on read (`_valid_liveness_record`: real bools, finite bounded
+timestamps, `checked_at` not in the future) and read as *stale* — verdict
+`unknown`, not `ok` — after 48 h without a refresh; a failed probe keeps the
+prior good sample as `last_good` so a docker outage cannot narrate
+`SUBSYSTEM_RECOVERED` over a live expiry warning; the refresh runs under the
+record's lock so overlapping heartbeats launch one container, and a failed
+persist is a logged warning, not a silent `None`.
+
+*Review round 2 (2026-09-13, codex skeptic + QA on the whole chunk) attacked
+the fixes and found three more HIGHs on the pause's path, all fixed before
+landing.* (v) The tool_search re-call's handler sits *outside* the initial
+call's `except`, so the round-1 "re-raise into the outer handler" escaped
+`execute_step` (uncaught on the sequential driver, stringified by the
+fan-out pool). One helper, `step_exec._blocked_outcome_from_exc`, now builds
+the typed blocked outcome for both adapter calls, keeping the first call's
+spend. (vi) The fan-out/DAG early return in `agent_loop` bypasses
+`loop_finalize`, whose stop-verdict stamp is the ONLY writer of
+`metadata.pause_reason` — and `handle_queue`'s strict-affirmative resume
+test reads exactly that, so a paused parallel run restarted under a new
+identity. The early return now stamps the pause with the same writer.
+(vii) The real schedulers kept going: `_run_steps_dag` released dependents
+regardless of the dep's outcome and `_run_steps_parallel` queued every step
+upfront, so a refusal walked the whole graph before the caller saw it. A
+halt flag set *in the worker* (a pool thread picks its next queued task
+before the main thread sees the refusal) makes every later task return a
+"not started — environmental pause" outcome without an adapter call; the
+DAG submits nothing further; in-flight peers drain. Mediums: the health
+probe maps an *unknown* liveness verdict (never recorded, stale, or a
+failed probe with nothing good to fall back on) to `UNKNOWN`, not `OK` —
+`run_health_probes` narrates RECOVERED on OK-after-SILENT, so "we lost sight
+of it" was being told as "healed"; the recorder takes its lock with
+`require=True` (under `MARO_FILELOCK_FAIL_OPEN` the default contract runs
+unlocked — the overlap race in the fix's clothes) and leaves the record
+alone when the lock is busy; `_reseed_probe` rejects a rewritten file whose
+refresh token is already past the expiry the reader hands back; the
+container script exits 1 with a fixed message for a missing/unreadable/
+wrong-shape file (a failed observation that keeps `last_good`) instead of
+printing the zero frame that read as "wiped"; the record validator is total
+(`math.isfinite(10**400)` raised inside the reader and made every refresh
+fail forever) and `last_good` nests one level; and the director lane —
+`workers.dispatch_worker` is a second `executor=True` caller — now carries
+the structured `error_class` on `WorkerResult` and stops dispatch (no
+review, no revision, no further tickets) on an environmental refusal,
+returning `DirectorResult.pause_reason`.
+
+*Review round 3 (2026-09-13, codex skeptic + QA, whole chunk) found one HIGH
+in the round-2 fixes and two carry-through gaps; fixed before landing.*
+(viii) The DAG worker *checked* the halt flag but never *set* it — only the
+coordinator did, after consuming the future — so with more ready roots than
+workers a pool thread picked the next queued root before the coordinator
+woke (probe: three independent roots, one worker, adapter calls `[1, 2, 3]`).
+The DAG worker now sets the flag the moment it holds an environmental
+outcome, exactly as fan-out does, and the coordinator cancels what is still
+pending; pinned with the queued-roots shape plus its plain-block control.
+(ix) The tool_search re-call's `TokenRunawayError` re-raise sat in the same
+outside-the-handler position the round-2 fix had just closed for
+environmental errors, and `BudgetRunawayError` fell through losing its
+class. Every *terminal* class (token brake, cost circuit, environmental)
+now goes through the one outcome builder, whose runaway accounting ADDS the
+kill's ingest to the first call's spend instead of replacing it. (x) The
+director's pause lived only on the returned object: the report (Telegram's
+entire reply), `summary()`, the durable director log and both CLI JSON
+twins said "stuck" with no remedy, and the skip-director branch dropped the
+loop's pause. A paused directive now gets a deterministic report (pause,
+the refusal's own remedy text, tickets not dispatched, finished output
+verbatim — no compile call spent on refused work); the log carries
+`pause_reason` plus each blocked worker's `error_class`/`stuck_reason`; the
+serializers and `summary()` carry the pause; skip-director forwards the
+loop's.
+
+*Review round 4 (2026-09-13, codex skeptic + QA, whole chunk) found one
+HIGH the earlier rounds' fixtures could not see and four carry-through
+gaps; fixed before landing.* (xi) **The first casualty.** Every test so far
+began with the breaker already tripped. The CLI auth failure that *trips*
+it (llm.py's subprocess site) raised a `RuntimeError` marked
+`container_auth_owned` but not classed — text classification called it a
+HOST login failure: wrong remedy, no pause, and only the *next* executor
+call (resolver → `ContainerAuthExpired`) paused. Under `require` that
+error now carries `maro_error_class = "container_auth"` too, so the monthly
+expiry's first run pauses typed; under `on` the lane degrades to the host
+by design and the step stays an ordinary block (both pinned through the
+real subprocess adapter with a faked CLI auth result). (xii) A fan-out
+worker that finished *after* the deadline had its real outcome — spend, and
+the refusal that set the halt — discarded behind the synthetic timeout row;
+the pool's exit waits for those workers, so their outcomes now replace the
+rows. (xiii) Progress printing ran *before* the halt/commit in the DAG
+worker and before the stamp in the batch coordinator; a closed stderr
+(`BrokenPipeError`) replaced a refusal with "execution error" and the DAG
+carried on. Every progress line in loop_parallel goes through one
+never-fatal `_say`, and commit/stamp precede presentation. (xiv) A
+*successful* tool_search re-call replaced `resp`, so every outcome
+constructor read only the second call's tokens (cost was summed, tokens
+dropped); the first call's usage is folded into the replacement response.
+(xv) The skip-director branch — Telegram's whole reply — said "[no output]"
+for a paused loop; it now uses the same deterministic pause renderer as the
+full director path, and a director log that fails to persist is a logged
+warning naming the director id, not a silent `None`. Also from this round:
+CI's repo tripwires (destructive-rewrite triage manifest, truncation
+discipline) had been red since the chunk's first commit while the targeted
+local suites were green — the new credentials reader is now triaged in the
+manifest (the old `_reseed_probe` line-framer retired) and the three bare
+`[:N]` cuts on rationale strings use `context_budget.clip`.
+
+*Review round 5 (2026-09-13, codex skeptic + QA, whole chunk) found two
+HIGHs in branch twins of the round-4 fixes and three carry-through gaps;
+fixed before landing.* (xvi) **The rate-limit retry twin of the first
+casualty.** A containerized call that was rate-limited and whose *retry*
+died of the expired session broke out of the retry loop and raised the
+generic "claude rate-limited after N retries" error — past the breaker,
+past the round-4 class marker: host `/login` remedy, no pause, and the
+healthy HOST subprocess circuit tripped. A retry that dies of something
+other than a rate limit now falls through to the generic failure path
+(breaker, class marker, real detail); only a still-rate-limited or
+capped-out retry raises the rate-limit error. (xvii) **Never-fatal output
+had two more siblings:** the director's `_log` (both pause branches ran it
+before the typed result, report or log existed) and the sequential loop's
+pause print plus the finalize summary print (both precede the metadata
+stamp the resume test reads). All guarded. (xviii) **DAG post-deadline
+twin** of the round-4 fan-out reconcile: a queued root's early "not
+started" return was never committed, so the coordinator's synthetic "dag
+timeout" row stood for a step that never ran — the worker now commits it
+under the lock. (xix) **A refused revision erased its draft:** the revision
+call overwrote the ticket's result, so the paused directive's report and
+log lost the paid-for draft — carried as `unaccepted_draft`, rendered in
+the pause report as unaccepted work. (xx) **The non-verbose heartbeat
+dropped the expiry warning** (recorded, but only printed under verbose)
+and the health narration rode goal-run closure only — an idle box never
+heard it. The heartbeat now surfaces it as a `container_auth` check and
+runs `run_health_probes(only=("container_auth",))` — the same
+edge-triggered, deduplicated narration, one probe, no cycle advance, no
+per-tick Telegram (health status untouched). Side-find outside the chunk:
+`tests/test_hermes_dispatch.py` wrote a run dir into the LIVE workspace
+because `deploy/hermes/dispatch.py` pops every workspace var at import
+(`c1234567-patient-yarrow`, 2026-09-07; left in place — run data is never
+auto-deleted); the test now isolates after the load.
+
+*Review round 6 (2026-09-13, codex skeptic + QA, whole chunk) found two
+HIGHs in the retry loop's remaining twins and three carry-through gaps;
+fixed before landing.* (xxi) **The terminal result decides.** A stream
+carrying a rejected `rate_limit_event` *and* ending in "OAuth session
+expired" still counted as rate-limited (another backoff cycle, then the
+rate-limit error past the breaker). `_rate_limited_failure` now lets an
+explicit terminal error result naming an auth failure outrank any earlier
+rate-limit evidence; the entry and the retry share it. (xxii) **A retry
+that times out is not replayed.** `TimeoutExpired` inside the retry loop
+`continue`d — a killed executor step (which may have acted) was launched
+again, and on exhaustion the stale rate-limit text was the cause and the
+timeout's partial output was gone. It now raises the initial call's own
+timeout error (kill reason + `maro_partial_output`), backoff persisted.
+(xxiii) **The heartbeat delivers OK observations too.** Round 5 ran the
+one-probe health cycle only on warn/expired, so a heartbeat-only box never
+re-armed (`narrated="silent"` forever) and the *next* expiry's warning was
+swallowed. Every sample now feeds the edge; the composed test proves
+SILENT → RECOVERED → SILENT through the real state machine. (xxiv) **The
+health transaction requires its lock** (`locked_write(..., require=True)`,
+busy → cycle skipped whole: no probe, no write, no narration); under
+`MARO_FILELOCK_FAIL_OPEN` the default contract proceeded unlocked and two
+cycles could double- or lose-narrate. (xxv) **`maro doctor` reads the
+expiry record** — a fifth container row, "Container auth session": ok /
+WARN / EXPIRED from the heartbeat's liveness record, and "expiry NOT
+ESTABLISHED" named as such (the breaker row is reactive: clear right up to
+the first casualty, so a known-expired session showed four green rows).
+Closes the round-4 residual.
+
+*Review round 7 (2026-09-13, codex skeptic + QA, whole chunk) found two
+HIGHs — one of them older than the chunk — and three carry-through gaps;
+fixed before landing.* (xxvi) **The tool_search re-call never worked in
+production.** It concatenated the resolver's raw schema dicts onto the
+`LLMTool` list; every real adapter builds its prompt from `t.name` /
+`t.parameters`, so the invoked re-call died of `AttributeError` and fell
+through to "unrecognised tool: tool_search" — since Phase 41, on every
+lane. Schemas are now converted at the boundary (`_schema_to_tool`,
+accepting `parameters` and the older `input_schema`); a nameless schema
+is a *resolution* failure (no second call). (xxvii) **Every failure of
+the invoked re-call is typed.** Rounds 2–3's allow-list let a killed
+re-call (timeout class) fall through, losing its diagnosis and partial
+output; the invoked call's exception now always becomes the shared
+blocked outcome with the first call's spend. (xxviii) **Both error
+envelopes.** The CLI's `error_during_execution` result carries its text in
+`errors: [...]`; the retry predicate, the breaker attribution and the
+display detail read only `result` — `_terminal_error_text` serves all
+three. (xxix) **Payload first on the retry.** A non-zero exit with a
+complete success result (the supported rc=1 shape) whose text mentioned a
+rate limit was replayed and finally reported as rate-limited; the retry
+accepts a success payload before any rate-limit reading, like the initial
+call. (xxx) **Narration under the lock.** The health cycle released its
+lock before appending the captain's-log line, so an older cycle's SILENT
+could land after a newer cycle's RECOVERED with nothing left to correct
+it; the narration now runs while the lock is held.
+
+*Review round 8 (2026-09-13, codex skeptic + QA, whole chunk) found one
+older HIGH beside round 7's and three carry-through gaps; fixed before
+landing. Two findings were declined by doctrine.* (xxxi) **The first-call
+injector rejected the production type.** `inject_tool_search_if_needed`
+read dict keys off the `LLMTool` objects `execute_step` hands it —
+`AttributeError`, swallowed by the caller — so `tool_search` was never
+advertised on the first call and round 7's repaired re-call was
+unreachable through the intended contract. The injector now reads either
+shape and appends `tool_search` in the same shape; the whole pipeline
+(stub → advertised → called → re-call → done) is the test. (xxxii) **The
+payload is ground truth in both directions.** A zero exit with an explicit
+`is_error: true` terminal result became an empty ordinary response, past
+the breaker and the classifier; `_terminal_failure` routes it into the
+failure path, initial call and retry alike (no evidence the installed CLI
+emits that pairing — the invariant is cheap). (xxxiii) **The sequential
+pause records the refused step** (and, by the same branch, an operator-ask
+pause): its `break` skipped the normal append, so a paused run reported
+`steps=0` with tokens on the books. (xxxiv) **Worker kills keep their
+evidence.** `dispatch_worker`'s except copied the class but returned
+`result=""` and zero tokens; `llm_errors.kill_evidence` now serves both
+outcome builders (partial output framed, runaway ingest counted).
+*Declined:* (a) "RESUME re-executes completed peers" — the continuation
+lane is continuation-by-context, not checkpoint restore, by the 2026-08-02
+decree (same identity, the parent's artifacts and context ride the
+continuation goal); the parallel path's outcomes reach the run report
+before the early return. A checkpoint-restore resume would be its own
+arc. (b) "a failed narration is acknowledged forever" — the accepted
+trade documented at the narration site (write-then-narrate; a lost line
+leaves the snapshot showing SILENT); an outbox is not this chunk.
+
+*Review round 9 (2026-09-13, codex skeptic + QA, whole chunk) found two
+HIGHs on lanes the chunk had never touched plus four carry-through gaps;
+all fixed. One finding is a live design question, recorded not
+changed.* (xxxv) **Expansion is permission-scoped.** The tool_search
+re-call resolved schemas from the whole registry under a default
+`PermissionContext`, so a deferred tool the caller's role or deny list
+had excluded came back advertised and callable, and the admitted one was
+duplicated beside its stub. The caller's tool list IS the step's
+permission context: only stubs in it may expand, each replacing its
+stub. (xxxvi) **A prose-only re-call is the step's answer** — it kept the
+FIRST response's tool_search call and ended "unrecognised tool" with an
+empty result; one `_no_tool_call_outcome` now serves both calls.
+(xxxvii) **The budget breakers run after the pause seam.** A refusal (or
+an operator ask) on the final step at the token/cost boundary broke out
+`done` before either the typed pause or the step record; the
+finished-plan carve-out is for a DONE final step only, and no longer
+skips that step's own bookkeeping. (xxxviii) **The team-worker lane is an
+executor lane.** `create_team_worker` had neither the container-contract
+guard nor `executor=True` (under `require` a specialist's ticket ran on
+the HOST session), and the parent stamped `done` over any nested
+outcome — a nested typed refusal was stringified past the pause seam.
+Policy signals now propagate to the same typed blocked outcome; a
+blocked ticket is a blocked step. (xxxix) **Malformed terminal flags fail
+closed:** `is_error: "true"`/null/1 and any `error_*` subtype take the
+failure path; the success extractor requires the literal false or the
+field absent. (xl) **Evidence is total and travels.** `kill_evidence`
+rejects inf/NaN/negative accounting to zero (int(inf) had raised past
+the blocked builder's guard), reads through the failover wrapper's cause
+chain, and a terminal failure AFTER work now carries the terminal
+object's usage and cost onto the exception, so the blocked step records
+the spend instead of zero. *Recorded, not changed:*
+`_subprocess_timeout_error` renders the kill reason into text but not
+as the `maro_kill_reason` attribute the classifier keys on, so every
+converted kill classifies `retry_backoff` (retry ladder → blocked step →
+split recovery) rather than the `failover` the classifier's comment
+intends (→ chain exhausted under `require` → `llm-unreachable` pause).
+That has been the live behaviour since the wrapper landed and is
+arguably the right one for a stalled worker (a stall is not an
+environmental outage); flipping it is a §13e-adjacent call, logged in
+BACKLOG for Jeremy.
+
+*Review round 10 (2026-09-13, codex skeptic + QA, whole chunk): one HIGH
+on round 9's own seams, the rest carry-through; all fixed.* (xli) **One
+reading of a terminal result's status.** The rate-limit retry predicate
+kept its own truthy-`is_error` test, so an auth-error envelope with a
+malformed or clear flag behind a rejected `rate_limit_event` bought
+another launch instead of the breaker; `_terminal_failure_obj` now
+serves the failure test and the predicate. (xlii) **Both runaway classes
+cross the team boundary** — the run-wide cost breaker's stop verdict has
+no pause mapping by design, so the policy-signal test alone missed
+`BudgetRunawayError`; the parent now carries `budget_runaway` to the
+loop's stop branch. (xliii) **The specialist's spend is the step's
+spend:** `TeamResult` carries its call's cost and the parent outcome
+folds the ticket's tokens and cost in (delivered or blocked). (xliv)
+**Evidence is one record.** `call_usage_evidence` (partial, input,
+output, cache-read, cost) replaces the 3-tuple at the outcome builders;
+the terminal failure attaches every counter independently (a cost with
+zero fresh input, cache-served work); the initial-call handler no longer
+overrides the builder's chain-aware read with its own shallow "" (a
+wrapped refusal lost its partial output there); the worker lane keeps
+output tokens. (xlv) **A refused revision keeps both** the paid-for draft
+(retention was gated on an EMPTY revision result) and the revision's
+partial output, and the pause report renders each under its own label on
+both director branches. The doc's "self-clears" claim now states its
+cadence (first executor call after the 300 s recheck; shape-only when
+the expiry is unknown).
+
+*Review round 11 (2026-09-13, codex skeptic + QA, whole chunk): one HIGH
+on round 10's own seam, four accounting carry-throughs; all fixed.*
+(xlvi) **An explicit terminal failure decides the retry question by
+itself.** Only auth text had outranked an earlier rejected
+`rate_limit_event`, so an `error_max_turns` behind one bought a replay of
+an executor call that had already done its work; a terminal failure is a
+rate-limit story only if the failure itself names the limit. (xlvii)
+**Each terminal counter attaches independently** through the shared
+total validator (one `try` around all of them let a single malformed
+field make a paid failure look free; malformed counters are now warned
+and recorded as 0), with the success path's conventions: fresh input =
+uncached ingest, cache reads separate. (xlviii) **Total-input
+accounting:** the outcome builders fold cache reads into `tokens_in`
+(the LLMResponse / StepOutcome / estimator contract — fresh-only priced
+a cache-only failure at zero); the worker lane too. (xlix) **The fan-out
+/ DAG and batch result constructors carry billed cost and cache reads**
+(both defaulted to zero, so those lanes' returned steps and the log
+built from them lost the refusal's spend). (l) **An ordinary specialist
+failure keeps its evidence and class:** `create_team_worker`'s except
+returned "" and zero accounting; it now records the partial output,
+usage, cost and llm_errors class, and the parent's blocked outcome
+carries the class.
+
+*Review round 12 (2026-09-13, codex skeptic + QA, whole chunk): two HIGHs
+on the terminal-result seam, four accounting/ledger carry-throughs; all
+fixed.* (li) **A terminal execution failure is never replayed.** The CLI's
+own terminal verdicts (`error_max_turns` and kin) became the generic
+"claude subprocess failed (rc=…)" text, which the classifier reads as
+`failover` — so the `FailoverAdapter` re-ran finished executor work on
+the next backend. The terminal branch now marks the error
+(`maro_terminal_failure`), and the classifier returns `fatal` for the
+marker after the auth/billing/container checks (a stated limit reset
+still classifies `retry_at`); the wrapper propagates instead of
+replaying. Pinned with a fallback spy that must never be called. (lii)
+**One rule for the terminal frame.** `_extract_result_object` returned
+the FIRST `type: result` object while `_parse_stream_json` kept the
+LAST; a capture carrying a success frame ahead of an auth-error frame
+completed as a confident `done`. Both readers now keep the last frame
+(pinned in both orderings at rc 0 and 1). (liii) **Cache reads
+attribute across combined calls.** The tool_search re-call folded the
+first call's input/output but not its cache reads; the blocked builder
+had no first-call cache input; `TeamResult` had no cache field, so the
+parent kept only its own. All three fold now (`cache_read_tokens`
+builder parameter; `TeamResult.cache_read_tokens` from the response or
+the failure evidence). (liv) **Cache creation is read independently of
+the input counter.** A terminal frame whose `input_tokens` was null or
+absent lost its `cache_creation_input_tokens` — the larger uncached
+ingest; each counter is validated (and warned) on its own and summed
+when either is present. (lv) **A terminal failure keeps the assistant's
+text.** Usage rode the terminal exception but what the call said and
+did (assistant text blocks, tool_use names) did not; `_assistant_text_tail`
+now attaches the stream's assistant output as `maro_partial_output`, so
+the blocked step's result and the pause card show the work. (lvi) **The
+paused step reaches the spend ledger.** Run cards read spend from
+`memory/step-costs.jsonl` (`spend_for_loops`), not from the step
+objects; the sequential env-pause early exit and the fan-out/DAG result
+constructor never called `record_step_cost`, so a refused call's paid
+spend vanished from the card. Both record now (the batch path already
+did; the lanes are disjoint, so no member is recorded twice). Recorded,
+not changed: a subprocess kill still classifies `retry_backoff` (design
+question above); the terminal branch's `fatal` means the loop's step
+recovery, not a backend retry, decides what happens after a max-turns
+exhaustion.
+
+*Review round 13 (2026-09-13, codex skeptic + QA, whole chunk): one
+shared HIGH on round 12's own seam, one scheduler HIGH, three MEDs; all
+fixed.* (lvii) **One event boundary for both terminal readers.** Round
+12 made both readers keep the LAST result frame, but
+`_extract_result_object` still promoted any brace-delimited object
+anywhere in the capture while `_parse_stream_json` framed complete JSON
+lines — a result-shaped object inside a diagnostic line (`diagnostic:
+{"type":"result","subtype":"success",…}`) outranked the real
+auth-error frame, bypassing the breaker and completing as `done`. The
+scanner now prefers line-framed result events (the stream parser's
+boundary) and only falls back to the whole-document scan when none
+exist, accepting an object only where a line starts with it (a
+pretty-printed single object behind a warning line still parses; text
+before a brace on the same line is not a protocol event). Pinned in
+both orderings, both exit codes, plus the pretty-printed control. (lviii)
+**The halt is published before worktree finalization.** Both schedulers
+set the halt after `_run_in_step_worktree` returned — i.e. after the
+refused step's merge-back/cleanup, which can wait on the repo lock — so
+a peer finishing meanwhile admitted a queued step against the dead
+session. The halt is now published inside the wrapped callback the
+moment the outcome exists; pinned with a two-worker, delayed-merge
+regression for fan-out and DAG (proven to fail on the pre-fix code).
+(lix) **Successful frames count cache creation.** The terminal branch
+summed input + cache creation (round 12) but its success sibling read
+raw counters and dropped cache creation, so every successful call
+under-reported total input to the folds and ledger downstream; the
+success path now validates each counter (warning on malformed, null as
+0) and sums input + cache creation + cache read. (lx) **A malformed
+assistant event no longer wipes the partial.** One event whose
+`message` was a list raised out of `_assistant_text_tail` and the outer
+guard attached nothing; each event's containers are validated on their
+own, malformed ones are counted and warned, and the rest keep their
+evidence — the same container validation now guards
+`_parse_stream_json`. (lxi) **A failed ledger append is visible.**
+`record_step_cost` swallowed the append failure and returned the entry
+as if recorded, so the new callers' guards never fired and the run
+card's total read as complete; it now warns naming the loop id and marks
+the entry `persisted: false`. Silent-drop census + triage manifest:
+both new stream readers triaged as subprocess-capture parsers (the
+baseline's `_parse_stream_json` class).
+
+*Review round 14 (2026-09-13, codex skeptic + QA, whole chunk): two HIGHs
+on round 13's reader seam, one HIGH on the accounting validator, one MED;
+all fixed. One HIGH recorded as an out-of-scope lead.* (lxii) **The
+whole-document fallback respects document boundaries.** Round 13's
+line-start fallback kept scanning the lines INSIDE the object it had just
+decoded, so a result-shaped object nested in a pretty-printed error's
+`errors[]` outranked the error (auth failure read as success). The
+fallback now advances past each decoded document; nested objects are
+data. Pinned both ways (success nested in error, error nested in
+success), both exit codes. (lxiii) **One selection for both readers.**
+`_parse_stream_json` fell back to the document scanner only when NO
+event line parsed; an `init` line ahead of a pretty-printed result left
+it with `None` while `_extract_result_object` found the frame — at rc=0
+the whole capture was delivered as prose and a `flag_stuck` answer
+completed as `done` with zero usage. The stream parser now always
+defers to the scanner when its own pass finds no result frame, so the
+two readers select one terminal object. (lxiv) **Counters are bounded.**
+`finite_nonneg` checked finiteness only for floats; a 400-digit JSON
+integer passed as a valid int and the cost estimator's float conversion
+raised `OverflowError` in the sequential driver AHEAD of the pause seam
+(which caught only `ImportError`) — the refusal never stamped its
+pause. The validator now rejects anything above `COUNTER_MAX` (10¹⁵);
+the driver's pricing block catches every exception (pricing is
+telemetry, warned as incomplete); `record_step_cost` records the row
+with `estimate_error` named when the estimator fails instead of raising
+before its append. Pinned through the real sequential driver: the pause
+stamps, the step record and the ledger row both land. (lxv) **Malformed
+auxiliary fields are isolated too.** Round 13 guarded `message/content`
+only; a list-valued `rate_limit_info` or an unhashable tool id raised
+while `_stream_events` re-parsed a SUCCESSFUL capture, turning completed
+work into a parser-origin block with zero accounting. Every auxiliary
+field is validated on its own, malformed ones counted and warned, the
+terminal frame read regardless. **Out-of-scope lead (not changed;
+BACKLOG):** parallel steps pass the project dir as the executor's
+explicit `cwd`, which outranks the step's provisioned worktree (phase
+3b, 2026-07-03) — concurrent workers share the project directory while
+merge-back examines a different checkout. Predates this chunk; which
+directory a parallel step should execute in is a phase-3b design
+question for Jeremy.
+
+*Review round 15 (2026-09-13, codex skeptic + QA, whole chunk): one
+shared HIGH on round 14's framing, one HIGH at the decode boundary, three
+MEDs; all fixed.* (lxvi) **One framer for every reader.** Round 14
+protected only the whole-document fallback: the line-framed first pass
+still promoted a COMPACT nested object sitting on its own line inside a
+multi-line document (indented or not), so both readers agreed on the
+wrong terminal frame. `_iter_stream_documents` is now the single event
+boundary: a document starts where a line begins with `{` at column 0
+(an NDJSON event and a pretty-printed object alike); everything the
+decoder consumes belongs to that document, so nested objects are data
+whatever their formatting; indented lines are never top-level.
+`_extract_result_object`, `_parse_stream_json` and
+`_assistant_text_tail` all iterate it — there is no second grammar to
+disagree with. Pinned with compact-nested fixtures (both nestings, both
+indents, both exit codes) and the NDJSON-beside-a-document control.
+(lxvii) **Decoding is bounded at the protocol boundary.** A 5000-digit
+JSON integer raised Python's int-digit-limit `ValueError` (not a
+`JSONDecodeError`) out of every decode site: in a side event it hid the
+auth-error frame behind it (parser-origin `retry_backoff`, no breaker,
+no pause); inside the frame it hid the frame. The framer decodes with a
+`parse_int` hook that turns any integer past 18 digits into `+inf` —
+which `finite_nonneg` already rejects field by field — and catches
+`ValueError`, so the frame is read and only the malformed counter is
+dropped (warned). The global digit limit is untouched (asserted).
+(lxviii) **Three more auxiliary fields isolated:** a non-string
+tool_result `text` broke the join, a list-valued `modelUsage` raised on
+`.get`, and an oversized `total_cost_usd` overflowed `safe_float` — each
+turned a SUCCESSFUL capture into a zero-accounting block. Text values
+are stringified per block, `modelUsage` is validated (warned, main model
+unattributed), success billing goes through the bounded validator
+(`_bounded_cost`, warned, 0), and `safe_float` catches `OverflowError`.
+Census: the three readers' drop sites collapsed into the framer, which
+the silent-drop census now counts (`decoder.raw_decode` registered as a
+parse call; REVIEWED entry); the destructive-rewrite scanner classifies
+none of the four as a RISK site any more, so the manifest lists none.
+
+*Review round 16 (2026-09-13, codex skeptic + QA, whole chunk): two
+HIGHs on the round-15 framer's boundary rule, one HIGH on auth
+classification, one MED; all fixed.* (lxix) **The framer consumes every
+top-level document, frames on the transport newline, and requires a
+document to end its line.** Three ways a diagnostic could still be
+promoted to the terminal event: a complete top-level ARRAY was skipped
+line by line (only `{` started a document), so a column-0 success
+object inside it framed as an event and outranked the real auth-error
+frame; `splitlines()` breaks on U+2028/U+2029/U+0085/form-feed, so a
+brace after one of those INSIDE a diagnostic line was "column 0"; and
+`raw_decode` stops at the closing brace, so a line that quoted a result
+object and went on in prose framed. Now a document starts at `{` OR `[`
+on an LF-delimited line (the repo's JSONL rule — `split("\n")`, never
+`splitlines()`), is consumed whole whatever it contains, and is an event
+only if nothing but whitespace follows it on its line; arrays and quoted
+documents are consumed, never yielded; the capture is read as written
+(no `.strip()` moving an indented first line to column 0). Pinned
+through the real adapter on the container lane (breaker trip, class
+marker, typed pause, ONE launch) for the array, six separators, the
+trailing-prose and the leading-indent shapes, each with a mirror control
+(the error shape after a real success stays data) and LF/CRLF positive
+controls. The accepted residual stands: a column-0 compact object inside
+a TORN document still frames. (lxx) **Auth classification reads every
+terminal error field, in full.** `_terminal_error_text` is the display
+rendering — `result` if present, else `errors[]` joined — and the retry
+predicate and the breaker both matched auth text against its first 4000
+chars: an explicit OAuth failure behind a nonempty partial-work `result`,
+or behind a long diagnostic in `errors[0]`, classified `fatal` (no
+breaker, no typed pause) — or, with "rate limit" in the diagnostic,
+bought another subprocess launch. `_terminal_error_fields` lists every
+field (unbounded; CLI-authored, substring-matched) and
+`_terminal_auth_field` is the one auth reading the predicate, the
+breaker note (the auth-naming field IS the recorded reason) and the
+class marker share; the display detail stays bounded and unchanged.
+Pinned: auth after a 4100-char diagnostic, auth beside a nonempty
+result (both: one launch, `container_auth`, breaker reason names OAuth,
+`container-auth-expired`), and the negative control — the same long
+diagnostic without an auth field is a rate-limit retry then a non-auth
+failure with the breaker clear.
+
+*Review round 17 (2026-09-13, codex skeptic + QA, whole chunk): one
+shared HIGH on the round-16 framer's callers, one HIGH on the breaker's
+raw-capture fallback, one MED on retry accounting; all fixed.* (lxxi)
+**The framer's callers read the capture as written too.** Round 16
+removed the framer's own `.strip()`, but `_parse_stream_json` and
+`_stream_events` still stripped their input before framing: a lone
+INDENTED rate_limit_event example bought another executor launch
+(`_rate_limited_failure` read the parser's `rate_limited`), and an
+indented result example on a clean exit became the answer — a tool
+call, with the example's usage attributed — while the framer's own
+callers saw zero documents. Both callers now pass the capture through
+untouched; only the plain-text fallback trims for display. Pinned
+through the real adapter: the indented event (one launch; the column-0
+control retries), the indented result example (no tool call, zero
+usage, the prose content; the column-0 control yields the `flag_stuck`
+call with its 37 tokens). (lxxii) **A terminal object without error
+text decides by itself.** When the terminal result carried neither
+`result` nor `errors[]` text (an `error_max_turns` with `errors: []`),
+the breaker fell back to searching the raw capture — an OAuth line
+quoted in an assistant message or a diagnostic array tripped it on a
+HEALTHY session, every later executor call refused, and the operator
+was told to re-seed; the display detail took the same raw head, so the
+classifier text-matched it as a host login failure (`auth_actionable`).
+With a terminal object present the breaker reads only its fields (no
+text → no note, not auth-owned) and the detail names the object
+(`terminal error_max_turns result without error text`); the raw-capture
+search survives only for captures with no terminal object at all.
+Pinned: array and assistant quotations (`fatal`, breaker clear, no
+pause) with the errors-populated positive control. (lxxiii) **Every
+rate-limited attempt's spend rides the call's outcome.** The retry loop
+replaced `result` on each attempt, so a paid attempt that then hit the
+limit (work, usage, cost, assistant text) vanished from the eventual
+auth failure, timeout, pre-launch refusal, exhaustion error, or
+success. `_terminal_usage` is the one validated reading of a terminal
+object's counters (the failure branch uses it too), `_capture_evidence`
+adds the assistant text, and `_add_call_evidence` ADDS to the evidence
+attributes `call_usage_evidence` reads (earlier partial text first).
+Each retry folds the attempt it replaces into `_prior`, and `_prior` is
+added exactly once to whatever the call ends in: the final failure, the
+retry's timeout error, the resolver's refusal before the next launch,
+the exhaustion error (which now carries the last attempt's evidence
+too), or the success response (fresh + cache reads into TOTAL input).
+Pinned with a 100/20/$0.50 first attempt against each ending
+(137/29/$0.62 on the auth pause with both attempts' text in order;
+142/29/5 on success; 100/20/$0.50 on the kill and on the refusal;
+150/30/$0.75 on exhaustion).
+
+*Review round 18 (2026-09-13, codex skeptic + QA, whole chunk): one
+HIGH each on the two remaining raw-capture readers, one shared MED on
+the retry launch; all fixed.* (lxxiv) **The rate-limit phrase backup
+reads the plain-text surface only.** After the structured readers
+rejected a capture, `_rate_limited_failure` searched the WHOLE capture
+for "hit your limit"/"rate limit": an indented example carrying
+`"reason": "rate limit"` or a diagnostic array quoting the limit
+message authorised another executor launch for work already done. The
+backup now applies only to a capture holding no JSON object at all
+(`_plain_text_capture`) — the CLI's plain-text error surface, the one
+shape whose free text is a signal; a stream decides by its structured
+signals. Pinned: both quoted shapes (one launch) against the plain-text
+limit error (retry) and the column-0 rate_limit_event. (lxxv) **The
+exhaustion errors' message comes from the terminal object.** Both
+rate-limit exhaustion constructors interpolated the raw capture head
+into their message, which the classifier text-matches: an assistant
+message quoting an OAuth line ahead of a rate-limit terminal made the
+exhaustion `auth_actionable` — the healthy HOST circuit tripped and the
+outcome lost its `no-tokens` pause (the total-cap twin too).
+`_failure_detail(stdout, obj, limit)` is now the one bounded detail
+for every failure message: the terminal object's error text; a
+text-less object names itself; a raw head only when the capture is
+plain text; otherwise "stream capture without a terminal result". Both
+exhaustion errors use it and carry the terminal-failure marker.
+Pinned through `FailoverAdapter` for both endings: `retry_at`, the
+no-tokens pause, host circuit clear, spend of every attempt. (lxxvi)
+**Every exception leaving a retry launch carries the replaced
+attempts' evidence.** The retry caught only `TimeoutExpired`; a
+probe-ordered runaway kill (`TokenRunawayError`, `BudgetRunawayError`)
+or a launch failure escaped with its own evidence and without
+`_prior`. One boundary now: timeouts convert then add, every other
+exception adds and re-raises with its class and evidence intact.
+Pinned for both brakes (300100/20/$1.75 and 100/20/$0.50, both
+attempts' text in order, class preserved).
+
+*Review round 19 (2026-09-13, codex skeptic + QA, whole chunk): two
+HIGHs on the plain-text/terminal readers, one HIGH on the exhaustion
+classification, one HIGH on the worker/director accounting; all
+fixed.* (lxxvii) **A string-only array is not plain text.**
+`_plain_text_capture` tested only for `{`, so a diagnostic ARRAY of
+strings (`["... OAuth session expired ...", "... hit your limit ..."]`)
+read as the CLI's plain-text surface: its quoted phrases authorised a
+replay and, in the exhaustion message, a host login story. The test is
+now "no `{` and no `[` anywhere" — a bracket means structured content
+and the safe direction is no phrase reading at all; such a capture's
+failure detail names itself ("stream capture without a terminal
+result"). Pinned: the OAuth+limit string array → one launch, neither
+`auth_actionable` nor `retry_at`, no quoted text in the message; the
+plain-text limit error and the column-0 event still retry. (lxxviii)
+**Only an affirmative `rejected` status is a rate limit.** Every
+non-null `rate_limit_info.status` other than "allowed" counted as a
+rejection, so a wrong-typed (`false`, `[]`, `{}`, `1`) or unknown
+("weird", "rejected_soon") status was a confident instruction to
+replay an executor call. `rejected` alone sets the flag; `allowed*`
+passes; anything else is a malformed event, counted and warned.
+Pinned for six malformed values (one launch, one warning) with
+allowed/rejected controls. (lxxix) **The rate-limit marker is
+structural.** The retry predicate read every terminal field, but the
+exhaustion classification text-matched the bounded display message:
+with `result: "partial work"` and the reset in `errors[]`, the display
+showed the partial work, the terminal-failure marker classified
+`fatal`, and the exhausted limit lost its `no-tokens` pause. Both
+exhaustion errors and the ordinary failure now carry
+`maro_rate_limited = _terminal_rate_limited(obj)` (the one reading the
+predicate uses), and `classify_error` honours it ahead of the marked
+terminal failure's FATAL rule. Pinned for retries / cap / rc=0
+endings: `retry_at`, the no-tokens pause, spend of every attempt; a
+limit-less terminal failure stays `fatal`. (lxxx) **Worker cost and
+cache reads reach the director.** `WorkerResult` carried a failed
+ticket's partial output and token counts but not its cost or
+cache-read tokens (the round-10 evidence record had both); the paid
+attempts behind a container-auth refusal or a runaway kill reached the
+director as free work, and success results dropped the same two
+fields. `WorkerResult`/`DirectorResult` gained `cost_usd` and
+`cache_read_tokens`; every worker-result constructor fills them
+(failure evidence, `deliver_result`, `flag_blocked`, content fallback
+and the empty-answer block — a paid call with no answer was recording
+zero tokens too); the director sums them at both worker-result sites
+and the log's worker rows carry them. Pinned through the real
+`dispatch_worker` (`ContainerAuthExpired` with fresh 37 / cache 100 /
+out 9 / $0.12 → tokens_in 137, cost 0.12, cache 100; success, empty
+and evidence-less controls) and `_write_director_log`.
+
+*Review round 20 (2026-09-13, codex skeptic + QA, whole chunk): one
+shared HIGH on the classifier's precedence, two MEDs (director
+accounting persistence, a conversion-failure boundary); all fixed.*
+(lxxxi) **A terminal failure classifies from its own fields, ahead of
+every text pattern.** The round-19 rate-limit marker sat BELOW the
+classifier's input/billing/auth substring checks, which read the
+display message — and that message shows the partial-work `result`.
+"Read invoice 401 before stopping." ahead of a reset in `errors[]`
+classified `auth_actionable` (the healthy host circuit tripped, a
+capable fallback could replay the work, the no-tokens pause was lost);
+"402"/"billing" made it `billing_actionable`, "413" `input_too_large`.
+One writer (`_mark_terminal_failure`) now stamps every terminal-failure
+exception with the object's structured verdicts — the shared rate-limit
+reading, the shared auth reading (`maro_terminal_auth`), and the error
+fields' text (`maro_terminal_text`) — and `classify_error` decides a
+marked terminal failure FIRST: rate-limited → `retry_at`; CLI-named
+host auth → `auth_actionable`; the authored billing / input phrases
+only (no bare status codes, no single words) → their classes; else
+`fatal`. Residual (accepted, same doctrine as round 16): an assistant's
+partial `result` literally quoting an authored phrase ("credit balance
+is too low") still counts — the fields are read as CLI-authored.
+Pinned through `FailoverAdapter` for 401/402/413/"unauthorized" prose
+(retry_at, no-tokens pause, host circuit closed, spend kept) with
+billing / input / turn-limit / host-auth controls. (lxxxii) **The
+director's worker bill is durable.** `run_director` summed every
+attempt in memory, but a revision REPLACED the draft's row and the log
+held only final rows — a paid draft followed by a refused revision
+persisted as zero worker spend. The log now carries `worker_totals`
+(tokens, cost, cache reads across every attempt) and
+`superseded_attempts` (each replaced draft's status, class and
+accounting); `maro director --format json` carries `cost_usd` and
+`cache_read_tokens`. Pinned through the real `run_director` (a $0.12 /
+100-cache draft, then a zero-cost container-auth refusal → totals 0.12
+/ 100 in the log and the CLI JSON, the final row's own zero intact).
+(lxxxiii) **Converting a successful capture is an evidence-preserving
+boundary.** A wrong-typed `tool` field (`["complete_step"]`) raised out
+of `_parse_tool_call`'s set lookup AFTER paid retries, and the
+exception carried no usage at all — a paid call became a
+zero-accounting blocked step. The field is validated (a non-string
+`tool` is not a call), and any conversion failure now carries the
+final capture's usage plus the replaced attempts' spend, once each,
+with a `maro_protocol_failure` marker the classifier maps to `fatal`
+whatever the message text matches (never a replay: the CLI ran to a
+result). Pinned: the odd terminal converts to content with its usage;
+a forced conversion failure after a paid attempt keeps 137/29/5/$0.62
+and both partials; a replay-shaped message stays `fatal`.
+
+*Review round 21 (2026-09-13, codex skeptic + QA, whole chunk): two
+HIGHs (the host circuit blocking the container lane; a RecursionError
+escaping the framer), two shared MEDs (failover accounting; the
+skip-director bill); all fixed.* (lxxxiv) **The container lane rides
+its own breaker, not the host circuit.** `FailoverAdapter`'s
+process-wide `"subprocess"` circuit is the HOST credential domain's
+(`~/.claude`), but every later executor call under `require` was
+skipped by it too: a host OAuth death refused each executor call with
+the host's `/login` story for fifteen minutes — never reaching
+`resolve_container_run`, never stamping `container-auth-expired`,
+never rechecking the re-seed. An executor call under `on`/`require`
+on a container-capable adapter now ignores the host circuit (logged);
+the seeded volume's session is its own domain and the container
+breaker refuses at resolve time. Pinned end to end: host call dies →
+circuit open → executor call with the container breaker tripped
+reaches the resolver (zero launches, `container_auth`, the typed
+pause) → a healthy container session serves the next executor call →
+a plain host call is still skipped. (lxxxv) **The framer survives a
+document too deep to decode.** `_iter_stream_documents` caught
+`ValueError` only; on Python 3.12 (CI) the recursive decoder raised
+`RecursionError` out of the terminal extraction, ahead of every
+verdict — an auth terminal behind a 10,000-deep side document became
+an unclassified, unpaid failure. The framer now skips such a document
+(one warning) and later documents on their own lines still frame.
+Pinned with the real decoder and a must-detect decoder that raises on
+depth: the auth terminal still frames, and the blocked story holds.
+(lxxxvi) **A permitted failover keeps every hop's spend.** The adapter
+attached the failed hop's evidence, but the wrapper abandoned that
+exception when the next backend succeeded — the response carried the
+fallback's usage only. The walk now keeps its failed hops and folds
+their validated evidence ONCE into the eventual response (input =
+fresh + cache reads, output, cache reads, cost) or into the final
+exception (every earlier hop's, added to the last one's own). Pinned:
+a $0.12 / 37+100 / 9 terminal billing failure then a $0.03 / 10 / 2
+fallback → 147 / 11 / 100 / $0.15; the failed-then-failed twin's
+exception carries 42 / 9 / 100 / $0.13; a single hop carries only its
+own. (lxxxvii) **The skip-director bill.** The direct-loop branch
+copied tokens and the pause but left `cost_usd`/`cache_read_tokens`
+at zero although its steps carry both; `director.main --format json`
+omitted the fields `cli._cmd_director` gained in round 20. Both
+fixed; pinned through the real `run_director(skip_if_simple=True)`
+with a paid paused step and both JSON renderers.
+
+*Review round 22 (2026-09-13, codex skeptic + QA, whole chunk): NO
+HIGH from either lens — the loop's first HIGH-free round, and by the
+standing rule its FIXPOINT. Two shared MEDs, both on the round-21
+failover fold; fixed.* (lxxxviii) **Evidence adds are chain-aware.**
+`_add_call_evidence` read the target's counters with a shallow
+`getattr`, but a final hop that arrives as a `BackendError` keeps its
+evidence on its CAUSE (`evidence_attr` reads the chain) — adding the
+earlier hops wrote wrapper attributes that shadowed the final hop's
+own counters and partial text. Reads now go through `evidence_attr`;
+pinned on the unit (a wrapper with its evidence on the cause: 42 / 9
+/ 100 / $0.13, both partials in order) and through nested real
+wrappers. (lxxxix) **The fold precedes the tail ledger row and the
+runaway meter.** The failed hops' spend was folded into the response
+AFTER the tail row (`record_step_cost`) and the meter had read it, so
+a closure/gate call recovered through a permitted failover returned
+the right bill and persisted the fallback's only; the failed hop's
+own call record carried no usage. The fold now runs right after the
+hop's own call record; the failed-call record carries the hop's own
+evidence (tokens_in = fresh + cache, tokens_out, cost). Pinned: one
+tail row of 147 / 11 / 100 / $0.15 under `tail_cost_scope`, two
+distinct call records (137 / 9 / $0.12 with the error; 10 / 2 /
+$0.03), the armed meter estimating the complete call.
+
+**Fixpoint (2026-09-13).** Twenty-two rounds on this chunk; twenty-one
+produced a verified HIGH each, round 22 none. The recurring seam was
+the claude CLI capture reader (rounds 12–18 converged it to ONE framer
+and ONE failure detail), then classification precedence (19–20), then
+the failover wrapper's credential domains and accounting (21–22). The
+accepted residuals are listed in the "RECORDED NOT CHANGED" set the
+review prompts carry: converted kills classify `retry_backoff`;
+continuation-by-context; narrate-after-write; host auth is
+terminal-surfaced, not a pause; a hand-set terminal marker with no
+structural verdict is `fatal`; the scheduler regression mocks the
+worktree wrapper; the phase-3b parallel-step cwd lead; torn and
+over-deep documents are skipped line by line; the breaker's bounded
+raw-text auth search when no terminal object exists; the partial
+`result` field read as CLI-authored; an `on`-mode degrade with the
+host circuit open re-fails once; a success after paid failed hops
+carries their bill but not their partial text; the `_reseed_probe`
+cadence versus the refusal message's wording.
 
 ### Baked verbs + spin-up key injection (r3, 2026-08-13)
 
@@ -286,7 +1154,7 @@ can only land inside a mount. SECURITY_MODEL Part 1's honest sentence
 
 | Key | Default | Notes |
 |---|---|---|
-| `executor.container` | `off` | `off` / `on` / `require`. OFF everywhere until burn-in on the runtime box; the flip (fresh-install default especially) is **Jeremy's call** after burn-in evidence. `require` refuses executor calls when docker is unavailable instead of degrading. |
+| `executor.container` | `off` | `off` / `on` / `require`. OFF everywhere until burn-in on the runtime box; the flip (fresh-install default especially) is **Jeremy's call** after burn-in evidence. `require` refuses executor calls when docker is unavailable instead of degrading. **Runtime box runs `require` since 2026-09-13** (Jeremy's call after the 09-12 host-lane degrade beside the secrets store). |
 | `executor.container_image` | `maro-executor:<pinned>` | |
 | `executor.container_network` | `bridge` | See below. |
 | `executor.container_extra_mounts` | `[]` | ro reference mounts. |

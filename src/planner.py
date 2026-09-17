@@ -217,7 +217,7 @@ def after_deps(step: str) -> Optional[set]:
     m = _AFTER_RE.search(step or "")
     if not m:
         return None
-    return {int(x) for x in m.group(1).split(",")}
+    return _after_numbers(m.group(1))
 
 
 def strip_after_tag(step: str) -> str:
@@ -710,7 +710,10 @@ _STEP_CEILING_DIRECTIVE = (
 # Dependency parsing
 # ---------------------------------------------------------------------------
 
-_AFTER_RE = re.compile(r'\[after:(\d+(?:,\d+)*)\]\s*$')
+# Single grammar source (step_gate.py, stdlib-only): the execute-lane gate,
+# the DAG lane and the census all read the same regex, so a tag the
+# planner accepts is a tag the gate enforces.
+from step_gate import AFTER_RE as _AFTER_RE, after_numbers as _after_numbers
 
 
 def parse_dependencies(steps: List[str]) -> tuple:
@@ -728,7 +731,7 @@ def parse_dependencies(steps: List[str]) -> tuple:
         m = _AFTER_RE.search(step)
         if m:
             clean.append(_AFTER_RE.sub("", step).rstrip())
-            deps[i] = {int(x) for x in m.group(1).split(",")}
+            deps[i] = _after_numbers(m.group(1))
         else:
             clean.append(step)
             # Default: depends on previous step (sequential)

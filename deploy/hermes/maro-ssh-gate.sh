@@ -26,7 +26,7 @@ DRIVER="$REPO/deploy/hermes/dispatch.py"
 
 cmd="${SSH_ORIGINAL_COMMAND:-}"
 if [ -z "$cmd" ]; then
-    echo '{"error": "no command — this key is dispatch-only (ping|dispatch|status|result|list|land)"}' >&2
+    echo '{"error": "no command — this key is dispatch-only (ping|dispatch|status|result|answer|list|land)"}' >&2
     exit 2
 fi
 
@@ -57,6 +57,16 @@ case "$verb" in
     status|result)
         _check_id "$rest"
         exec python3 "$DRIVER" "$verb" "$rest" ;;
+    answer)
+        # answer <job_id|handle_id> <text> — resumes the paused run by handle.
+        _ans_id="${rest%% *}"
+        _ans_text="${rest#* }"
+        _check_id "$_ans_id"
+        if [ -z "$_ans_text" ] || [ "$_ans_text" = "$rest" ]; then
+            echo '{"error": "answer needs <id> <text>"}' >&2
+            exit 2
+        fi
+        exec python3 "$DRIVER" answer "$_ans_id" "$_ans_text" ;;
     land)
         # Branch name is the only input; land.sh re-validates it too.
         if ! [[ "$rest" =~ ^hermes/[A-Za-z0-9._-]{1,64}$ ]]; then

@@ -21,6 +21,23 @@ generic storage lanes — workspace export/import and the sqlite backend
 migration — carry `shadow_ledger.jsonl` like any other memory file; that
 is data transport, not learning ingestion, and is deliberately in-bounds.)
 
+The Go track (2026-09-06): a third challenger, `go` — the Go successor
+engine (`maro-go now|agenda`) run against its own persistent workspace
+(`shadow.go.workspace`, so its landscape/memory accrue across shadows) in
+a scratch work dir with every mutating/network tool denied by tool policy
+(structural containment, no preamble). It is its OWN track: own switch
+(`shadow.go.enabled`), own daily cap, own claim dir (`<run-dir>/shadow-go/`)
+so it never competes with the star|plain pick for a run's one shadow slot,
+own ledger rows (`arm: "go"`). Both lanes' primaries are eligible on the
+basic checks alone — the tool policy is the side-effect guard (Jeremy
+2026-09-06: "widen the Go track's AGENDA eligibility to the tool-policy
+containment too; if we're going to shadow, let's do it right"). A
+build-shaped goal therefore runs in Go with no write tools and fails
+honestly; its row carries `primary_goal_shape` (worker type + action
+tier) so adjudication can partition those pairs. Same isolation
+invariant: the Go engine never reads or writes this workspace's learning
+paths.
+
 CLI (dev tool, like maro-introspect):
     PYTHONPATH=src python3 -m shadow_lane sweep [--limit N] [--verbose] [--dry-run]
     PYTHONPATH=src python3 -m shadow_lane status
@@ -32,6 +49,7 @@ import hashlib
 import json
 import logging
 import re
+import statistics
 import subprocess
 import sys
 import time
@@ -45,6 +63,19 @@ log = logging.getLogger("maro.shadow_lane")
 
 ARM_STAR = "star"
 ARM_PLAIN = "plain"
+ARM_GO = "go"
+
+# The Go track's claim dir under the primary run dir — a SIBLING of
+# `shadow/`, not inside it: the star|plain track claims a run by the mere
+# existence of `shadow/`, so a Go claim under it would silently consume the
+# run's star|plain slot (and vice versa). Two tracks, two claim dirs.
+GO_DIR = "shadow-go"
+# Tool policy for the Go challenger: every tool that can mutate or reach
+# the network is denied by name (maro-go --deny-tools; read tools stay).
+# This is the Go track's side-effect guard — structural (the engine
+# refuses the tool), unlike the star|plain preamble (instruction-level).
+GO_DENY_TOOLS = "Bash,Edit,MultiEdit,NotebookEdit,Write,WebFetch,WebSearch,Task,Agent"
+_GO_RUN_LINE = re.compile(r"^run ([0-9a-f]{8}) attempt (\d+) · (\S+)", re.MULTILINE)
 
 # Containment preamble, prepended to the goal for BOTH arms (symmetric, so
 # it cancels out of any arm comparison). Born from the first live fire
@@ -96,6 +127,15 @@ _TERMINAL_REASONS = frozenset({
     REASON_DRY_RUN, REASON_NOT_ORGANIC, REASON_NOT_RESEARCH,
     REASON_NOT_READ_TIER,
 })
+REASON_LANE = "lane!=now|agenda"
+# The Go track's terminal set is NARROWER than star|plain's: its gate never
+# asks the goal's shape (the tool policy is the containment), so the
+# research/read-tier reasons cannot be produced here. A SKIPPED stamp
+# carrying a reason outside this set is a stamp from an older, narrower
+# gate (2026-09-06: the first cron ticks stamped `worker_type!=research`
+# before the widening landed) and must not outlive the gate that wrote
+# it — `_stale_go_stamp` lets the sweep re-evaluate such a run.
+_GO_TERMINAL_REASONS = frozenset({REASON_DRY_RUN, REASON_NOT_ORGANIC, REASON_LANE})
 
 
 def eligible(goal: str, meta: dict) -> Tuple[bool, str]:
@@ -130,6 +170,49 @@ def eligible(goal: str, meta: dict) -> Tuple[bool, str]:
         return False, REASON_NOT_READ_TIER
 
     return True, ""
+
+
+def go_eligible(goal: str, meta: dict) -> Tuple[bool, str]:
+    """Eligibility for the Go track: the basic checks (done, not dry,
+    organic, non-empty) for BOTH lanes — the challenger's tool policy
+    denies every mutating/network tool, so the goal text cannot act
+    whatever its shape (structural containment; the read-tier gate is
+    the star|plain track's, whose containment is a preamble). Any other
+    lane is a terminal skip. The cost of the width: a build-shaped goal
+    runs without write tools and fails honestly — `primary_goal_shape`
+    on the row is what partitions those pairs at adjudication."""
+    meta = meta or {}
+    if meta.get("status") != "done":
+        return False, REASON_NOT_DONE
+    if meta.get("dry_run"):
+        return False, REASON_DRY_RUN
+    if meta.get("measurement_class", "organic") != "organic":
+        return False, REASON_NOT_ORGANIC
+    if not (goal or "").strip():
+        return False, REASON_EMPTY_GOAL
+    lane = str(meta.get("lane") or "")
+    if lane in ("now", "agenda"):
+        return True, ""
+    return False, REASON_LANE
+
+
+def goal_shape(goal: str) -> dict:
+    """The primary goal's shape as the star|plain gate sees it (worker
+    type + action tier) — recorded on every Go row so the adjudication
+    can partition "could have succeeded without write tools" from "could
+    not". Best-effort: a classifier failure yields None, never blocks."""
+    out: Dict[str, Any] = {"worker_type": None, "action_tier": None}
+    try:
+        from workers import infer_worker_type
+        out["worker_type"] = infer_worker_type(goal)
+    except Exception:  # narrow-except: classification is annotation, not a gate
+        pass
+    try:
+        import constraint
+        out["action_tier"] = constraint.classify_action_tier(goal)
+    except Exception:
+        pass
+    return out
 
 
 def pick_arm(handle_id: str) -> str:
@@ -284,21 +367,15 @@ def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int,
     # BEFORE env_extra, so the None wins). A future MARO_ var can't leak
     # by omission. This is still NOT a sandbox — see the design doc's
     # honest side-effect-guard framing.
-    import os as _os
-    _scrub_env: Dict[str, Any] = {
-        k: None for k in _os.environ
-        if k.startswith(("MARO_", "OPENCLAW_"))
-    }
-    _scrub_env["WORKSPACE_ROOT"] = None
-    # Not always in os.environ but injected by the wrapper conditionally:
-    _scrub_env["MARO_FETCH_CAPTURE_DIR"] = None
-    # NOT scrubbed — force-set (review 2026-08-14 r3): the pre-push hook's
-    # git guard keys on this marker (scripts/hooks/pre-push exits 0 when
-    # unset, i.e. treats the process as human). The challenger is a
-    # spawned agent and must stay marked as one, or it bypasses
-    # default-branch push protection. An inert 1-bit marker is an accepted
-    # black-box impurity in exchange for keeping the guard live.
-    _scrub_env["MARO_WORKER_RUN"] = "1"
+    # MARO_FETCH_CAPTURE_DIR is not always in os.environ but the wrapper
+    # injects it conditionally — scrubbed explicitly. MARO_WORKER_RUN is NOT
+    # scrubbed — force-set (review 2026-08-14 r3): the pre-push hook's git
+    # guard keys on this marker (scripts/hooks/pre-push exits 0 when unset,
+    # i.e. treats the process as human). The challenger is a spawned agent
+    # and must stay marked as one, or it bypasses default-branch push
+    # protection. An inert 1-bit marker is an accepted black-box impurity
+    # in exchange for keeping the guard live. (Shared with the Go track.)
+    _scrub_env = _scrub_env_extra()
 
     cli_version = None
     try:
@@ -385,6 +462,238 @@ def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int,
     return meta
 
 
+def _scrub_env_extra() -> Dict[str, Any]:
+    """The black-box env scrub every challenger gets (see run_challenger)."""
+    import os as _os
+    scrub: Dict[str, Any] = {
+        k: None for k in _os.environ
+        if k.startswith(("MARO_", "OPENCLAW_"))
+    }
+    scrub["WORKSPACE_ROOT"] = None
+    scrub["MARO_FETCH_CAPTURE_DIR"] = None
+    scrub["MARO_WORKER_RUN"] = "1"
+    return scrub
+
+
+def go_binary() -> Optional[Path]:
+    """The Go engine binary from `shadow.go.binary` (a path, or a name
+    resolved on PATH). None when it cannot be found — the sweep leaves the
+    run unclaimed and counts an error, never claims on a missing engine."""
+    import shutil
+    from config import get
+    raw = str(get("shadow.go.binary", "maro-go") or "").strip()
+    if not raw:
+        return None
+    p = Path(raw).expanduser()
+    if p.is_file():
+        return p
+    found = shutil.which(raw)
+    return Path(found) if found else None
+
+
+def go_workspace() -> Path:
+    """The Go engine's own persistent workspace for shadows: its landscape
+    and lineage memory accrue across shadows the way the primary's do, and
+    it is never this workspace (the engine must not read the champion's
+    learning). Default `<workspace_root>/shadow-go`."""
+    from config import get, workspace_root
+    raw = str(get("shadow.go.workspace", "") or "").strip()
+    return Path(raw).expanduser() if raw else workspace_root() / "shadow-go"
+
+
+def _parse_go_summary(text: str) -> dict:
+    """`maro-go runs show --json` prints the workspace announcement first,
+    then the summary object: parse from the first line that opens an
+    object; missing → {} (never KeyError)."""
+    text = text or ""
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start != -1:
+        try:
+            data, consumed = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(data, dict) and "handle" in data:
+            return data
+        start = text.find("{", start + consumed)
+    return {}
+
+
+GO_CONTEXT_DOCS = ("GOALS.md", "CONTEXT.md", "SIGNALS.md")
+GO_CONTEXT_CAP = 4000  # per doc; the same breaker the planner uses
+
+
+def _operator_context() -> Tuple[str, List[str]]:
+    """The operator docs the Python planner injects, rendered the same way.
+
+    Returns (text, docs): the concatenated "USER CONTEXT (<file>):" blocks
+    and the names of the docs that were present. Mirrors planner.py's
+    injection (workspace overlay over the repo template, clip() as the
+    breaker) so the Go challenger reads what the champion read — the first
+    live pair (37d0e041) failed on "what is the maro box?", a question the
+    operator's CONTEXT.md answers. Empty when no doc exists.
+    """
+    from config import user_file
+    from context_budget import clip
+
+    blocks: List[str] = []
+    docs: List[str] = []
+    for name in GO_CONTEXT_DOCS:
+        path = user_file(name)
+        if path is None:
+            continue
+        try:
+            text = clip(path.read_text(encoding="utf-8").strip(), GO_CONTEXT_CAP)
+        except OSError:
+            continue
+        if text:
+            blocks.append(f"USER CONTEXT ({name}):\n{text}")
+            docs.append(name)
+    return "\n\n".join(blocks), docs
+
+
+def run_go_challenger(run_dir: Path, goal: str, *, lane: str, binary: Path,
+                      timeout: int, model: Optional[str] = None,
+                      workspace: Optional[Path] = None) -> dict:
+    """Run the Go engine on `goal` (lane now|agenda) as the `go` arm.
+
+    Writes <run_dir>/shadow-go/RESULT.md + meta.json and returns the meta
+    dict. Two subprocess calls: the run itself (work dir = the scratch
+    under the claim dir, every mutating/network tool denied), then
+    `runs show --json <handle>` for the run's summary — calls, cost (the
+    landscape judge included), outcome, landscape relation. Cost is None
+    unless the engine says every call reported it (honest partial sums).
+    """
+    from llm import _run_subprocess_safe
+
+    if lane not in ("now", "agenda"):
+        raise ValueError(f"go challenger lane must be now|agenda: {lane!r}")
+    model = model or "haiku"
+    ws = workspace if workspace is not None else go_workspace()
+    scratch = run_dir / GO_DIR / "scratch"
+    scratch.mkdir(parents=True, exist_ok=False)
+
+    # Operator context parity: the Go engine takes the operator docs as a
+    # recorded input (--context <file>); the file is kept beside the result
+    # so the pair can be read with what the challenger saw.
+    context_text, context_docs = _operator_context()
+    context_path = None
+    context_sha = None
+    if context_text:
+        context_path = run_dir / GO_DIR / "context.md"
+        context_path.write_text(context_text, encoding="utf-8")
+        context_sha = hashlib.sha256(context_text.encode("utf-8")).hexdigest()
+
+    env_extra = _scrub_env_extra()
+    env_extra["MARO_GO_WORKSPACE"] = str(ws)
+    cmd = [str(binary), lane, "--backend", "subprocess", "--model", model,
+           "--work", str(scratch), "--deny-tools", GO_DENY_TOOLS]
+    if context_path is not None:
+        cmd += ["--context", str(context_path)]
+    cmd.append(goal)
+
+    binary_sha = None
+    try:
+        binary_sha = hashlib.sha256(Path(binary).read_bytes()).hexdigest()
+    except OSError:
+        pass
+
+    started_at = datetime.now(timezone.utc)
+    t0 = time.monotonic()
+    exit_status = "ok"
+    handle = None
+    stdout_text = ""
+    try:
+        proc = _run_subprocess_safe(cmd, input="", timeout=timeout,
+                                    liveness_timeout=0, cwd=str(scratch),
+                                    env_extra=env_extra)
+        stdout_text = proc.stdout or ""
+        if proc.returncode != 0:
+            exit_status = f"exit:{proc.returncode}"
+    except subprocess.TimeoutExpired as exc:
+        exit_status = f"timeout:{getattr(exc, 'maro_kill_reason', 'unknown')}"
+        stdout_text = getattr(exc, "maro_partial_output", "") or ""
+    except Exception as exc:  # narrow-except: a crashed engine is a data point
+        log.warning("shadow go challenger subprocess failed: %s", exc)
+        exit_status = f"error:{exc}"
+    wall_seconds = time.monotonic() - t0
+
+    m = _GO_RUN_LINE.search(stdout_text)
+    if m:
+        handle = m.group(1)
+    elif exit_status == "ok":
+        exit_status = "no_handle"
+
+    summary: dict = {}
+    if handle:
+        try:
+            proc = _run_subprocess_safe([str(binary), "runs", "show", "--json", handle],
+                                        input="", timeout=60, liveness_timeout=0,
+                                        cwd=str(scratch), env_extra=env_extra)
+            summary = _parse_go_summary(proc.stdout or "")
+        except Exception as exc:  # narrow-except: the summary is best-effort
+            log.warning("shadow go challenger: runs show failed for %s: %s", handle, exc)
+
+    usage = summary.get("usage") if isinstance(summary.get("usage"), dict) else {}
+    ls = summary.get("landscape") if isinstance(summary.get("landscape"), dict) else None
+    outcome = summary.get("outcome")
+    reason = summary.get("reason") if isinstance(summary.get("reason"), str) else None
+    needs_clarification = bool(reason and reason.startswith("needs clarification"))
+    question = None
+    if needs_clarification:
+        question = reason.split(":", 1)[1].strip() if ":" in reason else ""
+    models = sorted({str(c.get("model")) for c in summary.get("calls", [])
+                     if isinstance(c, dict) and c.get("model")})
+    meta = {
+        "arm": ARM_GO,
+        "started_at": started_at.isoformat(),
+        "wall_seconds": round(wall_seconds, 3),
+        "exit_status": exit_status,
+        "is_error": (outcome != "delivered") if outcome else None,
+        "cost_usd": usage.get("cost_usd") if usage.get("cost_reported") else None,
+        "tokens_in": usage.get("input_tokens") if usage else None,
+        "tokens_out": usage.get("output_tokens") if usage else None,
+        "tokens_cached": usage.get("cache_read_tokens") if usage else None,
+        "model": models[0] if len(models) == 1 else (models or model),
+        "cli_version": None,
+        # No preamble on this arm: containment is the work dir + the tool
+        # policy (structural). Explicit None so the batch judge partitions.
+        "containment_preamble_version": None,
+        "containment": "work_dir+tool_policy",
+        "tool_policy": {"deny": GO_DENY_TOOLS},
+        "lane": lane,
+        "goal": goal,
+        "cmd": cmd,
+        "scratch_cwd": str(scratch),
+        "go_workspace": str(ws),
+        "go_binary": str(binary),
+        "go_binary_sha256": binary_sha,
+        "go_handle": handle,
+        "go_run_id": summary.get("run_id"),
+        "go_outcome": outcome,
+        "go_closure": summary.get("closure"),
+        "go_calls": usage.get("calls") if usage else None,
+        "go_reason": reason,
+        # Recorded, not acted on: a clarification the shadow asked for
+        # reaches nobody (there is no requester behind the arm). The row
+        # says so, so the pair reads as "asked" rather than "failed".
+        "go_needs_clarification": needs_clarification,
+        "go_question": question,
+        "context_docs": context_docs,
+        "context_sha256": context_sha,
+        "context_chars": len(context_text),
+        "go_context": summary.get("context"),
+        "go_landscape": ({"relation": ls.get("relation"), "chosen": ls.get("chosen"),
+                          "rule": ls.get("rule")} if ls else None),
+    }
+
+    go_dir = run_dir / GO_DIR
+    (go_dir / "RESULT.md").write_text(str(summary.get("result") or ""), encoding="utf-8")
+    (go_dir / "meta.json").write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
+    return meta
+
+
 def _ledger_path():
     from config import workspace_root
     return workspace_root() / "memory" / "shadow_ledger.jsonl"
@@ -433,7 +742,12 @@ def _iter_run_dirs_newest_first(lookback_hours: float) -> List[Path]:
     return [rd for _, rd in dated]
 
 
-def _today_ledger_count() -> int:
+def _today_ledger_count(arms: Optional[frozenset] = None) -> int:
+    """Today's ledger rows, by `ts`, for the given arms (None = the
+    star|plain track). Each track counts only its own rows: a Go shadow
+    must not consume a star|plain cap slot, nor the reverse."""
+    if arms is None:
+        arms = frozenset({ARM_STAR, ARM_PLAIN})
     path = _ledger_path()
     if not path.is_file():
         return 0
@@ -448,7 +762,7 @@ def _today_ledger_count() -> int:
             except ValueError:
                 continue
             ts = str(row.get("ts", ""))
-            if ts.startswith(today):
+            if ts.startswith(today) and row.get("arm") in arms:
                 count += 1
     except OSError:
         pass
@@ -639,6 +953,7 @@ def _sweep_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
         }
         try:
             _append_ledger_row(row)
+            _refresh_pairs_page()
         except Exception as exc:
             # The ledger is the cap's only counting source — a lost row
             # means an executed challenger the next sweep can't see. Keep
@@ -657,7 +972,146 @@ def _sweep_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
         if verbose:
             log.info("shadow sweep: fired arm=%s handle_id=%s", arm, handle_id)
 
+    if get("shadow.go.enabled", False):
+        _sweep_go_locked(summary, limit=limit, verbose=verbose, dry_run=dry_run,
+                         lookback_hours=lookback_hours)
     return summary
+
+
+def _stale_go_stamp(go_dir: Path) -> bool:
+    """True iff the Go claim dir holds ONLY a SKIPPED stamp whose reason
+    the current Go gate cannot produce (a stamp from an older, narrower
+    gate). Anything else in the dir — a scratch, a result, an ERROR — is
+    a real claim and is never touched."""
+    try:
+        entries = [p.name for p in go_dir.iterdir()]
+    except OSError:
+        return False
+    if entries != ["SKIPPED"]:
+        return False
+    try:
+        reason = (go_dir / "SKIPPED").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return reason not in _GO_TERMINAL_REASONS
+
+
+def _sweep_go_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
+                     dry_run: bool, lookback_hours: float) -> None:
+    """The Go track of the sweep (same lock, own everything else): own
+    eligibility, own claim dir, own cap, own summary keys (`go_*`)."""
+    from config import get
+
+    daily_cap = int(get("shadow.go.daily_cap", 2))
+    timeout_seconds = int(get("shadow.go.timeout_seconds", 900))
+    model = str(get("shadow.go.model", "haiku") or "haiku")
+    for k in ("go_scanned", "go_skipped", "go_fired", "go_errors"):
+        summary.setdefault(k, 0)
+    if dry_run:
+        summary.setdefault("go_would_fire", [])
+
+    fired_today = _today_ledger_count(frozenset({ARM_GO}))
+    fired = 0
+    for run_dir in _iter_run_dirs_newest_first(lookback_hours):
+        if fired >= limit:
+            break
+        if fired_today + fired >= daily_cap:
+            if verbose:
+                log.info("shadow sweep (go): daily cap (%d) reached", daily_cap)
+            break
+        summary["go_scanned"] += 1
+        go_dir = run_dir / GO_DIR
+        if go_dir.exists():
+            if _stale_go_stamp(go_dir):
+                if dry_run:
+                    summary["go_skipped"] += 1
+                    continue
+                # A stamp from a retired reason is not a claim: retire the
+                # stamp (the only file the dir holds) and re-evaluate.
+                try:
+                    (go_dir / "SKIPPED").unlink()
+                    go_dir.rmdir()
+                except OSError as exc:
+                    summary["go_errors"] += 1
+                    log.warning("shadow sweep (go): could not retire stale stamp in %s: %s", run_dir.name, exc)
+                    continue
+            else:
+                summary["go_skipped"] += 1
+                continue
+        try:
+            meta = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            summary["go_errors"] += 1
+            continue
+        goal = str(meta.get("prompt") or "")
+        handle_id = str(meta.get("handle_id") or run_dir.name.split("-", 1)[0])
+        ok, reason = go_eligible(goal, meta)
+        if not ok:
+            if not dry_run and reason in _GO_TERMINAL_REASONS:
+                go_dir.mkdir(parents=True, exist_ok=True)
+                (go_dir / "SKIPPED").write_text(reason + "\n", encoding="utf-8")
+            summary["go_skipped"] += 1
+            continue
+        if not meta.get("ended_at") or not (run_dir / "run_card.json").is_file():
+            summary["go_skipped"] += 1
+            continue
+        lane = str(meta.get("lane"))
+        if dry_run:
+            summary["go_would_fire"].append({"handle_id": handle_id, "arm": ARM_GO,
+                                             "lane": lane, "run_dir": str(run_dir)})
+            fired += 1
+            continue
+        # Engine resolved BEFORE the claim (the star-prompt precedent): a
+        # missing binary must not consume the run's Go slot.
+        binary = go_binary()
+        if binary is None:
+            summary["go_errors"] += 1
+            log.warning("shadow sweep (go): engine binary not found (shadow.go.binary), "
+                        "leaving %s unclaimed", handle_id)
+            break  # no engine, no point scanning further this sweep
+        try:
+            go_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            summary["go_skipped"] += 1
+            continue
+        try:
+            challenger_meta = run_go_challenger(run_dir, goal, lane=lane, binary=binary,
+                                                timeout=timeout_seconds, model=model)
+        except Exception as exc:
+            summary["go_errors"] += 1
+            log.warning("shadow sweep (go): challenger failed for %s: %s", handle_id, exc)
+            try:
+                (go_dir / "ERROR").write_text(
+                    f"{datetime.now(timezone.utc).isoformat()} {exc}\n", encoding="utf-8")
+            except OSError:
+                pass
+            continue
+        row = {
+            "handle_id": handle_id,
+            "primary_lane": meta.get("lane"),
+            "primary_goal_achieved": meta.get("goal_achieved"),
+            "primary_ended_at": meta.get("ended_at"),
+            "primary_goal_shape": goal_shape(goal),
+            **_primary_comparison_fields(run_dir, meta),
+            **challenger_meta,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            _append_ledger_row(row)
+            _refresh_pairs_page()
+        except Exception as exc:
+            log.error("shadow sweep (go): ledger append failed for %s — writing "
+                      "fallback row: %s", handle_id, exc)
+            try:
+                (go_dir / "ledger-row.json").write_text(
+                    json.dumps(row, indent=2, default=str), encoding="utf-8")
+            except OSError:
+                pass
+        fired += 1
+        summary["go_fired"] += 1
+        if verbose:
+            log.info("shadow sweep (go): fired handle_id=%s go_handle=%s", handle_id,
+                     challenger_meta.get("go_handle"))
 
 
 def _primary_comparison_fields(run_dir: Path, meta: dict) -> dict:
@@ -700,18 +1154,214 @@ def _primary_comparison_fields(run_dir: Path, meta: dict) -> dict:
 # CLI
 # ---------------------------------------------------------------------------
 
+def ledger_rows(path: Optional[Path] = None) -> List[dict]:
+    """Every parseable row of the shadow ledger, in file order. A torn or
+    foreign line is skipped, never fatal — the ledger is append-only and
+    the readers are the adjudication's input, not its gate."""
+    path = path if path is not None else _ledger_path()
+    if not path.is_file():
+        return []
+    rows: List[dict] = []
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            # Said, not swallowed (retention decree: a short list must be
+            # distinguishable from a short store) — the sweep log carries it.
+            log.warning("shadow ledger: %s line %d is not JSON — skipped", path, n)
+            continue
+        if not isinstance(row, dict):
+            log.warning("shadow ledger: %s line %d is not a row — skipped", path, n)
+            continue
+        rows.append(row)
+    return rows
+
+
+PAIR_EXCERPT_CHARS = 1500  # breaker on the inlined challenger result, marked when cut
+
+
+def _ratio(a, b) -> Optional[float]:
+    try:
+        if a is None or b is None or float(b) <= 0:
+            return None
+        return round(float(a) / float(b), 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _shape_key(shape) -> str:
+    if not isinstance(shape, dict):
+        return "?"
+    return f"{shape.get('worker_type') or '?'}/{shape.get('action_tier') or '?'}"
+
+
+def pair_view(row: dict) -> dict:
+    """One ledger row as the pair the adjudication reads: the primary's
+    side, the challenger's side, the two ratios, and — when the run dir
+    is still there — the challenger's result excerpt and the primary's
+    report page. Pure over the row except for those two best-effort reads.
+    """
+    arm = row.get("arm") or "?"
+    is_go = arm == ARM_GO
+    if is_go:
+        outcome = row.get("go_outcome") or row.get("exit_status") or "?"
+    else:
+        outcome = "error" if row.get("is_error") else ("ok" if row.get("exit_status") == "ok" else str(row.get("exit_status") or "?"))
+    asked = bool(row.get("go_needs_clarification")) if is_go else False
+    ls = row.get("go_landscape") if isinstance(row.get("go_landscape"), dict) else None
+    view: Dict[str, Any] = {
+        "handle_id": row.get("handle_id"),
+        "ts": row.get("ts"),
+        "arm": arm,
+        "lane": row.get("primary_lane") or row.get("lane"),
+        "shape": _shape_key(row.get("primary_goal_shape")),
+        "primary": {
+            "achieved": row.get("primary_goal_achieved"),
+            "cost_usd": row.get("primary_cost_usd"),
+            "wall_seconds": row.get("primary_wall_seconds"),
+            "model": row.get("primary_model"),
+        },
+        "challenger": {
+            "outcome": outcome,
+            "is_error": row.get("is_error"),
+            "asked": asked,
+            "question": row.get("go_question") if is_go else None,
+            "cost_usd": row.get("cost_usd"),
+            "wall_seconds": row.get("wall_seconds"),
+            "tokens_in": row.get("tokens_in"),
+            "tokens_out": row.get("tokens_out"),
+            "tokens_cached": row.get("tokens_cached"),
+            "model": row.get("model"),
+            "landscape": ls.get("relation") if ls else None,
+            "context_docs": row.get("context_docs") if is_go else None,
+            "binary": (row.get("go_binary_sha256") or "")[:8] or None,
+            "exit_status": row.get("exit_status"),
+        },
+        "cost_ratio": _ratio(row.get("cost_usd"), row.get("primary_cost_usd")),
+        "wall_ratio": _ratio(row.get("wall_seconds"), row.get("primary_wall_seconds")),
+        "run_dir": None,
+        "report": None,
+        "result_excerpt": None,
+    }
+    handle = row.get("handle_id")
+    if handle:
+        try:
+            from runs import resolve_run_dir
+            rd = resolve_run_dir(str(handle))
+            if rd is not None and rd.is_dir():
+                view["run_dir"] = rd.name
+                reports = sorted(p for p in (rd / "build").glob("*-report.html")) if (rd / "build").is_dir() else []
+                if reports:
+                    view["report"] = f"{rd.name}/build/{reports[-1].name}"
+                result = rd / (GO_DIR if is_go else "shadow") / "RESULT.md"
+                if not is_go and not result.is_file():
+                    result = rd / "shadow" / str(arm) / "RESULT.md"
+                if result.is_file():
+                    from context_budget import clip
+                    view["result_excerpt"] = clip(result.read_text(encoding="utf-8").strip(),
+                                                  PAIR_EXCERPT_CHARS)
+        except Exception:  # narrow-except: the excerpt is a convenience, the row is the record
+            pass
+    return view
+
+
+def pairs_summary(views: List[dict]) -> dict:
+    """Counts the pre-registered questions partition on. No judgement of
+    answer agreement here — that is the batch judge's, at ~10 rows."""
+    per_arm: Dict[str, int] = {}
+    per_shape: Dict[str, int] = {}
+    outcomes: Dict[str, int] = {}
+    asked = 0
+    achieved = 0
+    cost_ratios: List[float] = []
+    wall_ratios: List[float] = []
+    cost_c = cost_p = 0.0
+    for v in views:
+        per_arm[v["arm"]] = per_arm.get(v["arm"], 0) + 1
+        per_shape[v["shape"]] = per_shape.get(v["shape"], 0) + 1
+        o = str(v["challenger"]["outcome"])
+        outcomes[o] = outcomes.get(o, 0) + 1
+        asked += 1 if v["challenger"]["asked"] else 0
+        achieved += 1 if v["primary"]["achieved"] else 0
+        if v["cost_ratio"] is not None:
+            cost_ratios.append(v["cost_ratio"])
+            cost_c += float(v["challenger"]["cost_usd"])
+            cost_p += float(v["primary"]["cost_usd"])
+        if v["wall_ratio"] is not None:
+            wall_ratios.append(v["wall_ratio"])
+    return {
+        "rows": len(views),
+        "per_arm": per_arm,
+        "per_shape": per_shape,
+        "challenger_outcomes": outcomes,
+        "asked": asked,
+        "primary_achieved": achieved,
+        "cost": {"paired": len(cost_ratios),
+                 "median_ratio": round(statistics.median(cost_ratios), 3) if cost_ratios else None,
+                 "challenger_usd": round(cost_c, 4), "primary_usd": round(cost_p, 4)},
+        "wall": {"paired": len(wall_ratios),
+                 "median_ratio": round(statistics.median(wall_ratios), 3) if wall_ratios else None},
+        "agreement": None,  # the batch judge's; not derivable from the rows
+    }
+
+
+def pairs(rows: Optional[List[dict]] = None, *, arm: Optional[str] = None) -> Tuple[List[dict], dict]:
+    """(views, summary) over the ledger — newest first; `arm` filters."""
+    rows = ledger_rows() if rows is None else rows
+    views = [pair_view(r) for r in rows if arm is None or r.get("arm") == arm]
+    views.reverse()
+    return views, pairs_summary(views)
+
+
+def _fmt_usd(x) -> str:
+    return "-" if x is None else f"${float(x):.3f}"
+
+
+def _fmt_s(x) -> str:
+    return "-" if x is None else f"{float(x):.0f}s"
+
+
+def _render_pairs_text(views: List[dict], summary: dict) -> str:
+    lines = [f"{summary['rows']} pair(s)  arms={summary['per_arm']}  shapes={summary['per_shape']}  "
+             f"asked={summary['asked']}  primary_achieved={summary['primary_achieved']}",
+             f"cost: paired={summary['cost']['paired']} median_ratio={summary['cost']['median_ratio']} "
+             f"challenger={_fmt_usd(summary['cost']['challenger_usd'])} primary={_fmt_usd(summary['cost']['primary_usd'])}   "
+             f"wall: paired={summary['wall']['paired']} median_ratio={summary['wall']['median_ratio']}",
+             "agreement: (batch judge, at ~10 rows)", ""]
+    hdr = f"{'handle':8} {'arm':5} {'lane':6} {'shape':12} {'primary':>10} {'chal':>10} {'ratio':>6}  challenger outcome"
+    lines.append(hdr)
+    for v in views:
+        p, c = v["primary"], v["challenger"]
+        prim = ("ok" if p["achieved"] else "no") + " " + _fmt_usd(p["cost_usd"]) + "/" + _fmt_s(p["wall_seconds"])
+        chal = _fmt_usd(c["cost_usd"]) + "/" + _fmt_s(c["wall_seconds"])
+        out = str(c["outcome"])
+        if c["asked"]:
+            out += f' ASKED: {c["question"] or ""}'
+        elif c["landscape"]:
+            out += f" ({c['landscape']})"
+        ratio = "-" if v["cost_ratio"] is None else f"{v['cost_ratio']:.2f}"
+        lines.append(f"{str(v['handle_id'] or '?'):8} {v['arm']:5} {str(v['lane'] or '?'):6} {v['shape']:12} "
+                     f"{prim:>10} {chal:>10} {ratio:>6}  {out}")
+    return "\n".join(lines) + "\n"
+
+
+def _refresh_pairs_page() -> None:
+    """Best-effort: the viz's Pairs tab tracks the ledger (a sweep that
+    fires is the one moment the page goes stale). Never raises."""
+    try:
+        from loop_report import write_pairs_page
+        write_pairs_page()
+    except Exception:  # narrow-except: a page is a view; the ledger row is the record
+        log.debug("pairs page refresh skipped", exc_info=True)
+
+
 def _status() -> dict:
     path = _ledger_path()
     if not path.is_file():
         return {"rows": 0, "last": None, "per_arm": {}}
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except ValueError:
-            continue
+    rows = ledger_rows(path)
     per_arm: Dict[str, int] = {}
     for row in rows:
         arm = row.get("arm", "?")
@@ -732,6 +1382,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_sweep.add_argument("--dry-run", action="store_true", help="report what WOULD fire; write nothing")
 
     sub.add_parser("status", help="ledger row count, last row, per-arm counts")
+    p_pairs = sub.add_parser("pairs", help="every champion–challenger pair the ledger holds, newest first")
+    p_pairs.add_argument("--arm", default=None, help="only this arm (star|plain|go)")
+    p_pairs.add_argument("--json", action="store_true")
 
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
     cmd = args.cmd
@@ -749,6 +1402,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if cmd == "status":
         print(json.dumps(_status(), indent=2, default=str))
+        return 0
+
+    if cmd == "pairs":
+        views, summary = pairs(arm=args.arm)
+        if args.json:
+            print(json.dumps({"summary": summary, "pairs": views}, indent=2, default=str))
+        else:
+            print(_render_pairs_text(views, summary), end="")
         return 0
 
     parser.print_help()

@@ -65,9 +65,41 @@ def _write_rec(rec: dict) -> None:
 
 def _read_rec(job_id: str) -> dict | None:
     try:
-        return json.loads(_rec_path(job_id).read_text())
+        rec = json.loads(_rec_path(job_id).read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return None
+    if isinstance(rec, dict) and not rec.get("handle_id"):
+        # The worker writes handle_id only when the run ENDS, but a live
+        # operator question needs the handle NOW: Hermes could not target
+        # 2fd65744's live SMS ask (2026-09-07 17:48Z, "live jobs expose no
+        # handle_id") and the code died. The run's metadata carries the
+        # job id from intake, so resolve it from there while in flight.
+        hid = _handle_for_job(job_id)
+        if hid:
+            rec["handle_id"] = hid
+            rec.setdefault("handle_id_source", "run-metadata (in flight)")
+    return rec
+
+
+def _handle_for_job(job_id: str) -> str | None:
+    """Resolve a job id to its run handle from run metadata (`origin.job_id`),
+    newest run first. Read-only; None when no run has started yet."""
+    try:
+        from runs import runs_root
+        root = runs_root()
+        dirs = sorted((d for d in root.iterdir() if d.is_dir()),
+                      key=lambda d: d.stat().st_mtime, reverse=True)
+    except Exception:
+        return None
+    for d in dirs[:200]:
+        try:
+            meta = json.loads((d / "metadata.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        origin = meta.get("origin") if isinstance(meta, dict) else None
+        if isinstance(origin, dict) and origin.get("job_id") == job_id:
+            return str(meta.get("handle_id") or d.name.split("-", 1)[0])
+    return None
 
 
 def _task_status(job_id: str) -> str | None:
@@ -251,6 +283,52 @@ def cmd_result(job_id: str) -> int:
     return _emit(out)
 
 
+def cmd_answer(ref: str, text: str) -> int:
+    """Answer a run's operator question and resume it, detached.
+
+    `ref` is a dispatch job_id (resolved to its handle) or a handle_id.
+    The resume is a queued continuation drained by the same detached
+    worker a dispatch uses, so the gate returns in seconds and the run
+    picks up under its own identity (operator_ask.answer).
+    """
+    import operator_ask
+
+    rec = _read_rec(ref)
+    handle_id = (rec or {}).get("handle_id") or ref
+    res = operator_ask.answer(handle_id, text, source="hermes-ssh")
+    if res.get("status") == "delivered":
+        # Live ask: the worker is waiting on the answer file inside its
+        # running step — nothing to resume, no worker to spawn.
+        return _emit({"status": "delivered", "handle_id": res["handle_id"],
+                      "question": res.get("question", "")})
+    if res.get("status") != "queued":
+        return _emit({"status": "error", "ref": ref,
+                      "error": res.get("error", "answer refused")}) or 2
+    job_id = res["job_id"]
+    new_rec = {
+        "job_id": job_id,
+        "goal": f"ANSWER for {res['handle_id']}: "
+                + text[:400] + ("…" if len(text) > 400 else ""),
+        "status": "dispatched",
+        "handle_id": res["handle_id"],
+        "answers": res["handle_id"],
+        "parent_job_id": (rec or {}).get("job_id"),
+        "dispatched_at": _now(),
+        "source": "hermes-ssh",
+    }
+    _write_rec(new_rec)
+    log = (DISPATCH_DIR / f"{job_id}.log").open("a")
+    subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve()), "worker", job_id],
+        stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        start_new_session=True, cwd=str(REPO),
+    )
+    return _emit({"job_id": job_id, "status": "dispatched",
+                  "handle_id": res["handle_id"], "late": res.get("late", False),
+                  "question": res.get("question", ""),
+                  "poll": f"status {job_id}", "fetch": f"result {job_id}"})
+
+
 def cmd_list() -> int:
     recs = []
     if DISPATCH_DIR.is_dir():
@@ -268,7 +346,7 @@ def cmd_list() -> int:
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return _emit({"error": "usage: dispatch.py enqueue|status|result|list|ping ..."}) or 2
+        return _emit({"error": "usage: dispatch.py enqueue|status|result|answer|list|ping ..."}) or 2
     verb, args = argv[0], argv[1:]
     if verb == "ping":
         return _emit({"status": "ok", "box": "maro", "time": _now()})
@@ -282,6 +360,8 @@ def main(argv: list[str]) -> int:
         return cmd_result(args[0])
     if verb == "list":
         return cmd_list()
+    if verb == "answer" and len(args) >= 2:
+        return cmd_answer(args[0], " ".join(args[1:]))
     return _emit({"error": f"bad verb/args: {verb}"}) or 2
 
 

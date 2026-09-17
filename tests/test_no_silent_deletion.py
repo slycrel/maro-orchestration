@@ -57,8 +57,18 @@ ALLOWED_DELETION_SITES = {
     ("checkpoint.py", "delete_checkpoint"):
         "user-invoked: `checkpoint delete` CLI only; no automatic caller "
         "(finalize's delete-on-done removed 2026-07-10, retention decree)",
+    ("handle.py", "_free_project_name"):
+        "ephemeral: the sibling allocator's own `.reserve-*` staging "
+        "directory, created by the same call moments earlier and never "
+        "published (the rename did not happen) — no run/user data; a "
+        "published reservation is never removed (landscape review r6–r7, "
+        "2026-09-13)",
     ("file_lock.py", "atomic_write"):
         "ephemeral: temp-file swap inside the atomic-write primitive",
+    # review r30: unique live-answer staging is removed only when publication fails.
+    ("operator_ask.py", "_write_answer_file"):
+        "ephemeral: same-directory live-answer temp created by this call; "
+        "removed only when its atomic replace fails",
     ("path_rewrite.py", "rewrite_file"):
         "ephemeral: removes only its own .maro-rewrite.tmp when the "
         "atomic swap fails; the file being rewritten is never unlinked",
@@ -72,6 +82,22 @@ ALLOWED_DELETION_SITES = {
         "ephemeral: clears stale loop-running marker (dead pid)",
     ("killswitch.py", "clear"):
         "user-invoked: the user clearing their own kill switch",
+    ("secrets_store.py", "_write_encrypted"):
+        "ephemeral: unlinks its own 0600 plaintext staging file after one "
+        "sops encrypt call (docs/SECRETS_DESIGN.md)",
+    ("secrets_store.py", "write_hand_off"):
+        "ephemeral staging: replaces a STALE per-step hand-off copy before writing "
+        "the fresh 0600 file (design §6/§10, 2026-09-06); the file holds injected "
+        "secret values only and is shredded when the step ends — never run data",
+    ("secrets_store.py", "_shred"):
+        "ephemeral: zero-fills and removes a run's derived-secret DROP file "
+        "after its values are stored — a plaintext credential must not "
+        "outlive the step; a failed store leaves the file in place",
+    ("shadow_lane.py", "_sweep_go_locked"):
+        "ephemeral: the Go track's own SKIPPED gate stamp, and only one "
+        "whose reason the gate no longer emits (a retired eligibility "
+        "rule); the run's data is never touched — the stamp is the lane's "
+        "marker, re-evaluated on the next sweep (2026-09-06)",
     ("llm.py", "_run_subprocess_safe"):
         "ephemeral: temp prompt file for subprocess adapter",
     ("runs.py", "record_llm_call"):
@@ -106,6 +132,10 @@ ALLOWED_DELETION_SITES = {
         "ephemeral: drain lock file",
     ("run_curation.py", "prune_run"):
         "user-invoked: explicit `prune` CLI subcommand",
+    # review r27: failed atomic deliverable staging removes only its own unique temp.
+    ("run_curation.py", "locate_deliverables"):
+        "ephemeral: removes only a unique same-directory artifact-copy temp "
+        "after copy/publish failure; the source and served destination remain",
     ("runs.py", "invalidate_run_index"):
         "ephemeral: removes only the derived migration marker so metadata can "
         "rebuild the disposable run-reference index",

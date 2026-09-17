@@ -111,16 +111,15 @@ class PriorAttempt:
 class ThreadIdentity:
     """Where this goal came from.
 
-    Resolved from run-metadata origin (handle_id chain) when the caller has
-    one; otherwise from the project's ancestry.json via ancestry.py — the same
-    source loop_init's prompt injection reads, so the two lineage strings in
-    the loop prompt can't disagree (BACKLOG: ancestry double-injection).
+    Resolved from run-metadata origin (handle_id chain): the operator's
+    `--after`, a task-path dispatch, or the landscape's own decision
+    (src/landscape.py). The project-ancestry (goal-slug) fallback was retired
+    2026-09-05 when the landscape took over the relation decision.
     """
     parent_goal: str
     parent_handle_id: str
-    chain: List[str]     # immediate parent first; handle_ids (origin walk) or
-                         # project slugs (ancestry.json fallback, source="ancestry")
-    source: str          # task_store | agent_loop | director | direct | ancestry | ...
+    chain: List[str]     # immediate parent first; handle_ids (origin walk)
+    source: str          # task_store | agent_loop | director | direct | cli | ...
 
 
 @dataclass
@@ -331,28 +330,72 @@ def _resolve_thread(origin: Optional[Origin]) -> Optional[ThreadIdentity]:
     )
 
 
-def _thread_from_project_ancestry(project: str) -> Optional[ThreadIdentity]:
-    """Lineage from the project's ancestry.json (ancestry.py).
+def _origin_of_run(ref: str) -> Optional[Origin]:
+    """The origin dict stamped on a run's metadata, by handle_id or loop_id."""
+    from runs import resolve_run_dir
+    rd = resolve_run_dir(ref)
+    if rd is None:
+        return None
+    meta = _read_run_metadata(rd)
+    if not meta:
+        return None
+    o = meta.get("origin")
+    return o if isinstance(o, dict) else None
 
-    The unification half of the BACKLOG ancestry-double-injection item: when
-    run-metadata origin gives recall nothing, consult the same chain
-    loop_init's `build_ancestry_prompt` injects instead of staying silent —
-    one source of truth for both lineage strings in the loop prompt.
-    """
-    if not project:
+
+# Prefix of a lineage string that names a run whose lineage could NOT be
+# resolved (cyclic ancestry, chain over the depth cap, a mint whose run is
+# unknown, a lookup error). It is never "" — "" is workspace-wide, the widest
+# scope — and it matches no run's root, so a lesson carrying it is injected
+# nowhere until an explicit re-scope. Fail closed: a lesson whose scope is
+# unknown gets the narrowest visibility, not the widest.
+UNRESOLVED_LINEAGE = "unresolved:"
+
+
+def lineage_root(ref: str) -> str:
+    """The root handle_id of the run lineage ``ref`` (a handle_id or loop_id)
+    belongs to: walk origin.parent_handle_id until a run with no parent, cycle-
+    and depth-guarded. A run that follows nothing is its own root. Unknown
+    ref → "" (workspace scope, never a guess)."""
+    if not ref:
+        return ""
+    from runs import resolve_run_dir
+    rd = resolve_run_dir(ref)
+    if rd is None:
+        return ""
+    cursor = rd.name.split("-", 1)[0]
+    seen = [cursor]
+    while True:
+        o = _origin_of_run(cursor)
+        parent = str((o or {}).get("parent_handle_id") or "")
+        if not parent:
+            break
+        if parent in seen:
+            # A cycle is not a lineage. Every member resolves to the SAME
+            # sentinel (the cycle's least handle), and the sentinel matches
+            # no run's root, so a lesson minted from a cycle member is
+            # visible to nobody rather than to a start-dependent subset
+            # (review 2026-09-05: x→y→x resolved to y from x and x from y).
+            members = seen[seen.index(parent):]
+            return UNRESOLVED_LINEAGE + "cycle:" + min(members)
+        if resolve_run_dir(parent) is None:
+            break  # a parent the workspace does not hold: the chain stops here
+        if len(seen) > _CHAIN_DEPTH_CAP:
+            return UNRESOLVED_LINEAGE + "depth:" + seen[0]
+        seen.append(parent)
+        cursor = parent
+    return cursor
+
+
+def _thread_from_current_run() -> Optional[ThreadIdentity]:
+    """Lineage of the run that is executing right now, from its own stamped
+    origin — the loop seam calls recall() without an origin, so this is how a
+    `--after` goal's lineage reaches lesson selection."""
+    from runs import current_handle_id
+    hid = current_handle_id()
+    if not hid:
         return None
-    from orch_items import project_dir
-    from ancestry import get_project_ancestry
-    pa = get_project_ancestry(project_dir(project))
-    if not pa or not pa.ancestry:
-        return None
-    nodes = pa.ancestry  # top-level mission first, immediate parent last
-    return ThreadIdentity(
-        parent_goal=nodes[-1].title,
-        parent_handle_id="",
-        chain=[n.id for n in reversed(nodes)],  # immediate parent first
-        source="ancestry",
-    )
+    return _resolve_thread(_origin_of_run(hid))
 
 
 def _normalize(text: str) -> str:
@@ -587,12 +630,36 @@ def recall(
     try:
         thread = _resolve_thread(origin)
         if thread is None:
-            thread = _thread_from_project_ancestry(project)
+            thread = _thread_from_current_run()
+        # No project-ancestry (goal-slug) fallback any more: the landscape
+        # decides a goal's relation to prior runs before it runs and stamps
+        # the decided parent on the origin (src/landscape.py, 2026-09-05).
+        # The slug path decided lineage by string identity — an identically
+        # worded stranger inherited a lineage's ancestry (feature-1 side-find).
     except Exception as exc:
         log.debug("recall: thread resolution failed: %s", exc)
         thread = None
     sources["thread_chain_len"] = len(thread.chain) if thread else 0
     sources["thread_source"] = thread.source if thread else ""
+
+    # Lineage scope for lesson selection: the root of the current run's
+    # lineage (its parent chain's last handle, or itself). No current run and
+    # no origin → "" → workspace rows only (a stranger to every lineage).
+    lineage = ""
+    try:
+        from runs import current_handle_id
+        _self = current_handle_id() or ""
+        if _self:
+            lineage = lineage_root(_self)
+        elif origin and origin.get("parent_handle_id"):
+            lineage = lineage_root(str(origin["parent_handle_id"]))
+    except Exception as exc:
+        log.debug("recall: lineage resolution failed: %s", exc)
+        lineage = ""
+    sources["lineage"] = lineage
+    # The recall record says what scope excluded, not only what it kept:
+    # "absent" and "excluded by lineage" are different facts (review 2026-09-05).
+    _lineage_diag: dict = {"lineage_excluded": 0}
 
     try:
         from runs import current_handle_id
@@ -673,7 +740,8 @@ def recall(
             # adjustments ride the frame extra so the readout can see both
             # rankings.
             _scored_agenda = query_lessons_scored(
-                goal, n=10, task_type="agenda")
+                goal, n=10, task_type="agenda", lineage=lineage or None,
+                diagnostics=_lineage_diag)
             _cam_candidates["agenda"] = _scored_agenda
             # One cache snapshot for both apply calls — a concurrent
             # finalize refresh landing between them must not show the
@@ -689,7 +757,9 @@ def recall(
                 # top-up below can never recover them). Dedup by lesson_id
                 # — the untyped query is a superset of the agenda one.
                 _have_ids = {getattr(_l, "lesson_id", "") for _l in _lessons}
-                _scored_untyped = query_lessons_scored(goal, n=10)
+                _scored_untyped = query_lessons_scored(
+                    goal, n=10, lineage=lineage or None,
+                    diagnostics=_lineage_diag)
                 _cam_candidates["untyped"] = _scored_untyped
                 _sel_untyped, _adj_untyped = apply_portability(
                     _scored_untyped, goal, project, cache=_port_cache)
@@ -827,7 +897,7 @@ def recall(
         # lifecycle (un-decays matches); inherited agent_loop behavior.
         try:
             from memory import search_graveyard
-            _gy = search_graveyard(goal, resurrect=True)
+            _gy = search_graveyard(goal, resurrect=True, lineage=lineage or None)
             if _gy:
                 result.graveyard = (
                     "Previously-learned (resurrected from decay):\n"
@@ -836,6 +906,7 @@ def recall(
                 sources["graveyard_count"] = len(_gy)
         except Exception:
             pass
+        sources["lineage_excluded"] = int(_lineage_diag.get("lineage_excluded", 0))
 
         # 5. Failure patterns from diagnoses (same-project diagnoses lead).
         try:

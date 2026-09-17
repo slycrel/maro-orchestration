@@ -285,6 +285,7 @@ def _build_result_and_finalize(
         march_of_nines_alert=march_of_nines_alert,
         pre_flight_review=pf_review,
         had_no_matching_skill=had_no_matching_skill,
+        regression_obligations=ctx.regression.to_list(),
     )
 
     # Write the loop transcript artifact: RESULT.md for a completed loop,
@@ -341,7 +342,13 @@ def _build_result_and_finalize(
             log.debug("partial result write failed: %s", exc)
 
     if ctx.verbose:
-        print(f"[maro] {result.summary()}", file=sys.stderr, flush=True)
+        # Never fatal (review round 5, 2026-09-13): this summary precedes
+        # the durable stamps below; a closed stderr must not cost the run
+        # its metadata (the pause_reason handle_queue resumes on).
+        try:
+            print(f"[maro] {result.summary()}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
     # World-facts slice 2: land the run's declared facts (anecdotal →
     # candidate knowledge nodes, hypotheses → observe_pattern). Before
@@ -478,6 +485,20 @@ def _build_result_and_finalize(
             log.warning("run worktree finalize error: %s", _wt_exc)
         ctx.run_worktree = None
 
+    # LAST status decision of Phase G (r1: it ran first, before the
+    # merge-backs above could demote done → partial and before fallible
+    # writes could raise — a consumed source with a run that then did not
+    # end done). Everything after this point is best-effort persistence
+    # that never changes the status.
+    _pre_settle_status = result.status
+    result.status, result.stuck_reason = settle_resume_claim(
+        ctx, result.status, result.stuck_reason)
+    if result.status != _pre_settle_status and not result.stop_verdict:
+        # Landing machinery failed after the goal work — infra, not a
+        # mid-goal shortfall (the merge-back demotions' precedent).
+        result.stop_verdict = "external-interrupt"
+        result.stop_evidence = clip(RESUME_UNSETTLED_REASON, 800)
+
     if result.stop_verdict and result.stop_verdict != _pre_merge_verdict:
         try:
             from memory_ledger import stamp_outcome_stop_verdict
@@ -509,25 +530,7 @@ def _build_result_and_finalize(
     except Exception as _sv_exc:
         log.debug("stop-verdict metadata stamp failed: %s", _sv_exc)
 
-    # Release loop lock — the admission slot first (per-project flock),
-    # then the global informational lockfile.
-    try:
-        if getattr(ctx, "project_slot", None) is not None:
-            ctx.project_slot.release()
-            ctx.project_slot = None
-    except Exception as _slot_exc:
-        log.debug("project slot release failed: %s", _slot_exc)
-    try:
-        if getattr(ctx, "run_lease", None) is not None:
-            ctx.run_lease.release()
-            ctx.run_lease = None
-    except Exception as _lease_exc:
-        log.debug("run lease release failed: %s", _lease_exc)
-    try:
-        from interrupt import clear_loop_running
-        clear_loop_running()
-    except Exception as _lock_exc:
-        log.debug("clear_loop_running failed: %s", _lock_exc)
+    release_loop_resources(ctx)
 
     # Signal heartbeat to wake immediately — pick up next queued task without
     # waiting for the full interval tick.  Reduces task-to-task latency from
@@ -590,6 +593,134 @@ def drain_deferred_maintenance(handle_id: str) -> int:
             log.warning("deferred maintenance failed for handle %s: %s",
                         handle_id, exc)
     return len(fns)
+
+
+RESUME_UNSETTLED_REASON = (
+    "resume completed, but the source checkpoint could not be marked consumed; "
+    "refusing a success status because the old resume id could replay external effects")
+
+
+def settle_resume_claim(ctx, loop_status: str, stuck_reason: Optional[str], *,
+                        successor_loop_id: str = ""):
+    """The ending of the claim a resumed run holds (chunk 9). Done → the
+    source must be settled (`checkpoint.settle_resume_source`: overwritten
+    by the complete successor, else consumed in place) or the run is NOT
+    done — `incomplete`, with the reason. Any other status keeps the
+    claim as it is: it is the replay barrier (live while this process
+    runs, superseded once the successor's file exists). Returns the
+    (status, stuck_reason) the run ends with. Runs at the LAST status
+    decision: the end of Phase G, after the merge-backs (r1), on the
+    parallel lane's result, and after an auto-recovery child returns
+    (`successor_loop_id` = the child that finished the work).
+
+    Deferred (`ctx.defer_resume_settlement`) when the CALLER owns the
+    terminal decision — the CLI runs closure verification after the loop
+    returns and can still demote done → incomplete, so it settles itself
+    afterwards with the same `settle_resume_source` (the `defer_learning`
+    shape: one function, called by whoever ends the run)."""
+    permit = getattr(ctx, "resume_claim_release", None)
+    if permit is None or loop_status != "done" or getattr(ctx, "defer_resume_settlement", False):
+        return loop_status, stuck_reason
+    try:
+        from checkpoint import settle_resume_source as _settle
+        ok = _settle(permit, successor_loop_id=successor_loop_id or ctx.loop_id)
+    except Exception as exc:
+        log.error("resume source settlement for %s raised: %s", ctx.loop_id, exc)
+        ok = False
+    if ok:
+        return loop_status, stuck_reason
+    log.warning("loop %s: %s (source %s)", ctx.loop_id, RESUME_UNSETTLED_REASON,
+                getattr(permit, "source", permit))
+    return "incomplete", RESUME_UNSETTLED_REASON
+
+
+def release_loop_resources(ctx) -> None:
+    """Release what `_initialize_loop` acquired — the admission slot first
+    (per-project flock), then the run lease, then the global informational
+    running marker. ONE home for every ending (finalize and the
+    pre-execution refusals — chunk 6, 2026-09-16: the refusals returned
+    with all three still held and relied on destructors)."""
+    try:
+        if getattr(ctx, "project_slot", None) is not None:
+            ctx.project_slot.release()
+            ctx.project_slot = None
+    except Exception as _slot_exc:
+        log.warning("project slot release failed: %s", _slot_exc)
+    try:
+        if getattr(ctx, "run_lease", None) is not None:
+            ctx.run_lease.release()
+            ctx.run_lease = None
+    except Exception as _lease_exc:
+        log.warning("run lease release failed: %s", _lease_exc)
+    try:
+        from interrupt import clear_loop_running
+        clear_loop_running()
+    except Exception as _lock_exc:
+        log.warning("clear_loop_running failed: %s", _lock_exc)
+
+
+def finalize_refusal(ctx, result):
+    """The ending for a run refused BEFORE its first step (cost gate, resume
+    refusal): no steps, no learning, no manifest — but the run's record must
+    say "refused" (typed stop verdict in metadata), the containerized
+    scratch clone and the isolated worktree (busy_policy=worktree) must be
+    discarded (nothing agentic ran, nothing to merge), and every acquired
+    resource released, exactly as `_finalize_loop` does for a run that
+    executed. Returns `result`, so a refusal site can `return
+    finalize_refusal(ctx, LoopResult(...))`. Never raises."""
+    try:
+        if not getattr(result, "stop_verdict", ""):
+            result.stop_verdict = getattr(ctx, "stop_verdict", "") or ""
+            result.stop_evidence = getattr(ctx, "stop_evidence", "") or ""
+    except Exception as _cp_exc:
+        log.debug("refusal verdict copy failed: %s", _cp_exc)
+    try:
+        from runs import stamp_run_stop_verdict as _stamp_stop_meta
+        _stamp_stop_meta(stop_verdict=result.stop_verdict,
+                         stop_evidence=result.stop_evidence, pause_reason="")
+    except Exception as _sv_exc:
+        log.warning("refusal stop-verdict metadata stamp failed: %s", _sv_exc)
+    _rel = getattr(ctx, "resume_claim_release", None)
+    if _rel:
+        # Nothing ran: the claim this run wrote on its source must not
+        # outlive the refusal (it would read as unresolved once this
+        # process exits and demand --reclaim for a run that did nothing).
+        try:
+            from checkpoint import release_checkpoint_claim as _release_claim
+            if not _release_claim(_rel.source, _rel.nonce):
+                log.warning("refused resume: the claim on %s could not be released — "
+                            "it reads as claimed until the operator reclaims it", _rel.source)
+        except Exception as _rel_exc:
+            log.warning("refused resume: claim release on %s failed: %s",
+                        getattr(_rel, "source", _rel), _rel_exc)
+        ctx.resume_claim_release = None
+    if getattr(ctx, "container_clone", None) is not None:
+        # Provisioned before the resume load (agent_loop Phase A), so a
+        # refusal used to leak it (r1 MED). Clone first: it is cut from
+        # the worktree when busy_policy=worktree.
+        _clone = ctx.container_clone
+        try:
+            import worktree as _wtmod
+            _wtmod.cleanup_clone(_clone)
+        except Exception as _cl_exc:
+            log.warning("refused run's scratch-clone cleanup failed: %s", _cl_exc)
+        ctx.container_clone = None
+    if getattr(ctx, "run_worktree", None) is not None:
+        _wt = ctx.run_worktree
+        try:
+            import worktree as _wtmod
+            _wtmod.cleanup(_wt, keep_on_failure=False)
+            _wtmod.prune(_wt.repo_dir)
+        except Exception as _wt_exc:
+            log.warning("refused run's worktree cleanup failed: %s", _wt_exc)
+        ctx.run_worktree = None
+    release_loop_resources(ctx)
+    try:
+        from heartbeat import post_heartbeat_event as _phb_event
+        _phb_event(event_type="loop_done", payload=(ctx.project or ""))
+    except Exception as _phb_exc:
+        log.debug("heartbeat wake after refusal failed: %s", _phb_exc)
+    return result
 
 
 def _finalize_loop(

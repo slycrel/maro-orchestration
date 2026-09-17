@@ -1986,6 +1986,7 @@ def _nav_tabs(active: str) -> str:
     """Top-level page tabs shared by the runs index, reading, and dev-log pages."""
     parts = []
     for href, label, key in (("index.html", "Runs", "runs"),
+                             ("pairs.html", "Pairs", "pairs"),
                              ("reading.html", "Reading", "reading"),
                              ("dev-log.html", "Dev log", "devlog")):
         cls = ' class="active"' if key == active else ""
@@ -2182,6 +2183,7 @@ def write_runs_index(*, force: bool = False) -> Optional[str]:
             _last_index_write[key] = now
         write_reading_page(root)
         write_devlog_page(root)
+        write_pairs_page(root)
         return str(out)
     except Exception:
         log.warning("runs index write failed", exc_info=True)
@@ -2259,6 +2261,104 @@ source: <a href="{_esc(_GITHUB_BLOB_BASE + "docs/READING_QUEUE.md")}" target="_b
 </table>
 </body></html>
 """
+
+
+def _render_pairs_html(views: List[dict], summary: dict) -> str:
+    def _usd(x):
+        return "-" if x is None else f"${float(x):.3f}"
+
+    def _secs(x):
+        return "-" if x is None else f"{float(x):.0f}s"
+
+    rows = []
+    for v in views:
+        p, c = v["primary"], v["challenger"]
+        handle = _esc(v["handle_id"] or "?")
+        handle_cell = f'<a href="{_esc(v["report"])}">{handle}</a>' if v.get("report") else handle
+        prim = ("achieved" if p["achieved"] else "not achieved") + f' · {_usd(p["cost_usd"])} · {_secs(p["wall_seconds"])}'
+        if p.get("model"):
+            prim += f' · {_esc(p["model"])}'
+        outcome = _esc(c["outcome"])
+        if c["asked"]:
+            outcome = f'<span class="badge badge-warn">asked</span> {_esc(c["question"] or "")}'
+        elif c.get("landscape"):
+            outcome += f' <span class="meta">({_esc(c["landscape"])})</span>'
+        chal = f'{outcome}<br><span class="meta">{_usd(c["cost_usd"])} · {_secs(c["wall_seconds"])}'
+        if c.get("model"):
+            chal += f' · {_esc(c["model"])}'
+        toks = [t for t in (("in", c["tokens_in"]), ("out", c["tokens_out"]), ("cached", c["tokens_cached"])) if t[1] is not None]
+        if toks:
+            chal += " · " + " ".join(f"{k}={v_}" for k, v_ in toks)
+        if c.get("context_docs"):
+            chal += f' · context: {_esc(", ".join(c["context_docs"]))}'
+        if c.get("binary"):
+            chal += f' · bin {_esc(c["binary"])}'
+        chal += "</span>"
+        if v.get("result_excerpt"):
+            chal += f'<details><summary class="meta">challenger result</summary><pre>{_esc(v["result_excerpt"])}</pre></details>'
+        ratio = "-" if v["cost_ratio"] is None else f'{v["cost_ratio"]:.2f}×'
+        rows.append(
+            "<tr>"
+            f'<td class="meta">{_esc((v["ts"] or "")[:16].replace("T", " "))}</td>'
+            f"<td>{handle_cell}</td>"
+            f'<td>{_esc(v["arm"])}</td>'
+            f'<td class="meta">{_esc(v["lane"] or "?")} · {_esc(v["shape"])}</td>'
+            f"<td>{prim}</td>"
+            f"<td>{chal}</td>"
+            f'<td class="meta">{ratio}</td>'
+            "</tr>"
+        )
+    body_rows = "".join(rows) if rows else (
+        '<tr><td colspan="7" class="meta">No pairs yet — the shadow lane has not fired a challenger.</td></tr>'
+    )
+    cost, wall = summary["cost"], summary["wall"]
+    shapes = ", ".join(f"{k}: {n}" for k, n in sorted(summary["per_shape"].items())) or "-"
+    arms = ", ".join(f"{k}: {n}" for k, n in sorted(summary["per_arm"].items())) or "-"
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Maro shadow pairs</title>
+<style>{_CSS}
+.badge-warn {{ background: #5a4a10; color: #ffe08a; }}
+pre {{ white-space: pre-wrap; font-size: 12px; max-height: 320px; overflow: auto; }}
+</style></head>
+<body>
+{_nav_tabs("pairs")}
+<div class="idx-header">
+<div><h1>Pairs</h1><div class="meta">{summary["rows"]} champion–challenger pair(s), newest first — arms {_esc(arms)}; shapes {_esc(shapes)}; challenger asked a clarification on {summary["asked"]}; primary achieved on {summary["primary_achieved"]}<br>
+cost: {cost["paired"]} paired, median challenger/primary {cost["median_ratio"] if cost["median_ratio"] is not None else "-"}, challenger {_usd(cost["challenger_usd"])} vs primary {_usd(cost["primary_usd"])} · wall: {wall["paired"]} paired, median ratio {wall["median_ratio"] if wall["median_ratio"] is not None else "-"} · answer agreement: the batch judge's, at ~10 rows<br>
+source: <code>memory/shadow_ledger.jsonl</code> (<code>python3 -m shadow_lane pairs</code>); design: <a href="{_esc(_GITHUB_BLOB_BASE + "docs/SHADOW_LANE_DESIGN.md")}" target="_blank" rel="noopener">docs/SHADOW_LANE_DESIGN.md</a></div></div>
+</div>
+<table class="idx-table">
+<tr><th>When</th><th>Run</th><th>Arm</th><th>Lane · shape</th><th>Primary</th><th>Challenger</th><th>Cost ratio</th></tr>
+{body_rows}
+</table>
+</body></html>
+"""
+
+
+def write_pairs_page(root: Optional[Path] = None) -> Optional[str]:
+    """Render the shadow ledger into `runs_root()/pairs.html`. Never raises.
+
+    The Pairs tab: every champion–challenger pair the lane has recorded
+    (star|plain and the Go track), the partition the pre-registered
+    questions need (goal shape, asked-vs-failed), the two ratios, and the
+    challenger's result inline — `shadow-go/` is not a servable subtree,
+    so the excerpt travels with the page. Refreshed by the runs-index
+    write and by the sweep after every row it appends.
+    """
+    try:
+        if root is None:
+            from runs import runs_root
+            root = runs_root()
+        root = Path(root)
+        root.mkdir(parents=True, exist_ok=True)
+        from shadow_lane import pairs
+        views, summary = pairs()
+        out = root / "pairs.html"
+        _atomic_write_text(out, _render_pairs_html(views, summary))
+        return str(out)
+    except Exception:
+        log.warning("pairs page write failed", exc_info=True)
+        return None
 
 
 def write_reading_page(root: Optional[Path] = None,

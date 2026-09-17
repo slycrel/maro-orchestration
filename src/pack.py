@@ -679,6 +679,16 @@ def _union_variants_into_local(lesson_text: str, variants: List[str]) -> None:
             "pack import: variant union skipped: %s", exc)
 
 
+def _foreign_lineage(value) -> str:
+    """The lineage an imported row carries: "" stays "" (workspace-wide by
+    the exporter's word); anything else is namespaced ``foreign:<root>`` so
+    it can never equal a local lineage root. Already-foreign stays as is."""
+    lin = str(value or "").strip()
+    if not lin or lin.startswith("foreign:"):
+        return lin
+    return "foreign:" + lin
+
+
 def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                      now: str, dry_run: bool) -> List[Dict[str, Any]]:
     """Lessons enter MEDIUM tier regardless of origin tier, score capped at 0.5
@@ -827,6 +837,12 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                 # this comment claimed a separation the census did not
                 # perform — the rows carried the flag and nothing read it.)
                 scope=_scope_clean,
+                # A lineage-scoped row stays out of every lineage here: the
+                # foreign root names no local run, and "" would be
+                # workspace-WIDE (review 2026-09-05: import silently widened
+                # the row). It is kept, namespaced, and invisible until an
+                # explicit local re-scope.
+                lineage=_foreign_lineage(row.get("lineage")),
                 provisional=bool(row.get("provisional", False)),
                 minted_from=minted_from,
                 imported=imported,

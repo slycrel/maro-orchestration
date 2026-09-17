@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -139,17 +140,34 @@ def _workspace_config_path() -> Path:
     return workspace_root() / "config.yml"
 
 
-def _load_yaml(path: Path) -> dict:
+_config_lock = threading.Lock()
+
+
+def load_faults() -> list[str]:
+    """Paths that failed to load on the most recent uncached config read."""
+    with _config_lock:
+        return list(_config_cache[2]) if _config_cache is not None else []
+
+
+def _load_yaml(path: Path, faults: list[str]) -> dict:
     """Load a YAML file. Returns {} if missing/malformed."""
-    if not path.exists():
-        return {}
+    import yaml
     try:
-        import yaml
         text = path.read_text(encoding="utf-8")
         data = yaml.safe_load(text)
-        return data if isinstance(data, dict) else {}
-    except Exception:
+        if data is None:
+            return {}  # an empty file is an empty mapping, not a fault
+        if isinstance(data, dict):
+            return data
+    except FileNotFoundError:
         return {}
+    except (OSError, UnicodeError, yaml.YAMLError):
+        pass
+    # review r17: a file that exists but cannot be read, parsed, or is not
+    # a mapping is a FAULT, remembered for `load_faults()` — defaulting
+    # must not turn an unreadable hook into "no hook owed".
+    faults.append(str(path))
+    return {}
 
 
 # Cached merged config — loaded once per process *per config path pair*,
@@ -157,8 +175,9 @@ def _load_yaml(path: Path) -> dict:
 # Tests and worker subprocesses routinely swap MARO_WORKSPACE/OPENCLAW_WORKSPACE
 # at runtime; a path-blind cache leaks the prior workspace's merged config into
 # the new one.
-_config_cache: Optional[dict] = None
-_config_cache_key: Optional[tuple] = None
+# review r18: publish data, identity, and local faults together so readers
+# cannot clear another load's fault and cache its partial configuration.
+_config_cache: Optional[tuple[dict, tuple, tuple[str, ...]]] = None
 
 
 def _mtime(path: Path) -> float:
@@ -176,16 +195,32 @@ def load_config(*, reload: bool = False) -> dict:
     an operator's config edit without needing a restart). Pass reload=True
     to force a re-read regardless.
     """
-    global _config_cache, _config_cache_key
+    with _config_lock:
+        return _load_config_locked(reload=reload)[0]
+
+
+def snapshot(*, reload: bool = False) -> tuple[dict, list[str]]:
+    """Return merged config and its load faults from the same published load."""
+    # review r19: separate reads can pair faulted data with a clean publish.
+    with _config_lock:
+        merged, _, faults = _load_config_locked(reload=reload)
+        return merged, list(faults)
+
+
+def _load_config_locked(*, reload: bool) -> tuple[dict, tuple, tuple[str, ...]]:
+    """Load or reuse the published snapshot while the caller holds the lock."""
+    global _config_cache
     user_path = _user_config_path()
     workspace_path = _workspace_config_path()
     cache_key = (str(user_path), str(workspace_path), _mtime(user_path), _mtime(workspace_path))
 
-    if _config_cache is not None and not reload and _config_cache_key == cache_key:
+    if (_config_cache is not None and not reload
+            and _config_cache[1] == cache_key and not _config_cache[2]):
         return _config_cache
 
-    user = _load_yaml(user_path)
-    workspace = _load_yaml(workspace_path)
+    faults: list[str] = []
+    user = _load_yaml(user_path, faults)
+    workspace = _load_yaml(workspace_path, faults)
 
     # Shallow merge: workspace keys override user keys.
     # Nested dicts are merged one level deep (e.g. model.default_tier).
@@ -196,9 +231,9 @@ def load_config(*, reload: bool = False) -> dict:
         else:
             merged[k] = v
 
-    _config_cache = merged
-    _config_cache_key = cache_key
-    return merged
+    # review r17: retry faults even when a repaired file keeps its mtime.
+    _config_cache = (merged, cache_key, tuple(faults))
+    return _config_cache
 
 
 def get(key: str, default: Any = None) -> Any:
@@ -256,20 +291,41 @@ def credentials_env_file() -> Path:
     return local
 
 
+def _parse_dotenv_text(text: str) -> dict[str, str]:
+    """KEY=value pairs from dotenv text: comments and blanks skipped, one
+    layer of matching quotes stripped. Shared by the legacy plaintext
+    reader, the secrets-store migration and the derived-secret drop."""
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            k = k.strip()
+            if k:
+                result[k] = v.strip().strip('"').strip("'")
+    return result
+
+
 def load_credentials_env() -> dict[str, str]:
-    """Load key=value pairs from credentials env file."""
+    """Credential name → value from every file source, in precedence order:
+    the managed secrets store (`secrets_store`, sops + age, 2026-09-06) wins
+    over the legacy plaintext credentials env file (`credentials_env_file`),
+    which keeps serving names the store lacks — so the day the store
+    appears nothing breaks, and `maro secrets check` names the residue.
+    Callers layer the PROCESS env above this themselves (llm._get_key)."""
     result: dict[str, str] = {}
     path = credentials_env_file()
-    if not path.exists():
-        return result
+    if path.exists():
+        try:
+            result.update(_parse_dotenv_text(path.read_text()))
+        except OSError:
+            pass
     try:
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if "=" in line and not line.startswith("#"):
-                k, v = line.split("=", 1)
-                result[k.strip()] = v.strip().strip('"').strip("'")
-    except Exception:
-        pass
+        import secrets_store as _ss
+        result.update(_ss.load())
+    except Exception as exc:  # the store must never take the legacy path down
+        import logging
+        logging.getLogger("config").warning("secrets store lookup failed: %s", exc)
     return result
 
 

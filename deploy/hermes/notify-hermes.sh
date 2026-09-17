@@ -100,7 +100,8 @@ announce=0
 case "$event" in
   run_completed) [ -n "$job_id" ] && announce=1 ;;
   escalation|backend_actionable|stranded_run|recursion_checkin|\
-  self_improvement_verdict|resume_refused_busy|resume_lock_unavailable)
+  self_improvement_verdict|resume_refused_busy|resume_lock_unavailable|\
+  operator_question|operator_question_expired)
     announce=1 ;;
 esac
 printf '%s' "$payload" | ssh -o ConnectTimeout=5 -o BatchMode=yes \

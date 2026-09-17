@@ -222,3 +222,109 @@ class TestWorkerMemorySlice:
         result = dispatch_worker(WORKER_OPS, "check status", dry_run=True)
         result.memory_slice_injected = True
         assert result.memory_slice_injected is True
+
+
+def test_adapter_failure_carries_the_structured_error_class():
+    # Review round 2 (2026-09-13): the text-only stuck_reason destroyed the
+    # typed refusal; the director reads error_class through the loop's seam.
+    from llm_errors import BackendError, ErrorInfo, CONTAINER_AUTH
+    from workers import dispatch_worker
+
+    class _Refusing:
+        model_key = "t"; backend = "subprocess"
+        def complete(self, messages, **kwargs):
+            raise BackendError(ErrorInfo(error_class=CONTAINER_AUTH, backend="subprocess",
+                                         retryable=False, failover=False,
+                                         user_action="re-seed", detail="breaker tripped"))
+    res = dispatch_worker("research", "look at the inbox", adapter=_Refusing())
+    assert res.status == "blocked" and res.blocked_origin == "adapter"
+    assert res.error_class == "container_auth"
+
+def test_worker_kill_preserves_partial_output_and_usage(monkeypatch, tmp_path):
+    # Review round 8: the worker lane copied the error class but returned
+    # result="" and zero tokens — a runaway kill's measured ingest and the
+    # only record of what the ticket did before dying were dropped.
+    from workers import dispatch_worker
+    from llm_errors import kill_evidence
+    exc = RuntimeError("token runaway: killed at 100000 input tokens")
+    exc.maro_partial_output = "partial work already performed"
+    exc.fresh_input_tokens = 100000
+    exc.estimated_cost_usd = 1.25
+    assert kill_evidence(exc) == ("[partial output before kill]\npartial work already performed", 100000, 1.25)
+    assert kill_evidence(RuntimeError("plain")) == ("", 0, 0.0)
+    bad = RuntimeError("x"); bad.fresh_input_tokens = "many"; bad.estimated_cost_usd = None
+    assert kill_evidence(bad) == ("", 0, 0.0)
+    class _Adapter:
+        model_key = "t"; backend = "subprocess"
+        def complete(self, messages, **kwargs):
+            raise exc
+    import container_exec as ce
+    monkeypatch.setattr(ce, "enforce_backend_container_contract", lambda *a, **k: None)
+    r = dispatch_worker("research", "find it", context="", adapter=_Adapter(), dry_run=False)
+    assert r.status == "blocked" and r.blocked_origin == "adapter"
+    assert r.result == "[partial output before kill]\npartial work already performed"
+    assert r.tokens_in == 100000
+
+
+
+def test_worker_kill_keeps_output_tokens_too(monkeypatch):
+    # Round 10: the ticket's output tokens were dropped with the kill.
+    from workers import dispatch_worker
+    exc = RuntimeError("killed")
+    exc.maro_partial_output = "half a ticket"; exc.fresh_input_tokens = 5; exc.fresh_output_tokens = 2
+    class _Adapter:
+        model_key = "t"; backend = "subprocess"
+        def complete(self, messages, **kwargs):
+            raise exc
+    import container_exec as ce
+    monkeypatch.setattr(ce, "enforce_backend_container_contract", lambda *a, **k: None)
+    r = dispatch_worker("research", "find it", context="", adapter=_Adapter(), dry_run=False)
+    assert r.status == "blocked" and (r.tokens_in, r.tokens_out) == (5, 2) and "half a ticket" in r.result
+
+
+def test_paid_worker_refusal_preserves_cost_and_cache(monkeypatch):
+    # Review round 19: the worker lane carried a failed ticket's partial
+    # output and token counts but dropped its COST and CACHE-READ tokens —
+    # the paid attempts a container-auth refusal or a runaway kill leaves
+    # behind reached the director as free work.
+    from container_exec import ContainerAuthExpired
+    from workers import dispatch_worker
+    exc = ContainerAuthExpired("container auth expired: OAuth session expired")
+    exc.maro_partial_output = "read the inbox"
+    exc.fresh_input_tokens = 37; exc.fresh_output_tokens = 9
+    exc.fresh_cache_read_tokens = 100; exc.estimated_cost_usd = 0.12
+    class _Adapter:
+        model_key = "t"; backend = "subprocess"
+        def complete(self, messages, **kwargs):
+            raise exc
+    import container_exec as ce
+    monkeypatch.setattr(ce, "enforce_backend_container_contract", lambda *a, **k: None)
+    r = dispatch_worker("research", "find it", context="", adapter=_Adapter(), dry_run=False)
+    assert r.status == "blocked" and r.error_class == "container_auth"
+    assert (r.tokens_in, r.tokens_out) == (137, 9), "total-input convention: fresh + cache"
+    assert r.cost_usd == pytest.approx(0.12) and r.cache_read_tokens == 100
+    assert "read the inbox" in r.result
+    # a success carries the response's own cost and cache reads the same way
+    from llm import LLMResponse
+    class _Ok:
+        model_key = "t"; backend = "subprocess"
+        def complete(self, messages, **kwargs):
+            return LLMResponse(content="done: the inbox has three unread threads", input_tokens=137, output_tokens=9,
+                               cost_usd=0.12, cache_read_tokens=100)
+    ok = dispatch_worker("research", "find it", context="", adapter=_Ok(), dry_run=False)
+    assert ok.status == "done" and ok.cost_usd == pytest.approx(0.12) and ok.cache_read_tokens == 100
+    # negative control: an evidence-less failure records nothing
+    class _Plain:
+        model_key = "t"; backend = "subprocess"
+        def complete(self, messages, **kwargs):
+            raise RuntimeError("plain")
+    p = dispatch_worker("research", "find it", context="", adapter=_Plain(), dry_run=False)
+    assert (p.cost_usd, p.cache_read_tokens, p.tokens_in) == (0.0, 0, 0)
+    # sibling: an EMPTY answer was still a paid call
+    class _Empty:
+        model_key = "t"; backend = "subprocess"
+        def complete(self, messages, **kwargs):
+            return LLMResponse(content="", input_tokens=40, output_tokens=1, cost_usd=0.03, cache_read_tokens=8)
+    e = dispatch_worker("research", "find it", context="", adapter=_Empty(), dry_run=False)
+    assert e.status == "blocked" and e.blocked_origin == "empty"
+    assert (e.tokens_in, e.tokens_out, e.cache_read_tokens) == (40, 1, 8) and e.cost_usd == pytest.approx(0.03)
