@@ -1,0 +1,17 @@
+[Unit]
+Description=PCD sidecar (local Jev-compatible System One judge)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/pcd/sidecar
+ExecStart=%h/pcd/.venv/bin/python3 %h/pcd/sidecar/run_server.py
+Environment=PCD_MODEL=Qwen/Qwen2.5-1.5B-Instruct
+Environment=PCD_DEVICE=cpu
+Environment=PCD_PORT=8765
+Environment=PCD_THREADS=6
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

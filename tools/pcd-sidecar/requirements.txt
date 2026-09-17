@@ -1,0 +1,12 @@
+# Core (torch backend, required)
+torch
+transformers
+accelerate
+numpy
+
+# Optional Apple-silicon backend (PCD_BACKEND=mlx / PCD_DEVICE=mlx).
+# Install separately -- mlx / mlx_lm only work on Apple Silicon:
+#   pip install mlx mlx_lm
+
+# Dev/test only
+pytest
