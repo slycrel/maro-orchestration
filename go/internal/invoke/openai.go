@@ -106,6 +106,9 @@ func (o *OpenAIChat) Complete(ctx context.Context, req Request, sink Sink) (*Res
 		if strings.TrimSpace(k) == "" {
 			return nil, fmt.Errorf("%w: %s: %s is empty in the secrets store", ErrBeforeDispatch, o.Name, o.KeyName)
 		}
+		if len(strings.TrimSpace(k)) < MinKeyLen {
+			return nil, fmt.Errorf("%w: %s: %s is shorter than %d characters and cannot be a credential", ErrBeforeDispatch, o.Name, o.KeyName, MinKeyLen)
+		}
 		key = k
 	}
 	start := time.Now()
@@ -164,9 +167,12 @@ func (o *OpenAIChat) post(ctx context.Context, key string, prompt []byte, jsonMo
 	}
 	defer resp.Body.Close()
 	body, rerr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	// redact first, parse second: nothing derived from the body can
-	// carry the key
-	body = []byte(Redact(string(body), key))
+	// redact first, parse second — and JSON-aware: a body that decodes
+	// is redacted on its decoded string VALUES and re-encoded, so a key
+	// spelled with a \u escape (review r3) is caught after decoding and
+	// a legitimate quoted "Bearer x" example is scrubbed as a value, not
+	// mangled as bytes. Only a body that does not decode is scrubbed raw.
+	body = RedactJSON(body, key)
 	if rerr != nil {
 		return out, resp.StatusCode, body, fmt.Errorf("%s", Redact(rerr.Error(), key))
 	}
@@ -178,8 +184,49 @@ func mentionsResponseFormat(body []byte) bool {
 	return strings.Contains(strings.ToLower(string(body)), "response_format")
 }
 
-// minRedactedKey is the shortest key value Redact replaces by value.
-const minRedactedKey = 8
+// MinKeyLen is the shortest credential a client will dispatch with. A
+// shorter "key" is refused BEFORE dispatch rather than sent and then
+// left in records: value redaction of a one-letter key would mangle
+// every body it touched, so the honest boundary is not to accept it.
+const MinKeyLen = 8
+
+// RedactJSON is Redact for a body that may be JSON: when it decodes, every
+// string value at every depth is redacted and the document re-encoded
+// (compact); when it does not, the bytes are redacted as text. Keys are
+// left alone — a credential is never a key.
+func RedactJSON(body []byte, key string) []byte {
+	var v any
+	if err := json.Unmarshal(body, &v); err != nil {
+		return []byte(Redact(string(body), key))
+	}
+	// re-encode without HTML escaping, so the marker stays "<redacted>"
+	// rather than \u003credacted\u003e
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(redactValue(v, key)); err != nil {
+		return []byte(Redact(string(body), key))
+	}
+	return bytes.TrimRight(out.Bytes(), "\n")
+}
+
+func redactValue(v any, key string) any {
+	switch x := v.(type) {
+	case string:
+		return Redact(x, key)
+	case []any:
+		for i := range x {
+			x[i] = redactValue(x[i], key)
+		}
+		return x
+	case map[string]any:
+		for k := range x {
+			x[k] = redactValue(x[k], key)
+		}
+		return x
+	}
+	return v
+}
 
 // clip is a bounded, single-line quote of an error body.
 func clip(b []byte) string {
@@ -193,11 +240,9 @@ func clip(b []byte) string {
 // Redact removes a credential from text that will be recorded or printed:
 // every occurrence of the key's VALUE (the only thing that matters) and,
 // belt and braces, whatever follows a "Bearer " prefix. An empty key
-// redacts only the prefix form; so does a key shorter than
-// minRedactedKey — a one-letter "key" is a test artifact, and replacing
-// every "k" in a JSON body is a mangled body, not a redaction.
+// redacts only the prefix form.
 func Redact(s, key string) string {
-	if key = strings.TrimSpace(key); len(key) >= minRedactedKey {
+	if key = strings.TrimSpace(key); key != "" {
 		s = strings.ReplaceAll(s, key, "<redacted>")
 	}
 	const marker = "<redacted>"

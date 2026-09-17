@@ -26,7 +26,7 @@ sidecar (`pcd`). A shadow arm asks configured second opinions the same
 question and records them where the resolver cannot read. Fresh installs
 behave exactly as before.
 
-## Verdict: REJECT → fixed same session, round 2 on the fix diff
+## Verdict: REJECT → fixed same session; rounds 2 and 3 on the fix diffs, then stop
 
 All four seats converged on the same five HIGHs from independent probes
 (source census of the invocation closure, `git show successor:` of the
@@ -143,6 +143,42 @@ Status 0, numbered findings. Ledger:
 Noted, not changed: `Unshadowed` counts verdicts with ZERO shadow
 records, so a crash after provider A's record and before B's is not
 visible per provider — the metric is defined that way and says so.
+
+## Round 3 — one Codex seat on the round-2 fix diff (`0458ac4a..cf3609d2`)
+
+Status 0. The last round on this chunk (Jeremy's 2026-09-16 budget:
+2–3 rounds the norm). Ledger:
+
+1. **A `\u`-escaped echo defeats byte-level redaction; the decoder
+   restores the key** — **VERIFIED, regression class in the r2 fix.**
+   `ReplaceAll` on the serialized bytes cannot see a key whose one
+   character is spelled `s`; `json.Unmarshal` then rebuilt it in
+   the content and finish_reason, and the transcript kept a reversible
+   spelling. **FIXED:** `invoke.RedactJSON` — a body that decodes is
+   redacted on its decoded string values at every depth and re-encoded
+   (HTML escaping off, so the marker survives); one that does not decode
+   is scrubbed as text. Both clients use it. Pin: content and
+   finish_reason echo an escaped key; the transcript is still JSON.
+2. **`strings.ToLower` is not `encoding/json`'s fold** — **VERIFIED**
+   (the decoder matches struct fields by `unicode.SimpleFold` orbits, so
+   `ſcore` is `score`). **FIXED:** `foldKey` canonicalises each rune to
+   the smallest member of its fold orbit, which is exactly
+   `bytes.EqualFold` equivalence; `Request.Validate` refuses question
+   ids that collide the same way, so the encoder and decoder agree.
+   Fixtures: `score`/`ſcore`, a fold duplicate three arrays deep.
+3. **The pre-parse text scrub broke a valid answer that quoted a
+   `Bearer` example** — **VERIFIED**; the same JSON-aware redaction
+   fixes it (the value is scrubbed, the re-encoder escapes it). Pinned
+   in the same test.
+4. **The 8-character exception silently unprotected a short key** —
+   **VERIFIED as the wrong direction.** A key shorter than 8 characters
+   is now refused BEFORE dispatch (`invoke.MinKeyLen`) in both clients,
+   and `Redact` has no length exception; the tests use realistic keys.
+   No listed provider issues a shorter key, and the boundary now says so
+   instead of recording one.
+
+Also tightened from the r3 read: the trickle test's elapsed bound now
+fails a 3-second deadline (was `< 4`).
 
 ## Out-of-scope leads
 

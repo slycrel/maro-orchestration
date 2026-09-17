@@ -34,7 +34,7 @@ func server(t *testing.T, status int, body string, seen *string, auth *string) *
 func TestHTTPProviderSendsTheWireBodyAndReadsUsage(t *testing.T) {
 	var seen, auth string
 	srv := server(t, 200, liveResponse, &seen, &auth)
-	h := NewJev(func() (string, error) { return "sekret", nil })
+	h := NewJev(func() (string, error) { return "sekret-key-01", nil })
 	h.BaseURL = srv.URL
 	if h.Capabilities().ActsOutward || h.Capabilities().OutwardReconcilable {
 		t.Fatal("a judgment provider must declare that it cannot act outward")
@@ -54,7 +54,7 @@ func TestHTTPProviderSendsTheWireBodyAndReadsUsage(t *testing.T) {
 	if seen != string(prompt) {
 		t.Fatalf("the body sent is not the prompt recorded:\n sent %s\nprompt %s", seen, prompt)
 	}
-	if auth != "Bearer sekret" {
+	if auth != "Bearer sekret-key-01" {
 		t.Fatalf("authorization header %q", auth)
 	}
 	if res.Usage.InputTokens != 473 || res.Usage.OutputTokens != 71 || res.Usage.WallMillis < 0 {

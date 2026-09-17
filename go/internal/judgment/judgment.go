@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // ErrWire is a malformed judgment request or response. It is the only
@@ -186,10 +187,10 @@ func (r Request) Validate() error {
 		if strings.TrimSpace(id) == "" {
 			return wireErr("a question id may not be empty")
 		}
-		if seen[id] {
-			return wireErr("question id %q appears twice in the order", id)
+		if seen[foldKey(id)] {
+			return wireErr("question id %q appears twice in the order (case-insensitively)", id)
 		}
-		seen[id] = true
+		seen[foldKey(id)] = true
 		q, ok := r.Questions[id]
 		if !ok {
 			return wireErr("order names %q, which is not a question", id)
@@ -499,11 +500,12 @@ func strictDecode(b []byte, into any) error {
 // noDuplicateKeys refuses an object (at any depth) that names a key twice:
 // encoding/json keeps the LAST value, so {"choice":"a","choice":"b"} would
 // resolve to b with a straight face. A judgement is never last-wins.
-// "Twice" is under case folding: the struct decoder matches field names
-// case-insensitively, so "choice" and "Choice" land on the SAME field
-// (review r2). Keys are compared folded everywhere, which narrows the
-// accepted JSON toward refusal — a state whose keys differ only by case
-// is not one this engine writes.
+// "Twice" is under the SAME folding encoding/json uses to match struct
+// fields (bytes.EqualFold: unicode.SimpleFold orbits, so "ſcore" is
+// "score" and "Choice" is "choice" — reviews r2, r3), not ASCII lower-
+// casing. Keys are compared folded everywhere, which narrows the
+// accepted JSON toward refusal; Request.Validate refuses the same
+// collision among question ids so the encoder and decoder agree.
 func noDuplicateKeys(b []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	type frame struct {
@@ -534,7 +536,7 @@ func noDuplicateKeys(b []byte) error {
 			}
 		case string:
 			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].key {
-				folded := strings.ToLower(v)
+				folded := foldKey(v)
 				if stack[n-1].seen[folded] {
 					return wireErr("key %q appears twice (case-insensitively)", v)
 				}
@@ -548,6 +550,23 @@ func noDuplicateKeys(b []byte) error {
 			stack[n-1].key = true
 		}
 	}
+}
+
+// foldKey maps a key to a canonical spelling such that foldKey(x) ==
+// foldKey(y) exactly when bytes.EqualFold(x, y): each rune is replaced
+// by the smallest rune of its unicode.SimpleFold orbit.
+func foldKey(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		m := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < m {
+				m = f
+			}
+		}
+		b.WriteRune(m)
+	}
+	return b.String()
 }
 
 // distributionSums refuses a reported distribution that is not one: every

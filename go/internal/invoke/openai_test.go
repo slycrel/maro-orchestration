@@ -37,7 +37,7 @@ func TestOpenAIChatAsksDeterministicallyAndReportsUsage(t *testing.T) {
 		seen = body
 		io.WriteString(w, `{"choices":[{"message":{"content":"{\"outcome\":1}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":3}}`)
 	})
-	o := NewOpenAIChat("hosted", srv.URL, "gemini-flash-lite-latest", "GEMINI_API_KEY", func() (string, error) { return "k", nil })
+	o := NewOpenAIChat("hosted", srv.URL, "gemini-flash-lite-latest", "GEMINI_API_KEY", func() (string, error) { return "k-realistic-key", nil })
 	o.Client = srv.Client()
 	oldRT := o.Client.Transport
 	o.Client.Transport = headerSpy{oldRT, &auth}
@@ -60,7 +60,7 @@ func TestOpenAIChatAsksDeterministicallyAndReportsUsage(t *testing.T) {
 	if o.Capabilities().ActsOutward {
 		t.Fatal("the hosted tier must declare that it cannot act outward")
 	}
-	if auth != "Bearer k" {
+	if auth != "Bearer k-realistic-key" {
 		t.Fatalf("authorization %q", auth)
 	}
 }
@@ -174,12 +174,6 @@ func TestRedactRemovesTheKeyAndAnyBearerToken(t *testing.T) {
 	if got := Redact("Bearer only-prefix", ""); got != "Bearer <redacted>" {
 		t.Errorf("empty key: %q", got)
 	}
-	// a degenerate short key is not replaced by value: every "k" in a
-	// JSON body is not a credential (review r2 found the 1-char test key
-	// mangling the usage object)
-	if got := Redact(`{"prompt_tokens":11}`, "k"); got != `{"prompt_tokens":11}` {
-		t.Errorf("short key: %q", got)
-	}
 }
 
 // The hosted client's timeout is a ceiling over the request's budget, the
@@ -220,5 +214,43 @@ func TestAnEchoedKeyInASuccessfulReplyIsRedactedBeforeTheParse(t *testing.T) {
 	}
 	if string(res.Response) != "your token is <redacted>" || res.Terminal != TerminalPartial {
 		t.Fatalf("%+v", res)
+	}
+}
+
+// Review r3: a body that spells one character of the key as a \u escape
+// defeats byte-level replacement and the decoder restores the key. The
+// redaction is JSON-aware: decoded string values are scrubbed and the
+// document re-encoded. A legitimate quoted "Bearer x" example inside the
+// content survives as valid JSON (r3's other finding), and a key shorter
+// than MinKeyLen is refused before dispatch instead of being sent.
+func TestRedactionIsJSONAware(t *testing.T) {
+	key := "sk-echo-9f-long-enough"
+	esc := `sk-echo-9f-long-enough` // the g escaped
+	srv := chatServer(t, func(body map[string]any, w http.ResponseWriter) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"token `+esc+` and example {\"authorization\":\"Bearer example-placeholder\"}"},"finish_reason":"`+esc+`"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	})
+	o := NewOpenAIChat("hosted", srv.URL, "m", "KEY", func() (string, error) { return key, nil })
+	res, err := o.Complete(context.Background(), Request{Purpose: PurposeJudge, Prompt: []byte("x")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{res.Reason, string(res.Transcript), string(res.Response)} {
+		if strings.Contains(s, key) || strings.Contains(s, "enou\\u0067h") {
+			t.Fatalf("the key reached a recorded surface: %q", s)
+		}
+	}
+	if !strings.HasPrefix(string(res.Response), "token <redacted> and example") || !strings.Contains(string(res.Response), `Bearer <redacted>"}`) {
+		t.Fatalf("response %q", res.Response)
+	}
+	var tr map[string]any
+	if err := json.Unmarshal(res.Transcript, &tr); err != nil {
+		t.Fatalf("the transcript is no longer JSON: %v", err)
+	}
+	short := NewOpenAIChat("hosted", srv.URL, "m", "KEY", func() (string, error) { return "k", nil })
+	if _, err := short.Complete(context.Background(), Request{Purpose: PurposeJudge, Prompt: []byte("x")}, nil); err == nil || !strings.Contains(err.Error(), "shorter than") {
+		t.Fatalf("a one-letter key was dispatched: %v", err)
+	}
+	if got := RedactJSON([]byte("not json Bearer abc-def-ghi"), key); string(got) != "not json Bearer <redacted>" {
+		t.Fatalf("non-JSON body: %q", got)
 	}
 }

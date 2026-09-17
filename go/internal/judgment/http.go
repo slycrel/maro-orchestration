@@ -105,6 +105,9 @@ func (h *HTTP) Complete(ctx context.Context, req invoke.Request, sink invoke.Sin
 		if strings.TrimSpace(k) == "" {
 			return nil, fmt.Errorf("%w: %s: %s is empty in the secrets store", invoke.ErrBeforeDispatch, h.Provider, h.KeyName)
 		}
+		if len(strings.TrimSpace(k)) < invoke.MinKeyLen {
+			return nil, fmt.Errorf("%w: %s: %s is shorter than %d characters and cannot be a credential", invoke.ErrBeforeDispatch, h.Provider, h.KeyName, invoke.MinKeyLen)
+		}
 		key = k
 		hreq.Header.Set("Authorization", "Bearer "+key)
 	}
@@ -132,7 +135,7 @@ func (h *HTTP) Complete(ctx context.Context, req invoke.Request, sink invoke.Sin
 		// would otherwise leave its prefix in the reason (review r2)
 		return &invoke.Result{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("%s: HTTP %d: %s", h.Provider, resp.StatusCode, snippet([]byte(scrub(string(body))))), Usage: invoke.Usage{WallMillis: wall}}, nil
 	}
-	body = []byte(scrub(string(body)))
+	body = invoke.RedactJSON(body, key) // JSON-aware: a \u-escaped echo is caught after decoding (review r3)
 	usage := invoke.Usage{WallMillis: wall}
 	var u struct {
 		Usage Usage `json:"usage"`

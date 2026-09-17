@@ -293,7 +293,7 @@ def test_a_trickling_body_still_hits_the_deadline():
                     continue
             elapsed = _time.monotonic() - start
             assert data.startswith(b"HTTP/1.0 408") or data.startswith(b"HTTP/1.1 408"), data[:80]
-            assert elapsed < 4, elapsed
+            assert elapsed < 2.5, elapsed  # a 1 s budget plus slack; a 3 s deadline would fail here
     finally:
         httpd.shutdown()
         httpd.server_close()

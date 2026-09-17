@@ -175,6 +175,16 @@ func TestRefusals(t *testing.T) {
 			_, err := DecodeResponse([]byte(`{"model":"m","answers":{"q":{"type":"choice","choice":"done","Choice":"blocked","confidence":0.5}},"usage":{"input_tokens":1,"output_tokens":1}}`))
 			return err
 		}},
+		// review r3: encoding/json folds by unicode.SimpleFold, under
+		// which the long s (ſ) IS s; ASCII lowercasing missed it
+		{"duplicate key under unicode simple folding", func() error {
+			_, err := DecodeResponse([]byte(`{"model":"m","answers":{"q":{"type":"score","score":0.1,"ſcore":0.9,"confidence":0.5}},"usage":{"input_tokens":1,"output_tokens":1}}`))
+			return err
+		}},
+		{"question ids that collide under folding", func() error {
+			_, err := EncodeRequest(Request{Model: "m", State: Sect("a", "b"), Questions: map[string]Question{"Q": q, "q": q}, Order: []string{"Q", "q"}})
+			return err
+		}},
 		{"duplicate question id in an llm reply", func() error {
 			_, err := ParseAnswers([]byte(`{"q":{"type":"noul","noul":0.1,"why":"w"},"q":{"type":"noul","noul":0.9,"why":"w"}}`), "m")
 			return err
@@ -308,5 +318,11 @@ func TestTheSameKeyInDifferentObjectsIsNotADuplicate(t *testing.T) {
 	}
 	if err := noDuplicateKeys([]byte(`{"a":[{"k":1,"K":2}]}`)); err == nil {
 		t.Fatal("a folded duplicate inside an array element was accepted")
+	}
+	if err := noDuplicateKeys([]byte(`{"a":[[[{"s":1,"ſ":2}]]]}`)); err == nil {
+		t.Fatal("a simple-fold duplicate three arrays deep was accepted")
+	}
+	if foldKey("ſcore") != foldKey("SCORE") || foldKey("k") == foldKey("x") {
+		t.Fatalf("foldKey: %q %q", foldKey("ſcore"), foldKey("SCORE"))
 	}
 }

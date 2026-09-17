@@ -2601,3 +2601,13 @@ skipped line, never a failed run.
   the intent prompt (84a7c12a changed it on 09-07 with no version
   dispatch). Journal↔template versioning is an engine gap, recorded as a
   lead, not a fix bolted onto this seam.
+- **120. Three rounds, each one deeper into the fix layer.** r2 found the
+  r1 scrub applied to one representation (bytes after the parse, the
+  reason after the clip); r3 found the r2 scrub blind to a `\u`-escaped
+  key and the r2 fold blind to Unicode (`ſcore` is `score` to
+  `encoding/json`). The answer both times was to move the operation to
+  where the meaning is: redact decoded string VALUES and re-encode
+  (`invoke.RedactJSON`), fold by `unicode.SimpleFold` orbits (`foldKey`),
+  refuse a key too short to be one before dispatch. Stopped at three by
+  the round budget; every finding in r3 was in the r2 diff, none in the
+  chunk under it.
