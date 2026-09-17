@@ -432,6 +432,15 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			if lineage, err = spine.LineageOf(led, after); err != nil {
 				return err
 			}
+			// the continuation pre-check: the driver decides again over the
+			// journal it claims from; this refuses before a goal is taken in
+			stopped, cerr := spine.Continuable(led, lineage.Run, j.Head())
+			if cerr != nil {
+				return fmt.Errorf("--after %s: %v", after, cerr)
+			}
+			if stopped {
+				fmt.Fprintf(errw, "continues: run %s (stopped)\n", after)
+			}
 			fmt.Fprintf(errw, "follows: run %s (goal %s, root %s)\n", after, lineage.Goal, lineage.Root)
 		}
 		shadow := splitNames(judgeShadow)
@@ -522,6 +531,7 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 						continue
 					}
 					s := spine.Summarize(rs)
+					s.ContinuedBy = spine.ContinuedBy(led, rs)
 					if payload, _, err := spine.LatestPayload(led, st, args[2]); err == nil {
 						s.Result = string(payload)
 					}
@@ -541,6 +551,9 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 				if spine.HandleOf(rs.Run) == args[1] {
 					for _, l := range spine.Inspect(rs) {
 						fmt.Fprintln(out, l)
+					}
+					if by := spine.ContinuedBy(led, rs); by != "" {
+						fmt.Fprintln(out, by)
 					}
 				}
 			}

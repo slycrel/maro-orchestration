@@ -531,10 +531,11 @@ func (d *Driver) Run(ctx context.Context, goalText []byte, policy DeliveryPolicy
 	if err := d.crash("after_intake"); err != nil {
 		return nil, err
 	}
-	if err := d.lineage(ctx, rs, goalText); err != nil {
+	forced, err := d.lineage(ctx, rs, goalText)
+	if err != nil {
 		return nil, err
 	}
-	return d.drive(ctx, rs, nil, nil)
+	return d.drive(ctx, rs, nil, forced)
 }
 
 // ValidateIntake is the one check every intake path runs BEFORE anything
@@ -1388,21 +1389,25 @@ func (d *Driver) StartGoal(ctx context.Context, led *Ledger, g *Goal) (*Report, 
 	if err != nil {
 		return nil, err
 	}
-	if err := d.lineage(ctx, rs, text); err != nil {
+	forced, err := d.lineage(ctx, rs, text)
+	if err != nil {
 		return nil, err
 	}
-	return d.drive(ctx, rs, nil, nil)
+	return d.drive(ctx, rs, nil, forced)
 }
 
 // lineage settles a new run's lineage before its first attempt: a goal
 // whose lineage was set at intake (operator --after, fork child, replay
-// arm) carries it; every other goal reads the landscape and decides.
-func (d *Driver) lineage(ctx context.Context, rs *RunState, goalText []byte) error {
+// arm) carries it; every other goal reads the landscape and decides. Then
+// the continuation stage: a run that follows a STOPPED run claims it (or
+// records the refusal it ends on — the returned forced outcome).
+func (d *Driver) lineage(ctx context.Context, rs *RunState, goalText []byte) (*Outcome, error) {
 	if rs.Goal.Parent != "" || rs.Goal.Origin == OriginFork || rs.Goal.Origin == OriginReplay {
 		rs.Parent, rs.Root = rs.Goal.Parent, rs.Goal.Root
-		return nil
+	} else if err := d.landscape(ctx, rs, goalText); err != nil {
+		return nil, err
 	}
-	return d.landscape(ctx, rs, goalText)
+	return d.continuation(ctx, rs)
 }
 
 // ResumeRun drives one non-terminal run from its last committed stage: a
@@ -1412,8 +1417,13 @@ func (d *Driver) lineage(ctx context.Context, rs *RunState, goalText []byte) err
 func (d *Driver) ResumeRun(ctx context.Context, rs *RunState) (*Report, error) {
 	a := rs.Latest()
 	if a == nil {
-		// the process died between the landscape and the first attempt
-		return d.drive(ctx, rs, nil, nil)
+		// the process died between the lineage stages and the first
+		// attempt: the continuation stage is idempotent by run
+		forced, err := d.continuation(ctx, rs)
+		if err != nil {
+			return nil, err
+		}
+		return d.drive(ctx, rs, nil, forced)
 	}
 	if a.Has(Recorded) != nil {
 		return d.deliver(ctx, rs, a)
@@ -1423,8 +1433,10 @@ func (d *Driver) ResumeRun(ctx context.Context, rs *RunState) (*Report, error) {
 			return nil, err
 		}
 	}
-	var forced *Outcome
-	if len(rs.Attempts) >= d.MaxAttempts {
+	// a refused continuation ends on its refusal whichever attempt
+	// records it; then the attempt bound
+	forced := refusalOutcome(rs.Continuation)
+	if forced == nil && len(rs.Attempts) >= d.MaxAttempts {
 		forced = &Outcome{Terminal: invoke.TerminalFailed, Reason: fmt.Sprintf("attempt bound %d reached: %d attempts died before recorded", d.MaxAttempts, len(rs.Attempts))}
 	}
 	return d.drive(ctx, rs, a, forced)

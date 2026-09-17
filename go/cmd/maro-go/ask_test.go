@@ -96,9 +96,16 @@ func TestCLIAskAnswerLoop(t *testing.T) {
 	if code := run([]string{"answer", "nope-1", "123456"}, &out, &errw); code == 0 || !strings.Contains(errw.String(), "no run nope-1") {
 		t.Fatalf("unknown handle: %d %s", code, errw.String())
 	}
+	// the answer is recorded, then the follow-up's own options are refused:
+	// the same answer again starts the follow-up instead of "already answered"
 	out.Reset()
 	errw.Reset()
-	if code := run([]string{"answer", handle, "--backend", "subprocess", "123456"}, &out, &errw); code != 0 {
+	if code := run([]string{"answer", handle, "--backend", "typo", "123456"}, &out, &errw); code == 0 || !strings.Contains(errw.String(), "unknown backend") {
+		t.Fatalf("typo backend: %d %s", code, errw.String())
+	}
+	out.Reset()
+	errw.Reset()
+	if code := run([]string{"answer", handle, "--backend", "subprocess", "123456"}, &out, &errw); code != 0 || !strings.Contains(errw.String(), "already holds this answer; starting its follow-up") {
 		t.Fatalf("answer exit %d: %s %s", code, out.String(), errw.String())
 	}
 	if !strings.Contains(out.String(), "answered "+handle+": What is the 6-digit code") {
@@ -150,6 +157,39 @@ func TestCLIAskAnswerLoop(t *testing.T) {
 	rows = nil
 	if err := json.Unmarshal(out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].Status != "answered" || rows[0].Source != "cli" || rows[0].Late {
 		t.Fatalf("ledger after answer %v: %s", err, out.String())
+	}
+	// the answer CONTINUED the asked run (it stopped on the question): the
+	// asks row names the follow-up and how it went; both runs show it;
+	// and the asked run cannot be followed again — it is done through
+	// the follow-up
+	follow := rows[0].FollowUp
+	if follow == "" || rows[0].FollowUpAt != "finished" {
+		t.Fatalf("asks json lacks the continuation: %s", out.String())
+	}
+	out.Reset()
+	errw.Reset()
+	if code := run([]string{"asks"}, &out, &errw); code != 0 || !strings.Contains(out.String(), "continued by "+follow+" (finished)") {
+		t.Fatalf("asks (%d):\n%s", code, out.String())
+	}
+	out.Reset()
+	errw.Reset()
+	if code := run([]string{"runs", "show", handle}, &out, &errw); code != 0 || !strings.Contains(out.String(), "continued by "+follow+": finished") {
+		t.Fatalf("runs show asked (%d):\n%s", code, out.String())
+	}
+	out.Reset()
+	errw.Reset()
+	if code := run([]string{"runs", "show", follow}, &out, &errw); code != 0 || !strings.Contains(out.String(), "continues "+handle+" (after)") {
+		t.Fatalf("runs show follow-up (%d):\n%s", code, out.String())
+	}
+	out.Reset()
+	errw.Reset()
+	if code := run([]string{"now", "--after", handle, "--backend", "subprocess", "check the inbox"}, &out, &errw); code == 0 || !strings.Contains(errw.String(), "--after "+handle+": run "+handle+" was continued by "+follow+", which finished: follow "+follow+" instead") {
+		t.Fatalf("a second follow of the asked run must be refused: %d %s", code, errw.String())
+	}
+	out.Reset()
+	errw.Reset()
+	if code := run([]string{"runs"}, &out, &errw); code != 0 || strings.Count(out.String(), "\n") > 3 {
+		t.Fatalf("the refused --after took no goal in (%d):\n%s", code, out.String())
 	}
 }
 

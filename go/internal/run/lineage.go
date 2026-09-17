@@ -14,6 +14,7 @@ import (
 type Lineage struct {
 	Goal record.RecordID
 	Root record.RecordID
+	Run  record.RunID // the run the lineage was resolved from ("" when built by hand)
 }
 
 // LineageOf resolves a run handle to the lineage a new goal would join by
@@ -28,7 +29,7 @@ func LineageOf(led *Ledger, handle string) (*Lineage, error) {
 		if g.Origin == OriginReplay || g.Origin == OriginFork {
 			return nil, fmt.Errorf("run: %s is a %s goal; follow the goal it descends from instead", handle, g.Origin)
 		}
-		return &Lineage{Goal: g.ID, Root: rs.Root}, nil
+		return &Lineage{Goal: g.ID, Root: rs.Root, Run: rs.Run}, nil
 	}
 	return nil, fmt.Errorf("run: no run with handle %s", handle)
 }

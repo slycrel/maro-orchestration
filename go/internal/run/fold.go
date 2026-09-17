@@ -163,6 +163,9 @@ type RunState struct {
 	// run that rides into the run's requests ("" when fresh).
 	Landscape *Landscape
 	Judge     *invoke.State // the landscape's judge call (attempt 0), when one was made; nil otherwise
+	// Continuation is the run's claim on the stopped run it follows (or the
+	// refusal it ended on); nil for a fresh run or a plain follow.
+	Continuation *Continuation
 	// Context is the goal's operator context rendered as the block that
 	// rides into its requests (nil when the goal carried none).
 	Context    []byte
@@ -241,7 +244,10 @@ type Ledger struct {
 	Acks       map[record.RecordID]*InterruptAck
 	// Forks by fork id; goals by id (a child goal may not have a run yet).
 	Forks map[record.RecordID]*ForkState
-	goals map[record.RecordID]*Goal
+	// Continued: the claim on each continued run, by source (claims only,
+	// never refusals) — one per source by the fold's rule.
+	Continued map[record.RunID]*Continuation
+	goals     map[record.RecordID]*Goal
 	// Arms: the experiment arm runs (replay arms and live-admitted goals)
 	// by assignment id, then arm (one each).
 	Arms map[record.RecordID]map[string]*RunState
@@ -282,6 +288,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	// decided its relation before starting (history before it is read as
 	// it was written: each run the root of its own lineage)
 	var firstLandscape uint64
+	continued := map[record.RunID]*Continuation{}
+	runOfGoal := map[record.RecordID]record.RunID{} // one production run per goal
+	var firstContinuation uint64
 	// invocation states are folded up front so transitions can be checked
 	// against evidence in one pass
 	inv, err := invoke.Fold(pr)
@@ -664,6 +673,63 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				return fmt.Errorf("run: %s landscape %s: %w", x.RunID, x.ID, err)
 			}
 			rs.Related = related
+		case *Continuation:
+			rs := get(x.RunID)
+			if len(rs.Attempts) != 0 || rs.Continuation != nil {
+				return fmt.Errorf("run: %s continuation %s after the run started (or a second continuation)", x.RunID, x.ID)
+			}
+			g := goals[x.Goal]
+			if g == nil || fams[x.Goal] == nil {
+				return fmt.Errorf("run: %s continuation for goal %s that was not committed first", x.RunID, x.Goal)
+			}
+			if rs.Goal == nil {
+				// a goal whose lineage was set at intake binds here (the
+				// landscape case binds the others)
+				if g.Parent == "" || started[x.Goal] {
+					return fmt.Errorf("run: %s continuation for goal %s with no lineage set at intake and no landscape (or already started)", x.RunID, x.Goal)
+				}
+				started[x.Goal], runOfGoal[x.Goal] = true, x.RunID
+				rs.Goal, rs.Family, rs.Target = g, fams[x.Goal], targets[x.Goal]
+				if rs.Context, err = contextBlock(g, store.Get); err != nil {
+					return fmt.Errorf("run: %s: %w", x.RunID, err)
+				}
+				rs.Parent, rs.Root = lineageOf(g, nil, runs)
+			} else if rs.Goal.ID != x.Goal {
+				return fmt.Errorf("run: %s continuation cites goal %s, not the run's %s", x.RunID, x.Goal, rs.Goal.ID)
+			}
+			source, how := continuationSource(rs, runs)
+			if source == "" || source != x.Source || how != x.How {
+				return fmt.Errorf("run: %s continuation names %s (%s) but the run follows %q (%s)", x.RunID, x.Source, x.How, source, how)
+			}
+			if x.AsOf+1 != x.Seq {
+				// decided over the head it was appended to: two claims in
+				// one command, or a claim over a stale prefix, cannot both
+				// hold — the second was not decided over the first
+				return fmt.Errorf("run: %s continuation %s decided over head %d but appended at %d", x.RunID, x.ID, x.AsOf, x.Seq)
+			}
+			stopped, cerr := Continuable(&Ledger{Runs: runs, Continued: continued}, source, x.AsOf)
+			want := ""
+			if cerr != nil {
+				want = cerr.Error()
+			}
+			if x.Refused != want {
+				return fmt.Errorf("run: %s continuation %s records refusal %q but the source's state as of %d says %q", x.RunID, x.ID, x.Refused, x.AsOf, want)
+			}
+			if want == "" && !stopped {
+				return fmt.Errorf("run: %s continuation %s claims %s, which finished: nothing to continue", x.RunID, x.ID, source)
+			}
+			rs.Continuation = x
+			if firstContinuation == 0 {
+				firstContinuation = x.Seq
+			}
+			if want == "" {
+				continued[source] = x
+				block, err := ContinuationContext(rs, runs, store.Get)
+				if err != nil {
+					return fmt.Errorf("run: %s continuation %s: %w", x.RunID, x.ID, err)
+				}
+				rs.Related = append(rs.Related, block...)
+			}
 		case *RunAttempt:
 			rs := get(x.RunID)
 			started[x.Goal] = true
@@ -671,6 +737,10 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				return fmt.Errorf("run: %s attempt %d started but %d attempts exist", x.RunID, x.Attempt, len(rs.Attempts))
 			}
 			if rs.Goal == nil {
+				if other, ok := runOfGoal[x.Goal]; ok && other != x.RunID {
+					return fmt.Errorf("run: %s attempt %d starts goal %s, which run %s already started", x.RunID, x.Attempt, x.Goal, other)
+				}
+				runOfGoal[x.Goal] = x.RunID
 				rs.Goal, rs.Family, rs.Target = goals[x.Goal], fams[x.Goal], targets[x.Goal]
 				if rs.Goal == nil || rs.Family == nil || rs.Family.ID != x.Family {
 					return fmt.Errorf("run: %s attempt %d cites goal %s / family %s that were not committed first", x.RunID, x.Attempt, x.Goal, x.Family)
@@ -687,6 +757,16 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				rs.Parent, rs.Root = lineageOf(rs.Goal, nil, runs)
 			} else if rs.Goal.ID != x.Goal || rs.Family.ID != x.Family {
 				return fmt.Errorf("run: %s attempt %d cites a different goal or assessment than attempt 1", x.RunID, x.Attempt)
+			}
+			if x.Attempt == 1 && rs.Continuation == nil && firstContinuation != 0 && x.Seq > firstContinuation {
+				// once the journal shows the engine claims, a run that
+				// follows a run that had not finished carries its claim or
+				// its refusal before attempt 1
+				if source, _ := continuationSource(rs, runs); source != "" {
+					if src := runs[source]; src != nil && (src.TerminalAt == 0 || Stopped(src)) {
+						return fmt.Errorf("run: %s attempt 1 started with no continuation record, following %s, which had not finished", x.RunID, source)
+					}
+				}
 			}
 			if x.Config.Lane != rs.Goal.Lane {
 				return fmt.Errorf("run: %s attempt %d ran lane %s but the goal is routed to %s", x.RunID, x.Attempt, x.Config.Lane, rs.Goal.Lane)
@@ -767,12 +847,27 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if cur := a.Current(); cur != x.From {
 				return fmt.Errorf("run: %s attempt %d transition %s→%s but the attempt is at %q", x.RunID, x.Attempt, x.From, x.To, cur)
 			}
+			if x.To == Recorded {
+				// a refused continuation ends on exactly its refusal, whichever
+				// attempt records (a resumed one too); a refusal outcome
+				// without the record is forged. Checked before the
+				// transition's own evidence: the binding is the first
+				// question a recorded outcome answers here
+				c := rs.Continuation
+				refused := c != nil && c.Refused != ""
+				if refused && (x.Outcome == nil || x.Outcome.Terminal != invoke.TerminalFailed || x.Outcome.Reason != continuationRefusedPrefix+c.Refused) {
+					return fmt.Errorf("run: %s attempt %d recorded past a refused continuation without ending on it", x.RunID, x.Attempt)
+				}
+				if !refused && x.Outcome != nil && strings.HasPrefix(x.Outcome.Reason, continuationRefusedPrefix) {
+					return fmt.Errorf("run: %s attempt %d records a continuation refusal that was not recorded", x.RunID, x.Attempt)
+				}
+			}
 			if err := checkTransition(rs, a, x, inv, learned, store, resolutions, verdicts, observations); err != nil {
 				return err
 			}
 			a.Transitions = append(a.Transitions, x)
-			if x.To == Delivered || x.To == DeliveryFailedS {
-				rs.TerminalAt = x.Seq
+			if (x.To == Delivered || x.To == DeliveryFailedS) && rs.TerminalAt == 0 {
+				rs.TerminalAt = x.Seq // the FIRST terminal transition; an ack (delivered→delivered) does not move it
 			}
 		case *IntentAssessment:
 			a, err := attempt(get(x.RunID), x.Attempt, "intent")
@@ -1008,7 +1103,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	led := &Ledger{Runs: runs, Families: fams, Targets: targets, Learned: learned, Interrupts: interrupts, Acks: acks, Forks: forks, goals: goals, Arms: replays}
+	led := &Ledger{Runs: runs, Families: fams, Targets: targets, Learned: learned, Interrupts: interrupts, Acks: acks, Forks: forks, Continued: continued, goals: goals, Arms: replays}
 	for _, g := range goalOrder {
 		if !started[g.ID] {
 			led.Unstarted = append(led.Unstarted, g)

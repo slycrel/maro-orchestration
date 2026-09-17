@@ -2959,3 +2959,177 @@ skipped line, never a failed run.
   refuse a key too short to be one before dispatch. Stopped at three by
   the round budget; every finding in r3 was in the r2 diff, none in the
   chunk under it.
+
+## Post-v1 — continuation, Go side: a run that continues a stopped run claims it, and its own end settles it (2026-09-17)
+
+**Ask (Jeremy, 2026-09-17, afk, the same order as the LoopsBench item 2 entry):** audit
+§3 item 2. The Python main closed it 2026-09-16 (checkpoint chunks 6, 7
+and 9: refusals end like finished runs, a resume CLAIMS its source before
+executing, the run that ends a resume SETTLES its source). The Go engine
+had the rerun relation and lineage, but a rerun re-planned and the prior
+run was never told it was continued; two reruns of one stopped run were
+two silent claims.
+
+**Contract kept from main (audit §4.2):** the source is claimed durably
+BEFORE anything executes; one continuation per source; a refused
+continuation is recorded and the run ends on it like a finished run; the
+source is settled by the continuation's end; a run that ends short keeps
+the barrier.
+
+**The Go engine's own road (D1, D5):**
+
+- A run STOPS when its recorded outcome says it fell short: execution
+  failed or partial, or closure `not_achieved`. Complete + `unknown` is
+  FINISHED — the self claim cannot promote it (verdict rule 4) and
+  nothing refuted it; a judge-less NOW run ends this way every time, so
+  counting it as stopped would make every `--after` a claim and refuse
+  the operator's second follow-up. `Stopped`, `stoppedOutcome`.
+- `continuation/1` (run-scoped, attempt 0): goal, source, how
+  (`after` = the operator named the run, which `answer` uses; `rerun` =
+  the landscape chose it), `as_of` (the journal head the claim was decided
+  over), `refused` (the exact state text when the claim was refused). The
+  driver stage runs after the lineage/landscape and before attempt 1,
+  idempotent by run (`continuation/<run>` key), crash seam
+  `after_continuation`; the fold binds a run that died between claim and
+  attempt 1 to its goal through the record.
+- `Continuable(led, source, asOf)` is ONE decision shared by the CLI
+  pre-checks (`--after`, `answer`: refuse before a goal is taken in), the
+  driver (record the claim or its refusal) and the fold (the recorded
+  refusal must equal the state as of `as_of`; a claim on a live /
+  finished / already-continued source is refused; attempt 1 of a run
+  following a stopped run without a record is refused once the journal
+  shows the engine claims). States: not stopped ⇒ "has not stopped
+  (attempt N state)"; continued ⇒ "is being continued by X (live)" /
+  "was continued by X, which finished: follow X instead" / "which
+  stopped: continue X instead".
+- Settlement is DERIVED: `ContinuationState` = the continuation run's own
+  outcome as of a head (live / finished / stopped). No settlement record.
+  The chain moves forward: a stopped continuation is the thing to
+  continue; there is no `--reclaim`.
+- A refusal ends the run: `refusalOutcome` is the forced outcome `drive`
+  records (attempt 1, or the attempt a resume makes — `ResumeRun` forces
+  it ahead of the attempt bound); the fold requires any recorded outcome
+  on a refused run to be `failed` with exactly `continuation refused:
+  <text>`, and refuses that prefix on a run with no record (checked
+  before the transition's own evidence, pattern 128).
+- `ContinuationContext` renders the `## Continues prior run` block into
+  `rs.Related` after the landscape's block (stop line; goal / answer /
+  plan unless the rerun block carried them; where each step ended; the
+  operator question); the fold re-derives it, so the execute request's
+  hash pins it. `RelatedContext` now shares `planListing`.
+- Surface: `asks --json` `follow_up` / `follow_up_state`; `runs show`
+  "continued by X: state" / "continues X (how)" / "continuation refused:
+  …"; `now --after` prints "continues: run X (stopped)" before intake.
+- Registry: `continuation/1` declared + generated; `regression_rerun`'s
+  `truncated` re-declared `authorization` (the fold has used it since r3
+  of the entry above; measured by the truncated forge); `contracts report`
+  0/0.
+
+**Tests:** claim + derived settlement end to end (`--after` a failed NOW
+run: record, lineage, the block in the execute request, `Continued`
+index, "finished" after the continuation ends; the second `--after` of
+the source refused by the pre-check and, driven anyway, recorded and
+ended `failed` on the refusal with no block; a follow of the finished
+continuation is a plain follow; a restart re-derives it all); refused
+while the first is live and again after it finished; a not-yet-stopped
+source; the chain moving forward (B stopped ⇒ "continue B instead"; D
+continues B and carries B's stop line); the landscape's own rerun as a
+continuation (`how: rerun`, one goal / one plan in the request, the
+step-outcome line) and the judge choosing an already-continued source
+ending refused; a `related` decision on a stopped run is no
+continuation; kills at `after_continuation` (resume claims nothing
+twice) and `after_landscape` on the rerun path (resume claims first);
+nine forgeries, one history each (the honest refusal accepted as the
+control; a claim on a continued source; a refusal that is not the
+state; a source the run does not follow; how contradicting the lineage;
+a claim on a finished run; decided after its own record; a claim after
+the run started; attempt 1 without a claim); the outcome binding both
+ways (a refused run recording another outcome; a refusal outcome on a
+run with no record); wire table + JSON round trip + the door executing
+the vocabulary; CLI: the ask loop's answer continues the asked run
+(`asks --json`, both `runs show` lines, a second `--after` refused before
+intake, no goal taken in).
+
+**Review (codex gpt-5.6-sol, high; 2 rounds, per the 2026-09-16 budget
+decree):** r1 = Skeptic + Architect on the chunk (10 + 9 findings, ~57KB
+prompts, ~20 min each). Verified and fixed: two claims on one source
+could both fold — a claim decided over head H never saw a claim appended
+at H+1, and `continued[source]` was overwritten — and two drivers
+deciding over the same head could both claim: now the driver folds a
+reader pinned at the head it read and submits the record with
+`ExpectHead` (re-deciding on the precondition, bounded), and the fold
+requires `as_of + 1 == seq` ("decided over the head it was appended
+to"); the same pin closes the refusal text describing post-head state
+("attempt 1 executing" written after the source reached judged); the
+ack transition (delivered→delivered) moved `TerminalAt` — now the FIRST
+terminal transition; a second production run could start a goal another
+run held (map-order source ambiguity) — the fold refuses it; a refused
+continuation was itself continuable (its failed terminal read as
+"stopped"), laundering the refusal — `Continuable` refuses a source that
+ended on a refusal; `asks` hid `follow_up` unless an Answer existed;
+`maro-go answer` left a run "already answered" with no follow-up when the
+follow-up's own options were refused after the Answer commit — the same
+answer resumes it; `runs show --json` lacked the continuation. Recorded
+as intentional/residue: AGENDA step prompts do not carry the riders
+(the planner consumes them; the plan is the executor's contract —
+pre-existing, its own chunk); refusal authorization bound to the exact
+text (deterministic; wording change = `continuation/2`); 8-hex handle
+collisions and first-match `LineageOf` (pre-existing, every verb). r2 =
+one Skeptic on the fix diff: 3 findings, all in the `answer` verb, all
+fixed: the Answer was committed without a head precondition, so a
+continuation claiming the source between the pre-check and the commit
+stranded an answered-but-unfollowed run — the verb now decides over a
+pinned prefix and appends the Answer with `ExpectHead` (re-deciding on
+the precondition); the resume check missed a follow-up goal taken in
+whose run had not started (`Ledger.Unstarted`) and would have taken in a
+second child — now refused with the resume hint; the text `asks` still
+printed "answer with:" for a run continued by hand without an Answer —
+the follow-up is shown and the instruction suppressed. STOPPED after r2
+per the budget. Residue: the Answer and the follow-up's claim are still
+two commits (the claim is the follow-up driver's) — a claim landing
+between them leaves the answer recorded and the follow-up ending refused,
+honestly; a text fixture for the by-hand follow of an asked run.
+
+Patterns:
+
+- **133. "Stopped" is what the record says, not what it does not say.**
+  Closure `unknown` after a complete execution is not a failure — the
+  self claim cannot promote, but nothing refuted. A predicate that treats
+  the absence of a judge as falling short turns every judge-less run into
+  a claim target and refuses the operator's ordinary follow-ups.
+- **134. One decision, three callers.** The CLI's pre-check, the
+  driver's record and the fold's check all call `Continuable` over a
+  ledger as of a head. A refusal text written twice would drift; the
+  fold compares the recorded text to the function's own.
+- **135. Settlement is the continuation's outcome.** A source's state is
+  READ from the run that continued it, never written back. There is no
+  settlement record to forget, no second writer, no "settled" flag that
+  can disagree with the run it summarizes.
+- **136. A forced outcome survives the resume.** Whatever forces a run to
+  end (a refusal, the attempt bound) must be forced again by `ResumeRun`
+  on the attempt the resume makes, or the resumed attempt executes the
+  goal the run was refused for.
+- **137. One history per forgery, even in one test.** A forged record the
+  fold refuses stays in the journal; every later fold of that history
+  refuses it first. A second forgery in the same harness is tested
+  against the first's error, not its own (pattern 120, re-learned).
+- **138. A decision over a prefix is appended to that prefix.** A claim
+  that says "decided as of H" and lands at H+3 was not decided over the
+  two records between; `as_of + 1 == seq`, and the writer commits with
+  `ExpectHead` over a fold pinned at the head it read. Every "one per X"
+  invariant decided from a fold needs both halves: the precondition (the
+  writer) and the equality (the fold), or two writers deciding over the
+  same head both win.
+- **139. A terminal watermark is set once.** A later transition of the
+  same terminal state (the ack) is not a second terminal; a watermark
+  that moves makes every as-of question answered before it wrong.
+- **140. A refusal is not work.** A run that ended on an authorization
+  refusal reads as "stopped" to a predicate over outcomes, and the chain
+  rule then lets it be continued — laundering the refusal into a fresh
+  claim. Classify refusals apart from stops wherever "stopped" grants
+  something.
+
+Owed on this branch: landscape prompt v4 (show the judge which
+candidates are already continued); the ask grounding gate (design
+decision owed on the live ask); work-dir binding; container executor +
+env-request strand; the resolution-completeness check.

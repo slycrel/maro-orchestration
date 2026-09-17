@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -83,39 +84,72 @@ func cmdAnswer(args []string, out, errw io.Writer) error {
 	var goal []byte
 	var contextFile string
 	err := withJournal(out, func(a *workspace.Announced, j *journal.Journal, st *thought.Store) error {
-		led, err := spine.Fold(j.Production(), st)
-		if err != nil {
-			return err
-		}
-		var rs *spine.RunState
-		for _, r := range led.Runs {
-			if spine.HandleOf(r.Run) == handle {
-				rs = r
+		// the decision (asked, not yet answered, continuable) is made over
+		// ONE journal prefix and the answer appended to exactly that head:
+		// a continuation claiming the source in between fails the
+		// precondition and the decision is made again
+		var (
+			led      *spine.Ledger
+			rs       *spine.RunState
+			question string
+			qid      record.RecordID
+			late     bool
+			err      error
+		)
+		for try := 0; ; try++ {
+			head := j.Head()
+			if led, err = spine.Fold(j.Production().PinAt(head), st); err != nil {
+				return err
 			}
-		}
-		if rs == nil {
-			return fmt.Errorf("answer: no run %s", handle)
-		}
-		asked := askedAttempt(rs)
-		if asked == nil {
-			return fmt.Errorf("answer: run %s asked nothing", handle)
-		}
-		if rs.Answer != nil {
-			return fmt.Errorf("answer: run %s was already answered (%s): %s", handle, rs.Answer.Source, rs.Answer.Text)
-		}
-		var question string
-		var qid record.RecordID
-		late := false
-		if q := asked.Question; q != nil {
-			question, qid = q.Question, q.ID
-			late = time.Now().After(q.Deadline)
-		} else {
-			question = asked.Intent.Question
-		}
-		ans := &spine.Answer{Header: record.Header{ID: record.NewID(), Schema: "answer/1", RunID: rs.Run, Attempt: asked.Attempt.Attempt, Subject: record.Ref{Kind: "run", ID: string(rs.Run)}, At: time.Now().UTC()},
-			Target: rs.Run, Question: qid, Text: text, Source: source, Late: late}
-		if _, err := j.Submit(context.Background(), journal.Command{IdempotencyKey: "answer/" + string(ans.ID), Epoch: j.Epoch(), Records: []record.Record{ans}}); err != nil {
-			return err
+			rs = nil
+			for _, r := range led.Runs {
+				if spine.HandleOf(r.Run) == handle {
+					rs = r
+				}
+			}
+			if rs == nil {
+				return fmt.Errorf("answer: no run %s", handle)
+			}
+			asked := askedAttempt(rs)
+			if asked == nil {
+				return fmt.Errorf("answer: run %s asked nothing", handle)
+			}
+			question, qid, late = "", "", false
+			if q := asked.Question; q != nil {
+				question, qid = q.Question, q.ID
+				late = time.Now().After(q.Deadline)
+			} else {
+				question = asked.Intent.Question
+			}
+			// an answer already recorded whose follow-up never started (the
+			// process died, or the run's own options were refused, between
+			// the answer and the follow-up's intake) is resumed by the same
+			// answer; any other text, or a follow-up that exists, refuses
+			if rs.Answer != nil {
+				if rs.Answer.Text != text {
+					return fmt.Errorf("answer: run %s was already answered (%s): %s", handle, rs.Answer.Source, rs.Answer.Text)
+				}
+				if f := followerOf(led, rs); f != "" {
+					return fmt.Errorf("answer: run %s was already answered (%s) and is followed by %s", handle, rs.Answer.Source, f)
+				}
+				if _, cerr := spine.Continuable(led, rs.Run, head); cerr != nil {
+					return fmt.Errorf("answer: %v", cerr)
+				}
+				fmt.Fprintf(errw, "answer: run %s already holds this answer; starting its follow-up\n", handle)
+				break
+			}
+			if _, cerr := spine.Continuable(led, rs.Run, head); cerr != nil {
+				return fmt.Errorf("answer: %v", cerr)
+			}
+			ans := &spine.Answer{Header: record.Header{ID: record.NewID(), Schema: "answer/1", RunID: rs.Run, Attempt: asked.Attempt.Attempt, Subject: record.Ref{Kind: "run", ID: string(rs.Run)}, At: time.Now().UTC()},
+				Target: rs.Run, Question: qid, Text: text, Source: source, Late: late}
+			_, err = j.Submit(context.Background(), journal.Command{IdempotencyKey: "answer/" + string(ans.ID), Epoch: j.Epoch(), ExpectHead: &head, Records: []record.Record{ans}})
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, journal.ErrPrecondition) || try >= 8 {
+				return err
+			}
 		}
 		goal, err = st.Get(rs.Goal.Text)
 		if err != nil {
@@ -160,6 +194,8 @@ type askRow struct {
 	Answer      string    `json:"answer,omitempty"`
 	Source      string    `json:"source,omitempty"`
 	Late        bool      `json:"late,omitempty"`
+	FollowUp    string    `json:"follow_up,omitempty"`       // the run continuing this one (after the answer)
+	FollowUpAt  string    `json:"follow_up_state,omitempty"` // live | finished | stopped
 }
 
 // cmdAsks lists every operator question the workspace's runs asked, with
@@ -184,6 +220,10 @@ func cmdAsks(args []string, out, errw io.Writer) error {
 				}
 				q := at.Question
 				row := askRow{Handle: spine.HandleOf(rs.Run), Status: "pending", Asked: q.At, Deadline: q.Deadline, Step: q.Step, Question: q.Question, Why: q.Why, Alternative: q.NoInputAlternative, Tried: q.Tried}
+				if c := led.Continued[rs.Run]; c != nil {
+					// continued with or without an answer (--after by hand)
+					row.FollowUp, row.FollowUpAt = spine.HandleOf(c.RunID), spine.ContinuationState(led, c, spine.Now)
+				}
 				if ans := rs.Answer; ans != nil {
 					row.Status, row.Answer, row.Source, row.Late = "answered", ans.Text, ans.Source, ans.Late
 				} else if time.Now().After(q.Deadline) {
@@ -220,10 +260,34 @@ func cmdAsks(args []string, out, errw io.Writer) error {
 					late = ", late"
 				}
 				fmt.Fprintf(out, "    answer (%s%s): %s\n", r.Source, late, r.Answer)
-			} else {
+			}
+			// continued with or without an answer (--after by hand): then
+			// there is nothing to answer any more
+			if r.FollowUp != "" {
+				fmt.Fprintf(out, "    continued by %s (%s)\n", r.FollowUp, r.FollowUpAt)
+			} else if r.Status != "answered" {
 				fmt.Fprintf(out, "    answer with: maro-go answer %s \"<your answer>\"\n", r.Handle)
 			}
 		}
 		return nil
 	})
+}
+
+// followerOf is the handle of a run whose goal follows rs's goal (taken
+// in by --after; its continuation may not be recorded yet), "" when none.
+func followerOf(led *spine.Ledger, rs *spine.RunState) string {
+	if rs.Goal == nil {
+		return ""
+	}
+	for _, other := range led.Runs {
+		if other.Goal != nil && other.Goal.Parent == rs.Goal.ID {
+			return spine.HandleOf(other.Run)
+		}
+	}
+	for _, g := range led.Unstarted {
+		if g.Parent == rs.Goal.ID {
+			return fmt.Sprintf("goal %s, taken in but not started (maro-go runs resume)", g.ID)
+		}
+	}
+	return ""
 }

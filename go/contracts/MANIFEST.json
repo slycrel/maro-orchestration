@@ -1,6 +1,6 @@
 {
   "generator": "maro-go contracts gen v1",
-  "source_ref": "228dc548",
+  "source_ref": "78d720ab",
   "kinds": {
     "answer": "00bcf334fcf472c3fb26d4e6fa6e738b9a43548c98056476976c7ba62c4f4697",
     "application": "ddab4335dd49232e8a3a7056daa72ae181e21794f25b5ab5d38a3dbd52305385",
@@ -9,6 +9,7 @@
     "child_terminal": "11d7c7e51346ac2f3fca1df6fe836d224965e3f5582acafd62b5de86a410f55c",
     "cohort_closed": "c26fdaaf1ad9f98c6b06cceca7d886544c724e3870086e6681b6d58170406990",
     "cohort_commitment": "3058251e4da2b3b7c8ef33b4fd8c93e55223061d085047869f86ecb43ea08033",
+    "continuation": "d02b420a090c6461b15970f12d6ce9fce7f244a90e089500a0e05fccd786dc66",
     "delivery_acked": "261d54b5a58c86b22bc492c977ecc0e34249b94890f2e8982e7119f6c8eb12c9",
     "delivery_attempted": "bc3aaee593730b05360ba6e86b7b92c645f347a68ce73ac96d72f67db6689925",
     "delivery_prepared": "1568c6f7898371acf8241845bdd9d13083823b0c4b3da150bff43e040cf5edaf",

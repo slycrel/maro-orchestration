@@ -782,6 +782,9 @@ func init() {
 	reg(KindLandscape, Landscape{}, "the driver's landscape stage (before attempt 1; one per run)",
 		"the fold (lineage, related context); Inspect; recall/policy scope",
 		"the run's relation to prior runs: fresh, related (follows one), rerun (follows one, reuses its plan)")
+	reg(KindContinuation, Continuation{}, "the driver's continuation stage (after the lineage, before attempt 1; one per run)",
+		"the fold (the claim on the source, the continuation block); `runs show`; `asks`; the CLI's --after and answer pre-checks",
+		"that this run continues a stopped run — one continuation per source, refused otherwise (the run ends on the refusal); the source is settled by this run's own end")
 	reg(KindMeteringTarget, MeteringTarget{}, "intake (the operator's --target, with the goal, one command)",
 		"the driver's Deliver stage (the metering line, the overage); `runs show`",
 		"the envelope the run is measured against (§11): a target with a why, never a constraint")

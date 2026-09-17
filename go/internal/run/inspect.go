@@ -32,6 +32,13 @@ func Inspect(rs *RunState) []string {
 		}
 		lines = append(lines, fmt.Sprintf("landscape: %s%s (%s; %d candidate(s) of %d scanned, %d below the floor)%s", ls.Relation, chosen, ls.Rule, len(ls.Candidates), ls.Scanned, ls.BelowFloor, map[bool]string{true: ": " + ls.Reason, false: ""}[ls.Reason != ""]))
 	}
+	if c := rs.Continuation; c != nil {
+		if c.Refused != "" {
+			lines = append(lines, "continuation refused: "+c.Refused)
+		} else {
+			lines = append(lines, fmt.Sprintf("continues %s (%s)", HandleOf(c.Source), c.How))
+		}
+	}
 	lens := a.Attempt.Config.Lens
 	if lens == "" {
 		lens = LensNeutral

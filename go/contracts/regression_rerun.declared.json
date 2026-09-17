@@ -69,9 +69,9 @@
     "truncated": {
       "absence": "omitted",
       "on_absence": "tolerated",
-      "used_for": "display-only",
+      "used_for": "authorization",
       "constraint": "unconstrained",
-      "measured_by": "internal/regression:TestRerunRunsArgvInTheRecordedDirWithoutAShell"
+      "measured_by": "internal/run:TestForgedRegressionRerunIsRefused"
     },
     "stdout": {
       "absence": "omitted",

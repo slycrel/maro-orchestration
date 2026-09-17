@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "effect_attestation",
+  "kind": "continuation",
   "envelope": "production",
-  "schema": "effect_attestation/1",
-  "go_type": "experiment.EffectAttestation",
+  "schema": "continuation/1",
+  "go_type": "run.Continuation",
   "fields": [
     {
       "name": "header.ID",
@@ -78,52 +78,38 @@
       "from_header": true
     },
     {
-      "name": "Experiment",
-      "wire": "experiment",
+      "name": "Goal",
+      "wire": "goal",
       "go_type": "record.RecordID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Cohort",
-      "wire": "cohort",
-      "go_type": "record.RecordID",
+      "name": "Source",
+      "wire": "source",
+      "go_type": "record.RunID",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Closure",
-      "wire": "closure",
-      "go_type": "record.RecordID",
+      "name": "How",
+      "wire": "how",
+      "go_type": "string",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Protocol",
-      "wire": "protocol",
-      "go_type": "experiment.Protocol",
+      "name": "AsOf",
+      "wire": "as_of",
+      "go_type": "uint64",
       "omittable": false,
       "is_thought": false
     },
     {
-      "name": "Units",
-      "wire": "units",
-      "go_type": "[]experiment.UnitRow",
+      "name": "Refused",
+      "wire": "refused",
+      "go_type": "string",
       "omittable": true,
-      "is_thought": false
-    },
-    {
-      "name": "Evaluator",
-      "wire": "evaluator",
-      "go_type": "string",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Estimator",
-      "wire": "estimator",
-      "go_type": "string",
-      "omittable": false,
       "is_thought": false
     }
   ],

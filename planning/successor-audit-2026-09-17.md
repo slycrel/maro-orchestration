@@ -149,3 +149,40 @@ downgrade); no per-restart re-run (the journal's reuse rule makes a
 restart's re-run the same re-run); observations are first-class records
 the fold checks, where main folds the decision into closure text.
 
+### 4.2 Continuation: a run that continues a stopped run claims it, and its own end settles it — LANDED 2026-09-17
+
+**Contract (shared with main — chunks 6, 7 and 9 of the checkpoint arc):**
+
+| Clause | Python main | Go successor (this chunk) |
+|---|---|---|
+| What is continued | a run whose checkpoint shows it did not finish (`--rerun`/resume of a stopped run) | a run that STOPPED: its recorded execution failed or ended partial, or its closure resolved `not_achieved`. A complete execution with closure `unknown` FINISHED (the self claim cannot promote it, nothing says it fell short; a judge-less NOW run ends this way every time) and is followed, never continued |
+| Who continues | the operator's explicit resume | the operator (`--after`, which `answer` uses) and Maro's own landscape `rerun` decision; a `related` decision is a tangent, a fork child / replay arm continues nothing |
+| Claim | one-shot durable claim on the source BEFORE execution; classifies live / superseded / unresolved / indeterminate | one `continuation` record per run, before attempt 1, naming source, how (`after` / `rerun`) and the journal head it was decided over; the fold refuses a claim on a source that is live, finished, or already continued, and refuses attempt 1 of a run that follows a stopped run without one |
+| One per source | CLI refuses all four states; `--reclaim` re-takes `unresolved` only; the API has no override | one continuation per source, ever: while it is live the second is refused; after it ends the chain moves FORWARD — a finished continuation means "follow it instead", a stopped one means "continue it instead" (it carries the source's lineage and context). No `--reclaim` |
+| Refusal | ends like a finished run with a typed verdict | recorded (the same record, `refused` set to the exact state text) and the run ENDS on it: attempt 1 (or a resumed attempt) records `failed` with reason `continuation refused: <text>`; the fold binds record and outcome both ways. The CLI also refuses before intake (`--after`, `answer`) so no goal is taken in |
+| Settlement | written by whoever makes the run's last status decision; a run ending other than done keeps its claim as a replay barrier | DERIVED: the source's state is the continuation run's own outcome (live / finished / stopped) — no settlement record to forget or forge; a stopped continuation keeps the source claimed (the barrier) and is itself the thing to continue |
+| Context | the resumed run reads the checkpoint (plan, done items) | the continuation's requests carry `## Continues prior run (handle, how)`: where it stopped, its goal, answer (or "recorded no answer"), its plan, where each step ended, the operator question it asked; a landscape rerun's block already carries goal/answer/plan, so only the stop line and step outcomes are added. The fold re-derives the block like the related block |
+| Surface | `--reclaim`, resume status | `asks --json` rows carry `follow_up` / `follow_up_state`; `runs show` says "continued by X: state" on the source and "continues X (how)" / "continuation refused: …" on the continuation; `now --after` prints "continues: run X (stopped)" |
+| Kill safety | checkpoint written before execution | crash seam `after_continuation`; a resume claims nothing twice; a kill between the landscape and the claim claims on resume |
+
+**Intentional differences:** settlement is derived, not recorded (the
+continuation's outcome IS the settlement); no `--reclaim` (the chain
+moves forward instead — the thing to continue is always the newest run in
+the chain, never a re-take of the source); the refusal is a record the
+run ends on, not a verdict class; `unknown` closure counts as finished
+(main's status vocabulary has no such state — a judge-less Go NOW run
+would otherwise have every follow-up claim it and refuse the next);
+Maro's own `rerun` decision is a continuation too (decisions belong to
+Maro, 2026-09-05), and a rerun the judge chooses of an already-continued
+source ends refused rather than silently re-claiming.
+
+**Residue:** the landscape prompt does not yet show the judge which
+candidates are already continued (prompt v4) — until it does, a rerun of
+a superseded run ends as an honest refused run; `follow_up_state` in
+`asks` is the derived state at read time, not a stamped one; AGENDA step
+prompts carry no riders (the planner consumes them; the plan is the
+executor's contract — pre-existing, its own chunk); the Answer and the
+follow-up's claim are two commits (a claim landing between them leaves
+the answer recorded and the follow-up ending refused); `HandleOf`
+collisions are unhandled across every handle-addressed verb.
+

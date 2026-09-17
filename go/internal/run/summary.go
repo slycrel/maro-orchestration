@@ -29,6 +29,12 @@ type Summary struct {
 	// Landscape is the relation decision, nil when the lineage was set at
 	// intake (--after, a fork child, a replay arm).
 	Landscape *Landscape `json:"landscape,omitempty"`
+	// Continuation is the claim on the run this one continues (or its
+	// refusal), nil for a fresh run or a plain follow.
+	Continuation *Continuation `json:"continuation,omitempty"`
+	// ContinuedBy is the source-side line ("continued by <handle>: <state>");
+	// it needs the ledger, so the caller fills it. "" when nothing does.
+	ContinuedBy string `json:"continued_by,omitempty"`
 	// Calls is every call the run made in journal order, the judge first.
 	Calls []CallSummary `json:"calls"`
 	Usage UsageSummary  `json:"usage"`
@@ -70,7 +76,7 @@ type UsageSummary struct {
 func Summarize(rs *RunState) Summary {
 	m := MissionOf(rs)
 	s := Summary{Handle: m.Handle, Run: string(rs.Run), Attempt: m.Attempt, Outcome: m.Outcome, Terminal: m.Terminal, Closure: m.Closure,
-		Delivery: m.Delivery, Required: m.Required, Reason: m.Reason, Parent: string(rs.Parent), Root: string(rs.Root), Landscape: rs.Landscape}
+		Delivery: m.Delivery, Required: m.Required, Reason: m.Reason, Parent: string(rs.Parent), Root: string(rs.Root), Landscape: rs.Landscape, Continuation: rs.Continuation}
 	if rs.Goal != nil && rs.Goal.Context != nil {
 		s.Context = rs.Goal.Context.Hash
 	}
