@@ -233,6 +233,7 @@ def _write_iteration_artifacts(
             executor_session=executor_session,
             world_facts=ctx.world_facts.to_list(),
             regression=ctx.regression.to_list(),
+            step_indices=list(getattr(ctx, "step_indices", []) or []),
         )
     except Exception as _exc:
         # Affects loop resumability — silent loss means a crashed loop can't restart.
@@ -475,13 +476,31 @@ def _check_loop_interrupts(
                 else:
                     new_remaining = _shape_steps(new_remaining, label="interrupt")
                     added = [s for s in new_remaining if s not in remaining_steps]
-                    if added:
-                        new_idxs = o.append_next_items(ctx.project, added)
-                        existing_count = len(remaining_steps)
-                        remaining_steps = new_remaining
-                        remaining_indices = remaining_indices[:existing_count] + new_idxs
-                    else:
-                        remaining_steps = new_remaining
+                    # Re-pair text ↔ item index by TEXT, whatever the
+                    # interrupt did to the order: a priority interrupt
+                    # PREPENDS its steps and the old `old_indices + new`
+                    # concatenation left the urgent step wearing the next
+                    # planned step's item number (review 2026-09-16 r1
+                    # finding 4 — the checkpoint then mapped the urgent
+                    # step's row onto that planned step's position and a
+                    # resume skipped work that never ran). A corrective
+                    # replacement likewise keeps only the surviving texts'
+                    # indices.
+                    _old_pairs: Dict[str, List[int]] = {}
+                    for _t, _ix in zip(remaining_steps, remaining_indices):
+                        _old_pairs.setdefault(_t, []).append(_ix)
+                    _new_pool = list(o.append_next_items(ctx.project, added)) if added else []
+                    _paired: List[int] = []
+                    for _t in new_remaining:
+                        _ixs = _old_pairs.get(_t)
+                        if _ixs:
+                            _paired.append(_ixs.pop(0))
+                        elif _new_pool:
+                            _paired.append(_new_pool.pop(0))
+                        else:
+                            _paired.append(-1)
+                    remaining_steps = new_remaining
+                    remaining_indices = _paired
                     o.append_decision(ctx.project, [
                         f"[loop:{ctx.loop_id}] interrupt({intr.intent}) from {intr.source}: {intr.message[:60]}",
                     ])

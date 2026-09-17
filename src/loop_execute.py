@@ -300,6 +300,7 @@ def _execute_main_loop(
                     executor_session=_executor_session,
                     world_facts=ctx.world_facts.to_list(),
                     regression=ctx.regression.to_list(),
+                    step_indices=step_indices,
                 )
             except Exception as _rotation_exc:
                 log.warning("executor session rotation checkpoint failed: %s",
@@ -308,6 +309,7 @@ def _execute_main_loop(
     # Step 2: Execute each step in order (dynamic — interrupts may add/replace steps)
     # Pre-populate with any completed steps from a checkpoint resume
     step_outcomes: List[StepOutcome] = list(_resume_completed)
+    ctx.step_indices = list(step_indices or [])  # checkpoint rows map to plan positions through it
     total_tokens_in = 0
     total_tokens_out = 0
     total_cache_read = 0
@@ -636,7 +638,11 @@ def _execute_main_loop(
                 # Same bookkeeping as an executed step: the counters
                 # advance, the row carries the right iteration, NEXT.md
                 # shows the item blocked, and the checkpoint records the
-                # refusal so a resume does not re-try the dependent.
+                # refusal as history. A resume DOES re-try the dependent
+                # (checkpoint._done_positions: a blocked row never finishes
+                # a position) — the operator's resume is a retry of the
+                # failed prerequisite, so the dependent is re-decided
+                # against the fresh outcome rather than frozen by this row.
                 iteration += 1
                 step_idx += 1
                 _gate_result = _gate_text(_gate)
@@ -683,7 +689,8 @@ def _execute_main_loop(
                                steps, step_outcomes,
                                executor_session=_executor_session,
                                world_facts=ctx.world_facts.to_list(),
-                               regression=ctx.regression.to_list())
+                               regression=ctx.regression.to_list(),
+                               step_indices=step_indices)
                 except Exception as _gk_exc:
                     log.warning("gated-step checkpoint write failed: %s", _gk_exc)
                 continue
@@ -1168,7 +1175,8 @@ def _execute_main_loop(
                            steps, step_outcomes, in_flight_index=step_idx,
                            executor_session=_executor_session,
                            world_facts=ctx.world_facts.to_list(),
-                           regression=ctx.regression.to_list())
+                           regression=ctx.regression.to_list(),
+                           step_indices=step_indices)
         except Exception as _if_exc:
             log.debug("in-flight checkpoint write failed (non-fatal): %s", _if_exc)
 

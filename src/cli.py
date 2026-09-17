@@ -2681,7 +2681,7 @@ def _cmd_resume(args: argparse.Namespace) -> int:
             pass
 
     print(f"[maro] resuming loop {ckpt.loop_id}: "
-          f"{len(ckpt.completed)}/{len(ckpt.steps)} steps done"
+          f"{ckpt.done_count}/{len(ckpt.steps)} steps done"
           + (f", step {ckpt.in_flight['index']} was in flight"
              if ckpt.in_flight else ""))
 

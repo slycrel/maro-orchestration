@@ -34,7 +34,7 @@ import logging
 import os
 import re
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -152,12 +152,67 @@ def _runs_root() -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 
+# Row statuses that FINISH a plan position (a resume skips the step). Every
+# other status — blocked (retry-requeued or superseded by sub-steps), stuck,
+# failed — leaves the step to be re-attempted on resume.
+_FINISHED_STATUSES = frozenset({"done", "skipped"})
+
+
+def _as_int(value: Any, default: int) -> int:
+    """Integer identity or `default` — never a guess.
+
+    Accepts ints and integral floats/strings ("13", 13.0). Refuses bools,
+    None, non-integral or non-finite numbers and anything else: a
+    position of 1.9 must not become position 1 (review r2 finding 4).
+    """
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return default
+    return default
+
+
+def _coerce_row(c: Dict[str, Any], n_steps: int) -> Optional["CompletedStep"]:
+    """Build a CompletedStep from a persisted dict, tolerating hand edits
+    and older shapes: `index` defaults to -1, `position` to 0, and a
+    position outside 1..n_steps reads as 0 (not a plan step). A row that
+    still cannot be built is dropped rather than crashing the load — the
+    resume path treats a load error as "start fresh", which re-executes
+    everything (review round 1, finding 6)."""
+    known = {f.name for f in fields(CompletedStep)}
+    row = {k: v for k, v in c.items() if k in known}
+    row["index"] = _as_int(row.get("index"), -1)
+    pos = _as_int(row.get("position"), 0)
+    row["position"] = pos if 0 < pos <= n_steps else 0
+    row["text"] = str(row.get("text", "") or "")
+    row["status"] = str(row.get("status", "") or "")
+    try:
+        return CompletedStep(**row)
+    except TypeError:
+        return None
+
+
 @dataclass
 class CompletedStep:
-    index: int
+    index: int             # NEXT.md item index the loop assigned (-1 for recovery sub-steps)
     text: str
     status: str
     result: str = ""
+    # 1-based position in `Checkpoint.steps` (0 = not a plan step: a
+    # recovery sub-step, or a row carried in from an earlier attempt whose
+    # plan this checkpoint no longer holds). Added 2026-09-16: `index` is
+    # the NEXT.md item number, never a plan position — live checkpoints
+    # held [13, 49, 11, 12] for 2–7-step plans, so `remaining_steps`
+    # (which compared it to 1..n) returned the WHOLE plan and a resume
+    # re-executed finished steps. Resume selects by this field.
+    position: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
     elapsed_ms: int = 0
@@ -195,26 +250,96 @@ class Checkpoint:
     # Regression obligations (regression_ledger rows) — a resume must keep
     # re-verifying what the pre-pause steps proved.
     regression: Optional[List[Dict[str, Any]]] = None
+    # Provenance of the rows' `position` field (2026-09-16 review, round 1):
+    # True ⇒ the writer mapped rows to plan positions and a position of 0
+    # means "not a plan step"; False ⇒ an older file whose `index` is read
+    # as a position (pre-fix semantics). Checkpoint-level on purpose — a
+    # positioned file whose rows ALL sit at 0 (a resume's in-flight write
+    # before its first suffix step completes: every row is carried history)
+    # must not fall back to reading stale item numbers as suffix positions.
+    positioned: bool = False
 
     def __post_init__(self):
         if not self.timestamp:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
+    def _done_positions(self) -> set:
+        """1-based plan positions a resume must NOT re-execute.
+
+        Positioned file (`positioned` is True — written by this build): a
+        position counts only when its LATEST row ended in a FINISHED
+        status (`_FINISHED_STATUSES`; latest-row-wins matches export_human).
+        A blocked row never counts, whatever produced it (review r1
+        finding 3, r2 finding 1):
+          - retry: the loop requeued the step — resume must start AT it;
+          - superseded by sub-steps: the sub-steps are not plan steps
+            (position 0), so a crash mid-way would otherwise lose them —
+            the step re-decomposes on resume (wasteful, never lost);
+          - prerequisite gate: a resume is the operator's retry of the
+            failed prerequisite, and the dependent must be re-decided
+            against the fresh outcome, not frozen by the old refusal.
+        The direction of error is deliberate — re-running a blocked step is
+        a retry, re-running a done step is the duplicate-effects bug.
+
+        Legacy file (`positioned` False): every row's `index` is read as a
+        position — the pre-fix behaviour, kept so an old file resumes
+        exactly as it did rather than as nothing-done.
+        """
+        if self.positioned:
+            n = len(self.steps)
+            latest: Dict[int, str] = {}   # position → status of its LATEST row
+            for s in self.completed:
+                pos = _as_int(getattr(s, "position", 0), 0)
+                if 0 < pos <= n:
+                    latest[pos] = s.status
+            return {pos for pos, st in latest.items() if st in _FINISHED_STATUSES}
+        return {s.index for s in self.completed}
+
     @property
     def next_step_index(self) -> int:
-        """Zero-based index of the next step to execute."""
-        if not self.completed:
-            return 0
-        return max(s.index for s in self.completed)
+        """Zero-based index of the next step to execute.
+
+        Positioned: the first remaining position (len(steps) when nothing
+        remains). Legacy: max recorded index, as before.
+        """
+        done = self._done_positions()
+        if self.positioned:
+            for i in range(1, len(self.steps) + 1):
+                if i not in done:
+                    return i - 1
+            return len(self.steps)
+        return max(done) if done else 0
 
     @property
     def remaining_steps(self) -> List[str]:
-        """Steps not yet completed (by position in steps list)."""
-        done_indices = {s.index for s in self.completed}
-        return [s for i, s in enumerate(self.steps, 1) if i not in done_indices]
+        """Steps not yet completed (by plan position)."""
+        done = self._done_positions()
+        return [s for i, s in enumerate(self.steps, 1) if i not in done]
+
+    @property
+    def done_count(self) -> int:
+        """Plan steps with a finished outcome — for progress displays.
+
+        Positioned: unique finished positions (carried-in history rows and
+        sub-steps sit at position 0 and do not count). Legacy: rows whose
+        status is done, as export_human always counted.
+        """
+        if self.positioned:
+            return len(self._done_positions())
+        return sum(1 for s in self.completed if s.status == "done")
 
     def is_complete(self) -> bool:
-        """True if all steps have an outcome."""
+        """True if nothing remains to execute.
+
+        Positioned: every plan position has a finished row. Legacy: row
+        count reaches the plan length (pre-fix rule, kept for old files).
+        After a resume `steps` is the SUFFIX and `completed` also holds the
+        carried-in rows, so a row count over-reports (review round 1,
+        finding 1: a second resume was refused as "completed all its
+        steps" while suffix work remained).
+        """
+        if self.positioned:
+            return not self.remaining_steps
         return len(self.completed) >= len(self.steps)
 
     def is_consumed(self) -> bool:
@@ -244,14 +369,22 @@ class Checkpoint:
             d["world_facts"] = self.world_facts
         if self.regression:
             d["regression"] = self.regression
+        if self.positioned:
+            d["positioned"] = True
         return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Checkpoint":
-        completed = [
-            CompletedStep(**c) if isinstance(c, dict) else c
-            for c in d.get("completed", [])
-        ]
+        steps = d.get("steps", [])
+        if not isinstance(steps, list):
+            steps = []
+        raw_rows = d.get("completed", [])
+        if not isinstance(raw_rows, list):
+            raw_rows = []
+        # Only dict rows are rows; anything else is a hand edit or a torn
+        # write and must not count toward "done" (r2 finding 4).
+        completed = [_coerce_row(c, len(steps)) for c in raw_rows if isinstance(c, dict)]
+        completed = [c for c in completed if c is not None]
         raw_session = d.get("executor_session")
         executor_session = None
         if isinstance(raw_session, dict):
@@ -274,8 +407,11 @@ class Checkpoint:
             loop_id=d["loop_id"],
             goal=d["goal"],
             project=d.get("project", ""),
-            steps=d.get("steps", []),
+            steps=steps,
             completed=completed,
+            # The marker is a JSON boolean or nothing — a hand-edited
+            # "false" string must read as legacy, not as positioned.
+            positioned=d.get("positioned") is True,
             timestamp=d.get("timestamp", ""),
             parent_loop_id=d.get("parent_loop_id", ""),
             handle_id=d.get("handle_id", ""),
@@ -304,6 +440,7 @@ def write_checkpoint(
     executor_session: Optional[Dict[str, Any]] = None,
     world_facts: Optional[List[Dict[str, Any]]] = None,
     regression: Optional[List[Dict[str, Any]]] = None,
+    step_indices: Optional[List[int]] = None,
 ) -> None:
     """Write current loop progress to disk.
 
@@ -330,9 +467,39 @@ def write_checkpoint(
             without the adapter's configuration-signature check.
     """
     try:
+        # item index → 1-based plan position, from the loop's own mapping
+        # (`step_indices[i]` is the NEXT.md item of plan step i+1). A row
+        # whose item is not in the mapping (recovery sub-step, or a row
+        # carried in from an earlier attempt) gets position 0.
+        _pos_of_item: Dict[int, int] = {}
+        _dup_items: List[int] = []
+        for _pos, _item in enumerate(step_indices or (), 1):
+            _item_i = _as_int(_item, -1)
+            if _item_i < 0:
+                continue
+            if _item_i in _pos_of_item:
+                _dup_items.append(_item_i)
+                continue
+            _pos_of_item[_item_i] = _pos
+        for _item_i in _dup_items:
+            # An item that names two positions is an ambiguous identity:
+            # its rows get position 0 (= re-run), never the first slot
+            # (r2 finding 3 — the first slot would skip work that never ran).
+            _pos_of_item.pop(_item_i, None)
+        if step_indices is not None and (len(step_indices) != len(steps) or _dup_items):
+            # Rows the mapping cannot place resolve to position 0 (= not
+            # done) — the safe direction — but a malformed mapping means
+            # the writer's plan and item lists drifted apart; say so.
+            log.warning(
+                "checkpoint %s: step_indices does not map the plan cleanly "
+                "(%d indices for %d steps, duplicate items %s) — rows of "
+                "unmapped or duplicated items will be re-executed on resume",
+                loop_id, len(step_indices), len(steps), _dup_items or "none",
+            )
         completed = [
             CompletedStep(
-                index=getattr(s, "index", i + 1),
+                index=_as_int(getattr(s, "index", i + 1), -1),
+                position=_pos_of_item.get(_as_int(getattr(s, "index", -1), -1), 0),
                 text=getattr(s, "text", ""),
                 status=getattr(s, "status", ""),
                 result=getattr(s, "result", ""),
@@ -360,6 +527,7 @@ def write_checkpoint(
             project=project,
             steps=steps,
             completed=completed,
+            positioned=step_indices is not None,
             handle_id=_run_handle_id(rd_path) if rd_path else "",
             in_flight=in_flight,
             # A mid-step crash has indeterminate provider state and may have
@@ -376,7 +544,8 @@ def write_checkpoint(
         else:
             path = _checkpoint_path(loop_id)
         path.write_text(json.dumps(ckpt.to_dict(), indent=2), encoding="utf-8")
-        log.debug("checkpoint written: %s (%d/%d steps)", loop_id, len(completed), len(steps))
+        log.debug("checkpoint written: %s (%d/%d steps done, %d rows)",
+                  loop_id, ckpt.done_count, len(steps), len(completed))
     except Exception as exc:
         log.debug("checkpoint write failed (non-fatal): %s", exc)
 
@@ -533,10 +702,9 @@ def export_human(loop_id: str) -> Optional[str]:
     if ckpt is None:
         return None
 
-    done_count = sum(1 for s in ckpt.completed if s.status == "done")
+    done_count = ckpt.done_count
     blocked_count = sum(1 for s in ckpt.completed if s.status == "blocked")
     total = len(ckpt.steps)
-    completed_indices = {s.index for s in ckpt.completed}
 
     status_parts = [f"{done_count}/{total} steps done"]
     if blocked_count:
@@ -558,8 +726,13 @@ def export_human(loop_id: str) -> Optional[str]:
         "",
     ]
 
-    # Build an index of completed steps by their 1-based index
-    completed_by_index: Dict[int, CompletedStep] = {s.index: s for s in ckpt.completed}
+    # Completed steps by their 1-based plan position (older files: index);
+    # a positioned file's history rows (position 0) never claim a slot.
+    completed_by_index: Dict[int, CompletedStep] = {}
+    for s in ckpt.completed:
+        _key = s.position if ckpt.positioned else s.index
+        if _key > 0:
+            completed_by_index[_key] = s
 
     for i, step_text in enumerate(ckpt.steps, 1):
         cs = completed_by_index.get(i)
@@ -614,11 +787,15 @@ def branch_checkpoint(loop_id: str) -> Optional[str]:
         parent_loop_id=loop_id,
         world_facts=list(ckpt.world_facts) if ckpt.world_facts else None,
         regression=list(ckpt.regression) if ckpt.regression else None,
+        # The rows travel with their position semantics — a branch of a
+        # positioned file read as legacy would take item numbers for
+        # positions (the very bug `positioned` exists to name).
+        positioned=ckpt.positioned,
     )
     path = _checkpoint_path(new_loop_id)
     path.write_text(json.dumps(branch.to_dict(), indent=2), encoding="utf-8")
-    log.info("branch_checkpoint: %s -> %s (%d/%d steps carried over)",
-             loop_id, new_loop_id, len(branch.completed), len(branch.steps))
+    log.info("branch_checkpoint: %s -> %s (%d/%d steps done carried over, %d rows)",
+             loop_id, new_loop_id, branch.done_count, len(branch.steps), len(branch.completed))
     return new_loop_id
 
 
@@ -655,7 +832,7 @@ def _cli_main() -> None:
             print("No checkpoints found.")
             return
         for c in ckpts:
-            done = len(c.completed)
+            done = c.done_count
             total = len(c.steps)
             branch_tag = f"  [branch of {c.parent_loop_id}]" if c.parent_loop_id else ""
             print(f"{c.loop_id}  {done}/{total}  {c.timestamp[:19]}  {c.goal[:55]}{branch_tag}")

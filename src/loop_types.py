@@ -465,6 +465,10 @@ class LoopContext:
     step_outcomes: List[StepOutcome] = field(default_factory=list)
     remaining_steps: List[str] = field(default_factory=list)
     remaining_indices: List[int] = field(default_factory=list)
+    # NEXT.md item index per plan position (step_indices[i] ↔ plan step
+    # i+1) — the checkpoint writer maps outcome rows to plan positions
+    # through it (checkpoint.CompletedStep.position).
+    step_indices: List[int] = field(default_factory=list)
     completed_context: List[str] = field(default_factory=list)
     iteration: int = 0
     step_idx: int = 0

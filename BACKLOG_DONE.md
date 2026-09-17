@@ -10,6 +10,53 @@ Rotation policy (2026-08-16): when this file outgrows whole-file readability (25
 
 ---
 
+## Checkpoint resume never skipped completed rows — FIXED 2026-09-16 (LoopsBench chunk 2)
+
+**Found:** round-2 Skeptic of the LoopsBench chunk-1 diff
+(`/tmp/adversarial-review.K4zIne`, finding 7), pre-existing HIGH. Every
+checkpoint row stored `StepOutcome.index` — the NEXT.md item the loop
+assigned — while `Checkpoint.remaining_steps` / `next_step_index` /
+`export_human` read it as a 1-based plan position. Live checkpoints on this
+box held `completed idx = [13, 49, 11, 12]` for 2–7-step plans, so
+`resume_from` returned the WHOLE plan and a resumed run re-executed
+finished steps (duplicate side effects), and the chunk-1 gate's blocked row
+never made a resume skip anything.
+
+**Fix (landed with this entry):** `CompletedStep.position` (1-based plan
+position, 0 = not a plan step) written from the loop's own
+`step_indices` mapping at all four writer sites; a checkpoint-level
+`positioned` marker (serialized, carried by `branch_checkpoint`) so a
+positioned file whose rows all sit at 0 is never read as legacy; a
+positioned file finishes a position only when its LATEST row is
+`done`/`skipped` — a blocked row never finishes one (retry-requeued,
+superseded by sub-steps, or gate-refused: a resume is the operator's retry
+and re-runs beats skips); `is_complete()` = nothing remains (a row count
+over-reported after one resume and the CLI refused the second resume);
+`done_count` for the progress surfaces; `from_dict` coerces persisted rows
+(integral-only ints, non-dict rows dropped, string marker = legacy);
+duplicate item ids in the mapping resolve to position 0; the interrupt
+handler re-pairs text ↔ item index by text (a priority interrupt prepended
+text but concatenated indices old+new, so the urgent step wore the next
+planned step's item number). Legacy files (no marker) keep the pre-fix
+reading exactly.
+
+**Review:** two Skeptic rounds (r1 8 findings → 7 class fixes; r2 6
+findings → 4 fixes + 2 direction decisions recorded in
+`checkpoint._done_positions`'s docstring). No round 3: r2 surfaced no
+regression in the r1 fix, only the direction dispute (decided: blocked
+never finishes) and residue that belongs to durable plan-node ids.
+Suites 58–60. Tests: `tests/test_checkpoint_resume_positions.py` (live
+shape, legacy negative control, carried-only positioned file, blocked
+never finishes, two-hop crash→resume→crash→resume through the loop, exact
+text↔position pairing captured at the one writer all four sites alias,
+gate-site capture, interrupt re-pairing, CLI `_cmd_resume` guard).
+
+**Residue:** parallel-batch checkpoint boundary; duplicate step texts /
+permuted mappings (durable plan-node ids); corrupt-resume fail-open policy;
+`write_checkpoint` in-place write — all pinned in BACKLOG under the
+LoopsBench chunk-1 residue section.
+
+
 ### SHIPPED 2026-09-07 — Live (in-step) ask for time-boxed inputs — a 2FA code dies with the step that asked for it (FOUND 2026-09-07, mail arc design)
 
 The ask lane ends the step, the container dies, and the resume takes minutes (post-pause tail + admission + pre-flight). A 2FA code is consumed by the session that requested it, so a browser login cannot survive the pause: the resumed run gets a fresh challenge and a fresh code. Needed: a time-boxed in-step variant — the worker writes the ask, keeps its process alive and polls for an answer file in scratch; the engine watches the ask file mid-step, fires the same card + Hermes leg, and drops the operator's reply into scratch when it arrives (`maro answer` writes the file instead of enqueueing a resume when the asking step is still live). Jeremy 2026-09-07: not willing to tie his SMS number to the mini, willing to relay a code by hand — so the loop has to close inside the code's lifetime (~10 min). Design owed; the mail goal cannot finish without it (`docs/ENV_REQUEST_DESIGN.md` §8). **Live evidence 2026-09-07 04:18Z:** run 084d3c1f, on its self-built browser image, drove a real Playwright login and landed on Yahoo's challenge-selector page, then wrote the ask ("Yahoo 2FA code required") through the pause lane — the question is pending and any code relayed into it arrives at a dead session. This is now the only piece between the mail goal and delivery.

@@ -7261,17 +7261,29 @@ NOT closed:
   metadata stamp.
 - **DAG lane does not harvest obligations** — only the sequential lane
   harvests; fan-out steps' passing runners are not carried to closure.
-- **Checkpoint resume never skips completed rows (PRE-EXISTING, HIGH lead;
-  round-2 Skeptic, `/tmp/adversarial-review.K4zIne`):** `write_checkpoint`
-  stores each row's NEXT.md item index (`StepOutcome.index`) while
-  `Checkpoint.remaining_steps` compares against 1-based plan positions — live
-  checkpoints on this box hold `completed idx = [13, 49, 11, 12, …]` for
-  2–7-step plans, so `resume_from` returns the WHOLE plan and a resumed run
-  re-executes finished steps (and a gated dependent, with every edge soft on
-  resume, can then reach the adapter). Fix: checkpoint a plan-position field
-  beside the item index and select remaining steps by it; add a
-  crash→resume test that asserts a completed step is absent from the queue.
-  Same family as the item-2 "per-attempt provenance" residue.
+- **Checkpoint resume by plan position — SHIPPED 2026-09-16 (chunk 2)**; the
+  HIGH lead moved to BACKLOG_DONE. Residue it left, in the same family:
+  - **Parallel-batch has no checkpoint boundary** (r1 finding 8, pre-existing):
+    the sequential loop's parallel-batch branch (`loop_execute` ~L930) mutates
+    `step_outcomes` and `continue`s past the post-step writer; the DAG/fan-out
+    lane writes no checkpoint at all. A crash after a joined batch loses the
+    batch and re-executes it. Lead: one checkpoint write after the join.
+  - **Duplicate step texts defeat the text-keyed interrupt re-pairing** (r2
+    finding 2): `_check_loop_interrupts` re-pairs text ↔ item index by text
+    (first unused occurrence), so a priority interrupt that injects a text
+    identical to a pending step hands the pending step's item to the urgent
+    copy; a permuted `step_indices` list is likewise undetectable by the
+    writer (r2 finding 3). Both are the durable-plan-node-id residue above —
+    carry `(text, item_id)` pairs as one structure instead of parallel lists.
+  - **Explicit resume of a corrupt checkpoint starts fresh** (r1 finding 6,
+    pre-existing policy): `loop_planning` catches any restore error and runs
+    the whole decomposition again. The loader now coerces rows so fewer
+    shapes raise, but the policy itself (fail open = re-run everything) is
+    unchanged; a `maro resume` of a torn file should fail closed with the
+    reason.
+  - **`write_checkpoint` still writes in place** although
+    `file_lock.atomic_write` is already what `mark_checkpoint_consumed` uses
+    two functions down — the atomic-write residue above is a one-line lift.
 - **Recorded cwd is ephemeral under run-worktree / container-clone modes:**
   finalize removes the successful worktree/clone before closure runs, so
   the obligation's cwd is gone ⇒ inconclusive (never fail). Rerun before

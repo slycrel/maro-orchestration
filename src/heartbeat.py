@@ -802,7 +802,7 @@ def _find_resumable_runs() -> list:
         out.append({
             "loop_id": ckpt.loop_id,
             "handle_id": ckpt.handle_id,
-            "done": len(ckpt.completed),
+            "done": ckpt.done_count,
             "total": len(ckpt.steps),
             "in_flight": (ckpt.in_flight or {}).get("index"),
         })

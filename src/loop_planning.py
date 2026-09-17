@@ -211,11 +211,12 @@ def _preflight_checks(
                 if ctx.verbose:
                     print(
                         f"[maro] resuming from checkpoint {resume_from_loop_id}: "
-                        f"{len(resume_completed)} steps already done, {len(steps)} remaining",
+                        f"{_ckpt.done_count} steps already done, {len(steps)} remaining "
+                        f"({len(resume_completed)} history rows carried)",
                         file=sys.stderr, flush=True,
                     )
-                log.info("checkpoint resume: loop_id=%s done=%d remaining=%d",
-                         resume_from_loop_id, len(resume_completed), len(steps))
+                log.info("checkpoint resume: loop_id=%s done=%d remaining=%d rows=%d",
+                         resume_from_loop_id, _ckpt.done_count, len(steps), len(resume_completed))
             else:
                 log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh", resume_from_loop_id)
         except Exception as _ckpt_err:
