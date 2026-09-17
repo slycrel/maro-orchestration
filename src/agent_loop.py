@@ -138,6 +138,7 @@ def run_agent_loop(
     cost_budget: Optional[float] = None,
     ralph_verify: bool = False,
     resume_from_loop_id: Optional[str] = None,
+    resume_checkpoint=None,  # the Checkpoint the caller already validated (CLI, under its lock) — used as-is, no re-read
     permission_context=None,
     continuation_depth: int = 0,
     preset_steps: Optional[List[str]] = None,
@@ -347,24 +348,6 @@ def run_agent_loop(
             )
             log.error("loop refused before decomposition — %s", _fence_msg)
 
-            # Nothing agentic has run yet, so any clone/worktree created during
-            # admission/fence setup is safe to remove without a merge-back.
-            if getattr(ctx, "container_clone", None) is not None:
-                try:
-                    import worktree as _wtmod
-                    _wtmod.cleanup_clone(ctx.container_clone)
-                    ctx.container_clone = None
-                except Exception as _cleanup_exc:
-                    log.warning("execution fence scratch-clone cleanup failed: %s", _cleanup_exc)
-            if getattr(ctx, "run_worktree", None) is not None:
-                try:
-                    import worktree as _wtmod
-                    _wtmod.cleanup(ctx.run_worktree)
-                    _wtmod.prune(ctx.run_worktree.repo_dir)
-                    ctx.run_worktree = None
-                except Exception as _cleanup_exc:
-                    log.warning("execution fence worktree cleanup failed: %s", _cleanup_exc)
-
             # Best-effort neutralization for later non-loop calls in the same
             # process; the refusal itself does not depend on these succeeding.
             for _neutralize, _label in (
@@ -381,23 +364,6 @@ def run_agent_loop(
                         _label, _neutralize_exc,
                     )
             try:
-                if getattr(ctx, "project_slot", None) is not None:
-                    ctx.project_slot.release()
-                    ctx.project_slot = None
-            except Exception as _release_exc:
-                log.warning("execution fence refusal project-slot release failed: %s", _release_exc)
-            try:
-                if getattr(ctx, "run_lease", None) is not None:
-                    ctx.run_lease.release()
-                    ctx.run_lease = None
-            except Exception as _release_exc:
-                log.warning("execution fence refusal run-lease release failed: %s", _release_exc)
-            try:
-                from interrupt import clear_loop_running
-                clear_loop_running()
-            except Exception as _release_exc:
-                log.warning("execution fence refusal running-state clear failed: %s", _release_exc)
-            try:
                 from observe import write_event as _write_event
                 _write_event(
                     "loop_done", goal=ctx.goal, project=ctx.project or "",
@@ -407,17 +373,15 @@ def run_agent_loop(
                 pass
             # Infra failure, not a goal verdict — the goal was never attempted
             # (stop-path survey: "stuck" here read downstream as goal failure).
-            try:
-                # Schema owner (2026-08-15 bypass burn-down) — owns the
-                # pair-completeness and the 800 evidence clip.
-                from runs import stamp_run_stop_verdict as _stamp_fence_stop
-                _stamp_fence_stop(
-                    stop_verdict="external-interrupt",
-                    stop_evidence=_fence_msg,
-                )
-            except Exception:
-                pass
-            return LoopResult(
+            # Nothing agentic has run yet, so the clone / worktree created
+            # during admission are discarded without a merge-back — the ONE
+            # refusal ending (loop_finalize.finalize_refusal: verdict stamped
+            # into run metadata, clone → worktree discarded, slot → lease →
+            # running marker released, heartbeat woken), same as the cost
+            # gate and the resume refusal (r2 MED 7).
+            ctx.stamp_stop("external-interrupt", _fence_msg)
+            from loop_finalize import finalize_refusal as _finalize_refusal
+            return _finalize_refusal(ctx, LoopResult(
                 loop_id=ctx.loop_id,
                 goal=ctx.goal,
                 project=ctx.project or "",
@@ -427,7 +391,7 @@ def run_agent_loop(
                 stop_verdict="external-interrupt",
                 stop_evidence=_fence_msg,
                 elapsed_ms=int((time.monotonic() - ctx.started_at) * 1000),
-            )
+            ))
 
         # In-fence scratch space is an inspectability convenience, not part of
         # the cwd/policy safety boundary. Keep it best-effort and visible.
@@ -452,8 +416,14 @@ def run_agent_loop(
         # checkpoint refuses here, before either. Absent → fresh, as before.
         _resume = None
         _preset_source = "preset"
-        if resume_from_loop_id:
-            _resume, _resume_refusal = _load_resume(ctx, resume_from_loop_id)
+        if resume_checkpoint is not None and not resume_from_loop_id:
+            resume_from_loop_id = str(getattr(resume_checkpoint, "loop_id", "") or "")
+        # A handed-over checkpoint ALWAYS goes through the resume load —
+        # gating on the id's truthiness let one with an empty loop_id skip
+        # the resume and start fresh (r1 HIGH); `_load_resume` refuses it.
+        if resume_checkpoint is not None or resume_from_loop_id:
+            _resume, _resume_refusal = _load_resume(
+                ctx, resume_from_loop_id, preloaded=resume_checkpoint)
             if _resume_refusal is not None:
                 return _resume_refusal
             if _resume is not None:

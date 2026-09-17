@@ -1,5 +1,146 @@
 # Backlog — Completed Archive
 
+## Explicit resume is fail-closed end to end — SHIPPED 2026-09-16 (LoopsBench chunk 6)
+
+**Found:** three chunk-3 leads (r2 findings 1 and 3, the class): (1) a torn
+`<run-dir>/build/checkpoint.json` carries its loop_id INSIDE the JSON, so
+the run-dir scan could not attribute it and `_load_resume` read it as
+ABSENT → started fresh and replayed every step's side effects; (2) `maro
+resume` validated one file under its admission lock, then the loop
+RE-READ the id (a torn write in between took the fresh branch); (3) both
+pre-execution refusals (cost gate, resume refusal) returned after
+`_initialize_loop` acquired the project slot, run lease, running marker,
+busy-policy worktree and container scratch clone, and relied on
+destructors to release them.
+
+**Fix (doctrine: explicit resume may start fresh ONLY on ABSENT — unknown
+is not absent; a refused run ends like a finished run):**
+`checkpoint.find_checkpoint(loop_id) -> CheckpointLookup(state, ckpt,
+path, detail)` is the ONE loader, states `found / absent / invalid /
+mismatch / io_error`. The id-addressed file decides on its own (torn →
+invalid, unreadable → io_error, names another loop → mismatch — never
+"absent, keep looking"); a run-dir file that parses and names another loop
+is not ours; a DAMAGED run-dir file is ours when its run dir's
+`metadata.json` names this loop (`loop_ids` / `loop_id`, schema-checked),
+not ours when the metadata names only others, and UNATTRIBUTABLE when the
+metadata cannot say — reported with its path and "cannot say" instead of
+absent, because it cannot rule this loop out. The lookup calls the raw
+`runs` helpers inside its own try (any exception → io_error) and lists run
+dirs with `os.scandir` (an unreadable runs root raises; `Path.glob`
+swallowed it). `load_checkpoint` is the lossy wrapper. `Checkpoint.from_dict`
+requires a non-empty string `loop_id` and a string `goal` (an empty id used
+to resume as loop '' → fresh). `_load_resume(ctx, id, *, preloaded=None)`:
+FOUND proceeds, ABSENT starts fresh, everything else refuses with the
+detail; `preloaded` is the `Checkpoint` the CLI validated under its lock,
+used as-is (must be a `Checkpoint` naming the requested id), and
+`run_agent_loop(resume_checkpoint=)` always routes it through the resume
+load. CLI: `_lookup_resume_checkpoint(ref)` reads the HANDLE-addressed
+file first (it decides when it exists; an embedded `handle_id` that differs
+from the ref is MISMATCH), only ABSENT falls through to the loop-id
+lookup; `_load_resume_checkpoint(ref)` stays the lossy seam (Checkpoint or
+None) and `_cmd_resume` names the damaged file on None; after the re-read
+under the lock the lock identity is recomputed and a change refuses.
+`loop_finalize.release_loop_resources(ctx)` (slot → lease → running
+marker) is the ONE release path — `_finalize_loop`, `finalize_refusal`
+and the fence refusal all use it; `finalize_refusal(ctx, result)` copies
+the typed stop verdict onto the result, stamps it into run metadata,
+discards the scratch clone then the busy-policy worktree (nothing to
+merge), releases, wakes the heartbeat. `_refuse_resume` stamps
+`external-interrupt`, the cost gate `out-of-budget` (was unstamped).
+Side-find: `runs.open_run` pins the run-dir contextvar and `_cmd_run` /
+`_cmd_resume` then wrapped the loop in `scoped_run_dir(_rd)`, which
+restores what was current at ITS entry — the pin outlived the command;
+both unpin to the prior value right after `open_run`.
+
+**Tests** `tests/test_resume_lookup.py` (new): the five lookup states of
+the id-addressed file (torn / other loop / dir-as-file) and the lossy
+wrapper's contract; run-dir attribution (ours / theirs / unattributable /
+found); a raising lookup is io_error; an unattributable torn run-dir file
+refuses an explicit resume through the REAL loop, attributed-to-other
+starts fresh; a preloaded checkpoint is used without a second read (and a
+wrong-id / empty-id / non-Checkpoint hand-over is refused); JSON-valid
+non-checkpoints and invalid UTF-8 are INVALID; malformed metadata shapes
+cannot attribute; an unreadable runs root is io_error; `maro resume
+<handle>` through the real parser succeeds when an unrelated run dir holds
+unattributable damage (and the run-dir scope does not leak), and refuses a
+handle file embedding another handle; the lock-identity re-read refusal
+releases the lock; the CLI names the damaged file and hands the object
+over; a refusal releases `clone → worktree(keep_on_failure=False) → slot →
+lease → running` with the verdict stamped; the cost gate through the real
+loop clears the marker and stamps `out-of-budget`; the fence refusal goes
+through the shared helper.
+
+**Round-1 review (4 lenses, gpt-5.6-sol) → fixed in the same chunk:** (A)
+the CLI seam's return type change broke two `test_stranded_sweep` tests —
+seam restored, lookup alongside; (B) empty / non-string `loop_id` was
+FOUND and the loop's truthiness gate skipped the resume — strict
+`from_dict`, unconditional resume load, type-checked hand-over; (C) a
+string `loop_ids` iterated char by char attributed the damage to loops
+"a","b",… — schema check; (D) lossy `_runs_root` / `_rundir_checkpoint_path`
+and `Path.glob` read an unreadable runs root as absent — raw helpers +
+`os.scandir`; (E) loop-id-first resolution let unrelated unattributable
+damage shadow a valid handle file, and the handle read trusted the
+embedded `handle_id` — handle-first + mismatch; (F) the locked re-read
+could change lock identity — recomputed and refused; (G) refusals leaked
+the container scratch clone; the fence refusal had its own release trio —
+clone cleanup in `finalize_refusal`, fence refusal through the shared
+helper; (H) invalid UTF-8 escaped the classifier as io_error — decoded
+inside the parse try; release failures now log at warning. Declined by
+doctrine: garbage `completed` rows stay dropped-not-refused (chunk-2
+decision, pinned by `test_from_dict_negative_controls_drop_or_demote_garbage`).
+
+**Round-2 Skeptic on the fix → round 3 (the fix regressed / missed):** (1)
+`find_checkpoint` still existence-checked id addresses with `Path.exists()`
+and filtered run-dir candidates with `is_file()` — both swallow EACCES and
+dangling links into False → absent → fresh — every address is now READ
+(no preflight; a dangling link at a checkpoint address is io_error; the
+scan `stat()`s each candidate and only "nothing lexists" skips); (2) the
+lock re-read compared identity only — a same-identity snapshot with FEWER
+finished positions (stale writer) was handed to the loop — now refused
+("lost finished positions [..]"), as is a different source path; (3) a
+successful handle resume was never consumed nor proven (checkpoint writes
+swallow failures, so a failed final write reported `done` with the source
+still resumable) — the source path is re-read after `done`: proven only if
+it now holds the complete successor, else consumed in place via the new
+`mark_checkpoint_consumed(path=)`, else demoted to `incomplete`; (4) the
+handle-first resolution interpolated the raw CLI ref into `runs.run_dir`
+(`/tmp/owned`, `../victim`, `a/b` escaped the runs root) — ref grammar
+`[A-Za-z0-9][A-Za-z0-9._-]{0,127}` validated first; (5) an existing run
+dir with no checkpoint fell through to the loop-id scan and was shadowed
+by unrelated damage — an existing run dir decides (ABSENT for that
+handle); (6) the restored lossy seam made `_cmd_resume` look up TWICE on
+failure, so the reported path need not be the observation that refused —
+one typed lookup per read (the two seam-patching tests now patch the typed
+resolver with real `Checkpoint`s); (7) the fence refusal still had its own
+ending and never woke the heartbeat — it now stamps and returns through
+`finalize_refusal`. Eight more tests (28 total in the file).
+
+**Round-3 Skeptic on the round-2 fix → cheap fixes landed, design residue
+queued (stop rule: 3 rounds is the budget):** (1) the re-read guard
+compared only finished positions — an older between-step snapshot that
+dropped the in-flight marker (or the plan text, or a row's identity)
+passed — now the two pre-execution snapshots must be IDENTICAL
+(`to_dict()` equality, after the completed/consumed messages); (3)
+consumption was policy only in the CLI — `_load_resume` (the API path)
+now refuses a consumed checkpoint, `branch_checkpoint` refuses to branch
+one, the heartbeat's resumable-run scan skips them; (4) `path=`
+consumption replaced a symlink instead of its target — `realpath` first;
+(5) `lexists` on the final path missed a dangling ANCESTOR (`build ->
+missing`), and `root.is_dir()` / `_old_checkpoint_dirs`'s `is_dir()`
+swallowed EACCES — `_classify_missing` walks the address top-down (first
+un-stat-able component: exists → dangling → io_error, else absent), the
+runs root is `os.stat`'ed, the old root is read unfiltered, the CLI's
+handle-dir probe uses the same classifier; (6) handles and loop ids come
+from ONE 8-hex generator — a ref that is both a run handle and another
+loop's id with its own file is refused as ambiguous (hint: the loop's
+own handle), an empty handle dir no longer hides a loop file or a damaged
+id-addressed file. Declined / queued: (2) a failed consumption after a
+`done` run demotes the status but leaves the source replayable (a durable
+resume claim BEFORE execution is the design — BACKLOG); (7) the proof
+re-read and the consumption run outside any lock shared with checkpoint
+writers (the chunk-3 "consumption can race a late writer" lead, still
+queued). Four more tests (32 in the file). Suites 73/74/75 green.
+
 ## Parallel lanes write the checkpoint — SHIPPED 2026-09-16 (LoopsBench chunk 5)
 
 **Found:** chunk-2 r1 finding 8 / chunk-3 re-examination: the sequential

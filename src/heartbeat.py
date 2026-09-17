@@ -766,8 +766,8 @@ def _find_resumable_runs() -> list:
     except Exception:
         return out
     for ckpt in ckpts:
-        if ckpt.is_complete():
-            continue
+        if ckpt.is_complete() or ckpt.is_consumed():
+            continue          # finished, or already resumed successfully
         # Run-lease first: held → owner alive even between steps (when the
         # checkpoint carries no in_flight pid at all); present-unheld →
         # the LOOP is done, but the run's owner process may still be alive

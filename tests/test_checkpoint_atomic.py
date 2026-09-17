@@ -172,7 +172,9 @@ def test_lookup_error_is_not_absent(monkeypatch, tmp_path):
     _loop_env(monkeypatch, tmp_path)
     import agent_loop as al
     monkeypatch.setattr(ckmod, "load_checkpoint", lambda loop_id: None)
-    monkeypatch.setattr(ckmod, "_find_checkpoint_path",
+    # chunk 6: the lookup READS each id address (no existence preflight via
+    # _find_checkpoint_path) — the address computation raising is the same class
+    monkeypatch.setattr(ckmod, "_checkpoint_path",
                         lambda loop_id: (_ for _ in ()).throw(PermissionError("EACCES")))
     adapter = _CountingAdapter()
     result = al.run_agent_loop("lookup", adapter=adapter, preset_steps=["Step one: fetch"],

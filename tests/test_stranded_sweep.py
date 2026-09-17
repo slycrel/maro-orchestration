@@ -459,24 +459,19 @@ def test_resume_reloads_checkpoint_after_admission(monkeypatch, tmp_path):
 
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
-    class FakeCheckpoint:
-        loop_id = "loopfresh"
-        handle_id = "handle-fresh"
-        goal = "finish"
-        project = ""
-        in_flight = None
-        completed = []
-        steps = ["s1"]
+    from checkpoint import (Checkpoint, CompletedStep, CheckpointLookup,
+                            LOOKUP_FOUND)
 
-        def __init__(self, complete):
-            self._complete = complete
+    def _snapshot(complete):
+        rows = [CompletedStep(index=1, text="s1", status="done", position=1)] if complete else []
+        return Checkpoint(loop_id="loopfresh", goal="finish", project="", steps=["s1"],
+                          completed=rows, positioned=True, handle_id="handle-fresh")
 
-        def is_complete(self):
-            return self._complete
-
-    checkpoints = iter((FakeCheckpoint(False), FakeCheckpoint(True)))
-    monkeypatch.setattr(cli, "_load_resume_checkpoint",
-                        lambda ref: next(checkpoints))
+    # the read that chose the lock, then the read under it (same source)
+    checkpoints = iter((_snapshot(False), _snapshot(True)))
+    monkeypatch.setattr(cli, "_lookup_resume_checkpoint",
+                        lambda ref: CheckpointLookup(LOOKUP_FOUND, ckpt=next(checkpoints),
+                                                     path=tmp_path / "same.json"))
     monkeypatch.setattr(
         agent_loop, "run_agent_loop",
         lambda *a, **k: pytest.fail("fresh completed checkpoint must refuse"),

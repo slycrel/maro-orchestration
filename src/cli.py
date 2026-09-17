@@ -690,6 +690,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     _origin = Origin(source="cli-run")
     if getattr(args, "parent", None):
         _origin["parent_project"] = args.parent
+    _prior_rd = _runs.current_run_dir()
     _rd = None
     try:
         _rd = _runs.open_run(
@@ -700,6 +701,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
     except Exception:
         _rd = None
+    # open_run pins the run dir itself; the scoped block below re-pins it
+    # and restores what was current at ITS entry — so unpin here, or the
+    # pin outlives the command (an in-process second resume, or a test,
+    # then writes its checkpoints into the previous run's dir).
+    _runs.set_current_run_dir(_prior_rd)
 
     _status = "error"
     result = None
@@ -2411,22 +2417,97 @@ def _resume_lock_name(identity: str) -> str:
     return "resume-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
 
 
-def _load_resume_checkpoint(ref: str):
-    """Resolve a loop/handle reference to its latest durable checkpoint."""
-    from checkpoint import load_checkpoint
+import re as _re
 
-    ckpt = load_checkpoint(ref)
-    if ckpt is not None:
-        return ckpt
+_RESUME_REF_RE = _re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def _lookup_resume_checkpoint(ref: str):
+    """Resolve a loop/handle reference to its latest durable checkpoint —
+    a discriminated `CheckpointLookup` (chunk 6): FOUND carries the
+    checkpoint; ABSENT means neither the handle's run-dir file nor the
+    loop-id lookup exists; INVALID / MISMATCH / IO_ERROR name the damaged
+    file so the operator hears WHY instead of "no checkpoint found".
+
+    Handle first: `<run_dir(ref)>/build/checkpoint.json` is addressed by
+    the ref itself, so when it exists it decides on its own — the loop-id
+    lookup's box-wide scan (whose unattributable-damage report is
+    deliberately conservative) must not shadow a valid handle file (r1
+    HIGH). Only an ABSENT handle file falls through to the loop-id lookup.
+    A handle-addressed file that embeds a DIFFERENT handle_id is MISMATCH:
+    the path and the body disagree about whose run this is."""
+    from checkpoint import (find_checkpoint, _read_candidate, CheckpointLookup,
+                            LOOKUP_ABSENT, LOOKUP_FOUND, LOOKUP_INVALID,
+                            LOOKUP_MISMATCH, LOOKUP_IO_ERROR)
+
+    # The ref is interpolated into a path by `runs.run_dir` (and by
+    # `checkpoint._checkpoint_path`): only the id grammar gets that far —
+    # "/tmp/x", "../x", "a/b" used to resolve OUTSIDE the runs root and a
+    # planted file there was then resumed (r2 HIGH 4).
+    if not _RESUME_REF_RE.fullmatch(ref or ""):
+        return CheckpointLookup(
+            LOOKUP_INVALID,
+            detail=f"{ref!r} is not a loop or handle id (letters, digits, . _ - only)")
     try:
-        import json as _json
         from runs import run_dir
-        path = run_dir(ref) / "build" / "checkpoint.json"
-        ckpt_data = _json.loads(path.read_text(encoding="utf-8"))
-        from checkpoint import Checkpoint
-        return Checkpoint.from_dict(ckpt_data)
-    except Exception:
-        return None
+        from checkpoint import _classify_missing
+        _rd = run_dir(ref)
+        path = _rd / "build" / "checkpoint.json"
+        try:
+            os.stat(_rd)
+            _is_handle = True          # the deterministic run dir exists: ref IS a handle
+        except (FileNotFoundError, NotADirectoryError):
+            if _classify_missing(_rd) == "dangling":
+                return CheckpointLookup(LOOKUP_IO_ERROR, path=path,
+                                        detail=f"run dir {_rd} is behind a dangling link")
+            _is_handle = False
+        by_handle = _read_candidate(path, None) if _is_handle else None
+    except Exception as exc:
+        return CheckpointLookup(LOOKUP_IO_ERROR, detail=f"run dir lookup for {ref!r} failed ({exc})")
+    if by_handle is not None:
+        if by_handle.state == LOOKUP_ABSENT:
+            # An existing run dir with NO checkpoint is ABSENT for this
+            # handle — unless the same 8-hex string is ALSO a loop id with
+            # its own id-addressed file (handles and loop ids come from the
+            # same generator, r3 HIGH 6): a FOUND loop file, or a damaged
+            # one at the id address `ckpt_<ref>.json`, is about this ref.
+            # Anything else the box-wide scan reports must not shadow the
+            # handle (r2 MED 5).
+            _by_loop = find_checkpoint(ref)
+            if _by_loop.found or (_by_loop.path is not None
+                                  and _by_loop.path.name == f"ckpt_{ref}.json"):
+                return _by_loop
+            return CheckpointLookup(LOOKUP_ABSENT, path=path,
+                                    detail=f"run {ref} has no checkpoint — nothing to resume")
+        if by_handle.state == LOOKUP_FOUND:
+            _embedded = str(getattr(by_handle.ckpt, "handle_id", "") or "")
+            if _embedded and _embedded != ref:
+                return CheckpointLookup(
+                    LOOKUP_MISMATCH, path=path,
+                    detail=f"checkpoint {path} names run {_embedded}, not {ref}")
+            # Namespace collision (r3 HIGH 6): the ref is this run's handle
+            # AND another loop's id with its own resumable file — refuse to
+            # guess which the operator meant.
+            _by_loop = find_checkpoint(ref)
+            if _by_loop.found and _by_loop.path != path:
+                _hint = str(getattr(_by_loop.ckpt, "handle_id", "") or "")
+                return CheckpointLookup(
+                    LOOKUP_MISMATCH, path=path,
+                    detail=(f"{ref!r} is ambiguous: run {ref}'s checkpoint ({path}) and loop "
+                            f"{ref}'s checkpoint ({_by_loop.path}) are different files"
+                            + (f" — resume the loop by its run handle {_hint!r}" if _hint else "")))
+        return by_handle
+    lk = find_checkpoint(ref)
+    if lk.state == LOOKUP_ABSENT:
+        return CheckpointLookup(LOOKUP_ABSENT, detail=f"no checkpoint found for {ref!r}")
+    return lk
+
+
+def _load_resume_checkpoint(ref: str):
+    """The checkpoint a loop/handle reference resolves to, or None — the
+    test seam `_cmd_resume` reads through (kept lossy on purpose; the
+    reason for a None is `_lookup_resume_checkpoint(ref).detail`)."""
+    return _lookup_resume_checkpoint(ref).ckpt
 
 
 def _cmd_answer(args: argparse.Namespace) -> int:
@@ -2508,9 +2589,13 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     Refuses runs that finalized or whose owner PID is still alive.
     """
     ref = args.run_id
-    ckpt = _load_resume_checkpoint(ref)
-    if ckpt is None:
-        return fail("E_RESUME", f"no checkpoint found for {ref!r}")
+    # ONE observation per read (r2 MED 6): the state, path and detail that
+    # refuse are the ones actually observed — never a second lookup's.
+    _lk = _lookup_resume_checkpoint(ref)
+    if not _lk.found:
+        # WHY, not "no checkpoint found": a damaged file is named.
+        return fail("E_RESUME", _lk.detail or f"no checkpoint found for {ref!r}")
+    ckpt = _lk.ckpt
 
     # The run handle owns checkpoint/metadata/report/artifact state across a
     # resume. Claim it before any liveness/status check so two terminals cannot
@@ -2596,11 +2681,30 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     # The first read selected the lock identity. Re-read under that lock so a
     # resume that completed between selection and acquisition cannot leave us
     # executing an older completed-step snapshot.
-    _fresh_ckpt = _load_resume_checkpoint(ref)
-    if _fresh_ckpt is None:
+    _fresh_lk = _lookup_resume_checkpoint(ref)
+    if not _fresh_lk.found:
         _resume_lock.close()
-        return fail("E_RESUME", f"checkpoint disappeared for {ref!r}")
-    ckpt = _fresh_ckpt
+        return fail("E_RESUME", f"checkpoint for {ref!r} is no longer resumable: "
+                                f"{_fresh_lk.detail or 'disappeared'}")
+    ckpt = _fresh_lk.ckpt
+    # The lock guards ONE identity. If the re-read resolves to a different
+    # run (the handle file appeared between the reads, or the id-addressed
+    # file was replaced), this lock does not cover it — refuse rather than
+    # proceed under the wrong lock (r1 HIGH).
+    _fresh_identity = ckpt.handle_id or ckpt.loop_id or ref
+    if _resume_lock_name(_fresh_identity) != _lock_name:
+        _resume_lock.close()
+        return fail("E_RESUME",
+                    f"checkpoint for {ref!r} changed identity between reads "
+                    f"({_resume_identity!r} → {_fresh_identity!r}) — re-run the resume")
+    # Same identity is not enough (r2 HIGH 2): the second read must be the
+    # SAME source — a stale writer replacing the file between the reads
+    # would otherwise hand the loop an older snapshot.
+    if _fresh_lk.path != _lk.path:
+        _resume_lock.close()
+        return fail("E_RESUME",
+                    f"checkpoint for {ref!r} resolved to a different file between reads "
+                    f"({_lk.path} → {_fresh_lk.path}) — re-run the resume")
 
     if ckpt.is_complete():
         _resume_lock.close()
@@ -2613,6 +2717,16 @@ def _cmd_resume(args: argparse.Namespace) -> int:
             f"loop {ckpt.loop_id} was already resumed successfully as "
             f"{ckpt.resumed_to_loop_id or 'a newer loop'}",
         )
+    # …and the snapshot must be the SAME snapshot, not merely one with the
+    # same finished positions (r3 HIGH 1: an older between-step file can
+    # drop the in-flight marker, the plan text, or a row's identity while
+    # keeping the finished set). Completion / consumption between the reads
+    # got their own messages above; any other change → re-run.
+    if _lk.ckpt.to_dict() != ckpt.to_dict():
+        _resume_lock.close()
+        return fail("E_RESUME",
+                    f"checkpoint for {ref!r} changed between reads (a writer replaced "
+                    "it after the lock was chosen) — re-run the resume")
 
     # Run-lease probe — strictly stronger owner evidence than the in-flight
     # pid. Checkpoints only carry a pid mid-step, so a healthy loop BETWEEN
@@ -2693,6 +2807,7 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     # idempotent — started_at/prompt.txt are preserved); otherwise mint one so
     # a loop_id-only checkpoint still gets attribution capture + inspectability.
     handle_id = ckpt.handle_id or _uuid.uuid4().hex[:8]
+    _prior_rd = _runs.current_run_dir()
     _rd = None
     try:
         from ancestry import Origin
@@ -2702,6 +2817,11 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         )
     except Exception:
         _rd = None
+    # open_run pins the run dir itself; the scoped block below re-pins it
+    # and restores what was current at ITS entry — so unpin here, or the
+    # pin outlives the command (an in-process second resume, or a test,
+    # then writes its checkpoints into the previous run's dir).
+    _runs.set_current_run_dir(_prior_rd)
     _status = "error"
     result = None
     _learning_adapter = None
@@ -2716,6 +2836,10 @@ def _cmd_resume(args: argparse.Namespace) -> int:
                     ckpt.goal,
                     project=ckpt.project or None,
                     resume_from_loop_id=ckpt.loop_id,
+                    # The object validated under THIS lock — the loop does
+                    # not re-read the id (a torn write in between used to
+                    # take the fresh branch).
+                    resume_checkpoint=ckpt,
                     # The run's own execution policy: a DAG-written file
                     # re-enters the DAG lane (0 would run it sequentially).
                     parallel_fan_out=int(getattr(ckpt, "parallel_fan_out", 0) or 0),
@@ -2739,14 +2863,32 @@ def _cmd_resume(args: argparse.Namespace) -> int:
             _finalize_cli_deferred_learning(
                 result, adapter=_learning_adapter, verbose=args.verbose)
             _status = result.status
-        # A successful resume has a new durable checkpoint/run record. Consume
-        # the source checkpoint so invoking the same legacy loop id again
-        # cannot replay its old remaining-step snapshot and duplicate effects.
-        if result.status == "done" and not ckpt.handle_id:
+        # A successful resume must leave the SOURCE file unable to replay:
+        # either the successor durably overwrote it (a handle resume writes
+        # into the same run dir — proven by re-reading the exact source
+        # path, since checkpoint writes swallow their own failures) or the
+        # source is consumed in place (a legacy id-addressed file, or a
+        # run-dir file resumed under a fresh handle). Neither → not done
+        # (r2 HIGH 3: a failed final write used to report success with the
+        # source still resumable).
+        if result.status == "done":
+            _src_path = _fresh_lk.path
+            _overwritten = False
+            try:
+                from checkpoint import _read_candidate as _reread_source
+                _after = _reread_source(_src_path, None) if _src_path else None
+                _overwritten = bool(
+                    _after is not None and _after.found
+                    and _after.ckpt.loop_id == result.loop_id
+                    and _after.ckpt.is_complete())
+            except Exception:
+                _overwritten = False
+        if result.status == "done" and not _overwritten:
             try:
                 from checkpoint import mark_checkpoint_consumed
                 if not mark_checkpoint_consumed(
-                        ckpt.loop_id, resumed_to_loop_id=result.loop_id):
+                        ckpt.loop_id, resumed_to_loop_id=result.loop_id,
+                        path=_src_path):
                     result.status = "incomplete"
                     result.stuck_reason = (
                         "resume completed, but the source checkpoint could not "

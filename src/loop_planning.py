@@ -233,7 +233,8 @@ def _items_name_these_steps(project: str, items: List[int], texts: List[str]) ->
     return True
 
 
-def _load_resume(ctx: LoopContext, resume_from_loop_id: str) -> tuple:
+def _load_resume(ctx: LoopContext, resume_from_loop_id: str, *,
+                 preloaded: Any = None) -> tuple:
     """Load the checkpoint an explicit resume names, or refuse.
 
     Returns (restored, early_return). Exactly one is set, except when the
@@ -241,40 +242,55 @@ def _load_resume(ctx: LoopContext, resume_from_loop_id: str) -> tuple:
     (an absent file is the only state that may — chunk-3 reviews). Runs
     before Phase B so a resume pays no planner call and appends nothing to
     NEXT.md, and an unreadable checkpoint refuses before either.
+
+    `preloaded`: the `Checkpoint` the caller already validated (the CLI,
+    under its admission lock) — used as-is, no second read (chunk 6: the
+    CLI validated one file and the loop re-read the id, a torn write in
+    between took the fresh branch). Otherwise `checkpoint.find_checkpoint`
+    is the one lookup: FOUND proceeds, ABSENT starts fresh, INVALID /
+    MISMATCH / IO_ERROR refuse with the file named — a damaged run-dir
+    file whose run cannot be attributed is IO_ERROR/INVALID here, not
+    absent (it cannot rule this loop out).
     """
-    try:
-        from checkpoint import load_checkpoint, resume_from as _resume_from
-        _ckpt = load_checkpoint(resume_from_loop_id)
-    except Exception as _load_exc:
-        return None, _refuse_resume(
-            ctx, resume_from_loop_id,
-            f"checkpoint {resume_from_loop_id} could not be loaded "
-            f"({_load_exc}) — refusing to start fresh")
-    if _ckpt is None:
-        # Absent vs unreadable (chunk-3 review, 2026-09-16): a file that
-        # EXISTS but cannot be loaded (torn by an older in-place writer,
-        # hand-damaged, storage fault) must not turn an explicit resume into
-        # a fresh run that replays every step's side effects. Fail closed
-        # with the path.
+    from checkpoint import Checkpoint as _Checkpoint, resume_from as _resume_from
+    if preloaded is not None:
+        _ckpt = preloaded
+        if not isinstance(_ckpt, _Checkpoint):
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"the checkpoint handed to the loop is a "
+                f"{type(_ckpt).__name__}, not a Checkpoint — refusing")
+        if not resume_from_loop_id or _ckpt.loop_id != resume_from_loop_id:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"the checkpoint handed to the loop names loop "
+                f"{getattr(_ckpt, 'loop_id', '')!r}, not {resume_from_loop_id!r} — refusing")
+    else:
         try:
-            from checkpoint import _find_checkpoint_path as _ckpt_file
-            _torn = _ckpt_file(resume_from_loop_id)
-        except Exception as _find_exc:
-            # Unknown is not absent (r2 finding 1): a lookup that cannot
-            # even stat the checkpoint dir refuses too.
+            from checkpoint import find_checkpoint, LOOKUP_FOUND, LOOKUP_ABSENT
+            _lk = find_checkpoint(resume_from_loop_id)
+        except Exception as _load_exc:
             return None, _refuse_resume(
                 ctx, resume_from_loop_id,
                 f"checkpoint lookup for {resume_from_loop_id} failed "
-                f"({_find_exc}) — refusing to start fresh")
-        if _torn is not None:
+                f"({_load_exc}) — refusing to start fresh")
+        if _lk.state == LOOKUP_ABSENT:
+            log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh",
+                        resume_from_loop_id)
+            return None, None
+        if _lk.state != LOOKUP_FOUND:
             return None, _refuse_resume(
                 ctx, resume_from_loop_id,
-                f"checkpoint {resume_from_loop_id} exists at {_torn} but could "
-                "not be read as that loop's checkpoint — refusing to start fresh "
+                f"{_lk.detail} — refusing to start fresh "
                 "(repair or delete the file to re-run from scratch)")
-        log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh",
-                    resume_from_loop_id)
-        return None, None
+        _ckpt = _lk.ckpt
+    if _ckpt.is_consumed():
+        # The loader is the policy boundary, not only the CLI (r3 HIGH 3):
+        # a library caller handing over a consumed file must not replay it.
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"checkpoint {resume_from_loop_id} was already resumed successfully as "
+            f"{_ckpt.resumed_to_loop_id or 'a newer loop'} — refusing to replay it")
     _ckpt_project = str(getattr(_ckpt, "project", "") or "")
     if _ckpt_project and _ckpt_project != (ctx.project or ""):
         # An explicit resume runs the checkpoint's OWN plan under its own
@@ -331,9 +347,9 @@ def _refuse_resume(ctx: LoopContext, resume_from_loop_id: str, reason: str) -> L
     Like the cost-gate refusal beside it, this returns before any step; it
     additionally stamps the typed stop verdict and records a trace edge so
     the run's record says "refused" rather than reading like a crash at
-    preflight (r2 finding 4). Known gap, same class as the cost gate: the
-    early return bypasses loop_finalize's explicit resource releases (see
-    BACKLOG "pre-execution refusals bypass finalize").
+    preflight (r2 finding 4), and ends through `finalize_refusal` (chunk 6:
+    metadata verdict, worktree discarded, slot / lease / running marker
+    released — the cost gate ends the same way).
     """
     log.error("checkpoint resume: %s", reason)
     try:
@@ -348,10 +364,11 @@ def _refuse_resume(ctx: LoopContext, resume_from_loop_id: str, reason: str) -> L
                     reason=_clip(reason, 300))
     except Exception as _tr_exc:
         log.debug("resume refusal edge failed: %s", _tr_exc)
-    return LoopResult(
+    from loop_finalize import finalize_refusal
+    return finalize_refusal(ctx, LoopResult(
         loop_id=ctx.loop_id, project=ctx.project or "", goal=ctx.goal,
         status="stuck", stuck_reason=reason,
-    )
+    ))
 
 
 def _preflight_checks(
@@ -506,12 +523,18 @@ def _preflight_checks(
                                     steps=len(steps))
                     except Exception:
                         pass
-                    return steps, {}, LoopResult(
+                    _cost_reason = (
+                        f"Estimated cost ${_estimated:.2f} exceeds budget ${ctx.cost_budget:.2f} "
+                        f"(with ${_slush:.2f} slush). Reduce step count or use cheaper models.")
+                    try:
+                        ctx.stamp_stop("out-of-budget", _cost_reason)
+                    except Exception as _cs_exc:
+                        log.debug("cost gate stop stamp failed: %s", _cs_exc)
+                    from loop_finalize import finalize_refusal
+                    return steps, {}, finalize_refusal(ctx, LoopResult(
                         loop_id=ctx.loop_id, project=ctx.project or "", goal=ctx.goal,
-                        status="stuck",
-                        stuck_reason=f"Estimated cost ${_estimated:.2f} exceeds budget ${ctx.cost_budget:.2f} "
-                                     f"(with ${_slush:.2f} slush). Reduce step count or use cheaper models.",
-                    )
+                        status="stuck", stuck_reason=_cost_reason,
+                    ))
                 elif _estimated > ctx.cost_budget * 0.8:
                     log.info("cost estimate $%.2f approaching budget $%.2f (%.0f%%)",
                              _estimated, ctx.cost_budget, _estimated / ctx.cost_budget * 100)

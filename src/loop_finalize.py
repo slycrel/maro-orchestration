@@ -516,25 +516,7 @@ def _build_result_and_finalize(
     except Exception as _sv_exc:
         log.debug("stop-verdict metadata stamp failed: %s", _sv_exc)
 
-    # Release loop lock — the admission slot first (per-project flock),
-    # then the global informational lockfile.
-    try:
-        if getattr(ctx, "project_slot", None) is not None:
-            ctx.project_slot.release()
-            ctx.project_slot = None
-    except Exception as _slot_exc:
-        log.debug("project slot release failed: %s", _slot_exc)
-    try:
-        if getattr(ctx, "run_lease", None) is not None:
-            ctx.run_lease.release()
-            ctx.run_lease = None
-    except Exception as _lease_exc:
-        log.debug("run lease release failed: %s", _lease_exc)
-    try:
-        from interrupt import clear_loop_running
-        clear_loop_running()
-    except Exception as _lock_exc:
-        log.debug("clear_loop_running failed: %s", _lock_exc)
+    release_loop_resources(ctx)
 
     # Signal heartbeat to wake immediately — pick up next queued task without
     # waiting for the full interval tick.  Reduces task-to-task latency from
@@ -597,6 +579,81 @@ def drain_deferred_maintenance(handle_id: str) -> int:
             log.warning("deferred maintenance failed for handle %s: %s",
                         handle_id, exc)
     return len(fns)
+
+
+def release_loop_resources(ctx) -> None:
+    """Release what `_initialize_loop` acquired — the admission slot first
+    (per-project flock), then the run lease, then the global informational
+    running marker. ONE home for every ending (finalize and the
+    pre-execution refusals — chunk 6, 2026-09-16: the refusals returned
+    with all three still held and relied on destructors)."""
+    try:
+        if getattr(ctx, "project_slot", None) is not None:
+            ctx.project_slot.release()
+            ctx.project_slot = None
+    except Exception as _slot_exc:
+        log.warning("project slot release failed: %s", _slot_exc)
+    try:
+        if getattr(ctx, "run_lease", None) is not None:
+            ctx.run_lease.release()
+            ctx.run_lease = None
+    except Exception as _lease_exc:
+        log.warning("run lease release failed: %s", _lease_exc)
+    try:
+        from interrupt import clear_loop_running
+        clear_loop_running()
+    except Exception as _lock_exc:
+        log.warning("clear_loop_running failed: %s", _lock_exc)
+
+
+def finalize_refusal(ctx, result):
+    """The ending for a run refused BEFORE its first step (cost gate, resume
+    refusal): no steps, no learning, no manifest — but the run's record must
+    say "refused" (typed stop verdict in metadata), the containerized
+    scratch clone and the isolated worktree (busy_policy=worktree) must be
+    discarded (nothing agentic ran, nothing to merge), and every acquired
+    resource released, exactly as `_finalize_loop` does for a run that
+    executed. Returns `result`, so a refusal site can `return
+    finalize_refusal(ctx, LoopResult(...))`. Never raises."""
+    try:
+        if not getattr(result, "stop_verdict", ""):
+            result.stop_verdict = getattr(ctx, "stop_verdict", "") or ""
+            result.stop_evidence = getattr(ctx, "stop_evidence", "") or ""
+    except Exception as _cp_exc:
+        log.debug("refusal verdict copy failed: %s", _cp_exc)
+    try:
+        from runs import stamp_run_stop_verdict as _stamp_stop_meta
+        _stamp_stop_meta(stop_verdict=result.stop_verdict,
+                         stop_evidence=result.stop_evidence, pause_reason="")
+    except Exception as _sv_exc:
+        log.warning("refusal stop-verdict metadata stamp failed: %s", _sv_exc)
+    if getattr(ctx, "container_clone", None) is not None:
+        # Provisioned before the resume load (agent_loop Phase A), so a
+        # refusal used to leak it (r1 MED). Clone first: it is cut from
+        # the worktree when busy_policy=worktree.
+        _clone = ctx.container_clone
+        try:
+            import worktree as _wtmod
+            _wtmod.cleanup_clone(_clone)
+        except Exception as _cl_exc:
+            log.warning("refused run's scratch-clone cleanup failed: %s", _cl_exc)
+        ctx.container_clone = None
+    if getattr(ctx, "run_worktree", None) is not None:
+        _wt = ctx.run_worktree
+        try:
+            import worktree as _wtmod
+            _wtmod.cleanup(_wt, keep_on_failure=False)
+            _wtmod.prune(_wt.repo_dir)
+        except Exception as _wt_exc:
+            log.warning("refused run's worktree cleanup failed: %s", _wt_exc)
+        ctx.run_worktree = None
+    release_loop_resources(ctx)
+    try:
+        from heartbeat import post_heartbeat_event as _phb_event
+        _phb_event(event_type="loop_done", payload=(ctx.project or ""))
+    except Exception as _phb_exc:
+        log.debug("heartbeat wake after refusal failed: %s", _phb_exc)
+    return result
 
 
 def _finalize_loop(

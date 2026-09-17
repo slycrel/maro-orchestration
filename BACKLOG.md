@@ -7374,7 +7374,15 @@ NOT closed:
     refusing to overwrite a consumed generation, or resume failing closed
     when owner liveness is unknown.
   - **Explicit resume: torn run-dir checkpoints and the CLI re-read race**
-    (chunk-3 r2 finding 1): `loop_planning` now refuses an explicit resume
+    (chunk-3 r2 finding 1) — **SHIPPED 2026-09-16 (chunk 6; record in
+    BACKLOG_DONE):** `checkpoint.find_checkpoint` is the one discriminated
+    loader (found/absent/invalid/mismatch/io_error; run-dir damage
+    attributed by metadata, unattributable reported not absent; every
+    address READ, never existence-checked), the CLI hands its validated
+    `Checkpoint` into `run_agent_loop(resume_checkpoint=)`, resolution is
+    handle-first with a ref grammar and a namespace-collision refusal, and
+    the two pre-execution reads must be the same file and the same
+    snapshot. Original lead text: `loop_planning` now refuses an explicit resume
     when the loop-id-named fallback file exists but cannot be read, names
     another loop, or the lookup raises — but a torn `*/build/checkpoint.json`
     carries its loop_id INSIDE the JSON, so the scan cannot attribute it and
@@ -7384,8 +7392,13 @@ NOT closed:
     a discriminated result (FOUND / ABSENT / INVALID / MISMATCH / IO_ERROR
     with the candidate path) and passing the CLI's already-validated
     checkpoint object into the loop instead of the id.
-  - **Pre-execution refusals bypass finalize** (chunk-3 r2 finding 3, class):
-    both `_preflight_checks` early returns — the cost gate and the new
+  - **Pre-execution refusals bypass finalize** (chunk-3 r2 finding 3, class)
+    — **SHIPPED 2026-09-16 (chunk 6):** `loop_finalize.release_loop_resources`
+    (slot → lease → running marker) is the one release path and
+    `finalize_refusal` the one refusal ending (typed verdict stamped, scratch
+    clone + busy-policy worktree discarded, heartbeat woken) for the cost
+    gate (`out-of-budget`), the resume refusal and the execution-fence
+    refusal. Original lead text: both `_preflight_checks` early returns — the cost gate and the new
     resume refusal — return after `_initialize_loop` took the project slot,
     run lease, running marker, fence/worktree — and (until chunk 4,
     2026-09-16) after `_decompose_goal`; `_load_resume` now runs before Phase
@@ -7396,7 +7409,42 @@ NOT closed:
     `finally` / shared refusal finalizer.
   - **`_checkpoint_path` interpolates unsanitized loop ids** (chunk-3 r2
     out-of-scope lead): a loop_id with path separators escapes the
-    checkpoint dir; `run_lease._safe_name` is the existing pattern.
+    checkpoint dir; `run_lease._safe_name` is the existing pattern. Chunk 6
+    validates the CLI ref (`cli._RESUME_REF_RE`) before any path is built;
+    the API path (`resume_from_loop_id=`) is still unsanitized.
+  - **A resume needs a durable claim BEFORE it executes** (chunk-6 r3
+    finding 2): after a `done` resume the CLI proves the source was
+    overwritten by the complete successor or consumes it in place, and
+    demotes the status to `incomplete` when neither is durable (disk full)
+    — but the demoted run's source is then intact, unconsumed and
+    resumable again (`is_consumed()` false, metadata status ≠ done). Lead:
+    an atomic `resume_in_progress` tombstone / source rename taken under
+    the admission lock before `run_agent_loop`, refused by later resumes
+    until reconciled; if it cannot be written, refuse before executing.
+    Pairs with the "consumption can race a late writer" lead above (r3
+    finding 7: the proof re-read and the consumption run outside any lock
+    shared with `write_checkpoint`; a per-loop mutation lock or a
+    monotonic generation is the shared fix).
+  - **Operator-answer resume ignores checkpoints** (chunk-6 r1,
+    pre-existing sibling): `operator_ask.answer` → `handle_queue` RESUME
+    calls `run_agent_loop` with neither `resume_from_loop_id` nor
+    `resume_checkpoint`, so a paused run resumed by `maro answer` re-plans
+    instead of restoring its checkpoint. Lead: route it through
+    `find_checkpoint(loop_id)` + `resume_checkpoint=`.
+  - **Global running marker has no owner** (chunk-6 r1, pre-existing):
+    `interrupt.clear_loop_running` removes the box-wide `loop.lock` (and the
+    per-project lock it names) without checking that THIS run wrote it;
+    a refusal ending can clear another concurrent run's marker. Lead:
+    stamp loop_id in the marker, clear only when it matches.
+  - **Unattributable damage is a box-wide refusal for loop-id resumes**
+    (chunk-6 r1, accepted): one torn `*/build/checkpoint.json` in a run dir
+    whose metadata cannot name its loops refuses every `maro resume
+    <loop_id>` on the box until repaired (handle resumes bypass it). Lead:
+    stamp the CURRENT loop identity (`loop_id` + checkpoint generation) in
+    run metadata at every checkpoint write, and quarantine ownerless
+    damage into a named location the operator is told about. Related:
+    historical `loop_ids` over-attribute — a continued handle's damaged
+    file is attributed to every loop it ever ran.
 - **Recorded cwd is ephemeral under run-worktree / container-clone modes:**
   finalize removes the successful worktree/clone before closure runs, so
   the obligation's cwd is gone ⇒ inconclusive (never fail). Rerun before

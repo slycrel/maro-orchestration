@@ -527,9 +527,19 @@ class Checkpoint:
                 }
         _ident = validate_identity(_int_list(d.get("step_items"), len(steps)),
                                    _int_list(d.get("plan_items")))
+        # Identity and goal are the two fields nothing downstream can
+        # default: an empty / non-string loop_id made a handle-addressed
+        # file FOUND and then resumed "loop ''" — which the loop read as
+        # no resume at all and started fresh (chunk-6 r1, all lenses).
+        _lid = d.get("loop_id")
+        if not isinstance(_lid, str) or not _lid:
+            raise ValueError("checkpoint loop_id must be a non-empty string")
+        _goal = d.get("goal")
+        if not isinstance(_goal, str):
+            raise ValueError("checkpoint goal must be a string")
         return cls(
-            loop_id=d["loop_id"],
-            goal=d["goal"],
+            loop_id=_lid,
+            goal=_goal,
             project=d.get("project", ""),
             steps=steps,
             completed=completed,
@@ -736,53 +746,236 @@ def _load_from(path: Path, loop_id: Optional[str] = None) -> Optional[Checkpoint
         return None
 
 
-def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
-    """Load a checkpoint by loop_id. Returns None if not found or corrupt.
+# Discriminated lookup states (LoopsBench chunk 6, 2026-09-16). An explicit
+# resume may start fresh ONLY on ABSENT; every other non-found state names
+# the file and refuses, because "could not read it" is not "there is none".
+LOOKUP_FOUND = "found"
+LOOKUP_ABSENT = "absent"
+LOOKUP_INVALID = "invalid"        # exists, not a checkpoint (torn / hand-damaged)
+LOOKUP_MISMATCH = "mismatch"      # exists at the id's own address, names another loop
+LOOKUP_IO_ERROR = "io_error"      # exists (or may exist) but the read / lookup failed
 
-    Search order: the active run dir (if any), then the non-run-dir
-    checkpoint dir (current location first, then pre-move locations), then
-    a newest-first scan of all run dirs (resume usually happens in a fresh
-    process where no run-dir contextvar is set).
-    """
-    rd_path = _rundir_checkpoint_path()
-    if rd_path is not None:
-        ckpt = _load_from(rd_path, loop_id)
-        if ckpt is not None:
-            return ckpt
 
-    found = _find_checkpoint_path(loop_id)
-    if found is not None:
-        # The requested id is checked against the file's own loop_id
-        # (chunk-3 r2 finding 2): a `ckpt_<id>.json` whose body names a
-        # different loop must not resume that other loop's plan.
-        ckpt = _load_from(found, loop_id)
-        if ckpt is not None:
-            return ckpt
+@dataclass
+class CheckpointLookup:
+    """What a loop-id lookup found. `ckpt` only when `state == found`;
+    `path` names the file the state is about (the damaged one, or the
+    found one); `detail` is the operator-readable reason."""
+    state: str
+    ckpt: Optional[Checkpoint] = None
+    path: Optional[Path] = None
+    detail: str = ""
 
-    root = _runs_root()
-    if root is not None and root.is_dir():
+    @property
+    def found(self) -> bool:
+        return self.state == LOOKUP_FOUND
+
+
+def _classify_missing(path: Path) -> str:
+    """Why a `FileNotFoundError` came back for `path`: "absent" when the
+    first component that cannot be stat'ed (top-down) does not exist at
+    all; "dangling" when something DOES exist there (a symlink whose
+    target is gone — at the file itself or at any ancestor such as
+    `build -> missing-dir`). A full-path `lexists` alone misses the
+    ancestor case (r3 HIGH 5)."""
+    parts = [path] + list(path.parents)
+    for comp in reversed(parts):          # root first
         try:
-            candidates = sorted(
-                root.glob("*/build/checkpoint.json"),
-                key=lambda p: p.stat().st_mtime, reverse=True,
-            )
-        except Exception:
+            os.stat(comp)
+        except FileNotFoundError:
+            return "dangling" if os.path.lexists(comp) else "absent"
+        except OSError:
+            return "dangling"             # cannot traverse: not "no file"
+    return "absent"
+
+
+def _read_candidate(path: Path, loop_id: Optional[str]) -> CheckpointLookup:
+    """Classify ONE file: absent / io_error / invalid / mismatch / found.
+    `loop_id=None` skips the identity check (a handle-addressed file)."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        if _classify_missing(path) == "dangling":
+            # A dangling symlink AT the checkpoint address or on the way to
+            # it: something was there and is not readable — not "no
+            # checkpoint" (r2 HIGH 1, r3 HIGH 5).
+            return CheckpointLookup(LOOKUP_IO_ERROR, path=path,
+                                    detail=f"checkpoint {path} is behind a dangling link")
+        return CheckpointLookup(LOOKUP_ABSENT, path=path, detail=f"no file at {path}")
+    except OSError as exc:
+        return CheckpointLookup(LOOKUP_IO_ERROR, path=path,
+                                detail=f"checkpoint {path} could not be read ({exc})")
+    try:
+        # Decoding is part of parsing: invalid UTF-8 is a damaged file
+        # (INVALID), not a failed read (r1 QA: UnicodeDecodeError is a
+        # ValueError and used to escape the classifier).
+        ckpt = Checkpoint.from_dict(json.loads(raw.decode("utf-8")))
+    except Exception as exc:
+        return CheckpointLookup(LOOKUP_INVALID, path=path,
+                                detail=f"checkpoint {path} is not a readable checkpoint ({exc})")
+    if loop_id is not None and ckpt.loop_id != loop_id:
+        return CheckpointLookup(
+            LOOKUP_MISMATCH, path=path,
+            detail=f"checkpoint {path} names loop {ckpt.loop_id}, not {loop_id}")
+    return CheckpointLookup(LOOKUP_FOUND, ckpt=ckpt, path=path)
+
+
+def _run_dir_loop_ids(build_ckpt_path: Path) -> Optional[set]:
+    """The loop ids a run dir's metadata attributes to it (plural
+    `loop_ids` + singular `loop_id`), or None when the metadata cannot
+    say (missing / unreadable) — the run dir is then UNATTRIBUTABLE."""
+    try:
+        meta = json.loads((build_ckpt_path.parent.parent / "metadata.json")
+                          .read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(meta, dict):
+        return None
+    # Schema-checked: a string `loop_ids` iterated as characters used to
+    # attribute the run to loops "a", "b", … and rule the real loop OUT
+    # (r1 HIGH). Any shape the writer never produces means "cannot say".
+    raw_ids = meta.get("loop_ids")
+    if raw_ids is None:
+        raw_ids = []
+    if not isinstance(raw_ids, list) or any(
+            not isinstance(l, str) or not l for l in raw_ids):
+        return None
+    ids = set(raw_ids)
+    single = meta.get("loop_id")
+    if single is not None:
+        if not isinstance(single, str) or not single:
+            return None
+        ids.add(single)
+    return ids or None
+
+
+def find_checkpoint(loop_id: str) -> CheckpointLookup:
+    """Discriminated checkpoint lookup by loop_id (the ONE loader).
+
+    Search order: the active run dir (if any), then the id-addressed file
+    (`ckpt_<id>.json`, current dir first, then pre-move locations), then a
+    newest-first scan of all run dirs (resume usually happens in a fresh
+    process where no run-dir contextvar is set).
+
+    Attribution rules — the difference between "not ours" and "unknown":
+    - the id-addressed file decides on its own: a torn / unreadable one is
+      INVALID / IO_ERROR, one naming another loop is MISMATCH (chunk-3 r2
+      finding 2), never "absent, keep looking";
+    - a run-dir file that parses and names another loop is simply not
+      ours; a damaged run-dir file is ours (INVALID / IO_ERROR) when the run
+      dir's metadata names this loop, not ours when it names only others,
+      and UNATTRIBUTABLE when the metadata cannot say — an unattributable
+      damaged file cannot rule this loop out, so the lookup reports it
+      (with its path) instead of ABSENT; the operator repairs or removes it;
+    - a lookup that raises (stat / scandir / unreadable runs root or
+      checkpoint dir) is IO_ERROR, not absent — this function calls the
+      raw helpers, not the lossy `_rundir_checkpoint_path` /
+      `_runs_root` wrappers that turn any exception into None (r1 HIGH:
+      an unreadable runs root read as "no checkpoint").
+    """
+    try:
+        from runs import current_run_dir, runs_root
+        rd_path = None
+        _rd = current_run_dir()
+        if _rd is not None:
+            rd_path = Path(_rd) / "build" / "checkpoint.json"
+        if rd_path is not None:
+            lk = _read_candidate(rd_path, loop_id)
+            if lk.state in (LOOKUP_FOUND, LOOKUP_INVALID, LOOKUP_IO_ERROR):
+                return lk
+            # absent / another run's own file: keep looking
+
+        # Every id address is READ, never existence-checked first:
+        # `Path.exists()` / `is_file()` follow links and turn EACCES / a
+        # dangling link into False, which read as absent (r2 HIGH 1).
+        _addrs = [_checkpoint_path(loop_id)]
+        # The pre-move root is read UNFILTERED (`_old_checkpoint_dirs` drops
+        # a dir whose `is_dir()` is False — which is also what an unreadable
+        # parent returns); a missing old root simply reads ABSENT.
+        from orch_items import orch_root
+        _old_root = orch_root() / _CHECKPOINT_DIR_NAME
+        if _old_root != _checkpoint_dir():
+            _addrs.append(_old_root / f"ckpt_{loop_id}.json")
+        for _addr in _addrs:
+            lk = _read_candidate(_addr, loop_id)
+            if lk.state != LOOKUP_ABSENT:
+                return lk
+
+        unattributed: List[CheckpointLookup] = []
+        root = runs_root()
+        try:
+            os.stat(root)                  # not `is_dir()`: that swallows EACCES
+            _have_root = True
+        except FileNotFoundError:
+            if _classify_missing(root) == "dangling":
+                raise
+            _have_root = False             # no runs root: nothing to scan
+        if _have_root:
+            # os.scandir, not Path.glob: glob swallows PermissionError and
+            # would present an unreadable runs root as empty.
             candidates = []
-        for p in candidates:
-            ckpt = _load_from(p, loop_id)
-            if ckpt is not None:
-                return ckpt
-    return None
+            with os.scandir(root) as _it:
+                for _entry in _it:
+                    _cand = Path(_entry.path) / "build" / "checkpoint.json"
+                    try:
+                        _st = _cand.stat()
+                    except (FileNotFoundError, NotADirectoryError):
+                        if _classify_missing(_cand) == "dangling":
+                            raise          # dangling link at / on the way to the address
+                        continue           # a run dir with no checkpoint (normal)
+                    # any other OSError (EACCES on the run dir / build/)
+                    # propagates → io_error, not "skipped"
+                    candidates.append((_st.st_mtime, _cand))
+            candidates.sort(key=lambda t: t[0], reverse=True)
+            for _mtime, cand in candidates:
+                lk = _read_candidate(cand, loop_id)
+                if lk.state == LOOKUP_FOUND:
+                    return lk
+                if lk.state in (LOOKUP_INVALID, LOOKUP_IO_ERROR):
+                    owners = _run_dir_loop_ids(cand)
+                    if owners is None:
+                        unattributed.append(lk)
+                    elif loop_id in owners:
+                        return lk
+                # mismatch / absent / attributed to others: not ours
+        if unattributed:
+            first = unattributed[0]
+            return CheckpointLookup(
+                first.state, path=first.path,
+                detail=(f"{first.detail}; its run dir's metadata cannot say whether "
+                        f"it is loop {loop_id}'s ({len(unattributed)} unattributable "
+                        "damaged checkpoint(s) — repair or remove to resume)"))
+    except Exception as exc:
+        return CheckpointLookup(LOOKUP_IO_ERROR,
+                                detail=f"checkpoint lookup for {loop_id} failed ({exc})")
+    return CheckpointLookup(LOOKUP_ABSENT, detail=f"no checkpoint found for {loop_id}")
 
 
-def mark_checkpoint_consumed(loop_id: str, *, resumed_to_loop_id: str) -> bool:
+def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
+    """Load a checkpoint by loop_id. Returns None if not found or corrupt —
+    the lossy view; callers that must tell absent from damaged use
+    `find_checkpoint`."""
+    lk = find_checkpoint(loop_id)
+    if lk.state != LOOKUP_FOUND and lk.state != LOOKUP_ABSENT:
+        log.warning("checkpoint lookup %s: %s", lk.state, lk.detail)
+    return lk.ckpt
+
+
+def mark_checkpoint_consumed(loop_id: str, *, resumed_to_loop_id: str,
+                             path: Optional[Path] = None) -> bool:
     """Retain but irrevocably consume a successful resume source checkpoint.
 
     This is intentionally narrower than deletion: closure-demoted/stuck runs
     keep resumable state, while a successfully-resumed checkpoint cannot be
-    invoked a second time to replay the same external effects.
+    invoked a second time to replay the same external effects. `path` is
+    the exact file the resume was read from (a run-dir file is not at the
+    id address); without it the id address is consumed.
     """
-    path = _find_checkpoint_path(loop_id) or _checkpoint_path(loop_id)
+    path = path or _find_checkpoint_path(loop_id) or _checkpoint_path(loop_id)
+    # Consume the FILE that supplied the bytes: atomic_write on a symlink
+    # address would replace the link and leave the target resumable (r3
+    # HIGH 4).
+    path = Path(os.path.realpath(path))
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if str(data.get("loop_id") or "") != loop_id:
@@ -948,6 +1141,12 @@ def branch_checkpoint(loop_id: str) -> Optional[str]:
     ckpt = load_checkpoint(loop_id)
     if ckpt is None:
         log.warning("branch_checkpoint: no checkpoint found for %s", loop_id)
+        return None
+    if ckpt.is_consumed():
+        # A consumed source was resumed successfully; a branch of it would
+        # carry the same remaining plan without the marker (r3 HIGH 3).
+        log.warning("branch_checkpoint: %s was already resumed as %s — not branching",
+                    loop_id, ckpt.resumed_to_loop_id or "a newer loop")
         return None
 
     new_loop_id = uuid.uuid4().hex[:8]
