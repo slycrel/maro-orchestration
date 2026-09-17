@@ -438,6 +438,22 @@ def run_agent_loop(
                 if _perm_ctx is not None else list(_EXECUTE_TOOLS)
             )
 
+        # Explicit resume restores the plan BEFORE Phase B (durable plan-node
+        # ids, 2026-09-16): the checkpoint's remaining steps are the preset
+        # plan, so the planner is not called (it used to be — a paid call
+        # whose plan was then discarded), NEXT.md is not re-appended
+        # (_prepare_execution keeps the carried items), and an unreadable
+        # checkpoint refuses here, before either. Absent → fresh, as before.
+        _resume = None
+        _preset_source = "preset"
+        if resume_from_loop_id:
+            _resume, _resume_refusal = _load_resume(ctx, resume_from_loop_id)
+            if _resume_refusal is not None:
+                return _resume_refusal
+            if _resume is not None:
+                preset_steps = list(_resume.steps)
+                _preset_source = "resume"
+
         # Phase B: Decompose goal into steps
         ctx.set_phase(LoopPhase.DECOMPOSE)
         steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = _decompose_goal(
@@ -446,14 +462,15 @@ def run_agent_loop(
             max_steps=max_steps,
             knowledge_sub_goals=knowledge_sub_goals,
             permission_context=permission_context,
+            preset_source=_preset_source,
         )
 
         # Phase C: Pre-flight checks
         ctx.set_phase(LoopPhase.PRE_FLIGHT)
         steps, _pf, _pf_early_return = _preflight_checks(
             ctx, steps,
-            resume_from_loop_id=resume_from_loop_id,
             parallel_fan_out=parallel_fan_out,
+            resume=_resume,
         )
         if _pf_early_return is not None:
             return _pf_early_return
@@ -476,8 +493,14 @@ def run_agent_loop(
         # Phase D: Parallel fan-out (early return if applicable)
         if _use_dag or _use_fanout:
             ctx.set_phase(LoopPhase.PARALLEL)
+            # Plan nodes are NEXT.md items in every lane: mirror (or keep
+            # the carried items) and bind BEFORE the lane runs, so its
+            # outcomes carry real items and mark them (the lanes return
+            # before Phase E, which used to be the only binding point).
+            _par_indices = _mirror_plan_items(ctx, steps, deps=_deps, resume=_resume)
             _parallel_result = _run_parallel_path(
                 ctx, steps,
+                step_indices=_par_indices,
                 clean_steps=_clean_steps,
                 deps=_deps,
                 levels=_levels,
@@ -488,6 +511,8 @@ def run_agent_loop(
                 use_dag=_use_dag,
                 resolve_tools_fn=_resolve_tools,
                 resumed=bool(_resume_completed),
+                declared=_pf.get("declared"),
+                pre_gated=_pf.get("pre_gated"),
             )
             if _parallel_result is not None:
                 # Record the fan-out itself and the terminal it returns from.
@@ -580,7 +605,8 @@ def run_agent_loop(
 
         # Phase E: Shape steps and write to NEXT.md
         ctx.set_phase(LoopPhase.PREPARE)
-        steps, step_indices, _manifest_steps = _prepare_execution(ctx, steps, _manifest_steps)
+        steps, step_indices, _manifest_steps = _prepare_execution(
+            ctx, steps, _manifest_steps, deps=_deps, resume=_resume)
 
         # Phase F: Main execute loop
         ctx.set_phase(LoopPhase.EXECUTE)
@@ -765,6 +791,8 @@ from loop_planning import (
     _shape_steps,
     _build_loop_context,
     _decompose_goal,
+    _load_resume,
+    _mirror_plan_items,
     _preflight_checks,
     _prepare_execution,
     _decompose,

@@ -37,7 +37,7 @@ import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from file_lock import atomic_write
 
@@ -181,6 +181,87 @@ def _as_int(value: Any, default: int) -> int:
     return default
 
 
+_INT_MISSING = object()
+
+
+def _int_list(value: Any, expect_len: Optional[int] = None) -> Optional[List[int]]:
+    """A persisted list of NEXT.md item indices, or None when it is not one.
+
+    Every entry must be an integer identity (`_as_int` rules — no bools,
+    None, fractions); with `expect_len` the length must match exactly. A
+    list that does not pair 1:1 with its plan is no identity at all and
+    the file reads as "not carried" (the safe direction: a resume then
+    appends fresh items and the gate degrades to soft, as before this field
+    existed) rather than pairing rows with the wrong steps.
+    """
+    if not isinstance(value, list) or not value:
+        return None
+    out: List[int] = []
+    for v in value:
+        i = _as_int(v, _INT_MISSING)  # type: ignore[arg-type]
+        if i is _INT_MISSING:
+            return None
+        out.append(i)  # type: ignore[arg-type]
+    if expect_len is not None and len(out) != expect_len:
+        return None
+    return out
+
+
+def validate_identity(
+    step_items: Optional[List[int]],
+    plan_items: Optional[List[int]],
+) -> Tuple[Optional[List[int]], Optional[List[int]]]:
+    """THE identity validator — writer, loader and the resume restore all
+    call it, so an ambiguous identity is dropped at every boundary the
+    same way (round-1 review, 2026-09-16: per-list type/length checks let
+    a duplicated or swapped binding through, and the gate then REFUSED
+    work on it — the wrong direction; uncertain identity must run softly).
+
+    Rules: an identity is a non-negative item or exactly -1 (an unmirrored
+    slot, may repeat) — any other negative is corruption and drops the
+    list. `plan_items` — every item unique AND strictly increasing (the
+    mirror appends the plan as consecutive NEXT.md lines, so the original
+    binding is monotone by construction; a reordered binding resolves a
+    number to the wrong item — r2 Skeptic finding 1); `step_items` — every
+    item unique; and relationally, the step items that ARE bound must
+    appear in strictly increasing original plan order (a swapped pairing
+    changes the graph). Unbound step items (interrupt additions,
+    sub-steps) are allowed. A failing list becomes None; a failing relation
+    drops `step_items` (the binding itself is the verbatim original and
+    stays).
+    """
+    def _unique(xs: Optional[List[int]], *, increasing: bool = False) -> Optional[List[int]]:
+        if not xs:
+            return None
+        seen: set = set()
+        last = -1
+        for x in xs:
+            if x == -1:
+                continue
+            if x < -1 or x in seen:
+                return None
+            if increasing and x <= last:
+                return None
+            seen.add(x)
+            last = x
+        return list(xs)
+
+    plan = _unique(plan_items, increasing=True)
+    steps = _unique(step_items)
+    if plan is not None and steps is not None:
+        pos = {item: k for k, item in enumerate(plan, 1) if item >= 0}
+        last = 0
+        for it in steps:
+            k = pos.get(it) if it >= 0 else None
+            if k is None:
+                continue
+            if k <= last:
+                steps = None
+                break
+            last = k
+    return steps, plan
+
+
 def _coerce_row(c: Dict[str, Any], n_steps: int) -> Optional["CompletedStep"]:
     """Build a CompletedStep from a persisted dict, tolerating hand edits
     and older shapes: `index` defaults to -1, `position` to 0, and a
@@ -260,6 +341,18 @@ class Checkpoint:
     # before its first suffix step completes: every row is carried history)
     # must not fall back to reading stale item numbers as suffix positions.
     positioned: bool = False
+    # Durable plan-node identity (2026-09-16, chunk 4). `step_items[i]` is
+    # the NEXT.md item index of `steps[i]` (-1 = never mirrored), so a
+    # resume restores the suffix WITH its items instead of paying a planner
+    # call and appending a second copy of the plan to NEXT.md.
+    # `plan_items[k-1]` is the item the ORIGINAL plan's step k bound to —
+    # what an `[after:k]` tag names — carried UNCHANGED across every resume
+    # so a suffix keeps its declared edges (step_gate resolves tags through
+    # it; loop_planning re-keys the DAG lane's edges through it). None =
+    # not carried: an older file, or a plan whose numbering was never bound
+    # (reshaped by step splitting, or a duplicate item index).
+    step_items: Optional[List[int]] = None
+    plan_items: Optional[List[int]] = None
 
     def __post_init__(self):
         if not self.timestamp:
@@ -319,6 +412,15 @@ class Checkpoint:
         return [s for i, s in enumerate(self.steps, 1) if i not in done]
 
     @property
+    def remaining_items(self) -> Optional[List[int]]:
+        """NEXT.md item per `remaining_steps` entry, in the same order —
+        None when the file carries no clean per-step item list."""
+        if not self.step_items or len(self.step_items) != len(self.steps):
+            return None
+        done = self._done_positions()
+        return [it for i, it in enumerate(self.step_items, 1) if i not in done]
+
+    @property
     def done_count(self) -> int:
         """Plan steps with a finished outcome — for progress displays.
 
@@ -373,6 +475,10 @@ class Checkpoint:
             d["regression"] = self.regression
         if self.positioned:
             d["positioned"] = True
+        if self.step_items is not None:
+            d["step_items"] = list(self.step_items)
+        if self.plan_items is not None:
+            d["plan_items"] = list(self.plan_items)
         return d
 
     @classmethod
@@ -380,6 +486,13 @@ class Checkpoint:
         steps = d.get("steps", [])
         if not isinstance(steps, list):
             steps = []
+        if any(not isinstance(_st, str) for _st in steps):
+            # A JSON-valid file whose plan holds non-strings is not a
+            # checkpoint (round-1 QA finding 5: it "restored" and then
+            # crashed dependency parsing outside the refusal path). Raising
+            # here makes `_load_from` read it as unreadable → an explicit
+            # resume refuses with the path.
+            raise ValueError("checkpoint steps must be strings")
         raw_rows = d.get("completed", [])
         if not isinstance(raw_rows, list):
             raw_rows = []
@@ -405,6 +518,8 @@ class Checkpoint:
                     "signature": signature,
                     "turns": turns,
                 }
+        _ident = validate_identity(_int_list(d.get("step_items"), len(steps)),
+                                   _int_list(d.get("plan_items")))
         return cls(
             loop_id=d["loop_id"],
             goal=d["goal"],
@@ -423,6 +538,11 @@ class Checkpoint:
             resumed_to_loop_id=str(d.get("resumed_to_loop_id") or ""),
             world_facts=d.get("world_facts") or None,
             regression=d.get("regression") or None,
+            # Identity lists are all-or-nothing (see _int_list): a torn or
+            # hand-edited list reads as "not carried", never as a partial
+            # pairing.
+            step_items=_ident[0],
+            plan_items=_ident[1],
         )
 
 
@@ -443,6 +563,7 @@ def write_checkpoint(
     world_facts: Optional[List[Dict[str, Any]]] = None,
     regression: Optional[List[Dict[str, Any]]] = None,
     step_indices: Optional[List[int]] = None,
+    plan_items: Optional[List[int]] = None,
 ) -> None:
     """Write current loop progress to disk.
 
@@ -467,6 +588,11 @@ def write_checkpoint(
         executor_session: Compatible clean between-step Claude session state.
             It is retained beside the checkpoint, never treated as sufficient
             without the adapter's configuration-signature check.
+        step_indices: NEXT.md item per plan step (the loop's own mapping).
+            Besides positioning the rows it is persisted as `step_items`
+            when it pairs 1:1 with `steps`, so a resume keeps the items.
+        plan_items: the ORIGINAL plan's number→item binding (LoopContext
+            .plan_items) — persisted verbatim, never recomputed here.
     """
     _target: Any = "<unresolved>"
     try:
@@ -523,6 +649,13 @@ def write_checkpoint(
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "pid": os.getpid(),
             }
+        # Identity travels only when it validates (same rules as the
+        # loader); a drifted mapping (warned above) or a garbage entry is
+        # positioned-but-unidentified: the next resume appends fresh items
+        # rather than trusting a misaligned list. Never manufacture -1.
+        _ident_w = validate_identity(
+            _int_list(list(step_indices), len(steps)) if step_indices is not None else None,
+            _int_list(list(plan_items)) if plan_items else None)
         rd_path = _rundir_checkpoint_path()
         ckpt = Checkpoint(
             loop_id=loop_id,
@@ -531,6 +664,12 @@ def write_checkpoint(
             steps=steps,
             completed=completed,
             positioned=step_indices is not None,
+            # Identity travels only when it pairs cleanly; a drifted mapping
+            # (warned above) is positioned-but-unidentified, so the next
+            # resume appends fresh items rather than trusting a misaligned
+            # list.
+            step_items=_ident_w[0],
+            plan_items=_ident_w[1],
             handle_id=_run_handle_id(rd_path) if rd_path else "",
             in_flight=in_flight,
             # A mid-step crash has indeterminate provider state and may have
@@ -815,6 +954,8 @@ def branch_checkpoint(loop_id: str) -> Optional[str]:
         # positioned file read as legacy would take item numbers for
         # positions (the very bug `positioned` exists to name).
         positioned=ckpt.positioned,
+        step_items=list(ckpt.step_items) if ckpt.step_items else None,
+        plan_items=list(ckpt.plan_items) if ckpt.plan_items else None,
     )
     path = _checkpoint_path(new_loop_id)
     atomic_write(path, json.dumps(branch.to_dict(), indent=2))

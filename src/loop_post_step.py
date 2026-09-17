@@ -234,6 +234,7 @@ def _write_iteration_artifacts(
             world_facts=ctx.world_facts.to_list(),
             regression=ctx.regression.to_list(),
             step_indices=list(getattr(ctx, "step_indices", []) or []),
+            plan_items=getattr(ctx, "plan_items", None),
         )
     except Exception as _exc:
         # Affects loop resumability — silent loss means a crashed loop can't restart.

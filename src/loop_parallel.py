@@ -330,12 +330,24 @@ def _run_parallel_path(
     use_dag: bool,
     resolve_tools_fn,
     resumed: bool = False,
+    declared: Optional[Dict[int, set]] = None,
+    pre_gated: Optional[Dict[int, str]] = None,
+    step_indices: Optional[List[int]] = None,
 ) -> Optional[LoopResult]:
     """Phase D: Parallel fan-out early return path.
 
+    `step_indices`: the NEXT.md item per step (`_mirror_plan_items`, run
+    before this lane). Outcome rows carry the item as their index and
+    each item is marked done/blocked in NEXT.md, as the sequential lane
+    does; without it (direct callers) rows carry positions, as before.
+
     `resumed`: the plan is a checkpoint suffix re-numbered from 1 while its
-    `[after:N]` tags still name the original plan — the DAG gate then
-    enforces nothing (same rule as `step_gate.plan_identity_intact`).
+    `[after:N]` tags still name the original plan. When preflight re-keyed
+    the suffix's edges through the carried plan binding
+    (`step_gate.remap_suffix_deps` — `deps`, `declared` and `pre_gated` are
+    then suffix-numbered), the DAG gate enforces them as on a fresh plan;
+    without a binding it enforces nothing (same rule as
+    `step_gate.plan_identity_intact`).
 
     Returns LoopResult if parallel execution was used, None otherwise
     (caller falls through to sequential execution).
@@ -350,12 +362,15 @@ def _run_parallel_path(
             _say(f"[maro] dag: running {len(clean_steps)} steps with dep-aware scheduling "
                  f"(max_workers={parallel_fan_out}, levels={len(levels)}, "
                  f"parallel_levels={len(parallel_levels)})")
+        _remapped = resumed and declared is not None
         _fanout_outcomes = _run_steps_dag(
             goal=ctx.goal,
             steps=clean_steps,
             deps=deps,
             tagged_steps=steps,
-            identity_intact=not resumed,
+            identity_intact=(not resumed) or _remapped,
+            declared=declared if _remapped else None,
+            pre_gated=pre_gated if _remapped else None,
             adapter=ctx.adapter,
             ancestry_context=_fanout_ancestry,
             tools=[LLMTool(**t) for t in resolve_tools_fn()],
@@ -389,8 +404,19 @@ def _run_parallel_path(
     _fanout_tokens_out = 0
     _fanout_loop_status = "done"
     _fanout_stuck_reason = None
+    _items = (list(step_indices)
+              if step_indices is not None and len(step_indices) == len(_fanout_step_texts)
+              else None)
     for _i, (_step_text, _oc) in enumerate(zip(_fanout_step_texts, _fanout_outcomes), 1):
         _st = _oc.get("status", "blocked")
+        _item = _items[_i - 1] if _items is not None else _i
+        if _items is not None and _item >= 0 and ctx.project and _st in ("done", "blocked"):
+            try:
+                _orch().mark_item(ctx.project, _item,
+                                  _orch().STATE_DONE if _st == "done" else _orch().STATE_BLOCKED)
+            except (OSError, ValueError) as _mk_exc:
+                log.warning("mark_item(%s) failed for parallel %s#%d: %s",
+                            _st, ctx.project, _item, _mk_exc)
         # Ledger parity (round 12): the batch path records every member;
         # the fan-out / DAG lanes never did, so run cards omitted their
         # spend — a refusal's included.
@@ -411,7 +437,7 @@ def _run_parallel_path(
         except Exception as _cost_exc:
             log.debug("fan-out record_step_cost failed (non-critical): %s", _cost_exc)
         _fanout_step_outcomes.append(step_from_decompose(
-            _step_text, _i,
+            _step_text, _item,
             status=_st,
             result=_oc.get("result", ""),
             iteration=_i,
@@ -686,6 +712,8 @@ def _run_steps_dag(
     incremental_context: str = "",
     tagged_steps: Optional[List[str]] = None,
     identity_intact: bool = True,
+    declared: Optional[Dict[int, set]] = None,
+    pre_gated: Optional[Dict[int, str]] = None,
 ) -> List[dict]:
     """Dep-aware parallel execution — semaphore-gated pool with auto-unblock.
 
@@ -703,6 +731,14 @@ def _run_steps_dag(
         deps:  1-based step index → set of dep indices (from parse_dependencies).
         tagged_steps: the same steps WITH their [after:] tags, so the gate
             below can tell a declared edge from the sequential default.
+        declared: pre-computed declared edges in THIS plan's numbering
+            (a resumed suffix re-keyed by step_gate.remap_suffix_deps);
+            when given, the tags are not re-read — they name the original
+            plan.
+        pre_gated: step index → blocked-row reason for steps whose enforced
+            prerequisite finished blocked/skipped BEFORE this run (carried
+            checkpoint rows); recorded blocked up front, never submitted,
+            and gating their own dependents transitively.
 
     Prerequisite gate (step_gate.py, 2026-09-16): a dep that completes
     blocked/skipped does NOT release its dependents. A dependent whose
@@ -724,7 +760,13 @@ def _run_steps_dag(
 
     _tagged = list(tagged_steps) if tagged_steps and len(tagged_steps) == len(steps) else None
     _declared: Dict[int, set] = {}
-    if _tagged is not None and identity_intact:
+    if declared is not None:
+        for _i, _d in declared.items():
+            try:
+                _declared[int(_i)] = {int(x) for x in _d}
+            except (TypeError, ValueError):
+                continue
+    elif _tagged is not None and identity_intact:
         for _i, _t in enumerate(_tagged, 1):
             _d = _explicit_deps(_t)
             if _d:
@@ -862,6 +904,27 @@ def _run_steps_dag(
         return step_idx, outcome
 
     active: Dict[Any, int] = {}  # Future → step_idx
+
+    # Pre-gated steps (resume remap): the enforced prerequisite ended
+    # blocked/skipped before this run and is not in this plan, so nothing
+    # here will ever "complete" it. Record the refusal now, release the
+    # soft dependents (no future will do it), and gate the enforced ones.
+    for _pg_idx, _pg_reason in sorted((pre_gated or {}).items()):
+        try:
+            _pg_i = int(_pg_idx)
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= _pg_i <= n or _pg_i in results:
+            continue
+        with results_lock:
+            results[_pg_i] = {
+                "status": "blocked", "stuck_reason": str(_pg_reason),
+                "result": "", "tokens_in": 0, "tokens_out": 0,
+            }
+        log.warning("dag prerequisite gate: step %d %s", _pg_i, _pg_reason)
+        _gate_dependents(_pg_i, "blocked")
+        for _j in range(1, n + 1):
+            remaining_deps.get(_j, set()).discard(_pg_i)
 
     def _submit_ready(pool) -> None:
         """Submit all tasks whose deps are now fully satisfied."""

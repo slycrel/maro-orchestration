@@ -301,6 +301,7 @@ def _execute_main_loop(
                     world_facts=ctx.world_facts.to_list(),
                     regression=ctx.regression.to_list(),
                     step_indices=step_indices,
+                    plan_items=getattr(ctx, "plan_items", None),
                 )
             except Exception as _rotation_exc:
                 log.warning("executor session rotation checkpoint failed: %s",
@@ -334,15 +335,23 @@ def _execute_main_loop(
     remaining_steps: List[str] = list(steps)
     remaining_indices: List[int] = list(step_indices)
     step_idx = 0  # global step counter (for numbering, includes injected steps)
-    # Prerequisite gate (step_gate.py): plan numbers resolve positionally
-    # only while the shaped plan is the parsed plan. Checked ONCE; when it
-    # fails every edge is soft for the whole run and the log says why.
-    try:
-        from step_gate import plan_identity_intact as _gate_identity
-        _gate_intact, _gate_identity_reason = _gate_identity(
-            step_indices, deps, resumed=bool(resume_completed))
-    except Exception as _gi_exc:
-        _gate_intact, _gate_identity_reason = False, f"identity check failed: {_gi_exc}"
+    # Prerequisite gate (step_gate.py): with a durable binding
+    # (ctx.plan_items — bound at NEXT.md mirroring on a fresh run, carried
+    # by the checkpoint on a resume) plan numbers resolve to ITEMS and a
+    # resumed suffix keeps its edges. Without one they resolve positionally
+    # only while the shaped plan is the parsed plan and the run is not a
+    # resume. Checked ONCE; when it fails every edge is soft for the whole
+    # run and the log says why.
+    _plan_items = list(ctx.plan_items) if getattr(ctx, "plan_items", None) else None
+    if _plan_items is not None:
+        _gate_intact, _gate_identity_reason = True, ""
+    else:
+        try:
+            from step_gate import plan_identity_intact as _gate_identity
+            _gate_intact, _gate_identity_reason = _gate_identity(
+                step_indices, deps, resumed=bool(resume_completed))
+        except Exception as _gi_exc:
+            _gate_intact, _gate_identity_reason = False, f"identity check failed: {_gi_exc}"
     if not _gate_intact and deps:
         log.warning("prerequisite gate: plan identity not intact (%s) — "
                     "declared edges are logged, not enforced, for this run",
@@ -627,6 +636,7 @@ def _execute_main_loop(
                 gate_implicit=_gate_implicit(),
                 superseded=ctx.gate_superseded,
                 identity_intact=_gate_intact,
+                plan_items=_plan_items,
             )
         except Exception as _gate_exc:
             # WARNING, not debug: a gate that silently stops gating is the
@@ -690,7 +700,8 @@ def _execute_main_loop(
                                executor_session=_executor_session,
                                world_facts=ctx.world_facts.to_list(),
                                regression=ctx.regression.to_list(),
-                               step_indices=step_indices)
+                               step_indices=step_indices,
+                               plan_items=getattr(ctx, "plan_items", None))
                 except Exception as _gk_exc:
                     log.warning("gated-step checkpoint write failed: %s", _gk_exc)
                 continue
@@ -1176,7 +1187,8 @@ def _execute_main_loop(
                            executor_session=_executor_session,
                            world_facts=ctx.world_facts.to_list(),
                            regression=ctx.regression.to_list(),
-                           step_indices=step_indices)
+                           step_indices=step_indices,
+                           plan_items=getattr(ctx, "plan_items", None))
         except Exception as _if_exc:
             log.debug("in-flight checkpoint write failed (non-fatal): %s", _if_exc)
 

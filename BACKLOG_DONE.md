@@ -10,6 +10,86 @@ Rotation policy (2026-08-16): when this file outgrows whole-file readability (25
 
 ---
 
+## Durable plan-node ids — SHIPPED 2026-09-16 (LoopsBench chunk 4)
+
+**Found:** the root residue every review this week converged on (chunk-1
+r2 findings 6–7 `/tmp/adversarial-review.K4zIne`, chunk-1 r3 "DAG lane
+schedules a resumed suffix by re-numbered tags", chunk-2 r2 duplicate-text /
+permuted-mapping leads, chunk-3 "build the ids first"). A resumed suffix was
+re-numbered from 1 while its `[after:N]` tags still named the original plan:
+the gate degraded every declared edge to SOFT on any resume
+(`plan_identity_intact(resumed=True)`), the DAG lane scheduled the suffix by
+self-depending tags ("upstream dep did not complete"), and — found while
+scoping — a resume RE-DECOMPOSED the goal (paid planner call, plan thrown
+away), appended a second copy of the plan to `NEXT.md` and paired the suffix
+with those fresh items by position, so the original items were never
+marked.
+
+**Fix (doctrine: a plan node IS its NEXT.md item; the original numbering is
+bound to items once and travels with the checkpoint; identity uncertainty
+degrades to SOFT, never refuses; only a checkpoint that NAMES another
+project or cannot be read refuses):**
+`Checkpoint.step_items` (item per plan step) + `Checkpoint.plan_items` (the
+ORIGINAL number→item binding, verbatim, never recomputed), both through ONE
+validator `checkpoint.validate_identity` at writer and loader (unique
+non-negative ids, `-1` may repeat, bound step items in strictly increasing
+plan order, else the offending list is dropped WHOLE; never manufactures
+`-1`); `from_dict` raises on a non-string step so the resume refuses instead
+of crashing after the restore. `loop_planning._load_resume` runs BEFORE
+Phase B and owns the one carry decision: the remaining steps become the
+preset plan (`preset_source="resume"`, an empty suffix plans nothing); a
+checkpoint naming a different project refuses; each carried (item, text)
+pair is verified against the current NEXT.md (`_items_name_these_steps`) and
+the whole identity is dropped on any mismatch. `_mirror_plan_items` (one
+boundary for every lane — extracted from `_prepare_execution`, called before
+Phase D for the fan-out/DAG lanes) keeps the carried items or appends fresh
+ones and sets `LoopContext.plan_items`; `_run_parallel_path(step_indices=)`
+rows carry the item as their index and mark it done/blocked.
+`step_gate.prerequisite_verdict(plan_items=)` resolves a tag's number to an
+ITEM and reads its latest outcome, carried rows included; the implicit edge
+is the original plan's {k-1}. `step_gate.remap_suffix_deps` re-keys a
+suffix's edges to suffix positions (finished carried prerequisite =
+satisfied; carried blocked/skipped = pre-gated when enforced) before
+`build_execution_levels`, the `use_dag` decision and
+`_run_steps_dag(declared=, pre_gated=)`. Every checkpoint writer passes the
+binding. Deleted: `plan_number_of`, the `_preflight_checks` id-only loader
+branch.
+
+**Review:** round 1 four Codex lenses (`/tmp/adversarial-review.dMNbXh`) →
+classes A (identity validated after the parallel lanes ran), B (validators
+accepted duplicate/swapped/fractional identity → hard gate on an ambiguous
+binding), D (line-offset ids), F (non-string step), G (dead compatibility
+paths) fixed in one fix diff; C (unreadable run-dir checkpoint reads absent)
+pinned out-of-scope (chunk-3 residue). Round 2 one Skeptic on the fix diff
+(`/tmp/adversarial-review.CrC7H0`): 2 HIGH + 4 MED + 1 LOW, all verified,
+5½ fixed in one small diff — a reordered binding survived validation (the
+binding is monotone by construction: consecutive NEXT.md lines, so
+`plan_items` must be strictly increasing); any negative other than -1 is
+corruption; a duplicate task text at the original's line offset verified in
+its place (duplicate texts now read as ambiguous → identity dropped);
+`_mirror_plan_items` keeps a defensive project check for direct callers;
+`maro resume` now prints `stuck_reason` (json field / text → stderr) with a
+CLI refusal test; the gate-writer site is asserted through the gate flow
+test. Pinned, not fixed: an unreadable NEXT.md still crashes fresh
+mirroring after the loader degraded (pre-existing — `append_next_items`
+reads utf-8 on every fresh run); the rotation writer site has no flow test.
+No round 3 (nothing regressed). Tests `tests/test_plan_node_ids.py`:
+loader must-detects (dup / swapped / fractional / bool / short + negative
+controls), writer never manufactures `-1`, non-string steps refuse, verdict
+through the binding with a fresh-run equivalence control, remap cases incl.
+the self-dependence must-detect, DAG pre-gating, loop flows (resume keeps
+NEXT.md items with the planner patched to raise; empty suffix; declared edge
+ENFORCED after resume; DAG lane takes the remapped suffix and marks the
+original items; cross-project refusal with fan-out 0 and 2; NEXT.md drift
+degrades to fresh items; writer spy on the binding at every site; the real
+`cli._cmd_resume` through the loop).
+
+**Residue → BACKLOG:** NEXT.md ids are line offsets (immutable id lead);
+reshaping after the DAG decision; DAG lane checkpoint write (now
+unblocked); discriminated checkpoint loader; duplicate-text interrupt
+re-pairing; pre-execution refusals bypass finalize (admission half);
+unreadable NEXT.md crashes mirroring (typed mirroring failure lead).
+
 ## Checkpoint write torn-file window + fail-open resume — FIXED 2026-09-16 (LoopsBench chunk 3)
 
 **Found:** chunk-1 QA round (write in place → a kill mid-write left a torn

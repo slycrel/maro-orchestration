@@ -10,6 +10,7 @@ the pre-flight/prepare-execution phases that run before step execution begins.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 import re as _re
 import sys
 from typing import Any, Dict, List, Optional
@@ -75,14 +76,98 @@ def _steps_are_independent(steps: List[str]) -> bool:
     return not any(_DEP_RE.search(s) for s in steps)
 
 
+def _mirror_plan_items(
+    ctx: LoopContext,
+    steps: List[str],
+    *,
+    deps: Optional[Dict[int, Any]] = None,
+    resume: Optional["RestoredCheckpoint"] = None,
+) -> List[int]:
+    """Mirror the plan to NEXT.md (or keep a resume's carried items) and
+    bind the ORIGINAL plan numbers to items (`ctx.plan_items`).
+
+    ONE boundary for every lane (round-1 review, 2026-09-16: the parallel
+    lanes returned before Phase E, so a resumed DAG never marked its
+    original items and reported positions as indices). Called before
+    Phase D for the fan-out / DAG lanes on the unshaped plan, and by
+    `_prepare_execution` after shaping for the sequential lane.
+
+    Durable plan-node ids: a resumed suffix keeps the NEXT.md items the
+    original run bound — `_load_resume` already decided whether the
+    carried identity is trustworthy (same project, items still name these
+    texts); here only the count after shaping can still disqualify it.
+    A fresh run binds `step_indices` itself when the shaped plan is the
+    parsed plan (`step_gate.plan_identity_intact`). None = never bound —
+    every declared edge then degrades to soft.
+    """
+    o = _orch()
+    step_indices: Optional[List[int]] = None
+    carried = False
+    if resume is not None and resume.items:
+        if resume.project and resume.project != (ctx.project or ""):
+            # `_load_resume` refuses this shape; a directly constructed
+            # RestoredCheckpoint is not trusted at the mutation boundary
+            # either (r2 Skeptic finding 5) — foreign items are never marked.
+            log.warning("checkpoint resume: carried items belong to project %r, this run is %r "
+                        "— fresh items appended and plan identity not carried",
+                        resume.project, ctx.project)
+        elif len(resume.items) != len(steps):
+            log.warning("checkpoint resume: %d carried item(s) for %d step(s) after shaping "
+                        "— fresh items appended and plan identity not carried",
+                        len(resume.items), len(steps))
+        else:
+            step_indices = list(resume.items)
+            carried = True
+            o.append_decision(ctx.project, [
+                f"[loop:{ctx.loop_id}] Resumed {resume.loop_id}: {len(steps)} remaining "
+                f"step(s) keep their NEXT.md items",
+            ])
+            log.info("checkpoint resume: %d remaining step(s) keep NEXT.md items %s",
+                     len(steps), step_indices)
+    if step_indices is None:
+        step_indices = o.append_next_items(ctx.project, steps)
+        o.append_decision(ctx.project, [
+            f"[loop:{ctx.loop_id}] Goal: {ctx.goal}",
+            *[f"- step {i}: {s}" for i, s in enumerate(steps, 1)],
+        ])
+
+    if resume is not None:
+        # Only the ORIGINAL binding is ever carried; a suffix's numbering
+        # is never re-bound. Without carried items the suffix's own steps
+        # run under items the binding does not know, so the binding is
+        # dropped too (old rule: a resume is soft).
+        ctx.plan_items = (list(resume.plan_items)
+                          if carried and resume.plan_items else None)
+        if ctx.plan_items is None:
+            log.warning("checkpoint resume: no durable plan binding carried from %s — "
+                        "declared edges are soft for this run", resume.loop_id)
+    else:
+        try:
+            from step_gate import plan_identity_intact as _bind_ok
+            _ok, _why = _bind_ok(step_indices, deps)
+        except Exception as _bind_exc:
+            _ok, _why = False, f"identity check failed: {_bind_exc}"
+        ctx.plan_items = list(step_indices) if _ok else None
+        if not _ok and deps:
+            log.warning("prerequisite gate: plan numbers not bound to items (%s) — "
+                        "declared edges are logged, not enforced, for this run", _why)
+    ctx.step_indices = list(step_indices)
+    return step_indices
+
+
 def _prepare_execution(
     ctx: LoopContext,
     steps: List[str],
     manifest_steps: List[str],
+    *,
+    deps: Optional[Dict[int, Any]] = None,
+    resume: Optional["RestoredCheckpoint"] = None,
 ) -> tuple:
-    """Phase E: Shape steps and write NEXT.md.
+    """Phase E: Shape steps and write NEXT.md (sequential lane).
 
     Returns (steps, step_indices, manifest_steps) — steps may be reshaped.
+    Item mirroring + plan binding live in `_mirror_plan_items` (shared
+    with the parallel lanes).
     """
     _shaped_steps = _shape_steps(steps, label="initial-plan")
     if len(_shaped_steps) != len(steps):
@@ -94,15 +179,147 @@ def _prepare_execution(
             )
         steps = _shaped_steps
         manifest_steps = list(steps)
-
-    o = _orch()
-    step_indices = o.append_next_items(ctx.project, steps)
-    o.append_decision(ctx.project, [
-        f"[loop:{ctx.loop_id}] Goal: {ctx.goal}",
-        *[f"- step {i}: {s}" for i, s in enumerate(steps, 1)],
-    ])
-
+    step_indices = _mirror_plan_items(ctx, steps, deps=deps, resume=resume)
     return steps, step_indices, manifest_steps
+
+
+@dataclass
+class RestoredCheckpoint:
+    """What an explicit resume restores BEFORE the loop decomposes anything.
+
+    `steps` are the remaining plan steps in plan order; `items` their
+    NEXT.md items (None when the checkpoint did not carry a clean list —
+    an older file); `plan_items` the ORIGINAL plan's number→item binding
+    (None when never bound). `completed` are the carried history rows.
+    """
+    loop_id: str
+    ckpt: Any
+    steps: List[str]
+    items: Optional[List[int]]
+    plan_items: Optional[List[int]]
+    completed: List[Any]
+    project: str
+
+
+def _items_name_these_steps(project: str, items: List[int], texts: List[str]) -> bool:
+    """Do the carried NEXT.md items still carry exactly these step texts?
+    Unmirrored (-1) slots are skipped; an unreadable ledger reads as no."""
+    if not project:
+        return False
+    try:
+        o = _orch()
+        _lines, ledger = o.parse_next(project)
+    except Exception as _pn_exc:
+        log.warning("checkpoint resume: NEXT.md for %s unreadable (%s)", project, _pn_exc)
+        return False
+    by_index = {it.index: it for it in ledger}
+    counts: Dict[str, int] = {}
+    for it in ledger:
+        _t = str(it.text).strip()
+        counts[_t] = counts.get(_t, 0) + 1
+    for item, text in zip(items, texts):
+        if item < 0:
+            continue
+        row = by_index.get(item)
+        _want = str(text).strip()
+        if row is None or str(row.text).strip() != _want:
+            return False
+        if counts.get(_want, 0) > 1:
+            # Two lines carry this text: a duplicate inserted at the
+            # original's line offset would verify in its place and be
+            # marked instead (r2 Skeptic finding 2). Text is not an
+            # identity — ambiguous reads as no.
+            return False
+    return True
+
+
+def _load_resume(ctx: LoopContext, resume_from_loop_id: str) -> tuple:
+    """Load the checkpoint an explicit resume names, or refuse.
+
+    Returns (restored, early_return). Exactly one is set, except when the
+    checkpoint is ABSENT: then both are None and the caller starts fresh
+    (an absent file is the only state that may — chunk-3 reviews). Runs
+    before Phase B so a resume pays no planner call and appends nothing to
+    NEXT.md, and an unreadable checkpoint refuses before either.
+    """
+    try:
+        from checkpoint import load_checkpoint, resume_from as _resume_from
+        _ckpt = load_checkpoint(resume_from_loop_id)
+    except Exception as _load_exc:
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"checkpoint {resume_from_loop_id} could not be loaded "
+            f"({_load_exc}) — refusing to start fresh")
+    if _ckpt is None:
+        # Absent vs unreadable (chunk-3 review, 2026-09-16): a file that
+        # EXISTS but cannot be loaded (torn by an older in-place writer,
+        # hand-damaged, storage fault) must not turn an explicit resume into
+        # a fresh run that replays every step's side effects. Fail closed
+        # with the path.
+        try:
+            from checkpoint import _find_checkpoint_path as _ckpt_file
+            _torn = _ckpt_file(resume_from_loop_id)
+        except Exception as _find_exc:
+            # Unknown is not absent (r2 finding 1): a lookup that cannot
+            # even stat the checkpoint dir refuses too.
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"checkpoint lookup for {resume_from_loop_id} failed "
+                f"({_find_exc}) — refusing to start fresh")
+        if _torn is not None:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"checkpoint {resume_from_loop_id} exists at {_torn} but could "
+                "not be read as that loop's checkpoint — refusing to start fresh "
+                "(repair or delete the file to re-run from scratch)")
+        log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh",
+                    resume_from_loop_id)
+        return None, None
+    _ckpt_project = str(getattr(_ckpt, "project", "") or "")
+    if _ckpt_project and _ckpt_project != (ctx.project or ""):
+        # An explicit resume runs the checkpoint's OWN plan under its own
+        # project: its completed rows, NEXT.md items and binding all belong
+        # there. Under another project the suffix would run with the
+        # original's completed steps silently absent (round-1 Skeptic
+        # finding 1) and the parallel lanes would enforce the foreign
+        # binding — refuse rather than guess.
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"checkpoint {resume_from_loop_id} belongs to project "
+            f"{_ckpt_project!r}, this run is {ctx.project!r} — refusing; "
+            "resume it under its own project")
+    try:
+        _remaining, _done = _resume_from(_ckpt)
+        _items = _ckpt.remaining_items
+        _binding = list(_ckpt.plan_items) if _ckpt.plan_items else None
+        if _items and not _items_name_these_steps(ctx.project or "", _items, list(_remaining)):
+            # A NEXT.md item index is the item's LINE number (orch_items):
+            # a hand edit above the plan shifts every id. The carried ids
+            # must still name these exact texts, else the whole identity
+            # is dropped here — ONE decision the remap, the parallel lanes
+            # and the sequential lane all inherit (round-1 findings on
+            # late validation).
+            log.warning("checkpoint resume: carried NEXT.md items %s no longer name the "
+                        "remaining steps of %s (ledger edited?) — fresh items appended "
+                        "and plan identity not carried", _items, resume_from_loop_id)
+            _items, _binding = None, None
+        restored = RestoredCheckpoint(
+            loop_id=resume_from_loop_id,
+            ckpt=_ckpt,
+            steps=list(_remaining),
+            items=_items,
+            plan_items=_binding,
+            completed=list(_done),
+            project=_ckpt_project,
+        )
+    except Exception as _ckpt_err:
+        # Same direction: the checkpoint loaded but restoring it failed —
+        # an explicit resume does not silently become a replay.
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"checkpoint {resume_from_loop_id} loaded but restore failed "
+            f"({_ckpt_err}) — refusing to start fresh")
+    return restored, None
 
 
 def _refuse_resume(ctx: LoopContext, resume_from_loop_id: str, reason: str) -> LoopResult:
@@ -141,24 +358,28 @@ def _preflight_checks(
     ctx: LoopContext,
     steps: List[str],
     *,
-    resume_from_loop_id: Optional[str],
     parallel_fan_out: int,
+    resume: Optional[RestoredCheckpoint] = None,
 ) -> tuple:
     """Phase C: Pre-flight — resume, cost gate, plan review, dep parsing, manifest.
 
     Returns (steps, preflight_results: dict, early_return: Optional[LoopResult]).
     If early_return is not None, caller should return it immediately.
     steps may be modified by checkpoint resume.
+
+    `resume`: the checkpoint `_load_resume` restored BEFORE Phase B (the
+    only loader — restoring here, after decomposition, was the paid
+    planner call this chunk removed).
     """
-    # Session resume — load checkpoint and skip completed steps
+    # Session resume — carried rows, ledgers, in-flight note, executor session
     resume_completed: List[StepOutcome] = []
     resume_executor_session: dict = {}
-    if resume_from_loop_id:
+    if resume is not None:
+        resume_from_loop_id = resume.loop_id
         try:
-            from checkpoint import load_checkpoint, resume_from as _resume_from
-            _ckpt = load_checkpoint(resume_from_loop_id)
+            _ckpt = resume.ckpt
             if _ckpt is not None:
-                _remaining, _done = _resume_from(_ckpt)
+                _done = resume.completed
                 for _cs in _done:
                     resume_completed.append(step_from_decompose(
                         _cs.text, _cs.index,
@@ -184,7 +405,11 @@ def _preflight_checks(
                         # a resumed step as if it just finished.
                         ended_ts="",
                     ))
-                steps = _remaining
+                # Phase B ran on these texts (preset from the restore);
+                # re-take the exact list — the in-flight note below edits
+                # a copy, never `resume.steps` (which `_load_resume`
+                # validated against NEXT.md).
+                steps = list(resume.steps)
                 # World-fact ledger carry (WORLD_FACTS_DESIGN slice 1): the
                 # resumed run must see the facts, not just the surviving
                 # steps. from_list drops malformed rows rather than raising.
@@ -249,29 +474,6 @@ def _preflight_checks(
                     )
                 log.info("checkpoint resume: loop_id=%s done=%d remaining=%d rows=%d",
                          resume_from_loop_id, _ckpt.done_count, len(steps), len(resume_completed))
-            else:
-                # Absent vs unreadable (chunk-3 review, 2026-09-16): a file
-                # that EXISTS but cannot be loaded (torn by an older
-                # in-place writer, hand-damaged, storage fault) must not
-                # turn an explicit resume into a fresh run that replays
-                # every step's side effects. Fail closed with the path.
-                try:
-                    from checkpoint import _find_checkpoint_path as _ckpt_file
-                    _torn = _ckpt_file(resume_from_loop_id)
-                except Exception as _find_exc:
-                    # Unknown is not absent (r2 finding 1): a lookup that
-                    # cannot even stat the checkpoint dir refuses too.
-                    return steps, {}, _refuse_resume(
-                        ctx, resume_from_loop_id,
-                        f"checkpoint lookup for {resume_from_loop_id} failed "
-                        f"({_find_exc}) — refusing to start fresh")
-                if _torn is not None:
-                    return steps, {}, _refuse_resume(
-                        ctx, resume_from_loop_id,
-                        f"checkpoint {resume_from_loop_id} exists at {_torn} but could "
-                        "not be read as that loop's checkpoint — refusing to start fresh "
-                        "(repair or delete the file to re-run from scratch)")
-                log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh", resume_from_loop_id)
         except Exception as _ckpt_err:
             # Same direction: the checkpoint loaded but restoring it failed —
             # an explicit resume does not silently become a replay.
@@ -346,9 +548,28 @@ def _preflight_checks(
     deps: Dict[int, Any] = {}
     levels: Optional[List[Any]] = None
     parallel_levels: List[Any] = []
+    declared: Optional[Dict[int, set]] = None
+    pre_gated: Optional[Dict[int, str]] = None
     try:
         from planner import parse_dependencies, build_execution_levels
         clean_steps, deps = parse_dependencies(steps)
+        if resume is not None and resume.items and resume.plan_items \
+                and len(resume.items) == len(steps):
+            # A suffix's tags name the ORIGINAL plan; parsed as-is they
+            # self-depend after re-numbering (an original `[after:4]` on
+            # what is now step 4 never ran: "upstream dep did not
+            # complete"). Re-key them through the carried binding so the
+            # DAG lane schedules by the real edges; prerequisites that
+            # finished before the crash are satisfied, carried
+            # blocked/skipped ones pre-gate their enforced dependents.
+            from step_gate import (remap_suffix_deps as _remap,
+                                   gate_implicit_enabled as _gate_implicit)
+            deps, declared, pre_gated = _remap(
+                steps, resume.items, resume.plan_items, resume_completed,
+                gate_implicit=_gate_implicit())
+            log.info("checkpoint resume: %d suffix step(s) re-keyed to their original "
+                     "edges (%d declared, %d pre-gated)",
+                     len(deps), len(declared), len(pre_gated))
         levels = build_execution_levels(deps)
         parallel_levels = [l for l in levels if len(l) > 1]
         if parallel_levels:
@@ -425,6 +646,9 @@ def _preflight_checks(
         "proj_fanout_dir": proj_fanout_dir,
         "use_dag": use_dag,
         "use_fanout": use_fanout,
+        # Resume remap products for the DAG lane (None on a fresh run).
+        "declared": declared,
+        "pre_gated": pre_gated,
     }
     return steps, pf, None
 
@@ -436,8 +660,13 @@ def _decompose_goal(
     max_steps: int,
     knowledge_sub_goals: bool,
     permission_context,
+    preset_source: str = "preset",
 ) -> tuple:
     """Phase B: Decompose goal into steps, run prereq checks.
+
+    `preset_source` names where a preset list came from for the trace
+    ("preset" = operator pipeline, "resume" = a checkpoint's remaining
+    steps — which may legitimately be EMPTY and still means "do not plan").
 
     Returns (steps, prereq_context, lessons_context, skills_context, cost_context).
     """
@@ -451,10 +680,11 @@ def _decompose_goal(
     )
 
     # Stage 5: rule hit — use deterministic steps, skip LLM decompose
-    if preset_steps is not None and preset_steps:
+    if preset_steps is not None and (preset_steps or preset_source == "resume"):
         steps = [str(s).strip() for s in preset_steps if str(s).strip()]
         if ctx.verbose:
-            print(f"[maro] pipeline: using {len(steps)} preset steps (no decompose)", file=sys.stderr, flush=True)
+            print(f"[maro] {preset_source}: using {len(steps)} preset steps (no decompose)",
+                  file=sys.stderr, flush=True)
     elif _matched_rule is not None and _matched_rule.steps_template:
         steps = list(_matched_rule.steps_template)
         if ctx.verbose:
@@ -470,7 +700,9 @@ def _decompose_goal(
         from run_trace import record_edge as _rec_plan
         if steps is not None:
             _rec_plan("plan.skills", "plan.decompose", loop_id=ctx.loop_id,
-                      source="preset" if (preset_steps is not None and preset_steps) else "rule",
+                      source=preset_source if (preset_steps is not None
+                                               and (preset_steps or preset_source == "resume"))
+                      else "rule",
                       rule=getattr(_matched_rule, "name", "") if _matched_rule else "",
                       steps=len(steps))
     except Exception:

@@ -15,10 +15,15 @@ The core loop takes a goal and autonomously decomposes → executes → introspe
 ```
 run_agent_loop(goal, adapter, ...)
   → A: _initialize_loop()     — build adapter, create project, load ancestry
+  →    _load_resume()         — explicit resume: restore the checkpoint BEFORE planning
+                                (suffix = preset plan; carried NEXT.md items verified;
+                                other-project / unreadable → refuse)
   → B: _decompose_goal()      — break goal into steps via planner.decompose()
-  → C: _preflight_checks()    — cheap plan review, DAG parsing, checkpoint resume
+  → C: _preflight_checks()    — cheap plan review, DAG parsing (+ suffix edge remap on resume)
   → D: _run_parallel_path()   — if steps are independent, fan-out via ThreadPoolExecutor
-  → E: _prepare_execution()   — shape steps (split compound exec+analyze), write manifest
+                                (items bound first by _mirror_plan_items; rows carry + mark them)
+  → E: _prepare_execution()   — shape steps (split compound exec+analyze), mirror plan to
+                                NEXT.md / keep carried items, bind plan numbers → items
   → F: _execute_main_loop()   — iterate steps: execute, verify, handle blocked/done
   → G: _build_result_and_finalize() — aggregate outcomes, record to memory, return LoopResult
 ```
@@ -73,7 +78,8 @@ Pre-flight flags steps that are really sub-goals. At execution time, those steps
 - Checkpoint resume exists but isn't auto-triggered on crash
 - Budget ceiling creates continuation tasks but doesn't auto-enqueue them
 - Parallel fan-out is conservative (heuristic independence check only)
-- Prerequisite gate (`step_gate.py`, 2026-09-16) enforces only DECLARED `[after:]` edges in the sequential lane; the sequential-default edge (71.5% of steps on this box, `scripts/prereq-census.py`) is soft unless `execution.gate_implicit_prerequisites` — closing that is item 3 (`docs/PCD_PREREQUISITE_FIELD_DESIGN.md`)
+- Prerequisite gate (`step_gate.py`, 2026-09-16) enforces only DECLARED `[after:]` edges (sequential lane and DAG lane); the sequential-default edge (71.5% of steps on this box, `scripts/prereq-census.py`) is soft unless `execution.gate_implicit_prerequisites` — closing that is item 3 (`docs/PCD_PREREQUISITE_FIELD_DESIGN.md`). A tag's number resolves through the ORIGINAL plan's binding (`LoopContext.plan_items` = plan number → NEXT.md item, persisted verbatim as `Checkpoint.plan_items`), so a resumed suffix keeps its edges; the binding is dropped whole (edges soft) when the plan was reshaped, a fresh run's items are not 1:1, or the carried items no longer name the step texts in NEXT.md (item ids are line offsets — immutable ids are a BACKLOG lead)
+- The DAG / fan-out lane writes no checkpoint (a crash mid-DAG resumes as nothing done); its rows do carry and mark their NEXT.md items since chunk 4
 - Regression obligations (`regression_ledger.py`) are harvested only in the sequential lane and re-run on the closure host, not through the container executor; a closure plan with zero generated checks skips the re-run
 
 ## File Map

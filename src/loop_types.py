@@ -469,6 +469,14 @@ class LoopContext:
     # i+1) — the checkpoint writer maps outcome rows to plan positions
     # through it (checkpoint.CompletedStep.position).
     step_indices: List[int] = field(default_factory=list)
+    # Durable binding of the ORIGINAL plan's numbers to NEXT.md items
+    # (plan_items[k-1] = item of plan step k — what `[after:k]` names).
+    # Set once by loop_planning._prepare_execution: on a fresh run when the
+    # shaped plan IS the parsed plan (step_gate.plan_identity_intact), on a
+    # resume from the checkpoint that carried it. None = never bound — the
+    # gate then degrades every edge to soft. Persisted verbatim by every
+    # checkpoint writer (checkpoint.Checkpoint.plan_items).
+    plan_items: Optional[List[int]] = None
     completed_context: List[str] = field(default_factory=list)
     iteration: int = 0
     step_idx: int = 0

@@ -2761,12 +2761,18 @@ def _cmd_resume(args: argparse.Namespace) -> int:
             _resume_out["goal_achieved"] = bool(_verdict.complete)
         if getattr(result, "audit_incomplete_warning", ""):
             _resume_out["audit_incomplete_warning"] = result.audit_incomplete_warning
+        if result.status != "done" and getattr(result, "stuck_reason", ""):
+            # A refused resume (other project, unreadable checkpoint) says
+            # why in stuck_reason; "status: stuck" alone hid it.
+            _resume_out["stuck_reason"] = result.stuck_reason
         if args.format == "json":
             print(json.dumps(_resume_out))
         else:
             print(f"[maro] resume finished: {result.status}")
             if "goal_achieved" in _resume_out:
                 print(f"goal_achieved: {_resume_out['goal_achieved']}")
+            if "stuck_reason" in _resume_out:
+                print(f"[maro] {_resume_out['stuck_reason']}", file=sys.stderr)
         return 0 if result.status == "done" else 1
     finally:
         if _rd is not None:

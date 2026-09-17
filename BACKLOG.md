@@ -7235,13 +7235,35 @@ closure with `shell=False`). Round 1 (4 Codex lenses,
 `/tmp/adversarial-review.SADYYh`) → 13 class fixes in one fix diff; round 2
 (Skeptic, fix diff only, `/tmp/adversarial-review.K4zIne`). Accepted residue,
 NOT closed:
-- **Durable plan-node ids** — the gate resolves a tag's plan number
-  POSITIONALLY through `step_indices`; `plan_identity_intact` degrades every
-  edge to soft on resume, on a reshaped plan, or on a duplicate item index
-  (one warning per run). The real fix is a tag that names an ITEM (or a
-  planner-assigned node id carried on the row), so a resumed suffix keeps its
-  edges. Item-3 design (`docs/PCD_PREREQUISITE_FIELD_DESIGN.md`) is where it
-  belongs — a prerequisite field on the PCD is a durable id by construction.
+- **Durable plan-node ids** — SHIPPED 2026-09-16 (chunk 4; record in
+  BACKLOG_DONE): a plan node IS its NEXT.md item; the original numbering is
+  bound to items once (`Checkpoint.plan_items`, verbatim) and a resumed
+  suffix keeps its items, its declared edges (hard) and its DAG scheduling
+  (`step_gate.remap_suffix_deps`). Remaining, NOT closed:
+  - **NEXT.md item ids are line offsets** (chunk-4 r1, all four lenses):
+    `NextItem.index` is the physical line; a hand edit above the plan shifts
+    every carried id. Mitigated: `_load_resume` verifies each carried
+    (item, text) pair against the current NEXT.md and drops the whole
+    identity (fresh items, soft gate) on any mismatch — but two identical
+    task texts still verify against each other's line. Lead: an immutable id
+    per item (in the line or a locked sidecar), resolved to a line only while
+    mutating NEXT.md; the PCD prerequisite field
+    (`docs/PCD_PREREQUISITE_FIELD_DESIGN.md`) is the same id by construction.
+  - **Reshaping after the DAG decision** (chunk-4 r1 Architect, pre-existing):
+    `_shape_steps` runs in Phase E, after `use_dag` was decided on the
+    unshaped plan, so a compound step that would split takes the DAG lane
+    unsplit. Lead: shape before dependency parsing, once.
+  - **Unreadable NEXT.md crashes mirroring** (chunk-4 r2 Skeptic finding 4,
+    pre-existing): `_load_resume` degrades carried identity when the ledger
+    cannot be parsed, but `append_next_items` then reads the same file
+    (utf-8, under the lock) and raises — on a resume AND on every fresh run.
+    Lead: a typed mirroring failure (`step_indices = [-1] * n`,
+    `plan_items = None`, warning) so the run executes unmirrored rather than
+    crashing at Phase E.
+  - **Rotation writer site has no flow test** (chunk-4 r2 finding 7): the
+    writer spy proves the post-step and in-flight sites carry the binding,
+    the gate flow test proves the gate site; the executor-session rotation
+    write (`loop_execute` ~L298) is asserted by inspection only.
 - **Closure with zero generated checks skips the regression re-run** — the
   obligations are only run inside the generated-checks branch; a plan whose
   check generation yields nothing (or is dry-run) never re-runs them. Cheap
@@ -7271,16 +7293,20 @@ NOT closed:
     (`loop_planning.use_dag`), and `_run_parallel_path` always returns a
     LoopResult. The real gap is that the DAG / fan-out lane writes no
     checkpoint at all, so a crash mid-DAG resumes as nothing-done — and a DAG
-    resume is itself blocked on durable plan-node ids (a resumed suffix is
-    scheduled by re-numbered tags). Build the ids first, then a per-node write
-    under `results_lock`; do not add a write to the dead sequential branch.
+    resume was blocked on durable plan-node ids — SHIPPED 2026-09-16 (chunk
+    4): the lane now takes its items before Phase D and marks them, so a
+    per-node write under `results_lock` (carrying `ctx.step_indices` /
+    `ctx.plan_items`) is the next chunk; do not add a write to the dead
+    sequential branch.
   - **Duplicate step texts defeat the text-keyed interrupt re-pairing** (r2
     finding 2): `_check_loop_interrupts` re-pairs text ↔ item index by text
     (first unused occurrence), so a priority interrupt that injects a text
     identical to a pending step hands the pending step's item to the urgent
-    copy; a permuted `step_indices` list is likewise undetectable by the
-    writer (r2 finding 3). Both are the durable-plan-node-id residue above —
-    carry `(text, item_id)` pairs as one structure instead of parallel lists.
+    copy. (The permuted-list half is CLOSED 2026-09-16, chunk 4:
+    `checkpoint.validate_identity` drops `step_items` whole unless the bound
+    items sit in strictly increasing plan order.) The duplicate-text half
+    remains — carry `(text, item_id)` pairs as one structure instead of
+    parallel lists.
   - **Checkpoint consumption can race a late writer** (chunk-3 r1 finding 3,
     pre-existing): `mark_checkpoint_consumed` and `write_checkpoint` are
     separate read/write actors on the same file with no shared lock; atomic
@@ -7305,12 +7331,13 @@ NOT closed:
   - **Pre-execution refusals bypass finalize** (chunk-3 r2 finding 3, class):
     both `_preflight_checks` early returns — the cost gate and the new
     resume refusal — return after `_initialize_loop` took the project slot,
-    run lease, running marker, fence/worktree and after `_decompose_goal`
-    (a paid planner call without preset steps), and skip loop_finalize's
-    explicit releases (`clear_loop_running` etc.; destructors release the
-    slot/lease incidentally). Lead: validate an explicit resume BEFORE
-    admission and decomposition, and put acquired loop resources behind an
-    unconditional `finally` / shared refusal finalizer.
+    run lease, running marker, fence/worktree — and (until chunk 4,
+    2026-09-16) after `_decompose_goal`; `_load_resume` now runs before Phase
+    B, so a refused resume no longer pays the planner — and skip
+    loop_finalize's explicit releases (`clear_loop_running` etc.; destructors
+    release the slot/lease incidentally). Lead: validate an explicit resume
+    BEFORE admission, and put acquired loop resources behind an unconditional
+    `finally` / shared refusal finalizer.
   - **`_checkpoint_path` interpolates unsanitized loop ids** (chunk-3 r2
     out-of-scope lead): a loop_id with path separators escapes the
     checkpoint dir; `run_lease._safe_name` is the existing pattern.
@@ -7319,14 +7346,13 @@ NOT closed:
   the obligation's cwd is gone ⇒ inconclusive (never fail). Rerun before
   cleanup, or translate to the merged checkout, when the container-lane
   parity item above is built.
-- **DAG lane schedules a resumed suffix by its re-numbered tags (PRE-EXISTING;
-  round-3 Skeptic, `/tmp/adversarial-review.1QYwnx`):** preflight re-parses
-  `[after:N]` on the checkpoint suffix, so an original `[after:4]` on what is
-  now position 4 self-depends and never runs ("dag: upstream dep did not
-  complete"). The new gate is OFF on resume (`identity_intact=False`), but
-  scheduling order still follows the stale edges. Closes with the durable
-  plan-node ids above (remap tags before scheduling), or by routing a resumed
-  plan through the sequential lane.
+- **DAG lane schedules a resumed suffix by its re-numbered tags** — SHIPPED
+  2026-09-16 (chunk 4): `step_gate.remap_suffix_deps` re-keys the suffix's
+  edges to suffix positions before `build_execution_levels` / `use_dag`, and
+  the lane's rows carry and mark the ORIGINAL NEXT.md items
+  (`_run_parallel_path(step_indices=)`, bound before Phase D by
+  `_mirror_plan_items`). Still open: the DAG lane writes no checkpoint (chunk-2
+  bullet above — now unblocked).
 - **Round-3 classifier residue:** family failure summaries are pytest / jest /
   mocha / go / cargo / "Tests failed"; other runners (tox, make, bun, plain
   npm scripts) are return-code only — a wrapper that swallows its child's
