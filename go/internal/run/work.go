@@ -43,11 +43,16 @@ const (
 
 var workBindings = map[WorkBinding]bool{WorkDefault: true, WorkOperator: true, WorkContinued: true}
 
-// workOf is where a run works: its attempt-1 config's dir; for a run that
-// predates the binding, the one dir every execute of it recorded (the cwd
-// on the invocation was the only record then) — "" when it has no attempt,
-// ran with none, or its executes disagree (review r1: an old run that
-// worked under --work must be continued THERE, not in today's default).
+// workOf is where a run works: its bound attempt's config's dir; for a run
+// that predates the binding, the one dir every call of it that carried one
+// recorded (the cwd on the invocation was the only record then, and every
+// call of an attempt ran in its dir — the planner's too, so a plan is
+// followed where it was made; review r3 of the grounding gate: an attempt
+// that died after its plan and before its first execute left no execute to
+// read, and its plan was executed in today's default) — "" when it has no
+// attempt, ran with none, or its calls disagree (review r1: an old run
+// that worked under --work must be continued THERE, not in today's
+// default).
 func workOf(rs *RunState) string {
 	if rs == nil || len(rs.Attempts) == 0 {
 		return ""
@@ -55,19 +60,31 @@ func workOf(rs *RunState) string {
 	if b := boundAttempt(rs); b != nil {
 		return b.Attempt.Config.Work
 	}
-	dir, seen := "", false
+	dir := ""
 	for _, a := range rs.Attempts {
 		for _, is := range a.Invocations {
-			if is.Invocation.Purpose != invoke.PurposeExecute {
-				continue
+			if c := is.Invocation.Cwd; c != "" {
+				if dir != "" && c != dir {
+					return ""
+				}
+				dir = c
 			}
-			if seen && is.Invocation.Cwd != dir {
-				return ""
-			}
-			dir, seen = is.Invocation.Cwd, true
 		}
 	}
 	return dir
+}
+
+// workedIn: some call of the run ran in dir (the dir was there, and the
+// run's files are in it).
+func workedIn(rs *RunState, dir string) bool {
+	for _, a := range rs.Attempts {
+		for _, is := range a.Invocations {
+			if is.Invocation.Cwd == dir {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // boundAttempt is the attempt whose config answers for the run's work dir:
@@ -85,11 +102,15 @@ func boundAttempt(rs *RunState) *AttemptState {
 
 // bindWork decides the attempt's work dir. The run's first bound attempt
 // decides; later attempts repeat it (one work dir per run). A continued
-// dir must still exist for every attempt that will work there.
+// dir must still exist for every attempt that will work there — and so
+// must any dir the run has worked in, whatever bound it (review r3: an
+// `operator`-bound dir that was gone was re-created empty under the old
+// name and the resume went on in it as if the run's files were there); a
+// bound dir no call has run in yet is made as usual.
 func (d *Driver) bindWork(rs *RunState) (string, WorkBinding, error) {
 	if b := boundAttempt(rs); b != nil {
 		cfg := b.Attempt.Config
-		if cfg.WorkBinding == WorkContinued {
+		if cfg.WorkBinding == WorkContinued || (cfg.Work != "" && workedIn(rs, cfg.Work)) {
 			if err := existingWork(cfg.Work); err != nil {
 				return "", "", err
 			}
@@ -164,7 +185,7 @@ func (d *Driver) work(cfg ConfigSnapshot) (string, error) {
 func existingWork(dir string) error {
 	st, err := os.Stat(dir)
 	if err != nil || !st.IsDir() {
-		return fmt.Errorf("%w: the continued run's work dir %q is gone: restore it and resume", ErrConfig, dir)
+		return fmt.Errorf("%w: the run's work dir %q is gone: restore it and resume", ErrConfig, dir)
 	}
 	return nil
 }

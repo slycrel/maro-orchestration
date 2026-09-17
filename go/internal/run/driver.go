@@ -88,6 +88,10 @@ type Driver struct {
 	Health func() []string
 	// Confined: every invocation runs tool-less (fork children).
 	Confined bool
+	// ProbeURL is the grounding gate's link probe (ground.go): "" when the
+	// link resolves, else a short reason. nil = the real HTTP probe, bounded
+	// by the run's context.
+	ProbeURL func(ctx context.Context, url string) string
 	// AskPath is the file a worker writes to ask the operator ($MARO_ASK,
 	// ask.go); read after every execute. Empty = this lane cannot ask.
 	AskPath string
@@ -559,6 +563,12 @@ func (d *Driver) drive(ctx context.Context, rs *RunState, prev *AttemptState, fo
 	if cfg.Work, cfg.WorkBinding, err = d.bindWork(rs); err != nil {
 		return nil, err
 	}
+	if cfg.Frame == nil {
+		// a resumed attempt runs under the run's frame, not the resuming
+		// process's (review r1: `maro-go resume` carries none, and the
+		// resumed worker lost the ask instructions with it)
+		cfg.Frame = inheritedFrame(rs)
+	}
 	att := &RunAttempt{Header: header(runRef(rs.Run), rs.Run, n, "run_attempt/1"), Goal: rs.Goal.ID, Family: rs.Family.ID, Config: cfg}
 	if prev != nil {
 		att.RecoversFrom = prev.Attempt.Attempt
@@ -694,6 +704,9 @@ func (d *Driver) finish(ctx context.Context, rs *RunState, a *AttemptState, out 
 func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *AttemptState, forced *Outcome) (*Outcome, error) {
 	// the in-flight call may be ANY earlier unrecorded attempt's: an attempt
 	// that reused it and then crashed does not carry it in its own list
+	var recovered *QuestionBounce // a recovered call's ask, bounced by this attempt
+	var recoveredUsage invoke.Usage
+recovery:
 	for ai := len(rs.Attempts) - 1; prev != nil && ai >= 0; ai-- {
 		cand := rs.Attempts[ai]
 		if cand.Attempt.Attempt >= n || cand.Has(Recorded) != nil {
@@ -702,8 +715,8 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 		p := cand.Attempt.Attempt
 		for i := len(cand.Invocations) - 1; i >= 0; i-- {
 			st := cand.Invocations[i]
-			if st.Invocation.Purpose != invoke.PurposeExecute {
-				continue
+			if st.Invocation.Purpose != invoke.PurposeExecute || rs.bounced(st.Invocation.ID) {
+				continue // a bounced call is consumed: the step ran (or runs) again
 			}
 			// provenance is the invocation's, never the recovering attempt's
 			model := st.Invocation.Backend.Model
@@ -730,6 +743,30 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 				out.Recall = cand.Recall.ID
 				if err := d.apply(ctx, rs, p, cand.Recall, st.Invocation.ID); err != nil {
 					return nil, err
+				}
+				if cand.Question != nil {
+					// the recovered attempt asked before it died: the
+					// question is the journal's, not the (archived) file's
+					out.Terminal, out.Reason = invoke.TerminalFailed, NeedsAnswer(cand.Question)
+					return out, nil
+				}
+				if st.Receipt != nil {
+					// the call landed and the crash came before its ask was
+					// read (review r1): the file is that call's — grounded
+					// now, on this attempt; a bounce runs the step again
+					// below, with the recovered call consumed
+					q, b, err := d.askAfterExecute(ctx, rs, rs.Attempts[n-1], n, 0, st.Invocation.ID)
+					if err != nil {
+						return nil, err
+					}
+					if q != nil {
+						out.Terminal, out.Reason = invoke.TerminalFailed, NeedsAnswer(q)
+						return out, nil
+					}
+					if b != nil {
+						recovered, recoveredUsage = b, st.Receipt.Usage
+						break recovery
+					}
 				}
 				return out, nil
 			}
@@ -765,35 +802,75 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 	}
 	// the request: frame + goal + rendering — the fold re-derives exactly
 	// this from the attempt config, the goal thought, and the selection
-	_, ft, err := d.frame()
+	a := rs.Attempts[n-1]
+	ft, err := frameText(a, d.Store.Get)
 	if err != nil {
 		return nil, err
 	}
-	prompt := Lensed(ft, append(append(append([]byte{}, text...), rs.riders()...), block...))
 	tools := d.Backend.Capabilities().ActsOutward && !d.Confined
-	cwd, err := d.work(rs.Attempts[n-1].Attempt.Config)
+	cwd, err := d.work(a.Attempt.Config)
 	if err != nil {
 		return nil, err
 	}
-	o, err := sh.Invoke(ctx, d.Backend, invoke.Request{Purpose: invoke.PurposeExecute, Prompt: prompt, Tools: tools, Timeout: d.Timeout, Cwd: cwd}, nil)
-	var inc *invoke.Incapable
-	if errors.As(err, &inc) {
-		// a refusal the shell makes BEFORE writing anything (input over the
-		// backend's declared maximum): deterministic, so a retry can only
-		// repeat it — record it as the attempt's honest failure (D16: the
-		// thought is never sliced to fit; the route is what is lacking)
-		return &Outcome{Terminal: invoke.TerminalFailed, Reason: "backend_incapable: " + err.Error(), Recall: sel.ID}, nil
+	// one execute — run once more when the gate bounces the worker's ask,
+	// with the bounce at the top of its context (ground.go)
+	call := func(bounce *QuestionBounce) (*invoke.Outcome, *Outcome, error) {
+		prompt := Lensed(ft, append(append(append(append([]byte{}, text...), bounceBlock(bounce)...), rs.riders()...), block...))
+		shell := &invoke.Shell{J: d.J, Store: d.Store, Run: rs.Run, Attempt: n, CrashAt: sh.CrashAt}
+		if err := d.archiveStale(rs, n); err != nil {
+			return nil, nil, err
+		}
+		o, err := shell.Invoke(ctx, d.Backend, invoke.Request{Purpose: invoke.PurposeExecute, Prompt: prompt, Tools: tools, Timeout: d.Timeout, Cwd: cwd}, nil)
+		var inc *invoke.Incapable
+		if errors.As(err, &inc) {
+			// a refusal the shell makes BEFORE writing anything (input over the
+			// backend's declared maximum): deterministic, so a retry can only
+			// repeat it — record it as the attempt's honest failure (D16: the
+			// thought is never sliced to fit; the route is what is lacking)
+			return nil, &Outcome{Terminal: invoke.TerminalFailed, Reason: "backend_incapable: " + err.Error(), Recall: sel.ID}, nil
+		}
+		if err != nil && !recordedFailure(o, err) {
+			return nil, nil, err
+		}
+		if err := d.applications(ctx, rs, n, o.Invocation, reps); err != nil {
+			return nil, nil, err
+		}
+		if err := d.crash("after_applications"); err != nil {
+			return nil, nil, err
+		}
+		return o, nil, nil
 	}
-	if err != nil && !recordedFailure(o, err) {
-		return nil, err
+	// a worker that asked the operator ends the attempt on its question:
+	// an honest failed terminal the answer's follow-up run continues from
+	var o *invoke.Outcome
+	var refused *Outcome
+	var q *Question
+	bounce, bouncedUsage := recovered, recoveredUsage
+	if bounce == nil {
+		if o, refused, err = call(nil); err != nil || refused != nil {
+			return refused, err
+		}
+		if q, bounce, err = d.askAfterExecute(ctx, rs, a, n, 0, o.Invocation); err != nil {
+			return nil, err
+		}
+		if bounce != nil {
+			bouncedUsage = o.Usage
+		}
 	}
-	if err := d.applications(ctx, rs, n, o.Invocation, reps); err != nil {
-		return nil, err
+	if bounce != nil {
+		if err := d.crash("after_bounce"); err != nil {
+			return nil, err
+		}
+		if o, refused, err = call(bounce); err != nil || refused != nil {
+			return refused, err
+		}
+		if q, _, err = d.askAfterExecute(ctx, rs, a, n, 0, o.Invocation); err != nil {
+			return nil, err
+		}
 	}
-	if err := d.crash("after_applications"); err != nil {
-		return nil, err
-	}
-	out := &Outcome{Terminal: o.Terminal, Reason: o.Reason, Invocation: o.Invocation, Produced: n, Receipt: o.Receipt, Usage: o.Usage, Model: d.Backend.Capabilities().Model, Recall: sel.ID}
+	// usage is what the goal cost this attempt: the bounced call's too (it
+	// ran; review r1 — the metering target saw only the re-run's receipt)
+	out := &Outcome{Terminal: o.Terminal, Reason: o.Reason, Invocation: o.Invocation, Produced: n, Receipt: o.Receipt, Usage: add(o.Usage, bouncedUsage), Model: d.Backend.Capabilities().Model, Recall: sel.ID}
 	if o.Terminal != invoke.TerminalFailed {
 		ref, err := receiptResponse(d.J, o.Receipt)
 		if err != nil {
@@ -801,11 +878,7 @@ func (d *Driver) execute(ctx context.Context, rs *RunState, n uint32, prev *Atte
 		}
 		out.Response = ref
 	}
-	// a worker that asked the operator ends the attempt on its question:
-	// an honest failed terminal the answer's follow-up run continues from
-	if q, err := d.askAfterExecute(ctx, rs, n, 0); err != nil {
-		return nil, err
-	} else if q != nil {
+	if q != nil {
 		out.Terminal, out.Reason = invoke.TerminalFailed, NeedsAnswer(q)
 	}
 	return out, nil

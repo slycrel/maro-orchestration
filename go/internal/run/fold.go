@@ -94,7 +94,9 @@ type AttemptState struct {
 	Plan   *Plan
 	// Question: the operator question the attempt ended on (NOW or AGENDA), when it asked one.
 	Question *Question
-	Steps    []*StepDone // by ordinal, dense from 1
+	// Bounces: the grounding gate's refusals of the worker's asks (ground.go), one per step at most, in Seq order.
+	Bounces []*QuestionBounce
+	Steps   []*StepDone // by ordinal, dense from 1
 	// Verdicts this attempt committed (run-scoped), in Seq order.
 	Verdicts []*verdict.Verdict
 	// Regression: the closure re-runs of the attempt's regression obligations, in obligation order, and the observations they ground (LoopsBench item 2).
@@ -296,6 +298,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 	runOfGoal := map[record.RecordID]record.RunID{} // one production run per goal
 	var firstContinuation uint64
 	var firstWorkBinding uint64 // Seq of the first attempt whose config carries a work binding
+	var firstGrounded uint64    // Seq of the first question that names its invocation (the grounding gate)
 	// invocation states are folded up front so transitions can be checked
 	// against evidence in one pass
 	inv, err := invoke.Fold(pr)
@@ -504,7 +507,23 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 			if a.Question != nil || a.Current() != Executing {
 				return fmt.Errorf("run: %s attempt %d question out of place (state %s, prior question %v)", x.RunID, x.Attempt, a.Current(), a.Question != nil)
 			}
+			if err := checkQuestion(get(x.RunID), a, x, firstGrounded); err != nil {
+				return err
+			}
+			if x.Invocation != "" && firstGrounded == 0 {
+				firstGrounded = x.Seq
+			}
 			a.Question = x
+			a.touch(x)
+		case *QuestionBounce:
+			a, err := attempt(get(x.RunID), x.Attempt, "question bounce")
+			if err != nil {
+				return err
+			}
+			if err := checkQuestionBounce(get(x.RunID), a, x); err != nil {
+				return err
+			}
+			a.Bounces = append(a.Bounces, x)
 			a.touch(x)
 		case *Answer:
 			rs := runs[x.Target]
@@ -1037,6 +1056,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				if st == nil || st.Invocation.RunID != x.RunID || st.Invocation.Attempt > x.Attempt || st.Invocation.Purpose != invoke.PurposeExecute || st.Receipt == nil || st.Receipt.Response != x.Result || st.Terminal == nil || st.Terminal.State != x.Terminal {
 					return fmt.Errorf("run: %s attempt %d step %d cites invocation %s that is not an execute call with this result and terminal", x.RunID, x.Attempt, x.Ordinal, x.Invocation)
 				}
+				if get(x.RunID).bounced(x.Invocation) {
+					return fmt.Errorf("run: %s attempt %d step %d cites invocation %s, which the gate bounced", x.RunID, x.Attempt, x.Ordinal, x.Invocation)
+				}
 				if a.Plan.ParallelAt(x.Ordinal) != nil {
 					return fmt.Errorf("run: %s attempt %d step %d is a parallel step but was executed", x.RunID, x.Attempt, x.Ordinal)
 				}
@@ -1044,7 +1066,7 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				// plan, and prior results, with the recall block the attempt's
 				// selection renders — the interpretation of "which step ran"
 				// is re-derived, never trusted
-				want, err := stepRequest(get(x.RunID), a, x.Ordinal, learned, store)
+				want, err := stepRequest(get(x.RunID), a, x.Ordinal, learned, store, bounceOf(get(x.RunID), st, x.Ordinal), st)
 				if err != nil {
 					return err
 				}
@@ -1246,11 +1268,21 @@ func recallBlock(rs *RunState, a *AttemptState, learned *learn.Ledger, store *th
 	return block, err
 }
 
-// stepRequest re-derives the execute request for step k of the attempt.
-func stepRequest(rs *RunState, a *AttemptState, k int, learned *learn.Ledger, store *thought.Store) (thought.Ref, error) {
+// stepRequest re-derives the execute request for step k of the attempt —
+// with the bounce block when the call was the re-run after a bounce.
+func stepRequest(rs *RunState, a *AttemptState, k int, learned *learn.Ledger, store *thought.Store, bounce *QuestionBounce, produced *invoke.State) (thought.Ref, error) {
 	goal, err := store.Get(rs.Goal.Text)
 	if err != nil {
 		return thought.Ref{}, err
+	}
+	// the request begins with the frame of the attempt that MADE the call
+	var frame []byte
+	if produced != nil {
+		if p := int(produced.Invocation.Attempt); p >= 1 && p <= len(rs.Attempts) {
+			if frame, err = frameText(rs.Attempts[p-1], store.Get); err != nil {
+				return thought.Ref{}, err
+			}
+		}
 	}
 	steps, results, _, err := planTexts(a, store)
 	if err != nil {
@@ -1263,7 +1295,7 @@ func stepRequest(rs *RunState, a *AttemptState, k int, learned *learn.Ledger, st
 	if err != nil {
 		return thought.Ref{}, err
 	}
-	return thought.Address(thought.Prompt, stepPrompt(goal, steps, planAfter(a.Plan), k, results[:k-1], block)), nil
+	return thought.Address(thought.Prompt, Lensed(frame, stepPrompt(goal, steps, planAfter(a.Plan), k, results[:k-1], bounceBlock(bounce), block))), nil
 }
 
 // checkJudgeVerdict re-executes the judge boundary for a judge-standing
@@ -1349,14 +1381,20 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 			judged = b
 			evidence = invoke.ForkEvidence(len(fs.Fork.Members))
 		} else {
-			wantReq, err := stepRequest(rs, a, k, learned, store)
-			if err != nil {
-				return err
-			}
+			// the judged call is the one asked step k's prompt (under its
+			// own attempt's bounce, when it was the re-run); a bounced call
+			// is consumed and never the judged one
 			found := false
 			for _, p := range rs.Attempts {
 				for _, es := range p.Invocations {
-					if es.Invocation.Purpose == invoke.PurposeExecute && es.Receipt != nil && es.Invocation.Request == wantReq {
+					if es.Invocation.Purpose != invoke.PurposeExecute || es.Receipt == nil || rs.bounced(es.Invocation.ID) {
+						continue
+					}
+					want, err := stepRequest(rs, a, k, learned, store, bounceOf(rs, es, k), es)
+					if err != nil {
+						return err
+					}
+					if es.Invocation.Request == want {
 						b, err := store.Get(es.Receipt.Response)
 						if err != nil {
 							return err
@@ -1490,6 +1528,40 @@ func checkJudgeVerdict(rs *RunState, a *AttemptState, v *verdict.Verdict, inv ma
 	return fmt.Errorf("run: %s attempt %d judge verdict %s was answered by the fallback %s with no failed or under-bar primary call in the record", rs.Run, v.Attempt, v.ID, via)
 }
 
+// goalUsage is what the goal cost so far: every receipt of every attempt
+// — except the calls made BESIDE the goal (the tail's diagnosis, the
+// evaluator's score, the shadow arm's measurement), which are not its cost
+// and must not change its recorded outcome.
+func goalUsage(rs *RunState) invoke.Usage {
+	var sum invoke.Usage
+	for _, p := range rs.Attempts {
+		for _, is := range p.Invocations {
+			if is.Receipt != nil && !asideOfTheGoal(is.Invocation.Purpose) {
+				sum = add(sum, is.Receipt.Usage)
+			}
+		}
+	}
+	return sum
+}
+
+// asksFor: reason is the needs-answer reason of a question the run asked
+// and has not recorded — attempt a's own, or an earlier attempt's that
+// died before recording it (the resumed attempt ends on it).
+func (rs *RunState) asksFor(a *AttemptState, reason string) bool {
+	if a.Question != nil && NeedsAnswer(a.Question) == reason {
+		return true
+	}
+	for _, p := range rs.Attempts {
+		if p == a || p.Attempt.Attempt >= a.Attempt.Attempt {
+			continue
+		}
+		if p.Question != nil && p.Has(Recorded) == nil && NeedsAnswer(p.Question) == reason {
+			return true
+		}
+	}
+	return false
+}
+
 // checkTransition executes the cross-record rules a transition claims.
 func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[record.RecordID]*invoke.State, learned *learn.Ledger, store *thought.Store, resolutions map[record.RecordID]*verdict.Resolution, verdicts map[record.RecordID]*verdict.Verdict, observations map[record.RecordID]*verdict.Observation) error {
 	switch x.To {
@@ -1504,10 +1576,14 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 		if err := checkLenses(rs, a, store); err != nil {
 			return err
 		}
+		agenda := a.Attempt.Config.Lane == LaneAgenda
 		if o.Invocation != "" {
 			st := inv[o.Invocation]
 			if st == nil || st.Invocation.RunID != rs.Run || st.Invocation.Attempt != o.Produced || o.Produced > x.Attempt {
 				return fmt.Errorf("run: %s attempt %d recorded invocation %s that this run's attempt %d did not make", rs.Run, x.Attempt, o.Invocation, o.Produced)
+			}
+			if rs.bounced(o.Invocation) {
+				return fmt.Errorf("run: %s attempt %d recorded invocation %s, which the gate bounced", rs.Run, x.Attempt, o.Invocation)
 			}
 			if st.Invocation.Backend.Model != o.Model {
 				return fmt.Errorf("run: %s attempt %d recorded model %q but the invocation ran %q", rs.Run, x.Attempt, o.Model, st.Invocation.Backend.Model)
@@ -1526,26 +1602,22 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 					return fmt.Errorf("run: %s attempt %d recorded receipt %s that disagrees with invocation %s", rs.Run, x.Attempt, o.Receipt, o.Invocation)
 				}
 			}
-			agenda := a.Attempt.Config.Lane == LaneAgenda
 			if agenda {
-				// usage is what the goal cost so far: every receipt of every
-				// attempt — except the calls made BESIDE the goal (the
-				// tail's diagnosis, the evaluator's score, the shadow
-				// arm's measurement), which are not its cost and must not
-				// change its recorded outcome
-				var sum invoke.Usage
-				for _, p := range rs.Attempts {
-					for _, is := range p.Invocations {
-						if is.Receipt != nil && !asideOfTheGoal(is.Invocation.Purpose) {
-							sum = add(sum, is.Receipt.Usage)
-						}
-					}
-				}
-				if o.Usage != sum || o.Steps != len(a.Steps) {
+				if o.Usage != goalUsage(rs) || o.Steps != len(a.Steps) {
 					return fmt.Errorf("run: %s attempt %d recorded usage/steps that are not the sum of its receipts (%d steps)", rs.Run, x.Attempt, len(a.Steps))
 				}
-			} else if o.Receipt != "" && o.Usage != st.Receipt.Usage {
-				return fmt.Errorf("run: %s attempt %d recorded usage that disagrees with receipt %s", rs.Run, x.Attempt, o.Receipt)
+			} else if o.Receipt != "" {
+				// NOW: the cited receipt's usage, plus the bounced call's when
+				// this attempt bounced one (it ran; its cost is the goal's)
+				want := st.Receipt.Usage
+				if b := a.bounceFor(0); b != nil && b.Invocation != o.Invocation {
+					if bs, _ := rs.invocation(b.Invocation); bs != nil && bs.Receipt != nil {
+						want = add(want, bs.Receipt.Usage)
+					}
+				}
+				if o.Usage != want {
+					return fmt.Errorf("run: %s attempt %d recorded usage that disagrees with receipt %s", rs.Run, x.Attempt, o.Receipt)
+				}
 			}
 			// exposure: the recall the request was rendered from is the
 			// producing attempt's; NOW: the request is EXACTLY frame+goal+rendering;
@@ -1577,6 +1649,9 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 			if o.Model != "" {
 				return fmt.Errorf("run: %s attempt %d recorded a model with no invocation", rs.Run, x.Attempt)
 			}
+			if o.Receipt != "" || o.Response != nil {
+				return fmt.Errorf("run: %s attempt %d recorded a receipt with no invocation", rs.Run, x.Attempt)
+			}
 			// a refusal after recall names this attempt's own selection
 			if o.Recall != "" {
 				sel := learned.Recalls[learn.RecallKey(rs.Run, x.Attempt)]
@@ -1584,6 +1659,31 @@ func checkTransition(rs *RunState, a *AttemptState, x *Transition, inv map[recor
 					return fmt.Errorf("run: %s attempt %d recorded recall %s that it did not make", rs.Run, x.Attempt, o.Recall)
 				}
 			}
+			// an outcome that cites no call is still held to the goal's
+			// cost (review r3 of the grounding gate: a recovered pre-gate
+			// question's outcome cites none — its usage and steps were
+			// unchecked): an AGENDA attempt that recalled accounts every
+			// receipt of the run and the steps it holds; anything else
+			// (a refusal before recall, an interrupt, the attempt bound)
+			// ran nothing it could account and records none
+			if agenda && o.Recall != "" {
+				if o.Usage != goalUsage(rs) || o.Steps != len(a.Steps) {
+					return fmt.Errorf("run: %s attempt %d recorded usage/steps that are not the sum of its receipts (%d steps)", rs.Run, x.Attempt, len(a.Steps))
+				}
+			} else if o.Usage != (invoke.Usage{}) || o.Steps != 0 {
+				return fmt.Errorf("run: %s attempt %d recorded usage or steps with no invocation to account", rs.Run, x.Attempt)
+			}
+		}
+		// an attempt that ended on a question records that question's
+		// reason (the operator reads it where they read the question), and
+		// a needs-answer reason names a question the run asked and did not
+		// record yet: this attempt's own, or an earlier attempt's that died
+		// on it (review r3: the reason was never bound to the question)
+		if a.Question != nil && (o.Terminal != invoke.TerminalFailed || o.Reason != NeedsAnswer(a.Question)) {
+			return fmt.Errorf("run: %s attempt %d asked question %s but recorded %s %q", rs.Run, x.Attempt, a.Question.ID, o.Terminal, o.Reason)
+		}
+		if IsNeedsAnswer(o.Reason) && (o.Terminal != invoke.TerminalFailed || !rs.asksFor(a, o.Reason)) {
+			return fmt.Errorf("run: %s attempt %d recorded a needs-answer reason that is no unrecorded question of the run's", rs.Run, x.Attempt)
 		}
 		res := resolutions[o.Closure]
 		if res == nil || res.RunID != rs.Run || res.Attempt != x.Attempt || res.VerdictKind != verdict.KindClosure || res.Subject != runRef(rs.Run) {
@@ -1827,7 +1927,14 @@ func checkExposure(rs *RunState, sel *learn.RecallSelection, get func(thought.Re
 			return fmt.Errorf("invocation %s request does not end with the recall rendering", invID)
 		}
 	} else {
-		want := thought.Address(thought.Prompt, Lensed(frame, append(append(append([]byte{}, goal...), rs.riders()...), block...)))
+		// the re-run after a bounce carries the bounce block after the goal
+		var bounce []byte
+		if int(produced) >= 1 && int(produced) <= len(rs.Attempts) {
+			if b := rs.Attempts[produced-1].bounceFor(0); b != nil && b.Invocation != invID {
+				bounce = bounceBlock(b)
+			}
+		}
+		want := thought.Address(thought.Prompt, Lensed(frame, append(append(append(append([]byte{}, goal...), bounce...), rs.riders()...), block...)))
 		if invRec.Request != want {
 			return fmt.Errorf("invocation %s request is not frame+goal+recall (%s vs %s)", invID, invRec.Request.Hash, want.Hash)
 		}

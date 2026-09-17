@@ -481,7 +481,7 @@ func planPrompt(goal []byte, interpretation string, related, block []byte) []byt
 // prerequisites shows them ("(after 1, 3)"); a plan without any renders
 // byte-for-byte as before edges existed, so every earlier record still
 // re-derives.
-func stepPrompt(goal []byte, steps []string, after [][]int, ordinal int, prior [][]byte, block []byte) []byte {
+func stepPrompt(goal []byte, steps []string, after [][]int, ordinal int, prior [][]byte, bounce, block []byte) []byte {
 	var b strings.Builder
 	b.WriteString("You are the executor of an orchestration engine named Maro (a goal that says \"maro\" means you), carrying out ONE step of a plan. Do the step and reply with its result; do not do later steps.\n\n## Goal\n")
 	b.Write(goal)
@@ -499,6 +499,7 @@ func stepPrompt(goal []byte, steps []string, after [][]int, ordinal int, prior [
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "\n## Your step (%d of %d)\n%s\n", ordinal, len(steps), steps[ordinal-1])
+	b.Write(bounce)
 	b.Write(block)
 	return []byte(b.String())
 }

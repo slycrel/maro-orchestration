@@ -111,12 +111,12 @@ relation is rerun, record it, refuse a forged binding.
 2. **Continuation: a rerun claims and settles the run it continues.**
    Contract in §4.2.
 3. **Ask grounding gate** (Question carries what was verified; a code ask
-   without `sent` is announced `unverified`; links probed). The LIVE ask
-   is a design item, not a port: the Go lane ends the attempt on the
-   question by design (pattern 109), which is exactly the case a
-   session-bound code cannot survive. Decide with Jeremy: a live window
-   inside the attempt (Python's road) or a worker-side re-request rule.
-   Recorded here; not built today.
+   without `sent` is announced `unverified`; links probed). Contract in
+   §4.4. Grounding gate LANDED 2026-09-17. The LIVE ask window is the
+   design decision owed: the Go lane ends the attempt on the question by
+   design (pattern 109), which is exactly the case a session-bound code
+   cannot survive. Decide with Jeremy: a live window inside the attempt
+   (Python's road) or a worker-side re-request rule.
 4. **Work-dir binding under the rerun relation** (§2a). Contract in
    §4.3. LANDED 2026-09-17.
 5. **Container executor + env-request lane** — a strand (Phase 3
@@ -195,10 +195,10 @@ collisions are unhandled across every handle-addressed verb.
 |---|---|---|
 | What is bound | the run's PROJECT (`~/.maro/workspace/projects/<slug>/`): NEXT.md, decisions, risks | the run's WORK DIR: the absolute directory every invocation of the run that carries a working directory runs in. Go has no projects; the directory is the whole of it |
 | Precedence | operator > landscape > navigator/parent > named > minted, stamped `project_binding` | operator (`--work`) > continued (the dir the run it continues worked in) > default (the workspace's own `work/`); recorded on the attempt config as `work` + `work_binding` (`default` / `operator` / `continued`) |
-| When it binds | at loop start, from the landscape decision | at attempt 1, from the continuation claim (§4.2): an unrefused claim on a source that recorded a dir binds `continued` to exactly that dir — the source's attempt-1 config, or for a run that predates the binding, the one dir all its executes recorded; a `related` decision, a plain follow of a finished run, a fork child, a replay arm bind nothing (default — fork children and replay arms inherit the parent's / runner's default). Attempts after the first bound one REPEAT it — a resumed attempt works where the run works, not where the resuming process defaults to; a run whose early attempts predate the binding adopts one at its first bound attempt (`operator` to where its executes ran, else the resuming driver's choice), and that adopted binding is what later attempts, continuations and `runs show` read |
+| When it binds | at loop start, from the landscape decision | at attempt 1, from the continuation claim (§4.2): an unrefused claim on a source that recorded a dir binds `continued` to exactly that dir — the source's attempt-1 config, or for a run that predates the binding, the one dir all its calls that carried one recorded (the planner's too — §4.4 review r3); a `related` decision, a plain follow of a finished run, a fork child, a replay arm bind nothing (default — fork children and replay arms inherit the parent's / runner's default). Attempts after the first bound one REPEAT it — a resumed attempt works where the run works, not where the resuming process defaults to; a run whose early attempts predate the binding adopts one at its first bound attempt (`operator` to where its calls ran, else the resuming driver's choice), and that adopted binding is what later attempts, continuations and `runs show` read |
 | What the fold checks | ledger guards around the card/stamp | `continued` sits on a run with an unrefused continuation and names the source's dir exactly; `default` on such a run whose source recorded a dir is refused (the override is `operator`, which the fold cannot check and does not); a later attempt that moved the dir is refused, and a bound attempt after an unbound attempt 1 is held to the binding's meaning and to where the run's executes ran; once the journal shows a bound config, an unbound one is refused (watermark, like the continuation's); every execute invocation ran in exactly the attempt's dir, every other invocation that carries a cwd carries that one, and an invocation that arrives BEFORE its attempt, or names attempt 0 of a run for anything but the landscape, is refused (review r1/r2: the lens and backend rules had the same hole — a call nothing attached could still be cited by an outcome, intent, plan or step). The door refuses a relative dir, a binding out of vocabulary, `operator`/`continued` with no dir, a dir with no binding |
 | Surface | `project_binding` in the loop record, the card | `runs show` prints "works in <dir> (<binding>)"; `runs show --json` carries `work` / `work_binding`; the driver emits event stage `work` at attempt start |
-| Kill safety | — | the binding is on the attempt record itself (same commit as the attempt); a resume reads attempt 1's, so no seam can lose it. A `continued` dir that is gone stops the run BEFORE its next attempt, first or resumed (`ErrConfig` "… is gone: restore it and resume"); it is never re-created empty under the old name; the claim stands and a resume after restoring works there |
+| Kill safety | — | the binding is on the attempt record itself (same commit as the attempt); a resume reads attempt 1's, so no seam can lose it. A `continued` dir that is gone — and, since §4.4 review r3, ANY bound dir some call of the run has already run in — stops the run BEFORE its next attempt, first or resumed (`ErrConfig` "… is gone: restore it and resume"); it is never re-created empty under the old name; the claim stands and a resume after restoring works there. A bound dir no call has run in yet is made as usual |
 
 **Intentional differences:** no projects are minted (the default stays
 the workspace's single `work/`; a per-run dir is its own decision, not
@@ -219,3 +219,44 @@ writers are the engine's own, the fold detects inconsistency, not a
 hostile writer; the binding watermark, like the continuation's, means a
 mixed-version writer set on one journal is unsupported; AGENDA judge
 calls drop the cwd the same way NOW's do (pre-existing).
+
+### 4.4 The ask grounding gate: an operator question is a claim the engine checks before the operator sees it — LANDED 2026-09-17
+
+**Contract (shared with main — `docs/OPERATOR_ASK_DESIGN.md` §7):**
+
+| Clause | Python main | Go successor (this chunk) |
+|---|---|---|
+| What is checked | `operator_ask.ground(ask)` on the host before any card goes out: every link in `question`/`why`/`no_input_alternative`/`sent` (≤5; HEAD then GET, 8 s) must answer < 400; a request for a code (`asks_for_code`) must carry `sent`; a code request must be LIVE (§8) | `ground` (`go/internal/run/ground.go`) after the execute that wrote `$MARO_ASK`: the same link probe (same fields, cap, method order, timeout; `Driver.ProbeURL` seam) and the same code-request rule (`asksForCode` = Python's regex + "code" in the lowercase question) on a new `sent` field of the ask file. The live rule cannot be a rule here (below) |
+| What a failure does | bounce once: the step re-runs with "Your question to the operator was NOT sent — it failed a check: …" at the top of its context; the ask is archived beside the next one (`-1` suffix on a same-second archive); a second failure passes through with the problems on the record and the card as `unverified` | the same shape as a RECORD: `question_bounce/1` (attempt n, `step`, the execute `invocation` whose worker wrote it, the `ask` as written, `problems` [{check, link, detail}]) is committed BEFORE the re-run; the step runs once more with the bounce block in its request (NOW: after the goal, before the riders; AGENDA: after "## Your step", before the recall block); the ask is archived under a unique `-N` suffix. A second failure passes through on the `question/1` record as `unverified` (hard problems + soft notes); the run's reason reads "needs answer: <q> [unverified: …]" |
+| What the Question record carries | `unverified`, `sent`, `live` | `invocation` (the execute that wrote it — identity), `sent` (display), `unverified` (routing). ABSENT invocation = a question that predates the gate |
+| What the fold checks | — (the gate is a host-side function; the ledger records its trace edge) | `checkQuestionBounce`: attempt Executing, no Question yet, one bounce per step, invocation = a landed execute of this run (attempt ≤ the bounce's), not already bounced, not cited by a StepDone; each problem re-derives from the ask (a `link` is one of the ask's links; `code_unsent` iff the ask asks for a code with no `sent`, and never left out; `code_lane` never in a bounce). `checkQuestion`: an invocation, once the journal shows grounded questions (watermark), is required; it is a landed execute of this run, not bounced; `unverified` re-derives from the ask; a bounced kind rides through only after a bounce of the same step; a code request with no `sent` must declare `code_unsent`; the lane note iff the question asks for a code. A bounced call is CONSUMED: an Outcome or StepDone citing it is refused, and the fold renders the re-run's request WITH the bounce block (`checkExposure`, `stepRequest`, the step-verdict evidence search) |
+| Recovery | the retry idiom of the loop | a bounce is its attempt's: a crash after the bounce resumes with a fresh call and no block (one call's cost). A crash after the execute landed but before its ask was read leaves the file where the call put it: the resumed attempt grounds it as that call's — its question (zero new calls), or a bounce the resumed attempt commits citing the recovered call, then one re-run there. A crash after the question was committed (NOW; AGENDA: after the step's judge, after the step) resumes to the journal's question, not the file's, and the run does not go on past it. Any ask file present BEFORE a fresh execute is archived first (`ask_stale_archived`): a call is never credited with a file it did not write |
+| Frame | `instructions` in the ask frame | the ask instructions live in the execute frame; every execute request — NOW's and, since review r1, every AGENDA step's — begins with the attempt's frame, and a resumed attempt runs under the RUN's frame (the first attempt's) when the resuming process has none |
+| Frame | "links must resolve; a code request says in `sent` how YOU triggered delivery (choose the SMS or authenticator option first) and what you saw" | the same sentence, verbatim, in `AskInstructions` |
+| Surface | the card + Hermes leg: `unverified` lines | `maro-go asks` rows `sent`/`unverified`/`bounced`; `runs show` the same three lines; events `ask_bounced` then `ask` |
+
+**Intentional differences:** the live rule (§8: a code request must come
+from a live ask) is a SOFT note here, `code_lane` — "a code is consumed by
+the session that asked for it, and this run ended on the question: the
+follow-up run may have to request a fresh one" — because the Go lane ends
+the attempt on the question by design (pattern 109); it rides on every code
+request as `unverified`, never bounces, and is the honest stand-in until the
+live-ask decision (a window inside the attempt, Python's road, or a
+worker-side re-request rule) is made with Jeremy; the bounce is a record
+kind, not a schema version of `question`, because the fold must re-derive
+the re-run's request from it; a bounce is attempt-scoped (a crash after it
+costs one call), which keeps recovery a reuse of landed calls with no
+bounce state to carry across attempts; the invocation on the question is a
+watermark field, like the continuation's and the work binding's.
+
+**Residue:** the live ask window (owed decision — with review r1's added consequence: a bounce for an unrelated link problem makes the re-run trigger a second code delivery, which may invalidate the first or hit a provider's resend limit; a delivery receipt that survives the bounce is part of that design); the URL probe runs on the
+host with the worker's own URLs — the same SSRF posture as Python's gate,
+not widened, not narrowed; Go's `\w`/`\s` are ASCII where Python's are
+Unicode (a code request phrased in non-ASCII word characters could differ
+at the margin); a failed step's ask file is not read (pre-existing: the
+ask lane reads the ask only after a landed execute); a crash after a bounce
+re-runs the step from scratch on resume; the five-link cap is silent
+(Python's is too); replay arms inherit the frame's ask path and have no
+ask channel (pre-existing; owed with the replay strand); judge calls
+carry no cwd and `WorkOperator` is self-attested (chunk 4's stated
+choices, re-filed by r1 with no new consequence).

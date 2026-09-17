@@ -30,6 +30,19 @@ func (d *Driver) frame() (*thought.Ref, []byte, error) {
 	return &ref, []byte(d.Frame), nil
 }
 
+// inheritedFrame is the run's frame for an attempt whose driver has none:
+// the first attempt that bound one (a resume works under the run's frame,
+// as it works in the run's dir); nil when no attempt did.
+func inheritedFrame(rs *RunState) *thought.Ref {
+	for _, a := range rs.Attempts {
+		if a.Attempt.Config.Frame != nil {
+			ref := *a.Attempt.Config.Frame
+			return &ref
+		}
+	}
+	return nil
+}
+
 // frameText reads the frame bound in an attempt's config (empty for none).
 func frameText(a *AttemptState, get func(thought.Ref) ([]byte, error)) ([]byte, error) {
 	if a == nil || a.Attempt.Config.Frame == nil {

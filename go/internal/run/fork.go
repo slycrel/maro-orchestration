@@ -477,7 +477,7 @@ func (d *Driver) driveChildren(ctx context.Context, rs *RunState, fs *ForkState)
 						err = fmt.Errorf("run: fork %s member %d (%s) panicked: %v", fs.Fork.ID, member, crs.Run, r)
 					}
 				}()
-				err = d.driveChild(cctx, crs, fs, member)
+				err = d.driveChild(cctx, crs, fs, member, workOf(rs))
 			}()
 			mu.Lock()
 			wasStopped := stopped
@@ -524,7 +524,7 @@ func (d *Driver) driveChildren(ctx context.Context, rs *RunState, fs *ForkState)
 		if err != nil {
 			return err
 		}
-		if err := d.driveChild(ctx, crs, fs, i+1); err != nil {
+		if err := d.driveChild(ctx, crs, fs, i+1, workOf(rs)); err != nil {
 			return err
 		}
 	}
@@ -581,8 +581,14 @@ func (d *Driver) commitDecision(ctx context.Context, rs *RunState, fs *ForkState
 // driver field is either added here or knowingly left out (review r1:
 // the judgment binding was left out by omission, and a first_verdict
 // child judged on the default arm whatever the parent was configured).
-func (d *Driver) childDriver(fs *ForkState) *Driver {
-	return &Driver{J: d.J, Store: d.Store, Backend: d.Backend, Judge: d.Judge, Lane: LaneNow, Origin: forkOrigin{}, Timeout: d.Timeout, Health: d.Health, Events: d.Events, Lens: d.Lens, Work: d.Work, WorkDefault: d.WorkDefault, Frame: d.Frame,
+func (d *Driver) childDriver(fs *ForkState, work string) *Driver {
+	// a child works where its parent works: the parent run's bound dir is
+	// the child's default (review r1: a continued parent's children fell
+	// back to the driver's default)
+	if work == "" {
+		work = d.WorkDefault
+	}
+	return &Driver{J: d.J, Store: d.Store, Backend: d.Backend, Judge: d.Judge, Lane: LaneNow, Origin: forkOrigin{}, Timeout: d.Timeout, Health: d.Health, Events: d.Events, Lens: d.Lens, Work: d.Work, WorkDefault: work, Frame: d.Frame,
 		Confined: true, ChildOf: fs.Fork.ID, ModelJudge: fs.Fork.Policy == JoinFirstVerdict, MaxAttempts: d.MaxAttempts, MaxDeliveryAttempts: d.MaxDeliveryAttempts,
 		JudgeProvider: d.JudgeProvider, JudgeShadow: d.JudgeShadow, Providers: d.Providers}
 }
@@ -590,8 +596,8 @@ func (d *Driver) childDriver(fs *ForkState) *Driver {
 // driveChild is the child's own driver: confined (tool-less), fork origin,
 // NOW lane with the parent's judge when the policy needs a verdict. It
 // writes the ChildTerminal from the child attempt's own scope.
-func (d *Driver) driveChild(ctx context.Context, crs *RunState, fs *ForkState, member int) error {
-	cd := d.childDriver(fs)
+func (d *Driver) driveChild(ctx context.Context, crs *RunState, fs *ForkState, member int, work string) error {
+	cd := d.childDriver(fs, work)
 	// crash seams: "child:<seam>" fires in every child, "child:<n>:<seam>"
 	// only in member n (1-based)
 	if strings.HasPrefix(d.CrashAt, "child:") {

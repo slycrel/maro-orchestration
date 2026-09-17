@@ -47,6 +47,39 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			}
 		}
 	}
+	// a recovered attempt that asked the operator ended on its question,
+	// whatever it committed after (a step's judge, the step itself) and
+	// whatever bound this attempt: the resumed attempt ends there too —
+	// the question is the journal's, and the run does not go on past it
+	// (review r1: the reused execute read the archived file as "no
+	// question" and the plan continued; r2: the attempt bound came first,
+	// and the questioned attempt's steps replaced the inherited ones the
+	// fold holds this attempt to). The latest unrecorded question wins.
+	for i := len(rs.Attempts) - 1; i >= 0; i-- {
+		p := rs.Attempts[i]
+		if p == a || p.Has(Recorded) != nil || p.Question == nil {
+			continue
+		}
+		sel, _, _, err := d.recall(ctx, rs, n, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		o := &Outcome{Terminal: invoke.TerminalFailed, Reason: NeedsAnswer(p.Question), Usage: usage, Recall: sel.ID, Steps: len(a.Steps)}
+		if p.Question.Invocation != "" {
+			// provenance is the asking call's; a question from before the
+			// gate names none, and the outcome cites none
+			st, by := rs.invocation(p.Question.Invocation)
+			if st == nil {
+				return nil, nil, fmt.Errorf("run: attempt %d asked on invocation %s, which the journal does not hold", p.Attempt.Attempt, p.Question.Invocation)
+			}
+			o.Invocation, o.Produced, o.Model = st.Invocation.ID, by, st.Invocation.Backend.Model
+			if st.Receipt != nil {
+				r := st.Receipt.Response
+				o.Receipt, o.Response = st.Receipt.ID, &r
+			}
+		}
+		return o, nil, nil
+	}
 	if forced != nil {
 		return forced, nil, nil
 	}
@@ -66,10 +99,23 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 	made := map[record.RecordID]string{}
 	// invoke runs one judge-or-execute call and applies the recall block's
 	// revisions to it when the block was in the request
+	// an execute request begins with the attempt's frame, as NOW's does
+	// (frame.go; review r1: the ask instructions live in the frame, and an
+	// AGENDA worker never saw them) — the fold renders the same bytes
+	ft, err := frameText(a, d.Store.Get)
+	if err != nil {
+		return nil, nil, err
+	}
 	invoke_ := func(purpose invoke.Purpose, prompt []byte, withBlock bool, tools bool) (*invoke.Outcome, []byte, error) {
 		var b invoke.Backend = d.Backend
 		if !tools {
 			b = d.judge(a)
+		}
+		if purpose == invoke.PurposeExecute {
+			prompt = Lensed(ft, prompt)
+			if err := d.archiveStale(rs, n); err != nil {
+				return nil, nil, err
+			}
 		}
 		if purpose == invoke.PurposeJudge {
 			// a judge is asked through the attempt's PRIMARY judgment
@@ -173,6 +219,9 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 			}
 			want = lr.Prompt
 		}
+		if purpose == invoke.PurposeExecute {
+			want = Lensed(ft, prompt)
+		}
 		ref := thought.Address(thought.Prompt, want)
 		for _, p := range rs.Attempts {
 			if p == a || p.Has(Recorded) != nil || (from != 0 && p.Attempt.Attempt < from) {
@@ -184,8 +233,8 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 					admitted = st.Invocation.ID == after
 					continue
 				}
-				if st.Invocation.Purpose != purpose || st.Invocation.Request != ref || st.Receipt == nil {
-					continue
+				if st.Invocation.Purpose != purpose || st.Invocation.Request != ref || st.Receipt == nil || rs.bounced(st.Invocation.ID) {
+					continue // a bounced call is consumed: the step runs again
 				}
 				b, err := d.Store.Get(st.Receipt.Response)
 				if err != nil {
@@ -238,7 +287,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 				continue
 			}
 			for _, st := range p.Invocations {
-				if st.Invocation.Purpose == invoke.PurposeExecute && st.Receipt != nil && !cited[st.Invocation.ID] {
+				if st.Invocation.Purpose == invoke.PurposeExecute && st.Receipt != nil && !cited[st.Invocation.ID] && !rs.bounced(st.Invocation.ID) {
 					return st
 				}
 			}
@@ -509,7 +558,7 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		var o *invoke.Outcome
 		var resp []byte
 		by := n
-		sp := stepPrompt(goal, steps, after, k, results, block)
+		sp := stepPrompt(goal, steps, after, k, results, nil, block)
 		if k == resumeAt {
 			ro, rb, rby, err := reuse(invoke.PurposeExecute, sp, 0, "")
 			if err != nil {
@@ -542,6 +591,27 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		}
 		if err := d.crash("after_step_execute"); err != nil {
 			return nil, nil, err
+		}
+		// a worker that asked the operator: the ask is grounded first
+		// (ground.go) — a bounced ask runs the step once more, with the
+		// bounce at the top of its context, before the step is judged
+		q, bounce, err := d.askAfterExecute(ctx, rs, a, n, k, o.Invocation)
+		if err != nil {
+			return nil, nil, err
+		}
+		if bounce != nil {
+			if err := d.crash("after_bounce"); err != nil {
+				return nil, nil, err
+			}
+			if o, resp, err = invoke_(invoke.PurposeExecute, stepPrompt(goal, steps, after, k, results, bounceBlock(bounce), block), len(block) > 0, true); err != nil {
+				return nil, nil, err
+			}
+			if o.Terminal == invoke.TerminalFailed {
+				return failed(fmt.Sprintf("step %d: %s", k, o.Reason), o.Invocation), nil, nil
+			}
+			if q, _, err = d.askAfterExecute(ctx, rs, a, n, k, o.Invocation); err != nil {
+				return nil, nil, err
+			}
 		}
 		// per-step judge (tool-less); a refused output = unjudged, continue.
 		// A recovered attempt's judge call for this step (and its verdict,
@@ -626,9 +696,9 @@ func (d *Driver) agenda(ctx context.Context, rs *RunState, a *AttemptState, prev
 		if err := d.crash("after_step"); err != nil {
 			return nil, nil, err
 		}
-		if q, err := d.askAfterExecute(ctx, rs, n, k); err != nil {
-			return nil, nil, err
-		} else if q != nil {
+		if q != nil {
+			// the attempt ends on the question: an honest failed terminal
+			// the answer's follow-up run continues from
 			return &Outcome{Terminal: invoke.TerminalFailed, Reason: NeedsAnswer(q), Invocation: lastExec, Produced: lastBy, Receipt: lastReceipt, Response: lastResp, Usage: usage, Model: model(), Recall: sel.ID, Steps: len(done)}, nil, nil
 		}
 		if sd.Outcome == StepBlocked {

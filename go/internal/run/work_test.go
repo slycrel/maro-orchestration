@@ -659,8 +659,63 @@ func TestContinuedWorkDirMustExist(t *testing.T) {
 	}
 }
 
-// Where a run that predates the binding worked is what its executes
-// recorded: one dir they all agree on; none, or disagreement, is "".
+// A dir the run has worked in must still exist for a resume, whatever
+// bound it (review r3 of the grounding gate: an operator-bound dir that
+// was gone was re-created empty under the old name); a bound dir no call
+// has run in yet is made as usual.
+func TestWorkedInDirMustExist(t *testing.T) {
+	t.Run("operator-bound, worked in, gone", func(t *testing.T) {
+		h := open(t)
+		work := filepath.Join(t.TempDir(), "job")
+		d := h.driver(scripted(outward, okCall), nil)
+		d.Work, d.CrashAt = work, "after_execute"
+		if _, err := d.Run(ctxBg, []byte(goalFlaky), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(work); err != nil {
+			t.Fatal(err)
+		}
+		h.restart()
+		exec := scripted(outward, okCall)
+		dr := h.driver(exec, nil)
+		_, err := dr.Resume(ctxBg)
+		if !errors.Is(err, ErrConfig) || !strings.Contains(err.Error(), "is gone") {
+			t.Fatalf("gone: %v", err)
+		}
+		if _, serr := os.Stat(work); !os.IsNotExist(serr) {
+			t.Fatal("the gone dir was re-created")
+		}
+		if rs := h.only(); len(rs.Attempts) != 1 || len(exec.Seen) != 0 {
+			t.Fatalf("attempts=%d calls=%d", len(rs.Attempts), len(exec.Seen))
+		}
+	})
+	t.Run("default-bound, never worked in", func(t *testing.T) {
+		h := open(t)
+		work := filepath.Join(t.TempDir(), "default")
+		d := h.driver(scripted(outward, okCall), nil)
+		d.WorkDefault, d.CrashAt = work, "after_executing"
+		if _, err := d.Run(ctxBg, []byte(goalFlaky), DeliveryPolicy{Required: TransportAccepted}); !errors.Is(err, ErrCrashed) {
+			t.Fatal(err)
+		}
+		os.RemoveAll(work)
+		h.restart()
+		exec := scripted(outward, okCall)
+		dr := h.driver(exec, nil)
+		dr.WorkDefault = work
+		if _, err := dr.Resume(ctxBg); err != nil {
+			t.Fatal(err)
+		}
+		if len(exec.Seen) != 1 || exec.Seen[0].Cwd != work {
+			t.Fatalf("resumed calls=%+v", exec.Seen)
+		}
+	})
+}
+
+// Where a run that predates the binding worked is what its calls
+// recorded: one dir all that carried one agree on; none, or disagreement,
+// is "". The planner's call counts (review r3 of the grounding gate: an
+// attempt that died between its plan and its first execute was resumed in
+// today's default, and the plan ran elsewhere than it was made).
 func TestWorkOfALegacyRun(t *testing.T) {
 	mk := func(cwds ...string) *RunState {
 		a := &AttemptState{Attempt: &RunAttempt{}}
@@ -679,6 +734,16 @@ func TestWorkOfALegacyRun(t *testing.T) {
 	if w := workOf(mk()); w != "" {
 		t.Fatalf("no executes: %q", w)
 	}
+	planned := mk()
+	planned.Attempts[0].Invocations = append(planned.Attempts[0].Invocations, &invoke.State{Invocation: &invoke.Invocation{Purpose: invoke.PurposePlan, Cwd: "/srv/job"}})
+	if w := workOf(planned); w != "/srv/job" {
+		t.Fatalf("planned, never executed: %q", w)
+	}
+	moved := mk("/srv/other")
+	moved.Attempts[0].Invocations = append(moved.Attempts[0].Invocations, &invoke.State{Invocation: &invoke.Invocation{Purpose: invoke.PurposePlan, Cwd: "/srv/job"}})
+	if w := workOf(moved); w != "" {
+		t.Fatalf("planned in one dir, executed in another: %q", w)
+	}
 	if w := workOf(nil); w != "" {
 		t.Fatalf("nil: %q", w)
 	}
@@ -686,5 +751,62 @@ func TestWorkOfALegacyRun(t *testing.T) {
 	bound.Attempts[0].Attempt.Config.Work, bound.Attempts[0].Attempt.Config.WorkBinding = "/bound", WorkOperator
 	if w := workOf(bound); w != "/bound" {
 		t.Fatalf("bound wins: %q", w)
+	}
+}
+
+// A fork's children work where the parent works: a continued parent's
+// children bind the source's dir as their default (review r1 of the
+// grounding gate chunk: they fell back to the driver's default).
+func TestForkChildrenWorkWhereTheParentWorks(t *testing.T) {
+	h := open(t)
+	base := t.TempDir()
+	srcWork, def := filepath.Join(base, "src"), filepath.Join(base, "default")
+	d := h.driver(scripted(outward, invoke.ScriptedCall{Terminal: invoke.TerminalFailed, Reason: "backend exited 1"}), nil)
+	d.Fresh, d.Work, d.WorkDefault = true, srcWork, def
+	if _, err := d.Run(ctxBg, []byte("two-level"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	a := h.newestRun(t)
+	lin, err := LineageOf(h.ledger(), HandleOf(a.Run))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := &keyed{Caps: invoke.Capabilities{Name: "keyed-exec", Model: "exec"}, Rules: execRules(), Def: "?"}
+	judge := &keyed{Caps: invoke.Capabilities{Name: "keyed-judge", Model: "judge"}, Rules: judgeRules(JoinAll), Def: judgeDone}
+	db := h.agenda(exec, judge)
+	db.After, db.WorkDefault = lin, def
+	if _, err := db.Run(ctxBg, []byte("two-level (retry)"), DeliveryPolicy{Required: TransportAccepted}); err != nil {
+		t.Fatal(err)
+	}
+	led := h.ledger()
+	var parent *RunState
+	for _, rs := range led.Runs {
+		if rs.Continuation != nil && rs.Continuation.Source == a.Run {
+			parent = rs
+		}
+	}
+	if parent == nil {
+		t.Fatal("no continuation of a")
+	}
+	if cfg := parent.Latest().Attempt.Config; cfg.Work != srcWork || cfg.WorkBinding != WorkContinued {
+		t.Fatalf("parent: %+v", cfg)
+	}
+	children := 0
+	for _, rs := range led.Runs {
+		if rs.Run == a.Run || rs.Run == parent.Run {
+			continue
+		}
+		children++
+		if cfg := rs.Latest().Attempt.Config; cfg.Work != srcWork || cfg.WorkBinding != WorkDefault {
+			t.Fatalf("child %s: %+v", rs.Run, cfg)
+		}
+		for _, is := range rs.Latest().Invocations {
+			if is.Invocation.Purpose == invoke.PurposeExecute && is.Invocation.Cwd != srcWork {
+				t.Fatalf("child %s executed in %q", rs.Run, is.Invocation.Cwd)
+			}
+		}
+	}
+	if children != 2 {
+		t.Fatalf("children: %d", children)
 	}
 }

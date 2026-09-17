@@ -107,6 +107,15 @@ func Inspect(rs *RunState) []string {
 		}
 		q := at.Question
 		lines = append(lines, fmt.Sprintf("question (attempt %d, step %d, until %s): %s", q.Attempt, q.Step, q.Deadline.UTC().Format("2006-01-02 15:04Z"), q.Question))
+		if q.Sent != "" {
+			lines = append(lines, "  sent: "+q.Sent)
+		}
+		if len(q.Unverified) > 0 {
+			lines = append(lines, "  unverified: "+problemsText(q.Unverified))
+		}
+		if at.bounceFor(q.Step) != nil {
+			lines = append(lines, "  bounced once: the first ask failed the grounding gate")
+		}
 		if q.Why != "" {
 			lines = append(lines, "  why: "+q.Why)
 		}

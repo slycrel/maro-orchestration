@@ -572,7 +572,7 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 				// drop, the ask path): a resumed attempt's calls and re-runs
 				// see what the original's did
 				wireSecrets(s, a, errw)
-				wireAsk(s, a)
+				d.AskPath = wireAsk(s, a)
 				d.Backend = s
 			} else {
 				fmt.Fprintln(errw, "resume: no subprocess backend available; runs needing re-execution will fail honestly:", err)

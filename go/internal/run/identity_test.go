@@ -13,7 +13,7 @@ func TestPromptsNameTheEngine(t *testing.T) {
 	for name, p := range map[string][]byte{
 		"intent": intentPrompt([]byte("g"), nil),
 		"plan":   planPrompt([]byte("g"), "i", nil, nil),
-		"step":   stepPrompt([]byte("g"), []string{"s"}, nil, 1, nil, nil),
+		"step":   stepPrompt([]byte("g"), []string{"s"}, nil, 1, nil, nil, nil),
 	} {
 		if !strings.Contains(string(p), "named Maro") || !strings.Contains(string(p), `"maro"`) {
 			t.Fatalf("%s prompt does not name the engine: %.120s", name, p)

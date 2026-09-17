@@ -54,6 +54,9 @@ type Ask struct {
 	Why                string `json:"why,omitempty"`
 	NoInputAlternative string `json:"no_input_alternative,omitempty"`
 	Tried              bool   `json:"tried"`
+	// Sent: for a code request, how the worker triggered the delivery and
+	// what confirmation it saw (the grounding gate, ground.go).
+	Sent string `json:"sent,omitempty"`
 }
 
 // AskInstructions is the `## Asking the operator` paragraph of the execute
@@ -71,7 +74,11 @@ func AskInstructions(path string) string {
 		`tried without them, or why none exists", "tried": true} — then end ` +
 		"the step saying you asked. The run pauses until the answer arrives " +
 		"and resumes with the answer in your next step's context; the " +
-		"question is a counted, reviewed event."
+		"question is a counted, reviewed event. The engine checks a question " +
+		"before the operator sees it: every link in it must resolve (a dead " +
+		"link comes back to you, not to them), and a request for a code must " +
+		`say in "sent" how YOU triggered its delivery (choose the SMS or ` +
+		"authenticator option first) and what confirmation you saw."
 }
 
 // ReadAsk parses a worker's ask file: nil, nil when absent; an error when
@@ -93,6 +100,7 @@ func ReadAsk(path string) (*Ask, error) {
 		NoInput     string          `json:"no_input_alternative"`
 		Alternative string          `json:"alternative"`
 		Tried       json.RawMessage `json:"tried"`
+		Sent        string          `json:"sent"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("ask file %s: %w", path, err)
@@ -113,7 +121,7 @@ func ReadAsk(path string) (*Ask, error) {
 	default:
 		tried = strings.TrimSpace(string(raw.Tried)) != `""`
 	}
-	return &Ask{Question: clip(q, 800), Why: clip(strings.TrimSpace(raw.Why), 600), NoInputAlternative: clip(alt, 600), Tried: tried}, nil
+	return &Ask{Question: clip(q, 800), Why: clip(strings.TrimSpace(raw.Why), 600), NoInputAlternative: clip(alt, 600), Tried: tried, Sent: clip(strings.TrimSpace(raw.Sent), 600)}, nil
 }
 
 func clip(s string, n int) string {
@@ -124,29 +132,54 @@ func clip(s string, n int) string {
 }
 
 // ArchiveAsk moves a consumed ask file aside (part of the run's record,
-// never deleted) so the follow-up cannot re-trigger the same question.
+// never deleted) so the follow-up cannot re-trigger the same question. A
+// second archive in the same second gets a `-1` suffix, never the first
+// one's name: a bounce and its re-ask are two files of the record.
 func ArchiveAsk(path string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
 	if _, err := os.Stat(path); err != nil {
-		return "", nil
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
 	}
-	target := filepath.Join(filepath.Dir(path), "ask-operator."+time.Now().UTC().Format("20060102T150405Z")+".asked.json")
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	target := filepath.Join(filepath.Dir(path), "ask-operator."+stamp+".asked.json")
+	for i := 1; ; i++ {
+		_, err := os.Stat(target)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if i >= 1000 {
+			return "", fmt.Errorf("archive ask: no free name beside %s", target)
+		}
+		target = filepath.Join(filepath.Dir(path), fmt.Sprintf("ask-operator.%s-%d.asked.json", stamp, i))
+	}
 	return target, os.Rename(path, target)
 }
 
 // Question is the run's recorded ask: what the worker needs, why, what it
 // tried first, and the time box. One per attempt; the attempt ends on it.
+// Since the grounding gate (ground.go) it also names the execute whose
+// worker wrote it, carries `sent`, and lists what the gate could not
+// verify (`unverified`) — a question with no invocation predates the gate.
 type Question struct {
 	record.ProductionRecord
 	record.Header      `json:"header"`
-	Step               int       `json:"step,omitempty"` // the AGENDA step ordinal; 0 for a NOW execute
-	Question           string    `json:"question"`
-	Why                string    `json:"why,omitempty"`
-	NoInputAlternative string    `json:"no_input_alternative,omitempty"`
-	Tried              bool      `json:"tried"`
-	Deadline           time.Time `json:"deadline"`
+	Step               int             `json:"step,omitempty"` // the AGENDA step ordinal; 0 for a NOW execute
+	Invocation         record.RecordID `json:"invocation,omitempty"`
+	Question           string          `json:"question"`
+	Why                string          `json:"why,omitempty"`
+	NoInputAlternative string          `json:"no_input_alternative,omitempty"`
+	Tried              bool            `json:"tried"`
+	Sent               string          `json:"sent,omitempty"`
+	Unverified         []AskProblem    `json:"unverified,omitempty"`
+	Deadline           time.Time       `json:"deadline"`
 }
 
 func (r *Question) Head() *record.Header { return &r.Header }
@@ -163,6 +196,11 @@ func (r *Question) ValidateWire() error {
 	}
 	if r.Deadline.IsZero() {
 		return errors.New("question: no deadline")
+	}
+	for i, p := range r.Unverified {
+		if err := p.validate(askOf(r), true); err != nil {
+			return fmt.Errorf("question: unverified %d: %v", i, err)
+		}
 	}
 	return nil
 }
@@ -212,38 +250,84 @@ func init() {
 }
 
 // NeedsAnswer renders the honest terminal reason for an attempt that ended
-// on a question, and IsNeedsAnswer recognises it (tail signals).
-func NeedsAnswer(q *Question) string { return needsAnswerPrefix + q.Question }
+// on a question — with what the gate could not verify, so the operator
+// reads it where they read the question — and IsNeedsAnswer recognises it
+// (tail signals).
+func NeedsAnswer(q *Question) string {
+	if len(q.Unverified) == 0 {
+		return needsAnswerPrefix + q.Question
+	}
+	return needsAnswerPrefix + q.Question + " [unverified: " + problemsText(q.Unverified) + "]"
+}
 func IsNeedsAnswer(reason string) bool {
 	return strings.HasPrefix(reason, needsAnswerPrefix)
 }
 
-// askAfterExecute is the driver's read of the ask file after an execute:
-// nil when the driver has no ask path or the worker wrote nothing. A
-// present file becomes a committed Question (the attempt's), and is
-// archived. An unusable file is reported and left where it is.
-func (d *Driver) askAfterExecute(ctx context.Context, rs *RunState, n uint32, step int) (*Question, error) {
+// askAfterExecute is the driver's read of the ask file after an execute
+// (`inv`): nil, nil when the driver has no ask path or the worker wrote
+// nothing. A present file is grounded (ground.go): one that fails a check
+// is BOUNCED — a committed QuestionBounce, the file archived — when the
+// attempt has not bounced this step yet, and the caller runs the step once
+// more with the bounce at the top of its context; otherwise it becomes a
+// committed Question (the attempt's) carrying what could not be verified,
+// and is archived. An unusable file is reported and left where it is.
+func (d *Driver) askAfterExecute(ctx context.Context, rs *RunState, a *AttemptState, n uint32, step int, inv record.RecordID) (*Question, *QuestionBounce, error) {
 	if d.AskPath == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	ask, err := ReadAsk(d.AskPath)
 	if err != nil {
 		d.emit(rs, n, "ask_unusable", Executing, err.Error())
-		return nil, nil
+		return nil, nil, nil
 	}
 	if ask == nil {
-		return nil, nil
+		return nil, nil, nil
+	}
+	hard, soft := d.ground(ctx, ask)
+	if len(hard) > 0 && a.bounceFor(step) == nil {
+		b := &QuestionBounce{Header: header(runRef(rs.Run), rs.Run, n, "question_bounce/1"), Step: step, Invocation: inv, Ask: *ask, Problems: hard}
+		if err := d.commit(ctx, fmt.Sprintf("question_bounce/%s/%d/%d", rs.Run, n, step), b); err != nil {
+			return nil, nil, err
+		}
+		a.Bounces = append(a.Bounces, b)
+		if _, err := ArchiveAsk(d.AskPath); err != nil {
+			// the file is the record's input: left in place, the re-run
+			// would read it as its own ask (review r1) — the attempt fails
+			// here, resumable, the bounce committed
+			return nil, nil, fmt.Errorf("run: %s attempt %d: archive the bounced ask: %w", rs.Run, n, err)
+		}
+		d.emit(rs, n, "ask_bounced", Executing, fmt.Sprintf("step %d: %s", step, problemsText(hard)))
+		return nil, b, nil
 	}
 	h := header(runRef(rs.Run), rs.Run, n, "question/1")
-	q := &Question{Header: h, Step: step, Question: ask.Question, Why: ask.Why, NoInputAlternative: ask.NoInputAlternative, Tried: ask.Tried, Deadline: h.At.Add(AskTimebox)}
+	q := &Question{Header: h, Step: step, Invocation: inv, Question: ask.Question, Why: ask.Why, NoInputAlternative: ask.NoInputAlternative, Tried: ask.Tried, Sent: ask.Sent, Unverified: append(hard, soft...), Deadline: h.At.Add(AskTimebox)}
 	if err := d.commit(ctx, fmt.Sprintf("question/%s/%d/%d", rs.Run, n, step), q); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	a.Question = q
 	if _, err := ArchiveAsk(d.AskPath); err != nil {
-		d.emit(rs, n, "ask_archive_failed", Executing, err.Error())
+		return nil, nil, fmt.Errorf("run: %s attempt %d: archive the ask: %w", rs.Run, n, err)
 	}
 	d.emit(rs, n, "ask", Executing, fmt.Sprintf("step %d: %s", step, ask.Question))
-	return q, nil
+	return q, nil, nil
+}
+
+// archiveStale clears an ask file left from before this execute — a call
+// that failed with a file written, a bounce whose archive never landed —
+// so the call about to be made is not credited with a question it did not
+// ask (review r1). The file is archived, never dropped.
+func (d *Driver) archiveStale(rs *RunState, n uint32) error {
+	if d.AskPath == "" {
+		return nil
+	}
+	target, err := ArchiveAsk(d.AskPath)
+	if err != nil {
+		return fmt.Errorf("run: %s attempt %d: archive a stale ask: %w", rs.Run, n, err)
+	}
+	if target != "" {
+		d.emit(rs, n, "ask_stale_archived", Executing, target)
+	}
+	return nil
 }
 
 // AnswerContext renders the answer as the operator context the follow-up

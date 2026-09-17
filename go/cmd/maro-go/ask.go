@@ -182,20 +182,23 @@ func cmdAnswer(args []string, out, errw io.Writer) error {
 
 // askRow is one line of `asks`: a question with its state.
 type askRow struct {
-	Handle      string    `json:"handle"`
-	Status      string    `json:"status"` // pending | answered | expired
-	Asked       time.Time `json:"asked"`
-	Deadline    time.Time `json:"deadline"`
-	Step        int       `json:"step,omitempty"`
-	Question    string    `json:"question"`
-	Why         string    `json:"why,omitempty"`
-	Alternative string    `json:"no_input_alternative,omitempty"`
-	Tried       bool      `json:"tried"`
-	Answer      string    `json:"answer,omitempty"`
-	Source      string    `json:"source,omitempty"`
-	Late        bool      `json:"late,omitempty"`
-	FollowUp    string    `json:"follow_up,omitempty"`       // the run continuing this one (after the answer)
-	FollowUpAt  string    `json:"follow_up_state,omitempty"` // live | finished | stopped
+	Handle      string             `json:"handle"`
+	Status      string             `json:"status"` // pending | answered | expired
+	Asked       time.Time          `json:"asked"`
+	Deadline    time.Time          `json:"deadline"`
+	Step        int                `json:"step,omitempty"`
+	Question    string             `json:"question"`
+	Why         string             `json:"why,omitempty"`
+	Alternative string             `json:"no_input_alternative,omitempty"`
+	Tried       bool               `json:"tried"`
+	Sent        string             `json:"sent,omitempty"`
+	Unverified  []spine.AskProblem `json:"unverified,omitempty"` // what the grounding gate could not verify about the question
+	Bounced     bool               `json:"bounced,omitempty"`    // the worker's first ask failed the gate and the step ran once more
+	Answer      string             `json:"answer,omitempty"`
+	Source      string             `json:"source,omitempty"`
+	Late        bool               `json:"late,omitempty"`
+	FollowUp    string             `json:"follow_up,omitempty"`       // the run continuing this one (after the answer)
+	FollowUpAt  string             `json:"follow_up_state,omitempty"` // live | finished | stopped
 }
 
 // cmdAsks lists every operator question the workspace's runs asked, with
@@ -219,7 +222,7 @@ func cmdAsks(args []string, out, errw io.Writer) error {
 					continue
 				}
 				q := at.Question
-				row := askRow{Handle: spine.HandleOf(rs.Run), Status: "pending", Asked: q.At, Deadline: q.Deadline, Step: q.Step, Question: q.Question, Why: q.Why, Alternative: q.NoInputAlternative, Tried: q.Tried}
+				row := askRow{Handle: spine.HandleOf(rs.Run), Status: "pending", Asked: q.At, Deadline: q.Deadline, Step: q.Step, Question: q.Question, Why: q.Why, Alternative: q.NoInputAlternative, Tried: q.Tried, Sent: q.Sent, Unverified: q.Unverified, Bounced: spine.Bounced(at, q.Step)}
 				if c := led.Continued[rs.Run]; c != nil {
 					// continued with or without an answer (--after by hand)
 					row.FollowUp, row.FollowUpAt = spine.HandleOf(c.RunID), spine.ContinuationState(led, c, spine.Now)
@@ -253,6 +256,15 @@ func cmdAsks(args []string, out, errw io.Writer) error {
 			fmt.Fprintf(out, "%s %s %s asked %s until %s: %s\n", mark, r.Handle, r.Status, r.Asked.UTC().Format("2006-01-02 15:04Z"), r.Deadline.UTC().Format("2006-01-02 15:04Z"), r.Question)
 			if r.Alternative != "" {
 				fmt.Fprintf(out, "    tried without the operator (%v): %s\n", r.Tried, r.Alternative)
+			}
+			if r.Sent != "" {
+				fmt.Fprintf(out, "    sent: %s\n", r.Sent)
+			}
+			if len(r.Unverified) > 0 {
+				fmt.Fprintf(out, "    unverified: %s\n", spine.ProblemsText(r.Unverified))
+			}
+			if r.Bounced {
+				fmt.Fprintln(out, "    bounced once: the first ask failed the grounding gate")
 			}
 			if r.Status == "answered" {
 				late := ""

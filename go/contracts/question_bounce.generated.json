@@ -1,9 +1,9 @@
 {
   "format_version": "2026-09-04",
-  "kind": "experiment",
-  "envelope": "control",
-  "schema": "experiment/1",
-  "go_type": "experiment.Experiment",
+  "kind": "question_bounce",
+  "envelope": "production",
+  "schema": "question_bounce/1",
+  "go_type": "run.QuestionBounce",
   "fields": [
     {
       "name": "header.ID",
@@ -78,24 +78,31 @@
       "from_header": true
     },
     {
-      "name": "Protocol",
-      "wire": "protocol",
-      "go_type": "experiment.Protocol",
-      "omittable": false,
-      "is_thought": false
-    },
-    {
-      "name": "Prior",
-      "wire": "prior",
-      "go_type": "record.RecordID",
+      "name": "Step",
+      "wire": "step",
+      "go_type": "int",
       "omittable": true,
       "is_thought": false
     },
     {
-      "name": "Why",
-      "wire": "why",
-      "go_type": "string",
+      "name": "Invocation",
+      "wire": "invocation",
+      "go_type": "record.RecordID",
       "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Ask",
+      "wire": "ask",
+      "go_type": "run.Ask",
+      "omittable": false,
+      "is_thought": false
+    },
+    {
+      "name": "Problems",
+      "wire": "problems",
+      "go_type": "[]run.AskProblem",
+      "omittable": true,
       "is_thought": false
     }
   ],

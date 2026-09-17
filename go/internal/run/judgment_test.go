@@ -360,7 +360,7 @@ func TestAForkChildInheritsTheJudgmentBinding(t *testing.T) {
 	p := &fakeWire{name: judgment.ProviderJev}
 	d := &Driver{JudgeProvider: p.Name(), JudgeShadow: []string{judgment.ProviderHosted}, Providers: map[string]judgment.Provider{p.Name(): p}}
 	fs := &ForkState{Fork: &Fork{Policy: JoinFirstVerdict}}
-	cd := d.childDriver(fs)
+	cd := d.childDriver(fs, "")
 	if cd.JudgeProvider != p.Name() || len(cd.JudgeShadow) != 1 || cd.Providers[p.Name()] != p || !cd.ModelJudge || !cd.Confined {
 		t.Fatalf("child driver %+v", cd)
 	}

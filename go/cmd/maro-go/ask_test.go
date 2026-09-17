@@ -9,19 +9,28 @@ import (
 	"strings"
 	"testing"
 
+	spine "github.com/slycrel/maro-orchestration/go/internal/run"
 	"github.com/slycrel/maro-orchestration/go/internal/secrets"
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
 )
 
 // fakeAskingClaudeSh saves its prompt, and on its FIRST tool-bearing call
-// asks the operator through $MARO_ASK (marker file = already asked); every
-// later call just answers, so the follow-up run completes.
+// asks the operator through $MARO_ASK for a code without saying how it
+// was sent (the grounding gate bounces it); on the SECOND — the re-run,
+// whose prompt carries the bounce — it asks again with `sent`; every
+// later call just answers, so the follow-up run completes. $FAKE_ASKED
+// counts the asks (an empty file = "already asked": never asks).
 const fakeAskingClaudeSh = `#!/bin/sh
 cat >> "$FAKE_PROMPT_OUT"; printf "\n----\n" >> "$FAKE_PROMPT_OUT"
-if [ -n "$MARO_ASK" ] && [ ! -f "$FAKE_ASKED" ]; then
+n=$(cat "$FAKE_ASKED" 2>/dev/null || echo 0)
+if [ -n "$MARO_ASK" ] && [ "$n" = "0" ]; then
   printf '{"question":"What is the 6-digit code Yahoo just texted you?","why":"the login challenge wants it","no_input_alternative":"tried the app password; the store has none","tried":true}' > "$MARO_ASK"
-  : > "$FAKE_ASKED"
+  echo 1 > "$FAKE_ASKED"
   printf '{"type":"result","subtype":"success","is_error":false,"result":"asked the operator for the code","usage":{"input_tokens":1,"output_tokens":1}}\n'
+elif [ -n "$MARO_ASK" ] && [ "$n" = "1" ]; then
+  printf '{"question":"What is the 6-digit code Yahoo just texted you?","why":"the login challenge wants it","no_input_alternative":"tried the app password; the store has none","tried":true,"sent":"chose Text me on the challenge page; Yahoo showed: code sent to ***-1234"}' > "$MARO_ASK"
+  echo 2 > "$FAKE_ASKED"
+  printf '{"type":"result","subtype":"success","is_error":false,"result":"asked again, saying how the code was sent","usage":{"input_tokens":1,"output_tokens":1}}\n'
 else
   printf '{"type":"result","subtype":"success","is_error":false,"result":"logged in with the code","usage":{"input_tokens":1,"output_tokens":1}}\n'
 fi
@@ -60,16 +69,21 @@ func TestCLIAskAnswerLoop(t *testing.T) {
 	if !strings.Contains(string(prompt), "## Asking the operator") || !strings.Contains(string(prompt), "write ONE JSON object to ") || !strings.Contains(string(prompt), "rare exception") {
 		t.Fatalf("frame lacks the ask instructions:\n%s", prompt)
 	}
-	if !strings.Contains(out.String()+errw.String(), "needs answer: What is the 6-digit code") {
-		t.Fatalf("the attempt must end on the question:\n%s%s", out.String(), errw.String())
+	if !strings.Contains(out.String()+errw.String(), "needs answer: What is the 6-digit code Yahoo just texted you? [unverified: a code is consumed by the session") {
+		t.Fatalf("the attempt must end on the question, with what the gate could not verify:\n%s%s", out.String(), errw.String())
+	}
+	// the first ask was bounced (a code request with no `sent`): the
+	// re-run's prompt carries the bounce, once; the frame states the rule
+	if n := strings.Count(string(prompt), "## Your question to the operator was NOT sent"); n != 1 || !strings.Contains(string(prompt), `put the confirmation you saw in "sent"`) || !strings.Contains(string(prompt), "every link in it must resolve") {
+		t.Fatalf("bounce blocks in the prompts: %d\n%s", n, prompt)
 	}
 	ws := os.Getenv(workspace.EnvOverride)
 	if _, err := os.Stat(filepath.Join(ws, "drop", "ask-operator.json")); err == nil {
 		t.Fatal("ask file not archived")
 	}
 	archived, _ := filepath.Glob(filepath.Join(ws, "drop", "ask-operator.*.asked.json"))
-	if len(archived) != 1 {
-		t.Fatalf("archived copies: %v", archived)
+	if len(archived) != 2 {
+		t.Fatalf("archived copies (the bounced ask and the re-ask): %v", archived)
 	}
 	out.Reset()
 	errw.Reset()
@@ -80,6 +94,9 @@ func TestCLIAskAnswerLoop(t *testing.T) {
 	if m == nil || !strings.Contains(out.String(), "tried without the operator (true): tried the app password") || !strings.Contains(out.String(), "answer with: maro-go answer "+m[1]) {
 		t.Fatalf("asks:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), "sent: chose Text me on the challenge page") || !strings.Contains(out.String(), "unverified: a code is consumed by the session") || !strings.Contains(out.String(), "bounced once: the first ask failed the grounding gate") {
+		t.Fatalf("asks lacks the gate's rows:\n%s", out.String())
+	}
 	handle := m[1]
 	out.Reset()
 	errw.Reset()
@@ -89,6 +106,9 @@ func TestCLIAskAnswerLoop(t *testing.T) {
 	var rows []askRow
 	if err := json.Unmarshal(out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].Status != "pending" || rows[0].Handle != handle || !rows[0].Tried || rows[0].Deadline.Sub(rows[0].Asked).Hours() != 24 {
 		t.Fatalf("asks json %v: %s", err, out.String())
+	}
+	if r := rows[0]; !r.Bounced || r.Sent == "" || len(r.Unverified) != 1 || r.Unverified[0].Check != spine.CheckCodeLane {
+		t.Fatalf("asks json lacks the gate's fields: %+v", r)
 	}
 	// a wrong handle, then the real answer
 	out.Reset()

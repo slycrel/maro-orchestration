@@ -12,6 +12,13 @@
       "constraint": "unconstrained",
       "measured_by": "internal/run:TestQuestionAndAnswerWire"
     },
+    "invocation": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "identity",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestForgedBounceIsRefused"
+    },
     "question": {
       "absence": "never",
       "on_absence": "rejected",
@@ -39,6 +46,20 @@
       "used_for": "display-only",
       "constraint": "unconstrained",
       "measured_by": "internal/run:TestQuestionAndAnswerWire"
+    },
+    "sent": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "display-only",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestBouncedAskRunsTheStepOnceMore"
+    },
+    "unverified": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "routing",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestForgedBounceIsRefused"
     },
     "deadline": {
       "absence": "never",

@@ -90,10 +90,11 @@ type ScriptedCall struct {
 	Terminal   TerminalState // "" ⇒ complete
 	Reason     string
 	Usage      Usage
-	FailBefore bool // fail before dispatch (nothing happens)
-	Hang       bool // block until ctx is done (simulates a kill/timeout)
-	NilResult  bool // return (nil, nil): a contract violation
-	Panic      bool // panic inside Complete: a contract violation
+	FailBefore bool          // fail before dispatch (nothing happens)
+	Hang       bool          // block until ctx is done (simulates a kill/timeout)
+	NilResult  bool          // return (nil, nil): a contract violation
+	Panic      bool          // panic inside Complete: a contract violation
+	Do         func(Request) // runs before the call answers: a worker's side effect (an ask file written)
 }
 
 // Scripted plays back a table of calls in order. Its capabilities are set
@@ -123,6 +124,9 @@ func (s *Scripted) Complete(ctx context.Context, req Request, sink Sink) (*Resul
 	}
 	if c.Panic {
 		panic("scripted backend panic")
+	}
+	if c.Do != nil {
+		c.Do(req)
 	}
 	if c.Hang {
 		<-ctx.Done()

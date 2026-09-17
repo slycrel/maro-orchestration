@@ -3255,3 +3255,196 @@ like NOW's (pre-existing); physical identity of a dir (a symlink
 retargeted under a `continued` run is a move the fold cannot see); the
 `run_attempt/2` road for the binding (a schema version instead of a
 watermark) if mixed-version writers on one journal ever matter.
+
+## Post-v1 — the ask grounding gate, Go side: a question is a claim, a failed claim comes back once as a record (2026-09-17)
+
+**Ask (Jeremy, 2026-09-17, afk, the same order):** audit §3 item 3, the
+portable half — Python main's grounding gate (`docs/OPERATOR_ASK_DESIGN.md`
+§7, 2026-09-07: a worker asked the operator for "the 6-digit code" behind
+a guessed link that 404'd, with no code sent; Jeremy: "I never received a
+code"). Main probes the links, requires `sent` on a code request, bounces
+the step once and passes a second failure through as `unverified`. The Go
+engine read the ask file and sent whatever was in it.
+
+**Contract kept from main (audit §4.4):** the same checks on the same
+fields, the same one bounce with the same words to the worker, the same
+pass-through as `unverified`, the same frame sentence.
+
+**The Go engine's own road (D1, D5):**
+
+- The bounce is a RECORD, `question_bounce/1`, committed before the
+  re-run — because the fold re-derives every request: NOW's re-run must
+  be byte-equal `Lensed(frame, goal + bounceBlock + riders + block)`, an
+  AGENDA step's has the block after "## Your step". A bounce the fold
+  could not see would make the re-run's request a forgery.
+  `go/internal/run/ground.go`.
+- A bounced call is consumed: recovery skips it, the fold refuses an
+  Outcome or StepDone that cites it. A bounce is its attempt's: a crash
+  after it resumes with a fresh call and no block.
+- `Question` gains `invocation` (which execute wrote it; watermarked like
+  the continuation and the work binding), `sent`, `unverified`. The lane
+  rule — a code is consumed by the session that asked — cannot bounce
+  here (pattern 109: the attempt ends on the question), so it rides as a
+  soft `code_lane` note on every code request; the live window is the
+  decision owed from Jeremy, not this chunk's.
+- Fold: `checkQuestionBounce` / `checkQuestion` re-derive every problem
+  from the ask itself (a link must be one of the ask's; `code_unsent` iff
+  the ask asks for a code with no `sent` and is never left out; a bounced
+  kind reaches a Question only after a bounce of that step; the lane note
+  iff the question asks for a code). Door: subject run, invocation, ask,
+  problems all present, bouncing checks only.
+- Surface: `asks` and `runs show` print `sent` / `unverified` / "bounced
+  once"; events `ask_bounced` then `ask` (`ask_stale_archived` when a
+  fresh execute found a file it did not write).
+- The frame reaches AGENDA (review r1): every AGENDA execute request
+  begins with the attempt's frame, as NOW's does — the ask instructions
+  live there, and an AGENDA worker had never seen them; the fold renders
+  the producing attempt's frame into every step request. A resumed
+  attempt runs under the run's frame when the resuming process has none.
+
+**Review (decree 2026-09-16: 2–3 rounds, fix-diff-only re-reads):** r1 =
+Skeptic + Architect (codex gpt-5.6-sol, high) on the whole chunk: 21
+findings, 10 verified and fixed, the rest refuted, out of scope
+(chunk 4's stated choices: judge cwd, `WorkOperator`), or intentional
+(the five-link cap, Python's exact code regex — the intent's "4–8 digit"
+was my wording, not the code's). Fixed: `maro-go resume` dropped the ask
+path and ran the resumed worker under no frame (a resumed attempt now
+runs under the RUN's frame — `inheritedFrame` — and the execute reads it
+from the attempt config); NOW recovery ignored an ask left unread by a
+crash after the receipt (the recovered call's file is grounded on the
+resumed attempt: its question, or a bounce the resumed attempt commits
+citing the recovered call, then one re-run); AGENDA recovery forgot a
+committed question when the crash came after it (the step's judge, the
+step itself) and went on with the plan (the resumed attempt ends on the
+journal's question before anything else); a bounce or question could
+name a step the attempt does not have, and a question after a bounce
+could cite a call the bounce never reached (`stepOfAttempt`; the
+re-run is this attempt's, Seq-after the bounce); an archive failure was
+an event and a stale ask file was the next call's (archive-or-fail, and
+every fresh execute archives what it finds first — `ask_stale_archived`);
+NOW's usage saw only the re-run (both calls, in the outcome and the fold
+rule); a problem's detail was trusted prose (the deterministic checks
+are held to the gate's words, a link problem to naming the link); the
+probe ignored the run's context (`ProbeURL(ctx, url)`, `httptest`
+coverage of the real prober); AGENDA workers never saw the ask
+instructions (every AGENDA execute request now begins with the
+attempt's frame, rendered by the fold from the producing attempt's
+config); fork children of a continued parent fell back to the driver's
+default (chunk 4 residue: the parent run's dir is the child's default).
+r2 = ONE Skeptic on the fix diff only: 5 findings, all verified
+and fixed — two were regressions of the r1 AGENDA-recovery fix (it
+replaced the inherited steps with the questioned attempt's, which the
+fold does not; and it sat behind the attempt bound, so `MaxAttempts=1`
+recorded "attempt bound reached" over the run's question), one a gap of
+it (a pre-gate question with no invocation was skipped), one a gap of
+the step-range rule ("no plan" read as NOW let a planless AGENDA attempt
+carry step 0 — the rule now branches on the lane), one a LOW in the
+archive's name probing (any stat error read as "occupied"). r3 = the
+regression round on the r2 → r3 fix diff: 3 findings, all verified
+and fixed (this is the STOP-RULE round: no r4). One HIGH: the recovered
+pre-gate question's outcome cites no call, and the fold's invocation-less
+branch checked only model and recall — its usage, steps and reason were
+whatever the record said (an AGENDA outcome that recalled is now held to
+the goal's cost and the steps it holds whether or not it cites a call;
+one that did not recall accounts nothing; a response with no call is
+refused; an attempt that asked records exactly `NeedsAnswer(question)`,
+failed; a needs-answer reason must be a question the run asked and has
+not recorded — mutation fixtures: invented/zeroed steps, invented/zeroed
+usage, another question, the question in other words, a response with
+no call, the asking attempt with another reason or a non-failed
+terminal). Two MEDIUMs, both chunk-4 residue the gate's resume made
+reachable: `workOf` read only executes, so a pre-binding AGENDA attempt
+that died between its plan and its first execute was resumed in today's
+default and its plan ran where it was not made (every call that carried
+a cwd counts; disagreement is "" as before); an `operator`-bound dir
+that was gone was re-created empty and the resume went on in it (a dir
+the run has worked in must exist for a resume whatever bound it —
+`workedIn`; a bound dir no call has run in is made as usual). Owed from
+r3, not built: a forged legacy-AGENDA fixture that crashes after its
+plan and resumes under another default (the `workOf` unit cases cover
+the rule); a NOW-side "recovers ⇒ must end on it" fold rule (the AGENDA
+driver guarantees it, the NOW recovery only when the asking attempt's
+call is the one recovered).
+
+**Patterns (147+):**
+
+- **147. A bounce is a record because the re-run's request is derived
+  from it.** The fold renders every request from the journal and refuses
+  one that does not re-derive; a re-run whose prompt carries a bounce
+  block the journal never saw is a forgery to the fold. Anything that
+  changes a request is committed before the request is made.
+- **148. A bounced call is consumed.** The execute whose worker wrote the
+  failed ask landed, and a landed call is what recovery and the fold
+  reach for; without the rule, a resume could cite it as the attempt's
+  execute, or a StepDone could point at it. A call the gate rejected is
+  spent — skipped on reuse, refused when cited.
+- **149. A bounce is its attempt's.** Carrying bounce state across
+  attempts would need a rule for which attempt's bounce a re-run answers
+  to; scoping it to the attempt keeps resume a reuse of landed calls,
+  at the price of one call after a crash between the bounce and the
+  re-run. Pay the call; do not build the state.
+- **150. On recovery, the question is the journal's, not the file's.**
+  A resume that reused a landed execute re-read the ask file, found it
+  archived, and concluded "no question" — a run that had asked ended as
+  if it had not. The record is the fact; the file is what produced it.
+- **151. A rule that cannot bounce rides as unverified.** Python's
+  "a code request must be live" bounces because Python has a live lane;
+  the Go lane ends the attempt on the question by design. Bouncing on it
+  would bounce every code request forever. The rule becomes a note the
+  operator reads, and the design decision stays visible as owed rather
+  than papered over as a check that always passes.
+- **152. Re-derive the problem from the ask, not from the check's word.**
+  A `link` problem names a link the ask contains; `code_unsent` is true
+  or false of the ask itself; the lane note is true iff the question asks
+  for a code. A record that names a problem the ask cannot have, or
+  leaves out one it must, is a forgery the fold can see without
+  re-running the probe it cannot re-run (the network).
+- **153. A file is the call's that ran while it was absent.** An ask file
+  the driver finds is credited to the execute it just made — unless it
+  was there before the call (a failed call wrote it; an archive never
+  landed). Archive what is there before every fresh call; a call's
+  claim starts from an empty inbox. And an archive that fails is a
+  failure, not an event: the file is the record's input, and left in
+  place it becomes the next call's.
+- **154. The recovered call's file is grounded on the attempt that
+  finds it.** A crash between the receipt and the read leaves the file
+  where the call put it; the resumed attempt reads it as that call's
+  and, if it must bounce, commits the bounce itself citing the recovered
+  call — the bounce is attempt-scoped (149) AND may name an earlier
+  attempt's call. The two rules compose: the re-run is always the
+  bouncing attempt's.
+- **155. The frame is the run's.** A resume that carried no frame ran
+  the worker bare, and the AGENDA lane never had one: the ask
+  instructions, the process's own "carry out this goal", were NOW-only
+  and first-attempt-only. Every execute request of a run begins with the
+  run's frame; the fold renders it from the attempt that made the call.
+- **156. One history per forgery, again (137, 146).** The lane-note
+  forgery and its honest twin share nothing: a refused Question poisons
+  the journal for the honest one that follows.
+- **157. An outcome that cites no call is still an accounting.** The
+  fold held usage, steps and (never) the reason only under `if
+  o.Invocation != ""`; the recovered pre-gate question's outcome had
+  none, and a forgery could meter anything and route the tail with a
+  reason nobody asked. Every Recorded outcome is re-derived — what it
+  cites decides WHICH derivation, never whether there is one.
+- **158. The record of where the run worked is every call that carried
+  a cwd.** `workOf` read only executes because "the work happens in
+  executes"; the planner's call ran in the dir too, and a run that died
+  between plan and execute left only the planner's word. A derivation
+  from the record must read the whole class that writes the field
+  (watch-list probe 2, in the fold itself this time).
+
+**Owed:** the live ask window (a window inside the attempt vs a
+worker-side re-request rule — Jeremy's call; r1 added the consequence
+that a bounce for an unrelated problem re-triggers a code delivery);
+replay arms inherit the frame's ask path with no ask channel; the URL probe's SSRF
+posture (same as Python's, unchanged); a failed step's ask is not read
+(pre-existing); a crash after a bounce re-runs the step from scratch.
+
+Owed on this branch: the live ask window (Jeremy's decision — a window
+inside the attempt or a worker-side re-request rule); replay arms' ask
+path; landscape prompt v4 (show the judge which candidates are already
+continued); container executor + env-request strand; the
+resolution-completeness check; the r3 residue above (a forged
+legacy-AGENDA plan-then-crash fixture; a NOW "recovers ⇒ ends on it"
+fold rule).
