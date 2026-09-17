@@ -460,7 +460,7 @@ func TestAgendaInvocationSequenceAndForgedStages(t *testing.T) {
 		return ClosureJudgeRequest(m, goal, steps, [][]byte{[]byte("r1"), []byte("r2")}, []bool{false, false})
 	})
 	if !bytes.Equal(judge.Seen[0].Prompt, intentPrompt(goal, nil)) || !bytes.Equal(judge.Seen[1].Prompt, planPrompt(goal, "Collect the numbers, then summarize them.", nil, nil)) ||
-		!bytes.Equal(exec.Seen[1].Prompt, stepPrompt(goal, steps, 2, [][]byte{[]byte("r1")}, nil)) || !bytes.Equal(judge.Seen[3].Prompt, stepJudge) ||
+		!bytes.Equal(exec.Seen[1].Prompt, stepPrompt(goal, steps, nil, 2, [][]byte{[]byte("r1")}, nil)) || !bytes.Equal(judge.Seen[3].Prompt, stepJudge) ||
 		!bytes.Equal(judge.Seen[4].Prompt, closure) {
 		t.Fatal("a request is not its template")
 	}

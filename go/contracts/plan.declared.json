@@ -25,6 +25,13 @@
       "used_for": "routing",
       "constraint": "unconstrained",
       "measured_by": "internal/run:TestTwoLevelScenarioSurvivesEveryKill"
+    },
+    "edges": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "routing",
+      "constraint": "unconstrained",
+      "measured_by": "internal/run:TestAgendaDeclaredPrerequisiteGates"
     }
   }
 }

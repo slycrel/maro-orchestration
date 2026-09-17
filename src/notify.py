@@ -37,11 +37,14 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import subprocess
-from typing import Optional
+from typing import Optional, Any
 
 log = logging.getLogger("notify")
+
+_MAX_TIMEOUT_S = 86400.0
 
 # backend_actionable: auth/billing/context failures with a fix the user must
 # apply (BACKEND_RESILIENCE_DESIGN §2) — default-on because a headless box's
@@ -62,6 +65,11 @@ DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
                   "stranded_run", "resume_refused_busy",
                   "resume_lock_unavailable", "recursion_checkin",
                   "self_improvement_verdict",
+                  # A worker's question to the operator (operator_ask,
+                  # decision 1d1ad8b0) and its time-box expiry: the run is
+                  # paused on it — a headless box's notify channel is the
+                  # only way the question reaches anyone.
+                  "operator_question", "operator_question_expired",
                   # Async-tail phase 2: the verdict follow-up to an
                   # answer-first run_completed (which went out with
                   # verdict_pending). Default-on — the split is only
@@ -80,15 +88,8 @@ DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
 # explicit `"blocking": False` payload field.
 ESCALATION_FILE_EVENTS = {"escalation", "backend_actionable", "stranded_run",
                           "resume_refused_busy", "resume_lock_unavailable",
-                          "recursion_checkin", "self_improvement_verdict"}
-
-
-def _config_get(key: str, default):
-    try:
-        from config import get as _get
-        return _get(key, default)
-    except Exception:
-        return default
+                          "recursion_checkin", "self_improvement_verdict",
+                          "operator_question", "operator_question_expired"}
 
 
 def escalations_path():
@@ -126,31 +127,172 @@ def _write_escalation_file(event_type: str, payload: dict) -> None:
     locked_append(escalations_path(), json.dumps(entry, default=str))
 
 
-def emit(event_type: str, payload: dict, *, run_dir: Optional[str] = None) -> bool:
+def _read(merged: dict, key: str, default):
+    """`config.get`'s dotted walk over ONE snapshot's mapping (review r19:
+    the policy reads every `notify.*` key from the same published load, so
+    the section and its faults can never come from different loads)."""
+    node = merged
+    for part in key.split("."):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return default
+    return node
+
+
+def _policy(event_type: str) -> tuple[Optional[bool], str, Any]:
+    """Validate one snapshot's hook obligation, command, and raw timeout.
+
+    A null, blank, or False command explicitly disables the hook; command:
+    false is an operator's deliberate off switch. Other non-strings are unknown.
+    Returns (owed, command, timeout_seconds as configured — unconverted).
+    """
+    from config import snapshot
+    merged, faults = snapshot()
+    # review r19: obligation and execution must use the same validation rules,
+    # read from ONE snapshot (r18's separate get/load_faults reads could pair a
+    # faulted section with a clean publish landing between them).
+    if faults:
+        return None, "", None
+    section = _read(merged, "notify", None)
+    if section is None:
+        return False, "", None
+    if not isinstance(section, dict):
+        return None, "", None
+    command = _read(merged, "notify.command", None)
+    if command is None or command is False:
+        return False, "", None
+    if not isinstance(command, str):
+        return None, "", None
+    command = command.strip()
+    if not command:
+        return False, "", None
+    events = _read(merged, "notify.events", DEFAULT_EVENTS)
+    if events is None or events == "" or events == []:
+        events = DEFAULT_EVENTS
+    if isinstance(events, str) or not isinstance(events, (list, tuple, set, frozenset)):
+        return None, "", None
+    if not all(isinstance(e, str) for e in events):
+        return None, "", None
+    timeout = _read(merged, "notify.timeout_seconds", 30)
+    return event_type in events, command, timeout
+
+
+def hook_owed(event_type: str) -> Optional[bool]:
+    """Whether a notify.command lane is owed `event_type`: True when one
+    is configured AND subscribes to it, False when there is confirmed no
+    such lane (absent, or an explicit `command: false`/empty), None when
+    that cannot be known — the config could not be read, the `notify`
+    section or its `command` is not the right shape, or `notify.events`
+    is not a list of names (review 2026-09-13 r16–r19: each of those had
+    read as "no hook owed", and a journal row then acknowledged a story
+    the configured recipient never got). One snapshot decides: the
+    section and its faults come from the same published load (r19)."""
+    try:
+        return _policy(event_type)[0]
+    except Exception:
+        return None
+
+
+def hook_configured(event_type: str) -> bool:
+    """True when a notify.command lane is configured AND it subscribes to
+    `event_type` — i.e. a False from `emit` means a configured recipient
+    received nothing, not "no channel" (review 2026-09-13 r13: the
+    finalize recorded delivery on either). Unknowable reads as False
+    here; `tell` uses `hook_owed` and treats unknowable as unacknowledged."""
+    return hook_owed(event_type) is True
+
+
+def early_reached(marker: dict) -> bool:
+    """Whether the answer-first notify recorded in a `verdict_pending`
+    marker REACHED the user — the routing fact for the verdict follow-up
+    (`run_verdict` only when it did; else the full `run_completed`).
+    `early_told` is the early sender's owed-channel word (`tell`); a
+    marker from before it (review r16) is read the legacy way: reached
+    unless a configured hook failed."""
+    if not isinstance(marker, dict) or not marker.get("notified_early"):
+        return False
+    if "early_told" in marker:
+        return bool(marker.get("early_told"))
+    return bool(not marker.get("hook_configured") or marker.get("hook_delivered"))
+
+
+def emit(event_type: str, payload: dict, *, run_dir: Optional[str] = None,
+         _journaled: bool = False) -> bool:
     """Fire a notification event. Returns True if the hook command ran cleanly.
 
-    Always appends to events.jsonl (best-effort). Runs notify.command only when
-    configured AND event_type is in notify.events. Never raises.
+    Always appends to events.jsonl (best-effort; `_journaled=True` says the
+    caller already wrote that row — `tell` does). Runs notify.command only
+    when configured AND event_type is in notify.events. Never raises.
     """
     try:
-        return _emit(event_type, payload or {}, run_dir=run_dir)
+        return _emit(event_type, payload or {}, run_dir=run_dir, journaled=_journaled)
     except Exception:
         log.debug("notify.emit(%s) failed", event_type, exc_info=True)
         return False
 
 
-def _emit(event_type: str, payload: dict, *, run_dir: Optional[str]) -> bool:
+def tell(event_type: str, payload: dict, *, run_dir: Optional[str] = None) -> bool:
+    """Fire a notification event and return whether its OWED channel
+    acknowledged it: the hook ran cleanly when one is configured for the
+    event, else the journal row was written (`emit` reports only the hook,
+    and reports False for "no hook" — review 2026-09-13 r15: a journal
+    write that failed with no hook configured was recorded as the story
+    told). The finalize and the repair sweeps stamp `final_notified_at`
+    on this word alone. Never raises."""
+    try:
+        journal_ok = _journal(event_type, payload or {})
+    except Exception:
+        journal_ok = False
+    try:
+        hook_ok = emit(event_type, payload or {}, run_dir=run_dir, _journaled=True)
+    except Exception:
+        hook_ok = False
+    try:
+        owed = hook_owed(event_type)
+    except Exception:
+        owed = None
+    # an unknowable channel (unreadable config, malformed subscription)
+    # acknowledges nothing but a clean hook run — the story stays owed
+    # until the configuration can be read (review r16)
+    return bool(journal_ok) if owed is False else bool(hook_ok)
+
+
+def answer_text(payload: dict) -> str:
+    """Return the first non-empty answer carried by a notification."""
+    if not isinstance(payload, dict):
+        return ""
+    # review r18: delivery qualification and journal text must name the same answer.
+    for key in ("result_excerpt", "answer_summary", "summary"):
+        text = str(payload.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _journal(event_type: str, payload: dict) -> bool:
+    """The structured event row for polling substrates — always, even
+    with no hook. Returns the writer's word (False on a torn row or any
+    failure)."""
     handle_id = str(payload.get("handle_id", ""))
     status = str(payload.get("status", ""))
-
-    # 1) Structured event for polling substrates — always, even with no hook.
     try:
         from context_budget import clip as _cb_clip
         from observe import write_event
         # 300 is a deliberate event-lane projection cap (write_event's rows
         # are PIPE_BUF-bounded downstream) — announced, not silent.
-        _detail = _cb_clip(str(payload.get("result_excerpt",
-                                           payload.get("summary", ""))), 300)
+        _excerpt = answer_text(payload)
+        _detail = _cb_clip(_excerpt, 300)
+        if event_type == "run_completed" and (
+                "goal_achieved" in payload or payload.get("goal_verdict_source")):
+            # review r17: reserve the verdict so an excerpt cannot hide failure.
+            _detail = (
+                f"[{handle_id}] goal_achieved={payload.get('goal_achieved')}"
+                + (f" source={payload.get('goal_verdict_source')}"
+                   if payload.get("goal_verdict_source") else "")
+                + (" verdict_pending" if payload.get("verdict_pending") else ""))
+            if _excerpt:
+                _detail += "; " + _cb_clip(_excerpt, max(0, 300 - len(_detail) - 2))
         if event_type == "run_verdict":
             # The verdict IS this event's content — the generic projection
             # dropped it entirely and polling substrates received an empty
@@ -164,14 +306,24 @@ def _emit(event_type: str, payload: dict, *, run_dir: Optional[str]) -> bool:
                 + (" answer_changed"
                    if payload.get("answer_changed") else "")
                 + f"; {payload.get('goal_verdict_summary', '')}", 300)
-        write_event(
+        return bool(write_event(
             event_type,
             goal=str(payload.get("goal", payload.get("reason", "")))[:200],
             status=status,
             detail=_detail,
-        )
+        ))
     except Exception:
-        pass
+        return False
+
+
+def _emit(event_type: str, payload: dict, *, run_dir: Optional[str],
+          journaled: bool = False) -> bool:
+    handle_id = str(payload.get("handle_id", ""))
+    status = str(payload.get("status", ""))
+
+    # 1) Structured event for polling substrates — always, even with no hook.
+    if not journaled:
+        _journal(event_type, payload)
 
     # 1b) Durable escalation-class file — attempted unconditionally,
     # independent of whether a notify.command lane is configured or whether
@@ -186,14 +338,21 @@ def _emit(event_type: str, payload: dict, *, run_dir: Optional[str]) -> bool:
         except Exception:
             log.warning("escalation file write failed for %s", event_type, exc_info=True)
 
-    # 2) The hook command, if the substrate registered one.
-    command = str(_config_get("notify.command", "") or "").strip()
-    if not command:
+    # 2) The hook command, if the validated policy subscribes to this event.
+    owed, command, timeout_raw = _policy(event_type)
+    if owed is None:
+        log.warning("notify configuration unknown for %s; hook skipped", event_type)
         return False
-    events = _config_get("notify.events", DEFAULT_EVENTS) or DEFAULT_EVENTS
-    if event_type not in events:
+    if owed is False:
         return False
-    timeout = float(_config_get("notify.timeout_seconds", 30))
+    try:
+        timeout = float(timeout_raw if timeout_raw is not None else 30)
+    except (TypeError, ValueError, OverflowError):
+        timeout = float("nan")
+    # review r21: even finite timeouts can overflow the subprocess clock.
+    if not math.isfinite(timeout) or timeout <= 0 or timeout > _MAX_TIMEOUT_S:
+        log.warning("invalid notify timeout for %s; using 30 seconds", event_type)
+        timeout = 30
 
     env = dict(os.environ)
     env["MARO_EVENT_TYPE"] = event_type

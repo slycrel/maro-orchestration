@@ -138,6 +138,8 @@ def run_agent_loop(
     cost_budget: Optional[float] = None,
     ralph_verify: bool = False,
     resume_from_loop_id: Optional[str] = None,
+    resume_checkpoint=None,  # the CLAIMED Checkpoint (mark_checkpoint_claimed's read-back): admitted by its permit after ONE re-read of its exact source path — never re-resolved by id
+    loop_id: Optional[str] = None,  # pre-minted loop id (a resume names its successor in the claim it writes); None = mint here
     permission_context=None,
     continuation_depth: int = 0,
     preset_steps: Optional[List[str]] = None,
@@ -146,6 +148,7 @@ def run_agent_loop(
     parent_loop_id: Optional[str] = None,
     admission_wait_s: Optional[float] = None,  # seconds to poll a busy project slot; None = config (default: refuse immediately)
     defer_learning: bool = False,  # data-r2-01: caller runs closure + finalize_deferred_learning() afterwards — skip verdict-blind lesson extraction/crystallization at finalize
+    defer_resume_settlement: bool = False,  # chunk 9: the caller settles the resume source after its own closure pass
     defer_maintenance: bool = False,  # async-tail decree: caller drains handle._POST_NOTIFY_MAINTENANCE post-notify — NOT implied by defer_learning (CLI lanes set that and drain nothing)
     measurement_class: str = "",  # explicit organic/smoke/control/benchmark provenance; empty = unknown direct caller
     handle_id: str = "",  # top-level request key; continuations reuse it for report dedup
@@ -178,36 +181,59 @@ def run_agent_loop(
         LoopResult with full outcome.
     """
     # Phase A: Initialize loop state
-    ctx, _early_return = _initialize_loop(
-        goal,
-        project=project,
-        repo_path=repo_path,
-        model=model,
-        backend=backend,
-        adapter=adapter,
-        dry_run=dry_run,
-        verbose=verbose,
-        interrupt_queue=interrupt_queue,
-        hook_registry=hook_registry,
-        ancestry_context_extra=ancestry_context_extra,
-        permission_context=permission_context,
-        continuation_depth=continuation_depth,
-        cost_budget=cost_budget,
-        token_budget=token_budget,
-        ralph_verify=ralph_verify,
-        max_steps=max_steps,
-        max_iterations=max_iterations,
-        step_callback=step_callback,
-        loop_reason=loop_reason,
-        parent_loop_id=parent_loop_id,
-        admission_wait_s=admission_wait_s,
-        defer_learning=defer_learning,
-        defer_maintenance=defer_maintenance,
-        measurement_class=measurement_class,
-        handle_id=handle_id,
-    )
+    try:
+        ctx, _early_return = _initialize_loop(
+            goal,
+            loop_id=loop_id,
+            project=project,
+            repo_path=repo_path,
+            model=model,
+            backend=backend,
+            adapter=adapter,
+            dry_run=dry_run,
+            verbose=verbose,
+            interrupt_queue=interrupt_queue,
+            hook_registry=hook_registry,
+            ancestry_context_extra=ancestry_context_extra,
+            permission_context=permission_context,
+            continuation_depth=continuation_depth,
+            cost_budget=cost_budget,
+            token_budget=token_budget,
+            ralph_verify=ralph_verify,
+            max_steps=max_steps,
+            max_iterations=max_iterations,
+            step_callback=step_callback,
+            loop_reason=loop_reason,
+            parent_loop_id=parent_loop_id,
+            admission_wait_s=admission_wait_s,
+            defer_learning=defer_learning,
+            defer_maintenance=defer_maintenance,
+            defer_resume_settlement=defer_resume_settlement,
+            measurement_class=measurement_class,
+            handle_id=handle_id,
+        )
+    except Exception:
+        if resume_checkpoint is not None:
+            # Initialization raised (bad pre-minted id, ...): nothing ran,
+            # the CLI's claim must not outlive it (r3 finding 6).
+            from checkpoint import release_own_claim as _release_own_claim
+            _release_own_claim(resume_checkpoint)
+        raise
     if _early_return is not None:
+        if resume_checkpoint is not None:
+            # Refused before any resource was taken (kill switch, busy
+            # slot…): the CLI's claim on the source must not outlive it.
+            from checkpoint import release_own_claim as _release_own_claim
+            if not _release_own_claim(resume_checkpoint):
+                log.warning("refused resume: claim on %s could not be released",
+                            getattr(resume_checkpoint, "resume_source", None))
         return _early_return
+    if resume_checkpoint is not None and getattr(resume_checkpoint, "resume_permit", None):
+        # From here every pre-execution refusal ends in finalize_refusal,
+        # which releases the claim the CLI wrote; a done ending settles the
+        # source (loop_finalize.settle_resume_claim).
+        from checkpoint import permit_of as _permit_of
+        ctx.resume_claim_release = _permit_of(resume_checkpoint)
 
     # BACKLOG #17 sub-item 1: scope the ambient loop_id for the duration
     # of this run so log_event() calls deep in the execution call stack
@@ -229,6 +255,12 @@ def run_agent_loop(
         adapter = ctx.adapter
         interrupt_queue = ctx.interrupt_queue
         _perm_ctx = ctx.perm_ctx
+        # Execution policy travels with every checkpoint (a resume re-enters
+        # the same lane).
+        try:
+            ctx.parallel_fan_out = max(0, int(parallel_fan_out or 0))
+        except (TypeError, ValueError):
+            ctx.parallel_fan_out = 0
 
         # Bind the run-scoped default cwd to this loop's project dir so EVERY
         # agentic subprocess (verify/quality_gate/pre_flight/refinement/claim_probe)
@@ -341,24 +373,6 @@ def run_agent_loop(
             )
             log.error("loop refused before decomposition — %s", _fence_msg)
 
-            # Nothing agentic has run yet, so any clone/worktree created during
-            # admission/fence setup is safe to remove without a merge-back.
-            if getattr(ctx, "container_clone", None) is not None:
-                try:
-                    import worktree as _wtmod
-                    _wtmod.cleanup_clone(ctx.container_clone)
-                    ctx.container_clone = None
-                except Exception as _cleanup_exc:
-                    log.warning("execution fence scratch-clone cleanup failed: %s", _cleanup_exc)
-            if getattr(ctx, "run_worktree", None) is not None:
-                try:
-                    import worktree as _wtmod
-                    _wtmod.cleanup(ctx.run_worktree)
-                    _wtmod.prune(ctx.run_worktree.repo_dir)
-                    ctx.run_worktree = None
-                except Exception as _cleanup_exc:
-                    log.warning("execution fence worktree cleanup failed: %s", _cleanup_exc)
-
             # Best-effort neutralization for later non-loop calls in the same
             # process; the refusal itself does not depend on these succeeding.
             for _neutralize, _label in (
@@ -375,23 +389,6 @@ def run_agent_loop(
                         _label, _neutralize_exc,
                     )
             try:
-                if getattr(ctx, "project_slot", None) is not None:
-                    ctx.project_slot.release()
-                    ctx.project_slot = None
-            except Exception as _release_exc:
-                log.warning("execution fence refusal project-slot release failed: %s", _release_exc)
-            try:
-                if getattr(ctx, "run_lease", None) is not None:
-                    ctx.run_lease.release()
-                    ctx.run_lease = None
-            except Exception as _release_exc:
-                log.warning("execution fence refusal run-lease release failed: %s", _release_exc)
-            try:
-                from interrupt import clear_loop_running
-                clear_loop_running()
-            except Exception as _release_exc:
-                log.warning("execution fence refusal running-state clear failed: %s", _release_exc)
-            try:
                 from observe import write_event as _write_event
                 _write_event(
                     "loop_done", goal=ctx.goal, project=ctx.project or "",
@@ -401,17 +398,15 @@ def run_agent_loop(
                 pass
             # Infra failure, not a goal verdict — the goal was never attempted
             # (stop-path survey: "stuck" here read downstream as goal failure).
-            try:
-                # Schema owner (2026-08-15 bypass burn-down) — owns the
-                # pair-completeness and the 800 evidence clip.
-                from runs import stamp_run_stop_verdict as _stamp_fence_stop
-                _stamp_fence_stop(
-                    stop_verdict="external-interrupt",
-                    stop_evidence=_fence_msg,
-                )
-            except Exception:
-                pass
-            return LoopResult(
+            # Nothing agentic has run yet, so the clone / worktree created
+            # during admission are discarded without a merge-back — the ONE
+            # refusal ending (loop_finalize.finalize_refusal: verdict stamped
+            # into run metadata, clone → worktree discarded, slot → lease →
+            # running marker released, heartbeat woken), same as the cost
+            # gate and the resume refusal (r2 MED 7).
+            ctx.stamp_stop("external-interrupt", _fence_msg)
+            from loop_finalize import finalize_refusal as _finalize_refusal
+            return _finalize_refusal(ctx, LoopResult(
                 loop_id=ctx.loop_id,
                 goal=ctx.goal,
                 project=ctx.project or "",
@@ -421,7 +416,7 @@ def run_agent_loop(
                 stop_verdict="external-interrupt",
                 stop_evidence=_fence_msg,
                 elapsed_ms=int((time.monotonic() - ctx.started_at) * 1000),
-            )
+            ))
 
         # In-fence scratch space is an inspectability convenience, not part of
         # the cwd/policy safety boundary. Keep it best-effort and visible.
@@ -438,6 +433,28 @@ def run_agent_loop(
                 if _perm_ctx is not None else list(_EXECUTE_TOOLS)
             )
 
+        # Explicit resume restores the plan BEFORE Phase B (durable plan-node
+        # ids, 2026-09-16): the checkpoint's remaining steps are the preset
+        # plan, so the planner is not called (it used to be — a paid call
+        # whose plan was then discarded), NEXT.md is not re-appended
+        # (_prepare_execution keeps the carried items), and an unreadable
+        # checkpoint refuses here, before either. Absent → fresh, as before.
+        _resume = None
+        _preset_source = "preset"
+        if resume_checkpoint is not None and not resume_from_loop_id:
+            resume_from_loop_id = str(getattr(resume_checkpoint, "loop_id", "") or "")
+        # A handed-over checkpoint ALWAYS goes through the resume load —
+        # gating on the id's truthiness let one with an empty loop_id skip
+        # the resume and start fresh (r1 HIGH); `_load_resume` refuses it.
+        if resume_checkpoint is not None or resume_from_loop_id:
+            _resume, _resume_refusal = _load_resume(
+                ctx, resume_from_loop_id, preloaded=resume_checkpoint)
+            if _resume_refusal is not None:
+                return _resume_refusal
+            if _resume is not None:
+                preset_steps = list(_resume.steps)
+                _preset_source = "resume"
+
         # Phase B: Decompose goal into steps
         ctx.set_phase(LoopPhase.DECOMPOSE)
         steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = _decompose_goal(
@@ -446,14 +463,15 @@ def run_agent_loop(
             max_steps=max_steps,
             knowledge_sub_goals=knowledge_sub_goals,
             permission_context=permission_context,
+            preset_source=_preset_source,
         )
 
         # Phase C: Pre-flight checks
         ctx.set_phase(LoopPhase.PRE_FLIGHT)
         steps, _pf, _pf_early_return = _preflight_checks(
             ctx, steps,
-            resume_from_loop_id=resume_from_loop_id,
             parallel_fan_out=parallel_fan_out,
+            resume=_resume,
         )
         if _pf_early_return is not None:
             return _pf_early_return
@@ -476,8 +494,14 @@ def run_agent_loop(
         # Phase D: Parallel fan-out (early return if applicable)
         if _use_dag or _use_fanout:
             ctx.set_phase(LoopPhase.PARALLEL)
+            # Plan nodes are NEXT.md items in every lane: mirror (or keep
+            # the carried items) and bind BEFORE the lane runs, so its
+            # outcomes carry real items and mark them (the lanes return
+            # before Phase E, which used to be the only binding point).
+            _par_indices = _mirror_plan_items(ctx, steps, deps=_deps, resume=_resume)
             _parallel_result = _run_parallel_path(
                 ctx, steps,
+                step_indices=_par_indices,
                 clean_steps=_clean_steps,
                 deps=_deps,
                 levels=_levels,
@@ -487,8 +511,17 @@ def run_agent_loop(
                 loop_shared_ctx=_loop_shared_ctx,
                 use_dag=_use_dag,
                 resolve_tools_fn=_resolve_tools,
+                resumed=bool(_resume_completed),
+                declared=_pf.get("declared"),
+                pre_gated=_pf.get("pre_gated"),
+                carried_outcomes=list(_resume_completed or []),
             )
             if _parallel_result is not None:
+                # The lane bypasses Phase G (below): settle the resume claim
+                # here so its status is final before anything reads it.
+                from loop_finalize import settle_resume_claim as _settle_claim
+                _parallel_result.status, _parallel_result.stuck_reason = _settle_claim(
+                    ctx, _parallel_result.status, _parallel_result.stuck_reason)
                 # Record the fan-out itself and the terminal it returns from.
                 # The phase never leaves "parallel" and none of the execute /
                 # finalize / verify edges exist on this path, so without this a
@@ -512,6 +545,22 @@ def run_agent_loop(
                              stuck_reason=_parallel_result.stuck_reason or "")
                 except Exception as _tr_exc:
                     log.debug("edge trace for parallel path failed: %s", _tr_exc)
+                # Round-2 review 2026-09-13: the early return also skipped
+                # loop_finalize's stop-verdict stamp, and the continuation
+                # lane picks RESUME over restart by reading
+                # metadata.pause_reason (handle_queue) — a typed pause that
+                # lived only on the LoopResult restarted the run under a new
+                # identity. Same writer, same semantics (empty verdict
+                # clears a stale one; the pause is written when truthy).
+                _par_pause = str(getattr(_parallel_result, "pause_reason", "") or "")
+                if _par_pause:
+                    try:
+                        from runs import stamp_run_stop_verdict as _stamp_par_pause
+                        _stamp_par_pause(stop_verdict="", stop_evidence="",
+                                         pause_reason=_par_pause)
+                    except Exception as _sp_exc:
+                        log.warning("parallel pause stamp failed for %s: %s",
+                                    ctx.loop_id, _sp_exc)
                 # 2026-07-08 adversarial review (finding #1): this early return
                 # bypasses _build_result_and_finalize() entirely — true for every
                 # finalize side effect (telegram notify, introspection, Reflexion
@@ -563,7 +612,8 @@ def run_agent_loop(
 
         # Phase E: Shape steps and write to NEXT.md
         ctx.set_phase(LoopPhase.PREPARE)
-        steps, step_indices, _manifest_steps = _prepare_execution(ctx, steps, _manifest_steps)
+        steps, step_indices, _manifest_steps = _prepare_execution(
+            ctx, steps, _manifest_steps, deps=_deps, resume=_resume)
 
         # Phase F: Main execute loop
         ctx.set_phase(LoopPhase.EXECUTE)
@@ -597,6 +647,7 @@ def run_agent_loop(
                 resolve_tools_fn=_resolve_tools,
                 tier_order=_TIER_ORDER,
                 parallel_fan_out=parallel_fan_out,
+                deps=_deps,
             )
         finally:
             if _disarm_runaway is not None:
@@ -708,6 +759,14 @@ def run_agent_loop(
                         _recovery_in_progress=True,
                     )
                     log.info("auto-recovery result: status=%s", result.status)
+                    # The child ran without the permit (a fresh loop): the
+                    # source THIS frame claimed is settled against the loop
+                    # that finished the work (r1: a done child returned with
+                    # the source still claimed-not-consumed).
+                    from loop_finalize import settle_resume_claim as _settle_child
+                    result.status, result.stuck_reason = _settle_child(
+                        ctx, result.status, result.stuck_reason,
+                        successor_loop_id=result.loop_id)
             except ImportError:
                 pass
             except Exception as exc:
@@ -747,6 +806,8 @@ from loop_planning import (
     _shape_steps,
     _build_loop_context,
     _decompose_goal,
+    _load_resume,
+    _mirror_plan_items,
     _preflight_checks,
     _prepare_execution,
     _decompose,

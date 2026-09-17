@@ -277,3 +277,12 @@ class TestInjectToolSearchIfNeeded:
         result = inject_tool_search_if_needed(schemas)
         names = [s["name"] for s in result]
         assert "tool_search" not in names
+
+
+def test_injector_tolerates_a_malformed_parameters_container():
+    # Round 9 QA: a non-dict parameters container raised in the injector.
+    from tool_search import inject_tool_search_if_needed
+    odd = [{"name": "x", "description": "[deferred] y", "parameters": [1, 2]},
+           {"name": "z", "description": "plain", "parameters": "nope"}]
+    out = inject_tool_search_if_needed(odd)
+    assert [t["name"] for t in out] == ["x", "z", "tool_search"]

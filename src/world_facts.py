@@ -123,7 +123,7 @@ class WorldFactLedger:
         semantic paraphrase still slips this (named residual).
         """
         import difflib
-        for f in self.facts.values():
+        for f in list(self.facts.values()):
             if f.kind != kind or f.source != SOURCE_PLANNER:
                 continue
             other = " ".join(f.fact.lower().split())
@@ -168,11 +168,11 @@ class WorldFactLedger:
         return False
 
     def anecdotal(self) -> List[WorldFact]:
-        return [f for f in self.facts.values() if f.kind == KIND_ANECDOTAL]
+        return [f for f in list(self.facts.values()) if f.kind == KIND_ANECDOTAL]
 
     def hypotheses(self) -> List[WorldFact]:
         """Slice-2 seam: finalize routes these into observe_pattern()."""
-        return [f for f in self.facts.values() if f.kind == KIND_HYPOTHESIS]
+        return [f for f in list(self.facts.values()) if f.kind == KIND_HYPOTHESIS]
 
     def render(self) -> str:
         """Advisory known-this-run block.
@@ -223,7 +223,7 @@ class WorldFactLedger:
     # -- checkpoint carry -------------------------------------------------
 
     def to_list(self) -> List[Dict[str, Any]]:
-        return [f.to_dict() for f in self.facts.values()]
+        return [f.to_dict() for f in list(self.facts.values())]
 
     @classmethod
     def from_list(cls, rows: Optional[Iterable[Any]]) -> "WorldFactLedger":

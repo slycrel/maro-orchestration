@@ -10,6 +10,14 @@ note: local rung REMOVED 2026-07-21 (swarm-review chunk 1, Jeremy decree
   exact pinned manifest (mlx 0.31.2 / mlx_lm 0.31.3 / transformers 5.12.1).
   The bake-off *results* this doc's methodology produced are likewise no
   longer machine-local — see `docs/data/validator-bakeoff-*.json`.
+  2026-09-17: re-touched from the dev Mac (ds4/Qwen3.8 on the M1 + a
+  parallel-constrained-decoding repo). Verdict UNCHANGED — the rung stays
+  out. See "2026-09-17 re-touch" below before spending time here again.
+  2026-09-17 (later, same day): SUPERSEDED. Jev (typesafe.ai) evaluated under a
+  pre-registered protocol on the July corpus (measurements withheld per the
+  TypeSafe MCA guardrail). DECISION (Jeremy): Jev gets a real shot
+  as the Tier-1 validator; the hosted LLM call stays the backup. See the
+  "Jev decision" section below. Eval: github.com/slycrel/jev-eval (private).
 ---
 
 # Local Validator — zero-cost first-pass validation (RETIRED 2026-07-21)
@@ -22,6 +30,126 @@ if the hosted free tiers churn away** (providers cut free quotas, keys
 die, breakers trip chronically): the re-entry path is the bakeoff
 methodology below + the kept corpus `tests/fixtures/validation_cases.json`
 + this doc's implementation record in git history (pre-2026-07-21).
+
+## 2026-09-17 re-touch — still not the time *(superseded the same day — see next section)*
+
+Revisited from the dev Mac after installing `antirez/ds4` (DwarfStar) and
+evaluating a small-model structured-extraction repo. **No change to the
+2026-07-21 decree: the local rung stays out.** Recorded so the next person does
+not re-derive July.
+
+**What was looked at.**
+
+1. **ds4 + Qwen3.8 Flash Next Q2 on the M1 Max** — builds and runs, measured
+   ~275 t/s prefill and ~24.5 t/s decode at `--ctx 32768 --prefill-chunk 2048
+   --mtp` (`--prefill-chunk 2048` is required on 64 GB; the model's 8192 default
+   plans 49.74 GiB and swaps). Now reachable from the box via the `m1` ssh alias.
+2. **`harshatheg/Qwen-2.5-1B-RLCD`** — advertised as a fast structured-extraction
+   model. It contains **no weights**: 26 files of Python that download stock
+   `mlx-community/Qwen2.5-1.5B-Instruct-4bit` and apply parallel constrained
+   decoding on top. Evaluated at `/Users/jeremy/claude/qwen-rlcd` (machine-local;
+   full write-up with six retractions in that repo's README).
+
+**Why neither changes the answer.**
+
+Qwen3.8 is far more capable than anything in the July field, but it is **41.72 GiB
+resident** — it is a sidecar that owns the machine, the opposite of the "small
+enough to be a component" shape this rung wanted. VibeThinker-3B-4bit remains the
+thing small enough to be a component, and July already priced it at 8.83 s with
+gated-first-pass standing. **There is no rung between them.** That gap, not the
+absence of a candidate, is why this stays shelved.
+
+**The evaluation independently reproduced this doc's own gating criterion.**
+Nine decoding variants scored over 99 hand-labelled fields, blind double-labelled
+by two agents (55/55 agreement, zero disagreements). The finding:
+
+> Order the arms by how readily they assert alarming values and you recover the
+> accuracy ranking on both halves of the corpus, in opposite directions. The
+> variants were never ranked by decoding quality.
+
+On benign negative-control documents where ground truth asserts 1 of 33 booleans,
+the best-scoring variant asserted **22 of 33**. Same failure the July bake-off
+caught and gated on — `qwen2.5-coder:3b` was 10x faster at 0.81 s and carried
+**2 unsafe false-passes**. Different model generation, same failure mode, and the
+July metric ("unsafe false-passes") caught it correctly. Plain autoregressive
+generation beat every clever decoding scheme on both halves of the corpus.
+
+Treat this as **confirmation that the bake-off's safety gate is the right gate**,
+not as new evidence for reviving the rung.
+
+**On the classifier idea.** Everything in the July field was a generative LLM. A
+cross-encoder or embedding classifier over the fixed-label verdicts
+(`closure_verify`, `intent`, `scope`, `quality_gate`, `run_curation`,
+`stop_verdicts`) is genuinely untried, would be 100–400 MB, would run in
+milliseconds on CPU, and would run on hardware LLMs were ruled out for —
+including the 2014 mini. It needs labelled examples, which run outcomes may
+already supply.
+
+**Jeremy 2026-09-17: interesting, but not yet** — *"maybe not yet; or at least
+not in the way we're looking at it now. Maybe the jev stuff will push us in that
+direction instead."* The expectation is that the Jev work may drive the
+requirement into a different shape first, and that a classifier should follow a
+real need rather than lead one.
+
+*Jev is typesafe.ai's new flagship model; access landed 2026-09-17, the same day
+as this re-touch. It is not otherwise described in this repo — check the current
+state of that work before acting on this paragraph. Note the structural point:
+a flagship model sits on the opposite side of this question from the local rung,
+so the likely connection is Jev as a **source of labels** for a small classifier
+rather than as the judge itself. That is an inference, not a decision.*
+
+Note also that the original decree's rationale was **token cost**, which a local
+classifier sidesteps entirely — so the 2026-07-21 reasoning does not tell you
+whether this version would pay. That stays open, and per `CAPABILITIES.md` the
+standing instruction for this family is **re-test, don't rebuild**.
+
+## 2026-09-17, later: Jev evaluated — decision: it gets a real shot
+
+Hours after the section above concluded "the time still isn't right", access to
+typesafe.ai's Jev arrived and it was evaluated against this doc's own July
+bake-off corpus and protocol, pre-registered (hypotheses and labels committed
+before any call). **Per the TypeSafe MCA guardrail recorded in
+`planning/feature-judgment-providers.md`, no Jev measurements are published
+here** — the numbers live in the private evaluation repo and under the
+workspace root. This section records only the decision and its shape.
+
+**What it is.** A hosted "System One" model: typed `Choice`/`Score`/`Noul`
+decisions with per-option probabilities and a confidence. Not an LLM; it does
+not generate text and does not execute code. Key: `TYPESAFE_API_KEY` in the
+workspace secrets. Sub-second from the box; priced per input token.
+
+**What the evaluation established, qualitatively.** On the July corpus and
+protocol it met the bar the July winner set, at latency in a different class.
+It was calibrated on a construction-labelled corpus, deterministic across
+repeats, robust to instruction rewording, and immune to prompt injection
+through the result text in a dedicated probe (its only misses there were false
+*fails* — the safe direction). Against `closure` on the same evidence it is
+strictly stricter: it never passed a closure fail and failed a substantial
+share of closure passes; not shown to be right (few human labels) —
+adjudication deferred (Jeremy: "maybe, but not now").
+
+**The edge that scopes it — Jev judges evidence, not code.** Reading code
+alone it confidently passed semantically wrong functions; with the real test
+output in the state it did not miss. Step wording alone flipped one case. **No
+confidence threshold catches the code-semantics miss; evidence in the state
+does.** The validator must run over `{step, result, evidence}` where evidence
+is what Tier 0 already produced — never over a bare claim.
+
+**Decision (Jeremy, 2026-09-17):** Jev gets a real shot as the Tier-1
+validator. Because it is a new hosted vendor in the verdict path, **a real
+backup is required**: the hosted LLM call that has served this rung before
+(hosted-free → paid) remains the fallback. The M1 via the `m1` ssh alias is an
+interim experiment on that lane, not the plan of record.
+
+**Shape to implement** (recommendation): Tier 1 = Jev `Choice(pass|fail)` over
+`{step, result, evidence}` with an evidence-first instruction; auto-pass only
+at high confidence **and** evidence present; mid-band → RETRY/escalate as
+today; low → escalate; escalation target unchanged (hosted-free, then paid);
+Jev unreachable/429/529/timeout → same path, never fail-open; record
+`p_pass`, `confidence`, evidence-present per verdict so the mid-band gets
+measured organically. The `jev` branch's judgment seam is the implementation
+surface. **Not shown:** the mid-confidence band, long states, real step-level
+volume, injection under real worker output.
 
 Poe's highest-volume LLM call is **validation** ("did this step result satisfy
 the goal?"). Those calls are frequent and mostly easy, so paying a frontier API

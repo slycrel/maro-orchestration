@@ -29,6 +29,7 @@ import re
 
 import sys
 import time
+import threading
 import uuid
 
 from typing import List, TYPE_CHECKING
@@ -305,11 +306,102 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 _PROJECT_MATCH_MIN_LEN = 6
+_PROJECT_SIBLING_CAP = 999
+# A project-transition settlement whose write failed in the run, keyed by
+# handle id: the finalize retries it in the write that resolves the verdict
+# marker (review 2026-09-13 round 7). Process-local by nature — a process
+# death loses it, and the transition-orphan sweep then reverts.
+_UNSETTLED_TRANSITIONS: dict = {}
+# review r22: owners and drainers must compare and remove atomically.
+_UNSETTLED_LOCK = threading.Lock()
 
 
-def _match_existing_project(message: str) -> str:
+def _free_project_name(base: str, exclude: "tuple[str, ...]", mission: str) -> str:
+    """The first `base-2`, `base-3`… that is not excluded and is FREE, and
+    RESERVED for the caller: the directory is created here, exclusively
+    (two pending runs that both observed `-2` vacant would otherwise both
+    bind it and the second would inherit the first's work), and PUBLISHED
+    COMPLETE: the project is initialised with `mission` (the goal, as the
+    loop's own `ensure_project` records it — that call is idempotent over
+    it) under a private temporary name inside the projects root and then
+    `rename`d to its name in one atomic step — no reader ever sees the
+    directory without its mission. The older slug resolver
+    (`resolve_project_slug`) treats a generic-slug sibling with NO recorded
+    mission as matching any subject, so a directory published before its
+    mission — even for a moment — is handed to the next unrelated goal
+    that opens the same way (review 2026-09-13 rounds 5–6). The rename
+    fails when the name was taken meanwhile (a populated directory:
+    ENOTEMPTY; a file or link: ENOTDIR/EEXIST) and the next name is
+    tried; a directory that is EMPTY at that instant is replaced — one
+    that appeared between the free check and the rename is a bare mkdir
+    with no project in it yet. A dangling symlink counts as taken
+    (`exists()` reports it absent). Past the cap a random suffix is tried
+    once; if even that is taken the binding fails closed — the excluded
+    or unsafe base is never returned. `base` must be a valid project
+    NAME: suffixing cannot repair a path-shaped identity (review
+    2026-09-13 rounds 3–4). The private staging directory is the
+    allocator's own and is removed when the reservation does not
+    happen — a partial initialisation included (review r7); only a
+    process death leaves one (`.reserve-*`, never a candidate for any
+    resolver)."""
+    from landscape import project_name
+    if not project_name(base):
+        raise ValueError(f"not a project name: {base!r}")
+    if not (mission or "").strip():
+        raise ValueError("a reserved project needs its mission")
+    import orch_items as _oi
+    root = _oi.projects_root()
+    root.mkdir(parents=True, exist_ok=True)
+
+    import os
+    import shutil
+    import uuid
+    from file_lock import atomic_write
+    # the complete project, built where no resolver looks (the same
+    # mission text loop_init / mission.py record: goal[:80]); a failure
+    # here propagates — the loop's own init would fail on the same store
+    staging = f".reserve-{uuid.uuid4().hex[:12]}"
+    staged = root / staging
+    published = False
+    try:
+        _oi.ensure_project(staging, mission[:80])
+
+        def _claim(name: str) -> bool:
+            target = root / name
+            if name in exclude or target.is_symlink() or target.exists():
+                return False
+            # the NEXT.md header names the project; the mission line is
+            # what the resolver reads
+            _next = staged / "NEXT.md"
+            _lines = _next.read_text(encoding="utf-8").split("\n", 1)
+            atomic_write(_next, f"# NEXT — {name}\n" + (_lines[1] if len(_lines) > 1 else ""))
+            try:
+                os.rename(staged, target)
+            except OSError:
+                return False
+            return True
+
+        for n in range(2, _PROJECT_SIBLING_CAP + 1):
+            cand = f"{base}-{n}"
+            if _claim(cand):
+                published = True
+                return cand
+        cand = f"{base}-{uuid.uuid4().hex[:8]}"
+        if _claim(cand):
+            published = True
+            return cand
+        raise RuntimeError(f"no free project name beside {base!r}")
+    finally:
+        if not published:
+            shutil.rmtree(staged, ignore_errors=True)
+
+
+def _match_existing_project(message: str, exclude: "tuple[str, ...]" = ()) -> str:
     """If the goal text literally names an existing project directory, return
-    that project name; else "".
+    that project name; else "". Names in `exclude` and entries that do not
+    resolve inside the projects root (a symlink out of it — the containment
+    the landscape binder refuses must not be re-granted by the shortcut,
+    review 2026-09-13 round 2) are never matched.
 
     A dispatched goal like "deepen one edge in the polymarket-edges ledger"
     must bind to the existing `polymarket-edges` project — minting a fresh
@@ -326,28 +418,56 @@ def _match_existing_project(message: str) -> str:
             return ""
         msg = message.lower()
         best = ""
+        from landscape import project_inside_root
         for d in root.iterdir():
             name = d.name
-            if not d.is_dir() or len(name) < _PROJECT_MATCH_MIN_LEN:
+            if not d.is_dir() or len(name) < _PROJECT_MATCH_MIN_LEN or name in exclude:
                 continue
             if len(name) <= len(best):
                 continue
             if re.search(r"(?<![a-z0-9-])" + re.escape(name.lower()) + r"(?![a-z0-9-])", msg):
+                if not project_inside_root(name):
+                    log.warning("project shortcut: %r named in the goal is not a project inside the root; skipped", name)
+                    continue
                 best = name
         return best
     except Exception:
         return ""
 
 
+def _project_for_goal(message: str, exclude: "tuple[str, ...]" = ()) -> "tuple[str, str]":
+    """Project identity for a project-less goal and the rule that bound it:
+    (an existing project named in the goal text, "named") else (the minted
+    goal slug, "minted"). ONE directory observation decides both — the rule
+    is read off the same scan that picked the project, never a second scan
+    that a directory appearing or vanishing in between could contradict.
+
+    `exclude` names projects the automatic fallbacks may not land in — the
+    landscape's context-only project (review 2026-09-13 round 2: the minted
+    slug REUSES an existing slug for a goal that opens the same way, so
+    "…report for client B" would land in client A's project one layer below
+    the judge's "context only"). A slug that is excluded, or whose directory
+    does not resolve inside the projects root, steps to the first free
+    `-2`, `-3`… sibling."""
+    matched = _match_existing_project(message, exclude)
+    if matched:
+        return matched, "named"
+    from loop_artifacts import resolve_project_slug
+    from landscape import project_inside_root
+    slug = resolve_project_slug(message)
+    if slug in exclude or not project_inside_root(slug):
+        base = slug
+        slug = _free_project_name(base, exclude, message)
+        log.info("project fallback: %r steps aside to %r (%s)", base, slug,
+                 "context only" if base in exclude else "not a project inside the root")
+    return slug, "minted"
+
+
 def _default_project_for(message: str) -> str:
     """Project identity for a project-less goal: an existing project named in
     the goal text, else the minted goal slug. Both the loop fence and the
     scope pass must resolve through here so they can't diverge."""
-    matched = _match_existing_project(message)
-    if matched:
-        return matched
-    from loop_artifacts import resolve_project_slug
-    return resolve_project_slug(message)
+    return _project_for_goal(message)[0]
 
 
 def _run_now(
@@ -355,6 +475,7 @@ def _run_now(
     handle_id: str,
     adapter,
     verbose: bool = False,
+    context: str = "",
 ) -> Dict[str, Any]:
     """Execute a NOW-lane task: single LLM call, returns result dict.
 
@@ -386,7 +507,7 @@ def _run_now(
                 LLMMessage("system",
                            _NOW_SYSTEM + (_NOW_LINK_READ if enrichment else "")),
                 LLMMessage("user",
-                           f"{enrichment}\n\n{message}" if enrichment else message),
+                           "\n\n".join(p for p in (enrichment, context, message) if p)),
             ],
             max_tokens=2048,
             temperature=0.4,
@@ -586,6 +707,17 @@ def _now_verify_payload(message: str, result: str,
         return f"{label}:\n{text}"
 
     return f"{_seg('Request', message)}\n\n{_seg('Response', result)}"
+
+
+def _autonomous_origin(origin: Optional[dict]) -> bool:
+    """Whether an origin marks a task-path run (no human reading the text).
+
+    Origin presence used to be the proxy. It is no longer one: ``--after``
+    stamps an origin on an interactive CLI run purely to carry lineage, and
+    a memory-scope request must not opt the run into the autonomous verdict
+    path (an extra judge call, a possible demotion) — review 2026-09-05.
+    A CLI-sourced origin is interactive; every other source is a task."""
+    return origin is not None and str(origin.get("source") or "") != "cli"
 
 
 def _verify_now_outcome(
@@ -820,6 +952,7 @@ def handle(
     origin: Optional[Origin] = None,
     persona: Optional[str] = None,
     measurement_class: Optional[str] = None,
+    fresh: bool = False,
 ) -> HandleResult:
     """Process an incoming request through Maro's handle.
 
@@ -837,6 +970,18 @@ def handle(
         _pre_hid = _pre_hid_fn()
     except Exception:
         _pre_hid = None
+    # A kept finalize write from an EARLIER run in this process gets its
+    # retry as soon as the process does work again — the heartbeat's sweep
+    # runs only in the heartbeat process, and a long-lived listener that
+    # never sweeps otherwise held its obligation for its life (review r11).
+    # Best-effort; nothing kept costs nothing. Not on dry runs (side-effect
+    # free by contract).
+    if _UNSETTLED_TRANSITIONS and not dry_run:
+        try:
+            from audit_repair import drain_kept_writes as _drain_kept
+            _drain_kept()
+        except Exception:
+            log.debug("kept-write drain at handle entry failed", exc_info=True)
     try:
         result = _handle_impl(
             message,
@@ -853,6 +998,7 @@ def handle(
             origin=origin,
             persona=persona,
             measurement_class=measurement_class,
+            fresh=fresh,
         )
         return result
     except Exception as _handle_exc:
@@ -902,120 +1048,200 @@ def handle(
                 # route the notify below. From here on, "marker still active"
                 # in any run dir is exactly the crash signature the
                 # audit_repair sweep hunts.
-                _vp_meta = {}
-                _meta_loop_ids: list = []
+                # The finalize's write is ONE obligation — resolve this
+                # run's verdict marker and record any settlement the run
+                # could not — DECIDED from the locked snapshot
+                # (`audit_repair.reconcile_kept_write`), so it exists
+                # without a read of its own: a store that cannot be read
+                # or written keeps the obligation in
+                # `_UNSETTLED_TRANSITIONS` (flagged `_finalize`) and the
+                # transition sweep drains it from this process once the
+                # store is back (review r8–r10: keeping the settlement
+                # alone left the marker active and the verdict sweep
+                # skips a living owner; a failed read before the write
+                # kept nothing at all); only a death loses it, and the
+                # sweeps then work from disk.
+                _owed_obligation = None
                 try:
-                    from runs import run_dir as _run_dir_vp
-                    _meta_all = json.loads(
-                        (_run_dir_vp(_hid) / "metadata.json")
-                        .read_text(encoding="utf-8"))
-                    _meta_loop_ids = [
-                        str(l) for l in (_meta_all.get("loop_ids") or []) if l]
-                    _vp_meta = _meta_all.get("verdict_pending") or {}
-                    if not isinstance(_vp_meta, dict):
-                        _vp_meta = {}
-                    if _vp_meta and not _vp_meta.get("resolved_at"):
-                        from runs import stamp_run_metadata_for as _srm_resolve
-                        _resolved = dict(_vp_meta)
-                        _resolved["resolved_at"] = datetime.now(
-                            timezone.utc).isoformat()
-                        _srm_resolve(_hid, {"verdict_pending": _resolved})
-                except Exception:
-                    _vp_meta = {}
-                _tail_lid = ""
-                try:
-                    _tail_lid = (str(_meta_loop_ids[-1])
-                                 if _meta_loop_ids
-                                 else str(_vp_meta.get("loop_id") or ""))
-                except Exception:
-                    _tail_lid = ""
-                try:
-                    from metrics import tail_cost_scope as _fin_cost_scope
-                except Exception:
-                    from contextlib import nullcontext
-                    _fin_cost_scope = lambda *a, **k: nullcontext()  # noqa: E731
-                # Shared run-dir finalization (slice log, snapshot repo, stamp
-                # status + backend_error, curate run_card, re-render reports).
-                # Returns the run_card, which IS the completion payload.
-                # Curation-scoped: answer synthesis is a real tail LLM call
-                # (review 2026-08-13).
-                with _fin_cost_scope(_tail_lid, "curation"):
-                    _card = _close_run(_hid, status=_status,
-                                       backend_error=_backend_err)
-                # Actionable backend death: ping the notify channel with the
-                # fix (auth/billing/context) — distinct from run_completed so
-                # substrates can render it as "act now", not "run finished".
-                if _backend_err is not None:
+                    with _UNSETTLED_LOCK:
+                        _prior = _UNSETTLED_TRANSITIONS.get(_hid)
+                    _obligation = {k: v for k, v in dict(_prior or {}).items()
+                                   if k != "verdict_pending"}
+                    _obligation["_finalize"] = True
+                    # review r20: the live owner still owes its final close and tell.
+                    _obligation["_by"] = "owner"
                     try:
-                        from notify import emit as _notify_emit_be
-                        _notify_emit_be("backend_actionable", {
-                            "handle_id": _hid,
-                            "status": _status,
-                            "error_class": _backend_err.error_class,
-                            "backend": _backend_err.backend,
-                            "user_action": _backend_err.user_action,
-                            "summary": _backend_err.user_action,
-                            # Run identity for the relay layer — an alert
-                            # without the original ask can't be tied back to
-                            # the job it interrupted (azure-finch 2026-07-17).
-                            "goal": str((_card or {}).get("goal", ""))[:300],
-                        })
+                        from runs import revise_run_metadata_for as _revise_fin
+                        from audit_repair import reconcile_kept_write as _reconcile_fin
+                        _written = _revise_fin(
+                            _hid, lambda existing: _reconcile_fin(existing, _obligation))
+                    except Exception:
+                        _written = None
+                    if _written is None:
+                        _owed_obligation = _obligation
+                        log.error("finalize write for %s not recorded; kept for the "
+                                  "maintenance retry", _hid)
+                    else:
+                        # review r22: a later publication belongs to its own writer.
+                        with _UNSETTLED_LOCK:
+                            if _UNSETTLED_TRANSITIONS.get(_hid) is _prior:
+                                _UNSETTLED_TRANSITIONS.pop(_hid, None)
+                    _vp_meta = {}
+                    _meta_loop_ids: list = []
+                    try:
+                        from runs import run_dir as _run_dir_vp
+                        _meta_all = json.loads(
+                            (_run_dir_vp(_hid) / "metadata.json")
+                            .read_text(encoding="utf-8"))
+                        _meta_loop_ids = [
+                            str(l) for l in (_meta_all.get("loop_ids") or []) if l]
+                        _vp_meta = _meta_all.get("verdict_pending") or {}
+                        if not isinstance(_vp_meta, dict):
+                            _vp_meta = {}
+                    except Exception:
+                        _vp_meta = {}
+                    _tail_lid = ""
+                    try:
+                        _tail_lid = (str(_meta_loop_ids[-1])
+                                     if _meta_loop_ids
+                                     else str(_vp_meta.get("loop_id") or ""))
+                    except Exception:
+                        _tail_lid = ""
+                    try:
+                        from metrics import tail_cost_scope as _fin_cost_scope
+                    except Exception:
+                        from contextlib import nullcontext
+                        _fin_cost_scope = lambda *a, **k: nullcontext()  # noqa: E731
+                    # Shared run-dir finalization (slice log, snapshot repo, stamp
+                    # status + backend_error, curate run_card, re-render reports).
+                    # Returns the run_card, which IS the completion payload.
+                    # Curation-scoped: answer synthesis is a real tail LLM call
+                    # (review 2026-08-13).
+                    with _fin_cost_scope(_tail_lid, "curation"):
+                        _card = _close_run(_hid, status=_status,
+                                           backend_error=_backend_err, final=True)
+                    # Actionable backend death: ping the notify channel with the
+                    # fix (auth/billing/context) — distinct from run_completed so
+                    # substrates can render it as "act now", not "run finished".
+                    if _backend_err is not None:
+                        try:
+                            from notify import emit as _notify_emit_be
+                            _notify_emit_be("backend_actionable", {
+                                "handle_id": _hid,
+                                "status": _status,
+                                "error_class": _backend_err.error_class,
+                                "backend": _backend_err.backend,
+                                "user_action": _backend_err.user_action,
+                                "summary": _backend_err.user_action,
+                                # Run identity for the relay layer — an alert
+                                # without the original ask can't be tied back to
+                                # the job it interrupted (azure-finch 2026-07-17).
+                                "goal": str((_card or {}).get("goal", ""))[:300],
+                            })
+                        except Exception:
+                            pass
+                    # Substrate notification: the run_card IS the completion payload
+                    # (status, done!=achieved class, result excerpt + path).
+                    # Async-tail phase 2: when the answer already went out at
+                    # final-step compile (verdict_pending marker, notified_early),
+                    # this emit becomes the VERDICT follow-up (run_verdict) —
+                    # closure/gate have run by now, the marker was resolved just
+                    # above (before close_run, so the tripwire kept its
+                    # authority), and the re-curated card carries the verdict.
+                    try:
+                        from notify import tell as _notify_emit
+                        from runs import run_dir as _run_dir_notify
+                        # The follow-up is only owed when the early notify
+                        # actually reached the user: a CONFIGURED hook that
+                        # failed to deliver downgrades back to a full
+                        # run_completed — a verdict for an answer the user never
+                        # received is worse than a late answer (review
+                        # 2026-08-13).
+                        from notify import early_reached as _early_reached_fn
+                        _early_reached = _early_reached_fn(_vp_meta)
+                        if _card is None:
+                            # curation failed: the record's own verdict is
+                            # the story, never an id (review r16 — the
+                            # sweeps' fallback, shared)
+                            try:
+                                from audit_repair import _story_payload as _fallback_story
+                                _card = _fallback_story(_hid, _run_dir_notify(_hid), None,
+                                                        by="finalize")
+                            except Exception:
+                                _card = None
+                        if _early_reached:
+                            _payload = dict(_card or {"handle_id": _hid,
+                                                      "status": _status})
+                            # "Revised answer" means a REPLACEMENT LOOP shipped
+                            # after the early notify (gate escalation / closure
+                            # restart) AND its text differs. A bare sha compare
+                            # false-fires when curation.answer_synthesis is ON —
+                            # two stochastic syntheses of the same run word the
+                            # same answer differently (review 2026-08-13).
+                            _final_answer = str(
+                                _payload.get("answer_summary", "") or "")
+                            _final_sha = (hashlib.sha256(
+                                _final_answer.encode("utf-8")).hexdigest()
+                                if _final_answer else "")
+                            _loop_replaced = bool(
+                                _meta_loop_ids
+                                and _vp_meta.get("loop_id")
+                                and _meta_loop_ids[-1] != _vp_meta.get("loop_id"))
+                            _payload["answer_changed"] = bool(
+                                _loop_replaced and _final_sha
+                                and _final_sha != _vp_meta.get("answer_sha", ""))
+                            _kind = "run_verdict"
+                            _delivered = _notify_emit(
+                                _kind, _payload,
+                                run_dir=str(_run_dir_notify(_hid)),
+                            )
+                        else:
+                            _kind = "run_completed"
+                            _delivered = _notify_emit(
+                                _kind,
+                                _card or {"handle_id": _hid, "status": _status},
+                                run_dir=str(_run_dir_notify(_hid)),
+                            )
+                        # The story was TOLD when its owed channel acknowledged
+                        # it (`notify.tell`: the hook ran cleanly when one is
+                        # configured for the event, else the journal row was
+                        # written — review r15: "no hook" is not "delivered");
+                        # a channel that failed leaves it owed — the
+                        # untold-finalize sweep retries it (review r13: an
+                        # attempt is not an acknowledgment). Recorded so a
+                        # repair sweep does not tell it again; `finalized_at`
+                        # is the final CLOSE, which precedes this emit — not
+                        # delivery evidence (review r12). A record that fails
+                        # to stamp errs toward a repeated notify, never a
+                        # missing one.
+                        # ...and never while this run's resolving write is
+                        # still KEPT (`_written is None`): the card told then
+                        # is the pending one, and the resolver — this
+                        # process's drain, or any verdict sweep — tells the
+                        # verdict and records that (review r16: the finalize
+                        # acknowledged "verdict pending" as the final story
+                        # and the repaired verdict was never told).
+                        _told = bool(_delivered) and _written is not None
+                        if _told:
+                            try:
+                                from runs import stamp_run_metadata_for as _srm_told
+                                _srm_told(_hid, {"final_notified_at": datetime.now(
+                                    timezone.utc).isoformat()})
+                            except Exception:
+                                pass
+                        elif _written is None:
+                            log.warning("finalize for %s told %s over a kept resolution; "
+                                        "the resolver tells the verdict", _hid, _kind)
+                        else:
+                            log.warning("the owed notify channel did not acknowledge %s for %s; "
+                                        "the untold-finalize sweep retries it", _kind, _hid)
                     except Exception:
                         pass
-                # Substrate notification: the run_card IS the completion payload
-                # (status, done!=achieved class, result excerpt + path).
-                # Async-tail phase 2: when the answer already went out at
-                # final-step compile (verdict_pending marker, notified_early),
-                # this emit becomes the VERDICT follow-up (run_verdict) —
-                # closure/gate have run by now, the marker was resolved just
-                # above (before close_run, so the tripwire kept its
-                # authority), and the re-curated card carries the verdict.
-                try:
-                    from notify import emit as _notify_emit
-                    from runs import run_dir as _run_dir_notify
-                    # The follow-up is only owed when the early notify
-                    # actually reached the user: a CONFIGURED hook that
-                    # failed to deliver downgrades back to a full
-                    # run_completed — a verdict for an answer the user never
-                    # received is worse than a late answer (review
-                    # 2026-08-13).
-                    _early_reached = bool(
-                        _vp_meta.get("notified_early")
-                        and (not _vp_meta.get("hook_configured")
-                             or _vp_meta.get("hook_delivered")))
-                    if _early_reached:
-                        _payload = dict(_card or {"handle_id": _hid,
-                                                  "status": _status})
-                        # "Revised answer" means a REPLACEMENT LOOP shipped
-                        # after the early notify (gate escalation / closure
-                        # restart) AND its text differs. A bare sha compare
-                        # false-fires when curation.answer_synthesis is ON —
-                        # two stochastic syntheses of the same run word the
-                        # same answer differently (review 2026-08-13).
-                        _final_answer = str(
-                            _payload.get("answer_summary", "") or "")
-                        _final_sha = (hashlib.sha256(
-                            _final_answer.encode("utf-8")).hexdigest()
-                            if _final_answer else "")
-                        _loop_replaced = bool(
-                            _meta_loop_ids
-                            and _vp_meta.get("loop_id")
-                            and _meta_loop_ids[-1] != _vp_meta.get("loop_id"))
-                        _payload["answer_changed"] = bool(
-                            _loop_replaced and _final_sha
-                            and _final_sha != _vp_meta.get("answer_sha", ""))
-                        _notify_emit(
-                            "run_verdict", _payload,
-                            run_dir=str(_run_dir_notify(_hid)),
-                        )
-                    else:
-                        _notify_emit(
-                            "run_completed",
-                            _card or {"handle_id": _hid, "status": _status},
-                            run_dir=str(_run_dir_notify(_hid)),
-                        )
-                except Exception:
-                    pass
+                finally:
+                    # review r21: repair must wait for the owner's close and tell.
+                    if _owed_obligation is not None:
+                        with _UNSETTLED_LOCK:
+                            _UNSETTLED_TRANSITIONS[_hid] = _owed_obligation
                 # Tail cost lane (2026-08-13): the drains' LLM calls (lesson
                 # extraction, crystallization, promotion validation, evolver)
                 # join the loop's cost rows via the same scope.
@@ -1109,6 +1335,7 @@ def _handle_impl(
     origin: Optional[Origin] = None,
     persona: Optional[str] = None,
     measurement_class: Optional[str] = None,
+    fresh: bool = False,
 ) -> HandleResult:
     """Process an incoming request through Maro's handle.
 
@@ -1223,6 +1450,13 @@ def _handle_impl(
     # execution floor is the MID role default unless the operator opts in).
     _pfx = _apply_prefixes(message)
     message = _pfx.message
+    # review r26: retain raw prompt identity, but persist the semantic goal
+    # prefixes stripped so future landscape scans compare user intent only.
+    try:
+        from runs import stamp_run_metadata as _stamp_stripped_goal
+        _stamp_stripped_goal({"goal": message})
+    except Exception:
+        pass
     # Explicit persona= wins over a prefix-forced persona (full precedence
     # logic + registry validation happens later where PersonaRegistry is in
     # scope) — but the model_tier floor below is resolved now, well before
@@ -1270,6 +1504,175 @@ def _handle_impl(
         adapter = build_adapter(model=model or assign_model_by_role("worker"))
     elif dry_run:
         adapter = _DryRunAdapter()
+
+    # The landscape (feature-related-runs, src/landscape.py): a goal whose
+    # origin names no parent decides its relation to the workspace's prior
+    # runs — fresh / related / rerun — before it runs. related and rerun make
+    # the goal follow the chosen run (its origin names the parent; recall
+    # walks the lineage, lessons mint at its root) and the prior's answer
+    # rides into the request as context. `--after` already named the parent
+    # (operator override); `--fresh` and dry runs record a skipped landscape.
+    _related_ctx = ""
+    # The project the landscape's decision binds (feature 2 follow-up,
+    # 2026-09-13, decree [[feedback_decisions_belong_to_maro]]): a goal
+    # that follows a prior run lands where that run's work is. "" when
+    # fresh, overridden, or the chosen run's project is gone. The
+    # context-only project is the one the automatic fallbacks keep out of.
+    _landscape_project = ""
+    _context_only_project = ""
+    # review r27: the binding helper can run at the pre-execution clarification exit.
+    _agenda_project = ""
+    _project_binding = ""
+    _binding_goal = message  # review r30: project naming uses intent before BLE paraphrase.
+    _landscape_decided = False
+    _origin_as_given = dict(origin) if origin else None
+
+    def _decide_landscape(goal_text: str) -> None:
+        # The stage as one decision over `goal_text`, re-runnable: the
+        # clarified goal (a channel reply that names other work than the
+        # goal as submitted) is judged again, and everything the first
+        # decision derived — origin, related context, the bound and the
+        # context-only project — is replaced, never merged (review
+        # 2026-09-13 round 2). Starts from the origin the CALLER gave.
+        nonlocal origin, _related_ctx, _landscape_project, _context_only_project, _landscape_decided
+        import landscape as _landscape
+        def _judge(_adapter=adapter):
+            # the landscape's one call rides the hosted-free family when
+            # it is available (same seat as the NOW verdict judge), else
+            # the run's own adapter — a cheap call either way. Built
+            # only when there is a candidate to judge.
+            try:
+                from hosted_free import build_hosted_free_adapter as _hf_build
+                _hf = _hf_build()
+            except Exception:
+                _hf = None
+            return _hf if _hf is not None else _adapter
+        _land = _landscape.decide(
+            goal_text, handle_id=handle_id,
+            adapter=None if dry_run else _judge,
+            fresh=bool(fresh or dry_run),
+            why="" if fresh else ("dry_run" if dry_run else ""))
+        # Everything the decision derives is computed BEFORE anything is
+        # recorded or installed, so a failure anywhere leaves both the
+        # persisted and the live state as they were (review r4: a context
+        # read raising after the stamp left a new parent on disk with the
+        # old project live). A re-decision replaces the stamped origin in
+        # the same write as the record (even with an empty one): the first
+        # decision's parent must not outlive it; apply raises when nothing
+        # was recorded.
+        _new_ctx = _landscape.related_context(_land)
+        _new_project = _landscape.chosen_project(_land)
+        _new_context_only = _landscape.context_only_project(_land)
+        _new_origin = _landscape.apply(handle_id, dict(_origin_as_given) if _origin_as_given else None,
+                                       _land, replace=_landscape_decided)
+        origin = _new_origin
+        _related_ctx, _landscape_project, _context_only_project = _new_ctx, _new_project, _new_context_only
+        _landscape_decided = True
+        # The decision is committed above. What follows is reporting: an
+        # exception here (a closed stderr, a logging handler that fails)
+        # must not reach the stage-failed handler, which would record the
+        # run as FRESH over a decision that is recorded, installed, and
+        # driving the run (review 2026-09-13 round 5).
+        try:
+            log.info("landscape: %s (%s) %d candidate(s) of %d scanned%s",
+                     _land.get("relation"), _land.get("rule"),
+                     len(_land.get("candidates") or []), _land.get("scanned", 0),
+                     f" → follows {_land['chosen']}" if _land.get("chosen") else "")
+            if verbose:
+                print(f"[maro:{handle_id}] landscape: {_land.get('relation')} "
+                      f"({_land.get('rule')}; {len(_land.get('candidates') or [])} "
+                      f"candidate(s) of {_land.get('scanned', 0)} scanned)"
+                      + (f" — follows run {_land['chosen']}: {_land.get('reason', '')}"
+                         if _land.get("chosen") else ""),
+                      file=sys.stderr, flush=True)
+        except Exception:
+            pass
+
+    def _bind_project() -> None:
+        """Resolve and durably record the AGENDA project's identity once."""
+        # review r27: one helper gives early clarification and execution the same precedence.
+        nonlocal _agenda_project, _project_binding
+        # Project identity, by precedence (2026-09-13): the operator's
+        # explicit project (an override, never the design) — or, riding the
+        # same argument, the dispatch NAVIGATOR's pick from the recent-
+        # projects menu (handle_queue: Maro's own decision, made with
+        # project evidence; recorded as `navigator`, not as an operator's
+        # word); the project of the run the LANDSCAPE chose and judged the
+        # goal to CONTINUE; an existing project literally named in the goal;
+        # else the minted slug. review r28: `parent` is reached only when an
+        # origin names a parent and the landscape was not consulted (notably
+        # explicit CLI --after), so it is effectively an operator-class
+        # override recorded under its own name. Dispatch forks do not carry
+        # parent_project and retain their named/minted child-project behavior.
+        _nav_pick = ""
+        if isinstance((origin or {}).get("dispatch_navigator"), dict):
+            _nav_pick = str(origin["dispatch_navigator"].get("project") or "")
+        if project and project == _nav_pick:
+            _agenda_project, _project_binding = project, "navigator"
+        elif project:
+            _agenda_project, _project_binding = project, "operator"
+        elif _landscape_project:
+            _agenda_project, _project_binding = _landscape_project, "landscape"
+        else:
+            # review r27: --after inherits only a validated, existing project directory.
+            _parent_project = ""
+            try:
+                import landscape as _binding_landscape
+                from orch_items import projects_root as _binding_projects_root
+                _candidate = _binding_landscape.project_name(
+                    (origin or {}).get("parent_project"))
+                if (_candidate
+                        and (_binding_projects_root() / _candidate).is_dir()
+                        and _binding_landscape.project_inside_root(_candidate)):
+                    _parent_project = _candidate
+            except Exception:
+                _parent_project = ""
+            if _parent_project:
+                _agenda_project, _project_binding = _parent_project, "parent"
+            else:
+                _agenda_project, _project_binding = _project_for_goal(
+                    _binding_goal or message,
+                    (_context_only_project,) if _context_only_project else ())
+        if _context_only_project and _project_binding in ("named", "minted"):
+            log.info("project binding: %s (%s) keeps out of %s (context only)",
+                     _agenda_project, _project_binding, _context_only_project)
+        if _landscape_project and _landscape_project != _agenda_project:
+            log.warning("project binding: %s (%s) outranks the landscape's %s",
+                        _agenda_project, _project_binding, _landscape_project)
+        try:
+            from runs import stamp_run_metadata as _stamp_project_metadata
+            if _stamp_project_metadata({"project": _agenda_project,
+                                        "project_binding": _project_binding}) is None:
+                log.warning("project binding: %s (%s) not recorded in run metadata",
+                            _agenda_project, _project_binding)
+        except Exception:
+            log.warning("project binding: %s (%s) not recorded in run metadata",
+                        _agenda_project, _project_binding, exc_info=True)
+        log.info("project binding: %s (%s)", _agenda_project, _project_binding)
+
+    if not (origin or {}).get("parent_handle_id"):
+        try:
+            # review r26: routing prefixes must not dilute lexical similarity.
+            _decide_landscape(message)
+        except Exception as _land_exc:
+            # The decision is recorded even when the stage itself fails: an
+            # unreadable landscape is fresh, and the run is not blocked on
+            # it. Nothing the failed stage derived drives the run: the
+            # origin stays what the caller gave (apply's result is only
+            # bound on success) and the related context is still "" (it is
+            # rendered last). If even the fresh record cannot be written,
+            # the run proceeds as a pre-landscape run would, and says so.
+            log.warning("landscape: stage failed, running fresh: %s", _land_exc)
+            _fallback = None
+            try:
+                from runs import stamp_run_metadata_for as _stamp_land
+                _fallback = _stamp_land(handle_id, {"landscape": {
+                    "rule": "judge_unreadable", "relation": "fresh",
+                    "reason": f"stage failed: {str(_land_exc)[:200]}"}})
+            except Exception as _stamp_exc:
+                log.warning("landscape: fresh record not written either: %s", _stamp_exc)
+            if _fallback is None:
+                log.warning("landscape: %s runs with NO landscape record (metadata not writable)", handle_id)
 
     # Classify intent
     introspects_self = False
@@ -1400,7 +1803,8 @@ def _handle_impl(
             # Fall through to the agenda branch below
 
     if lane == "now":
-        outcome = _run_now(message, handle_id, adapter, verbose=verbose)
+        outcome = _run_now(message, handle_id, adapter, verbose=verbose,
+                           context=_related_ctx)
 
         # Status honesty for autonomous callers: NOW "done" means the
         # completion call returned, not that the goal was achieved — a
@@ -1410,10 +1814,10 @@ def _handle_impl(
         # human reading the text) get a cheap self-verdict and demote to
         # "incomplete" when the response reports non-fulfillment.
         # Interactive calls keep raw speed.
-        if origin is not None and not dry_run and outcome.get("status") == "done":
+        if _autonomous_origin(origin) and not dry_run and outcome.get("status") == "done":
             outcome = _verify_now_outcome(
                 message, outcome, adapter, wall_start=wall_started_at)
-        elif (origin is None and not dry_run
+        elif (not _autonomous_origin(origin) and not dry_run
                 and outcome.get("status") == "done"
                 and _interactive_now_verdict_enabled()):
             # Interactive half of the NOW verdict pipe (chunk B, 2026-07-31 —
@@ -1820,7 +2224,6 @@ def _handle_impl(
         if not dry_run and not project and _is_meta_command:
             try:
                 from conductor import conduct
-                from agent_loop import _goal_to_slug
                 conductor_response = conduct(
                     message,
                     adapter=adapter,
@@ -1828,7 +2231,6 @@ def _handle_impl(
                     dry_run=False,
                 )
                 elapsed = int((time.monotonic() - started_at) * 1000)
-                conductor_project = _goal_to_slug(message)
                 return HandleResult(
                     handle_id=handle_id,
                     lane="agenda",
@@ -1837,7 +2239,8 @@ def _handle_impl(
                     message=message,
                     status="done",
                     result=conductor_response.message,
-                    project=conductor_project,
+                    # review r27: a Conductor meta-command executes without binding a project.
+                    project="",
                     elapsed_ms=elapsed,
                     artifact_path=None,
                 )
@@ -1853,7 +2256,66 @@ def _handle_impl(
             "MARO_YOLO",
             str(_cfg.get("yolo", "false")).strip().lower() == "true",
         )
+        # review r28: exact-input rerun identity is invalid after a live reply changes intent.
+        _clarified = False
+        # review r29: keep live clarification outside the BLE input so a
+        # mechanical rewrite cannot paraphrase or erase the operator's answer.
+        _clarification_suffix = ""
+
+        def _pause_for_clarification(question: str) -> HandleResult:
+            """Bind and durably pause every clarification path without an answer."""
+            # review r29: no channel, timeout, blank input, and channel errors
+            # all share the same durable pause and returned binding.
+            try:
+                _bind_project()
+            except Exception as exc:
+                log.warning(
+                    "clarification: project binding failed, pausing unbound: %s",
+                    exc,
+                )
+            _pause_recorded = False  # review r30: never claim a pause that is absent on disk.
+            try:
+                from runs import stamp_run_metadata as _stamp_q
+                from stop_verdicts import PAUSE_OP_CLARIFICATION
+                _pause_recorded = _stamp_q({
+                    "clarification_question": question,
+                    "pause_reason": PAUSE_OP_CLARIFICATION,
+                    # review r30: the current enriched goal belongs to this question.
+                    "clarification_base_goal": message,
+                }) is not None
+            except Exception:
+                _pause_recorded = False
+            elapsed = int((time.monotonic() - started_at) * 1000)
+            if not _pause_recorded:
+                # review r30: an unrecorded clarification cannot be answered later.
+                log.warning("clarification: pause could not be recorded for %s", handle_id)
+                return HandleResult(
+                    handle_id=handle_id, lane="agenda",
+                    lane_confidence=confidence,
+                    classification_reason=reason + " [clarity pause write failed]",
+                    message=message, status="error",
+                    result=(f"Before starting I need to clarify: {question}, but the "
+                            "pause could not be recorded; please re-submit the goal"),
+                    project=_agenda_project, elapsed_ms=elapsed,
+                )
+            return HandleResult(
+                handle_id=handle_id,
+                lane="agenda",
+                lane_confidence=confidence,
+                classification_reason=reason + " [clarity check: ambiguous]",
+                message=message,
+                status="clarification_needed",
+                result=(
+                    f"Before starting, I need to clarify one thing:\n\n"
+                    f"{question}\n\n"
+                    f"*(Add `yolo: true` to user/CONFIG.md to skip this check.)*"
+                ),
+                project=_agenda_project,
+                elapsed_ms=elapsed,
+            )
+
         if not dry_run and not _yolo:
+            _unclear_question = ""  # review r30: preserve an UNCLEAR verdict across later diagnostics.
             try:
                 from intent import check_goal_clarity
                 _clarity = check_goal_clarity(message, adapter=adapter)
@@ -1867,54 +2329,99 @@ def _handle_impl(
                 except Exception:
                     pass
                 if not _clarity.get("clear"):
-                    _q = _clarity.get("question", "Could you clarify the goal?")
+                    # review r31: an empty model question still preserves the UNCLEAR verdict.
+                    _q = _clarity.get("question") or "Could you clarify the goal?"
+                    _unclear_question = _q  # review r30: only a failed CHECK may degrade to execution.
                     if verbose:
                         print(f"[maro:{handle_id}] clarity check: UNCLEAR — {_q}", file=sys.stderr, flush=True)
                     if channel is not None:
-                        # Ask via channel and wait for reply — then continue with enriched goal
-                        _reply = channel.ask(_q)
-                        if _reply:
-                            message = f"{message}\n\nAdditional context: {_reply}"
-                        # Fall through to continue execution
-                    else:
-                        # No channel — return clarification_needed (CLI path).
-                        # Stamp the question into run metadata: the HandleResult
-                        # is ephemeral on queue/dispatch paths, and a
-                        # clarification_needed record without its question is
-                        # undiagnosable from the other side of the wire.
+                        # review r29: channel failure is an unanswered
+                        # clarification, not failure of the clarity check.
                         try:
-                            from runs import stamp_run_metadata as _stamp_q
-                            from stop_verdicts import PAUSE_OP_CLARIFICATION
-                            _stamp_q({
-                                "clarification_question": _q,
-                                "pause_reason": PAUSE_OP_CLARIFICATION,
-                            })
+                            _reply = (channel.ask(_q) or "").strip()
+                        except Exception as _ask_exc:
+                            log.warning(
+                                "clarification: live channel failed, pausing: %s",
+                                _ask_exc,
+                            )
+                            return _pause_for_clarification(_q)
+                        if not _reply:
+                            return _pause_for_clarification(_q)
+                        _clarification_suffix = f"\n\nAdditional context: {_reply}"
+                        message = message + _clarification_suffix
+                        # review r28: a reply changes exact-text identity for downstream recall.
+                        _clarified = True
+                        # review r27: scans must see clarified user intent, not the submitted fragment.
+                        try:
+                            from runs import stamp_run_metadata as _stamp_clarified_goal
+                            _stamp_clarified_goal({"goal": message})
                         except Exception:
                             pass
-                        elapsed = int((time.monotonic() - started_at) * 1000)
-                        return HandleResult(
-                            handle_id=handle_id,
-                            lane="agenda",
-                            lane_confidence=confidence,
-                            classification_reason=reason + " [clarity check: ambiguous]",
-                            message=message,
-                            status="clarification_needed",
-                            result=(
-                                f"Before starting, I need to clarify one thing:\n\n"
-                                f"{_q}\n\n"
-                                f"*(Add `yolo: true` to user/CONFIG.md to skip this check.)*"
-                            ),
-                            elapsed_ms=elapsed,
-                        )
+                        # review r27: do not re-stamp after BLE; goal_after_rewrite owns that transform.
+                        if _landscape_decided:
+                            # the landscape judged the goal AS SUBMITTED;
+                            # the reply may name other work ("this is for
+                            # client B") — decide again over the clarified
+                            # goal before anything binds on the first verdict
+                            _re_decided = False
+                            try:
+                                _decide_landscape(message)
+                                _re_decided = True
+                            except Exception as _re_exc:
+                                # the first decision was about a goal that
+                                # no longer exists: nothing it derived may
+                                # drive the clarified one. The run goes on
+                                # FRESH (the stage-failed policy) — the
+                                # goal-text fallback binds the project, the
+                                # caller's origin stands, no prior context
+                                # rides in (review r4).
+                                log.warning("landscape: re-decision over the clarified goal failed, "
+                                            "running fresh: %s", _re_exc)
+                                origin = dict(_origin_as_given) if _origin_as_given else None
+                                _related_ctx = _landscape_project = _context_only_project = ""
+                                try:
+                                    from runs import stamp_run_metadata_for as _stamp_land_fresh
+                                    _stamp_land_fresh(handle_id, {
+                                        "landscape": {"rule": "judge_unreadable", "relation": "fresh",
+                                                      "reason": f"re-decision failed: {str(_re_exc)[:200]}"},
+                                        "origin": dict(_origin_as_given or {})})
+                                except Exception:
+                                    pass
+                            if _re_decided:
+                                # reporting, outside the failure handler:
+                                # a diagnostic that raises must not turn a
+                                # committed re-decision into a fresh
+                                # record (review r6)
+                                try:
+                                    log.info("landscape: re-decided over the clarified goal")
+                                except Exception:
+                                    pass
+                    else:
+                        return _pause_for_clarification(_q)
             except Exception:
-                pass  # clarity check must never block execution
+                # review r30: failures after UNCLEAR still take its durable pause.
+                if _unclear_question:
+                    return _pause_for_clarification(_unclear_question)
+                pass
+
+        # review r30: bind named projects from the clarification-enriched,
+        # prefix-stripped text, before BLE is allowed to erase literal names.
+        _binding_goal = message
 
         # BLE rewriter — strip prescribed execution steps, keep outcome intent (non-blocking)
         # Bitter Lesson Engineering: embed the "what", let the AI own the "how".
         if not dry_run:
             try:
                 from intent import rewrite_imperative_goal
-                _rewritten = rewrite_imperative_goal(message, adapter=adapter)
+                # review r29: BLE sees the submitted goal, while the exact
+                # live answer is appended after any rewrite.
+                _rewrite_input = (
+                    message[:-len(_clarification_suffix)]
+                    if _clarification_suffix
+                    and message.endswith(_clarification_suffix)
+                    else message
+                )
+                _rewritten = rewrite_imperative_goal(_rewrite_input, adapter=adapter)
                 # The rewrite left no record at all: metadata.prompt keeps the
                 # raw input, so a rewritten goal and an untouched one were
                 # indistinguishable afterwards. (The atlas used to infer this
@@ -1924,12 +2431,12 @@ def _handle_impl(
                     from run_trace import record_edge as _rec
                     _rec("route.clarity", "route.rewrite",
                          handle_id=handle_id,
-                         rewritten=bool(_rewritten != message),
-                         goal_before=message if _rewritten != message else "",
-                         goal_after=_rewritten if _rewritten != message else "")
+                         rewritten=bool(_rewritten != _rewrite_input),
+                         goal_before=_rewrite_input if _rewritten != _rewrite_input else "",
+                         goal_after=_rewritten if _rewritten != _rewrite_input else "")
                 except Exception:
                     pass
-                if _rewritten != message:
+                if _rewritten != _rewrite_input:
                     if verbose:
                         print(f"[maro:{handle_id}] BLE rewrite: imperative goal → outcome goal", file=sys.stderr, flush=True)
                     try:
@@ -1937,12 +2444,30 @@ def _handle_impl(
                         _srm({"goal_rewritten": True, "goal_after_rewrite": _rewritten})
                     except Exception:
                         pass
-                    message = _rewritten
+                # review r29: this assignment also protects the suffix when
+                # the base goal did not require rewriting.
+                message = _rewritten + _clarification_suffix
             except Exception:
                 pass  # rewrite failures must never block a run
 
         if verbose:
             print(f"[maro:{handle_id}] AGENDA lane — starting loop...", file=sys.stderr, flush=True)
+
+        # Resolve persistent identity once for every AGENDA shape — including
+        # mode:thin (review r26: the thin branch used to return before this
+        # block, so a thin run carried the landscape relation but no project,
+        # and a later follow-up choosing it landed named/minted; thin
+        # execution takes no project argument, so the continuation identity
+        # lives in metadata and in the returned HandleResult — a minted
+        # fallback may create its project directory, the same accepted
+        # identity side effect as the full loop). It is both the loop fence
+        # and the deterministic goal-family key used by recall: a semantic
+        # rephrase explicitly routed to the same project must inherit prior
+        # decisions/artifact paths without an embedding or another LLM call.
+        # Stamp it before recall so the next run can join this one even
+        # though metadata was opened before lane classification.
+        # review r27: execution and the clarification exit share the same binder.
+        _bind_project()
 
         # mode:thin — use factory_thin loop (stripped scaffolding) instead of
         # full Mode 2. Kept as an operator-only escape hatch + benchmark
@@ -1952,6 +2477,21 @@ def _handle_impl(
             try:
                 from factory_thin import run_factory_thin
                 from conductor import assign_model_by_role
+                # review r28: declare thin provenance durably before any thin output exists.
+                try:
+                    from runs import stamp_run_metadata as _stamp_thin_execution
+                    if _stamp_thin_execution({"execution": "thin"}) is None:
+                        log.warning(
+                            "mode:thin: execution marker not recorded for %s — "
+                            "curation may scan the bound project",
+                            handle_id,
+                        )
+                except Exception:
+                    log.warning(
+                        "mode:thin: execution marker not recorded for %s — "
+                        "curation may scan the bound project",
+                        handle_id,
+                    )
                 _thin_result = run_factory_thin(
                     message,
                     model=model or assign_model_by_role("worker"),
@@ -1961,6 +2501,22 @@ def _handle_impl(
                 _thin_text = _thin_result.final_report or "[no output produced]"
                 if _thin_result.status != "done":
                     _thin_text += f"\n\n⚠️ Thin loop status: {_thin_result.status}"
+                # review r28: report persistence is independent of the already-recorded mode marker.
+                try:
+                    from runs import current_run_dir as _thin_current_run_dir
+                    _thin_rd = _thin_current_run_dir()
+                    if _thin_rd is None:
+                        raise RuntimeError("no active run directory")
+                    _thin_build = _thin_rd / "build"
+                    _thin_build.mkdir(parents=True, exist_ok=True)
+                    (_thin_build / "loop-thin-RESULT.md").write_text(
+                        _thin_text, encoding="utf-8")
+                except Exception as exc:
+                    log.warning(
+                        "mode:thin: thin report not persisted; the answer is only "
+                        "in the returned result: %s",
+                        exc,
+                    )
                 return HandleResult(
                     handle_id=handle_id,
                     lane="agenda",
@@ -1969,7 +2525,7 @@ def _handle_impl(
                     message=message,
                     status=_thin_result.status,
                     result=_thin_text,
-                    project=project or "",
+                    project=_agenda_project,
                     tokens_in=_thin_result.total_tokens // 2,
                     tokens_out=_thin_result.total_tokens // 2,
                     elapsed_ms=elapsed,
@@ -1978,22 +2534,31 @@ def _handle_impl(
                 log.warning("mode:thin failed, falling back to Mode 2: %s", _thin_exc)
                 # Fall through to run_agent_loop below
 
-        # Resolve persistent identity once for every full AGENDA shape.  It is
-        # both the loop fence and the deterministic goal-family key used by
-        # recall: a semantic rephrase explicitly routed to the same project
-        # must inherit prior decisions/artifact paths without an embedding or
-        # another LLM call.  Stamp it before recall so the next run can join
-        # this one even though metadata was opened before lane classification.
-        _agenda_project = project or _default_project_for(message)
-        try:
-            from runs import stamp_run_metadata as _stamp_project_metadata
-            _stamp_project_metadata({"project": _agenda_project})
-        except Exception:
-            pass
+        # review r27: prefix exits need the context already known before persona and
+        # completion-standard selection, which intentionally remain default-lane only.
+        _base_context_parts = []
+        if prior_context:
+            _base_context_parts.append(
+                f"== Prior run context (for continuation) ==\n{prior_context}\n"
+                f"== End prior context — continue from here =="
+            )
+        if operator_context:
+            _base_context_parts.append(operator_context)
+        if _related_ctx:
+            _base_context_parts.append(_related_ctx)
+        if _now_escalation_context:
+            _base_context_parts.append(
+                f"== Escalated from NOW lane ==\n{_now_escalation_context}\n"
+                f"== End NOW-lane context =="
+            )
+        _prefixed_context_kwargs = (
+            {"ancestry_context_extra": "\n\n".join(_base_context_parts)}
+            if _base_context_parts else {})
 
         # pipeline: prefix — user specifies explicit steps as "step1 | step2 | step3".
         # Bypasses LLM decomposition entirely; runs the given steps in order.
         if _pipeline_prefix:
+            # review r28: parse the preset submitted text only; a clarification is goal context, not a step.
             _pipe_raw = _pfx.message
             _pipe_steps = [s.strip() for s in _pipe_raw.split("|") if s.strip()]
             if not _pipe_steps:
@@ -2002,7 +2567,7 @@ def _handle_impl(
                 if verbose:
                     print(f"[maro] pipeline: {len(_pipe_steps)} steps: {_pipe_steps}", file=sys.stderr, flush=True)
                 _pipe_result = run_agent_loop(
-                    _pipe_raw,
+                    message,  # review r28: execute the clarified goal while retaining preset steps above.
                     project=_agenda_project,
                     model=model,
                     adapter=adapter,
@@ -2012,6 +2577,7 @@ def _handle_impl(
                     measurement_class=measurement_class,
                     handle_id=handle_id,
                     introspection_access=introspects_self,
+                    **_prefixed_context_kwargs,
                     # Async-tail: this lane returns through handle()'s
                     # finalize, which drains post-notify — same contract as
                     # the agenda lane (review of 707a541: these lanes were
@@ -2031,7 +2597,7 @@ def _handle_impl(
             if verbose:
                 print("[maro] team: dag execution mode (parallel_fan_out=4)", file=sys.stderr, flush=True)
             _team_result = run_agent_loop(
-                _pfx.message,
+                message,  # review r28: live clarification must reach every execution branch.
                 project=_agenda_project,
                 model=model,
                 adapter=adapter,
@@ -2041,6 +2607,7 @@ def _handle_impl(
                 measurement_class=measurement_class,
                 handle_id=handle_id,
                 introspection_access=introspects_self,
+                **_prefixed_context_kwargs,
                 defer_maintenance=True,  # drains in handle()'s finalize
             )
             return _loop_result_to_handle(
@@ -2062,6 +2629,7 @@ def _handle_impl(
                 measurement_class=measurement_class,
                 handle_id=handle_id,
                 introspection_access=introspects_self,
+                **_prefixed_context_kwargs,
                 defer_maintenance=True,  # drains in handle()'s finalize
             )
             return _loop_result_to_handle(
@@ -2071,10 +2639,10 @@ def _handle_impl(
             )
 
         _ralph_from_cfg = _cfg.get("ralph_verify", "").strip().lower() == "true"
-        # Dispatched goals arrive project-less; default the loop's project
-        # identity via _default_project_for — an existing project named in the
-        # goal, else the minted goal slug (same derivation the scope pass uses
-        # below) — so the cwd fence, per-step cwd binds, and prompt project_dir
+        # Dispatched goals arrive project-less; the loop's project identity
+        # is `_agenda_project` — bound above by precedence (operator /
+        # navigator / landscape / named / minted; the scope pass uses the
+        # same value) — so the cwd fence, per-step cwd binds, and prompt project_dir
         # all engage instead of silently running unfenced from the launch cwd
         # (BACKLOG #1, 3rd repro), and scope + execution stop pointing at two
         # different project dirs. `project` itself stays as-given: routing
@@ -2098,16 +2666,26 @@ def _handle_impl(
         # fork records its lineage in the child project's ancestry.json —
         # the same chain build_ancestry_prompt injects and recall falls back
         # to — so origin-walk and ancestry.json stop being two disagreeing
-        # sources. First fork wins; parent identity derives from parent_goal
-        # via the same _default_project_for the parent's own loop used.
-        if origin:
+        # sources. First fork wins; parent identity is the project the
+        # parent run RECORDED (its metadata — a landscape-bound parent works
+        # in a project its goal text never names, review 2026-09-13), and
+        # only for a parent with no recorded project (no run found, or a
+        # run whose metadata carries no valid name) the goal-text
+        # derivation its own loop would have used.
+        if origin and origin.get("related_by") != "landscape":
+            # A landscape-decided relation is a RUN relation (origin +
+            # recall thread carry it); it is not a project fork, so it
+            # never writes the project's ancestry.json — that file is the
+            # goal-slug channel the landscape retired (review 2026-09-05).
             try:
                 from ancestry import record_fork_ancestry
                 from orch_items import project_dir as _anc_pdir
                 _par_goal = str(origin.get("parent_goal") or "").strip()
                 _par_hid = str(origin.get("parent_handle_id") or "").strip()
                 _child_slug = str(_loop_kwargs.get("project") or "")
-                _par_slug = _default_project_for(_par_goal) if _par_goal else ""
+                from landscape import recorded_project as _recorded_project
+                _par_slug = (_recorded_project(_par_hid) if _par_hid else "") or \
+                    (_default_project_for(_par_goal) if _par_goal else "")
                 if (_par_goal or _par_hid) and _child_slug and _child_slug != _par_slug:
                     record_fork_ancestry(
                         _anc_pdir(_child_slug),
@@ -2181,25 +2759,8 @@ def _handle_impl(
                 log.info("handle: persona=%s conf=%.2f forced=%s", _pname, _pconf, _forced_honored)
         except Exception:
             pass
-        _extra_ctx_parts = []
-        if prior_context:
-            _extra_ctx_parts.append(
-                f"== Prior run context (for continuation) ==\n{prior_context}\n"
-                f"== End prior context — continue from here =="
-            )
-        # Dispatch-envelope operator channel (docs/DISPATCH_ENVELOPE.md):
-        # advisory operator framing rides context, never the goal — lesson
-        # extraction receives the goal only, so this text is structurally
-        # unlearnable. Arrives pre-labeled (dispatch_envelope.operator_block).
-        if operator_context:
-            _extra_ctx_parts.append(operator_context)
-        # NOW→AGENDA verdict escalation: the failed quick answer rides along
-        # so the orchestrated run doesn't re-answer from model knowledge.
-        if _now_escalation_context:
-            _extra_ctx_parts.append(
-                f"== Escalated from NOW lane ==\n{_now_escalation_context}\n"
-                f"== End NOW-lane context =="
-            )
+        # review r27: extend the same base list used by prefix paths with default-only context.
+        _extra_ctx_parts = list(_base_context_parts)
         if _persona_ctx:
             _extra_ctx_parts.append(_persona_ctx)
         # Completion standard — injected for every AGENDA run
@@ -2244,13 +2805,16 @@ def _handle_impl(
         # Matched on _raw_input (pre-prefix-strip) — the same field the
         # intake record stores. exclude_handle_id: this handle's own row was
         # already written above.
-        try:
-            from rerun_identity import brief_for_goal as _rerun_brief
-            _rerun_block = _rerun_brief(_raw_input, exclude_handle_id=handle_id)
-            if _rerun_block:
-                _extra_ctx_parts.append(_rerun_block)
-        except Exception as _rerun_exc:
-            log.debug("handle: rerun brief skipped: %s", _rerun_exc)
+        # review r28: after clarification exact-text identity no longer holds;
+        # losing a brief is safer than injecting another intent's deliverables.
+        if not _clarified:
+            try:
+                from rerun_identity import brief_for_goal as _rerun_brief
+                _rerun_block = _rerun_brief(_raw_input, exclude_handle_id=handle_id)
+                if _rerun_block:
+                    _extra_ctx_parts.append(_rerun_block)
+            except Exception as _rerun_exc:
+                log.debug("handle: rerun brief skipped: %s", _rerun_exc)
 
         # Phase 65 minimum viable experiment: scope generation via inversion.
         # Gated by `scope_generation` config flag (default off). `scope_ab_skip`
@@ -2282,7 +2846,7 @@ def _handle_impl(
                     # Scopes any proxy-interpretation decision to this project
                     # (blank domain would inject it into every project's
                     # recall — chunk-3 review finding).
-                    decision_domain=project or _default_project_for(message),
+                    decision_domain=_agenda_project,
                 )
                 # Keep _scope as the scope-view for back-compat with the
                 # existing artifact-write / captain's-log / ab-skip branches
@@ -2292,7 +2856,7 @@ def _handle_impl(
                 # successful scope.md persistence and raw-dump on parse failure.
                 try:
                     import orch_items as _oi
-                    _scope_project = project or _default_project_for(message)
+                    _scope_project = _agenda_project
                     _proj_dir = _oi.projects_root() / _scope_project / "artifacts"
                     _proj_dir.mkdir(parents=True, exist_ok=True)
                 except Exception:
@@ -2581,7 +3145,7 @@ def _handle_impl(
                                                        status="done")
                     _early_answer = str(
                         (_card_early or {}).get("answer_summary", "") or "")
-                    from notify import emit as _notify_early
+                    from notify import tell as _notify_early, answer_text
                     _delivered = _notify_early(
                         "run_completed",
                         _card_early or {"handle_id": _hid_early,
@@ -2589,16 +3153,13 @@ def _handle_impl(
                                         "verdict_pending": True},
                         run_dir=str(_run_dir_early(_hid_early)),
                     )
-                    # emit() returns True only when the notify HOOK ran
-                    # cleanly; False also means "no hook configured" (the
-                    # event still journals to events.jsonl). Record both
-                    # facts: the finalize downgrades run_verdict back to a
-                    # full run_completed when a CONFIGURED hook failed to
-                    # deliver — otherwise the user's only external message
-                    # would be a verdict for an answer they never received
-                    # (review 2026-08-13, the breaker's at-most-once-
-                    # attempted class again).
+                    # review r17: a clean acknowledgment of an empty card
+                    # is not an answer received. Keep the attempt marker,
+                    # but route the finalize and repairs to a full completion.
                     _vp_marker["notified_early"] = True
+                    # review r18: only qualify the answer the journal actually carries.
+                    _vp_marker["early_told"] = bool(_delivered) and bool(
+                        answer_text(_card_early))
                     _vp_marker["hook_delivered"] = bool(_delivered)
                     try:
                         from config import get as _nc_get
@@ -2698,6 +3259,8 @@ def _handle_impl(
                         diagnosis=_closure_diag,
                         loop_id=getattr(loop_result, "loop_id", "") or "",
                         project=project or getattr(loop_result, "project", "") or "",
+                        regression_obligations=list(
+                            getattr(loop_result, "regression_obligations", None) or []),
                     )
                 _closure = _closure_decision.closure_verdict
             except Exception as _closure_exc:
@@ -2885,6 +3448,8 @@ def _handle_impl(
                                 loop_id=getattr(loop_result, "loop_id", "") or "",
                                 project=project or getattr(loop_result, "project", "") or "",
                                 prior_verdict=_pre_restart_closure,
+                                regression_obligations=list(
+                                    getattr(loop_result, "regression_obligations", None) or []),
                             )
                         _closure = _reverify_decision.closure_verdict
                         if (
@@ -3460,57 +4025,153 @@ def _handle_impl(
                     if verbose:
                         print(f"[maro:{handle_id}] quality gate: ESCALATE → {_next_tier} ({_gate_verdict.reason})",
                               file=sys.stderr, flush=True)
+                    _esc_ready = False
                     if _action == "escalate" and _next_tier:
-                        if verbose:
-                            print(f"[maro:{handle_id}] re-running with model={_next_tier}",
-                                  file=sys.stderr, flush=True)
-                        # Deferred learning drains early here: the retry's
-                        # decompose recalls lessons from the loop it is
-                        # retrying, so they must exist before it plans.
-                        # Tail-scoped: these extraction calls are the failed
-                        # loop's tail spend (review 2026-08-13 — escalation
-                        # paths were the unscoped remainder).
-                        from metrics import tail_cost_scope as _esc_scope
-                        with _esc_scope(
-                                getattr(loop_result, "loop_id", "") or "",
-                                "learning"):
-                            # Durable records first (they hold the tail since
-                            # 2026-08-20), then the in-process fallback
-                            # registry. LEARNING only, and no surface
-                            # refresh: the run is not over — maintenance is
-                            # still owed to the finalize block, and the card
-                            # this would re-render is mid-flight.
-                            try:
-                                from tail_jobs import (run_jobs as _tail_run,
-                                                       KIND_LEARNING)
-                                _tail_run(handle_id, kinds=(KIND_LEARNING,),
-                                          refresh=False, respect_claim=False)
-                            except Exception as _esc_tail_exc:
-                                log.warning(
-                                    "early learning drain failed for %s: %s",
-                                    handle_id, _esc_tail_exc)
-                            _drain_deferred_learning(handle_id)
-                        _escalated_adapter = build_adapter(model=_next_tier)
-                        _pre_escalation_loop = loop_result
-                        _pre_escalation_loop_id = getattr(loop_result, "loop_id", None)
-                        _escalated_project = (
+                        _pre_escalation_project = (
                             project or getattr(loop_result, "project", "") or ""
-                        ) + "-escalated"
-                        # Preserve the normal run contract (measurement
-                        # provenance, handle identity, deferred learning,
-                        # callback/context, repo fence) while changing only
-                        # the fields intrinsic to an escalation retry.
-                        _escalate_kwargs = dict(_loop_kwargs)
-                        _escalate_kwargs.update({
-                            "project": _escalated_project,
-                            "model": _next_tier,
-                            "adapter": _escalated_adapter,
-                            "dry_run": False,
-                            "verbose": verbose,
-                            "loop_reason": "quality_gate_escalate",
-                            "parent_loop_id": _pre_escalation_loop_id,
-                        })
-                        loop_result = run_agent_loop(message, **_escalate_kwargs)
+                        )
+                        _pre_escalation_binding = _project_binding
+                        _escalated_project = _pre_escalation_project + "-escalated"
+                        # the retry's destination is an automatic project
+                        # transition and carries the binding's constraints:
+                        # never the landscape's context-only project, never
+                        # a path outside the projects root (review r3)
+                        from landscape import project_inside_root as _esc_inside, project_name as _esc_name
+                        _esc_exclude = (_context_only_project,) if _context_only_project else ()
+                        if not _esc_name(_escalated_project):
+                            # a path-shaped project is the OPERATOR's explicit
+                            # choice (handle accepts it as given); the retry
+                            # stays beside it — suffixing cannot make a name of
+                            # a path, and the allocator refuses one (review r4)
+                            log.warning("escalation: %r is not a project name (operator path); kept as given",
+                                        _escalated_project)
+                        elif _escalated_project in _esc_exclude or not _esc_inside(_escalated_project):
+                            _esc_base = _escalated_project
+                            _escalated_project = _free_project_name(_esc_base, _esc_exclude, message)
+                            log.info("escalation: %r steps aside to %r", _esc_base, _escalated_project)
+                        # the run's project changes here (loop init stamps
+                        # it again); the binding provenance must not keep
+                        # claiming the landscape/operator chose a project
+                        # they never saw (review 2026-09-13 round 2)
+                        from runs import stamp_run_metadata as _stamp_esc
+                        def _stamp_project_pair(_proj, _bind, _transition=None):
+                            # the pair and, when given, the transition
+                            # record go in ONE write; True when recorded.
+                            # Two attempts; a SETTLEMENT (adopted/reverted)
+                            # that still fails is handed to the finalize,
+                            # which retries it in the write that resolves the
+                            # verdict marker — the record must not say "in
+                            # transition" past the run's end (review r7)
+                            _fields = {"project": _proj, "project_binding": _bind}
+                            if _transition is not None:
+                                _fields["project_transition"] = _transition
+                            for _attempt in (1, 2):
+                                try:
+                                    if _stamp_esc(_fields) is not None:
+                                        return True
+                                except Exception:
+                                    log.warning("project binding: %s (%s) write %d raised",
+                                                _proj, _bind, _attempt, exc_info=True)
+                            if _transition is not None and _transition.get("settled_at"):
+                                with _UNSETTLED_LOCK:
+                                    _UNSETTLED_TRANSITIONS[handle_id] = dict(_fields)
+                                log.error("project transition %s → %s settlement (%s) not recorded; "
+                                          "retried at the finalize, else recovery reverts to the "
+                                          "delivered project", _transition.get("from"),
+                                          _transition.get("to"), _transition.get("outcome"))
+                            else:
+                                log.warning("project binding: %s (%s) not recorded in run metadata",
+                                            _proj, _bind)
+                            return False
+                        # The transition is DURABLE before the destination
+                        # changes: `from` is the delivered project, restored by
+                        # whoever settles the run if this process dies before
+                        # the retry is adopted or reverted (the crash-orphan
+                        # sweep reverts it; review 2026-09-13 round 6). A
+                        # retry whose recovery cannot be recorded is not
+                        # started — the delivered work's identity outranks
+                        # the quality improvement.
+                        _esc_transition = {
+                            "kind": "escalation",
+                            "from": _pre_escalation_project,
+                            "from_binding": _pre_escalation_binding,
+                            "to": _escalated_project,
+                            "since": datetime.now(timezone.utc).isoformat(),
+                        }
+                        def _settled_transition(_outcome):
+                            return {**_esc_transition, "outcome": _outcome,
+                                    "settled_at": datetime.now(timezone.utc).isoformat()}
+                        _esc_ready = _stamp_project_pair(_escalated_project, "escalated", _esc_transition)
+                        if not _esc_ready:
+                            log.warning("escalation: retry not started — the project transition %r → %r "
+                                        "could not be recorded; the delivered work stands",
+                                        _pre_escalation_project, _escalated_project)
+                            _gate_note += ("\n\n⚠️ Quality gate escalation not started: the run's "
+                                           "project transition could not be recorded — shipping "
+                                           "the original loop's output.")
+                    if _action == "escalate" and _next_tier and _esc_ready:
+                        # ONE lifecycle from the transition write to the
+                        # retry's return: anything that raises in between —
+                        # the learning drain, the adapter build, the loop —
+                        # reverts the transition before the error goes up to
+                        # the gate's handler, which ships the original loop
+                        # (review 2026-09-13 round 7: the adapter build sat
+                        # outside the revert and left the transition active
+                        # with the retry project as the record).
+                        try:
+                            if verbose:
+                                print(f"[maro:{handle_id}] re-running with model={_next_tier}",
+                                      file=sys.stderr, flush=True)
+                            # Deferred learning drains early here: the retry's
+                            # decompose recalls lessons from the loop it is
+                            # retrying, so they must exist before it plans.
+                            # Tail-scoped: these extraction calls are the failed
+                            # loop's tail spend (review 2026-08-13 — escalation
+                            # paths were the unscoped remainder).
+                            from metrics import tail_cost_scope as _esc_scope
+                            with _esc_scope(
+                                    getattr(loop_result, "loop_id", "") or "",
+                                    "learning"):
+                                # Durable records first (they hold the tail since
+                                # 2026-08-20), then the in-process fallback
+                                # registry. LEARNING only, and no surface
+                                # refresh: the run is not over — maintenance is
+                                # still owed to the finalize block, and the card
+                                # this would re-render is mid-flight.
+                                try:
+                                    from tail_jobs import (run_jobs as _tail_run,
+                                                           KIND_LEARNING)
+                                    _tail_run(handle_id, kinds=(KIND_LEARNING,),
+                                              refresh=False, respect_claim=False)
+                                except Exception as _esc_tail_exc:
+                                    log.warning(
+                                        "early learning drain failed for %s: %s",
+                                        handle_id, _esc_tail_exc)
+                                _drain_deferred_learning(handle_id)
+                            _escalated_adapter = build_adapter(model=_next_tier)
+                            _pre_escalation_loop = loop_result
+                            _pre_escalation_loop_id = getattr(loop_result, "loop_id", None)
+                            # Preserve the normal run contract (measurement
+                            # provenance, handle identity, deferred learning,
+                            # callback/context, repo fence) while changing only
+                            # the fields intrinsic to an escalation retry.
+                            _escalate_kwargs = dict(_loop_kwargs)
+                            _escalate_kwargs.update({
+                                "project": _escalated_project,
+                                "model": _next_tier,
+                                "adapter": _escalated_adapter,
+                                "dry_run": False,
+                                "verbose": verbose,
+                                "loop_reason": "quality_gate_escalate",
+                                "parent_loop_id": _pre_escalation_loop_id,
+                            })
+                            loop_result = run_agent_loop(message, **_escalate_kwargs)
+                        except BaseException:
+                            # the retry never delivered: the run's project is
+                            # the one holding the delivered work (review r3)
+                            _stamp_project_pair(_pre_escalation_project, _pre_escalation_binding,
+                                                _settled_transition("reverted"))
+                            raise
                         elapsed = int((time.monotonic() - started_at) * 1000)
                         if getattr(loop_result, "loop_id", ""):
                             _run_loop_ids.append(loop_result.loop_id)
@@ -3534,6 +4195,9 @@ def _handle_impl(
                         if _rerun_shipped:
                             _gate_note = f"\n\n✅ Quality gate escalated to {_next_tier} — re-run complete."
                             _contested_claims = []  # fresh run — don't append stale claims
+                            # the retry IS the delivered work now: the
+                            # transition settles as adopted (review r6)
+                            _stamp_project_pair(_escalated_project, "escalated", _settled_transition("adopted"))
                         else:
                             _dead_reason = (
                                 getattr(loop_result, "stuck_reason", None)
@@ -3542,6 +4206,13 @@ def _handle_impl(
                             _dead_loop_id = getattr(loop_result, "loop_id", "") or ""
                             _dead_rerun_loop = loop_result
                             loop_result = _pre_escalation_loop
+                            # the delivered work is the original loop's: the
+                            # run's project and its provenance follow it, or
+                            # the next continuation (landscape, recall,
+                            # curation all read metadata `project`) would
+                            # bind to the dead retry's workspace (review r3)
+                            _stamp_project_pair(_pre_escalation_project, _pre_escalation_binding,
+                                                _settled_transition("reverted"))
                             # Parent ships → its contested claims still apply;
                             # its closure verdict (stamped before the gate ran)
                             # stays the run's verdict — no post-escalate
@@ -3602,6 +4273,8 @@ def _handle_impl(
                                         diagnosis=_post_diag,
                                         loop_id=getattr(loop_result, "loop_id", "") or "",
                                         project=project or getattr(loop_result, "project", "") or "",
+                                        regression_obligations=list(
+                                            getattr(loop_result, "regression_obligations", None) or []),
                                     ).closure_verdict
                                 if (
                                     _post_closure is None
@@ -4184,6 +4857,8 @@ def main(argv=None):
     parser.add_argument("--repo", help="Path to target repo (auto-injects stack context into decompose)")
     parser.add_argument("--model", "-m", help="LLM model string")
     parser.add_argument("--lane", choices=["now", "agenda"], help="Force a specific lane")
+    parser.add_argument("--after", metavar="HANDLE_ID", help="Follow a prior run: this goal joins its lineage (recall walks it; lessons minted here stay with it). Overrides the landscape's own decision.")
+    parser.add_argument("--fresh", action="store_true", help="Skip the landscape: do not look at prior runs; this goal is the root of its own lineage")
     parser.add_argument("--persona", help="Force a specific persona by name (same as a 'persona:<name>:' prefix in the message; unknown names fall back to auto-selection)")
     from ancestry import MEASUREMENT_CLASSES
     parser.add_argument("--measurement-class", choices=MEASUREMENT_CLASSES, default="organic", help="Success-measurement cohort provenance (default: organic)")
@@ -4233,6 +4908,37 @@ def main(argv=None):
                 print(f"[maro] attached {rec['name']} ({rec['bytes']} bytes)",
                       file=sys.stderr)
 
+    if getattr(args, "after", None) and getattr(args, "fresh", False):
+        print("Error: --after and --fresh contradict: one follows a run, the other refuses to look", file=sys.stderr)
+        return 2
+    if getattr(args, "after", None):
+        # Lineage: the new goal follows a prior run. Its origin names the
+        # parent; recall walks the chain; lessons minted here scope to the
+        # chain's root (feature-lineage-memory, 2026-09-05).
+        from runs import resolve_run_dir as _resolve_run_dir
+        _prior = _resolve_run_dir(args.after)
+        if _prior is None:
+            print(f"Error: --after {args.after}: no run with that handle_id in this workspace", file=sys.stderr)
+            return 2
+        try:
+            _prior_meta = json.loads((_prior / "metadata.json").read_text(encoding="utf-8"))
+            if not isinstance(_prior_meta, dict):
+                raise ValueError("metadata is not an object")
+        except Exception as _exc:
+            # A run the workspace holds but cannot describe is not a lineage
+            # to join: minting from it would fail closed to an unresolved
+            # scope, and the follow-up would learn nothing (review 2026-09-05).
+            print(f"Error: --after {args.after}: that run's metadata.json is unreadable ({_exc})", file=sys.stderr)
+            return 2
+        _prior_goal = str(_prior_meta.get("prompt") or "")
+        # review r27: explicit --after carries the parent's validated project direction.
+        from landscape import project_name as _after_project_name
+        _parent_project = _after_project_name(_prior_meta.get("project"))
+        _attach_origin = {**(_attach_origin or {}), "source": "cli",
+                          "parent_handle_id": _prior.name.split("-", 1)[0],
+                          "parent_goal": _prior_goal[:200]}
+        if _parent_project:
+            _attach_origin["parent_project"] = _parent_project
     try:
         result = handle(
             msg,
@@ -4246,6 +4952,7 @@ def main(argv=None):
             measurement_class=args.measurement_class,
             operator_context=_attach_ctx,
             origin=_attach_origin,
+            fresh=bool(getattr(args, "fresh", False)),
         )
     except RuntimeError as e:
         # build_adapter() raises RuntimeError with an actionable, human-facing

@@ -58,6 +58,13 @@ _NOUNS = (
 )
 
 
+def recorded_project_verbatim(meta: dict) -> Optional[str]:
+    """Return a non-blank project string verbatim: the string IS the directory."""
+    # review r26: distinguish this verbatim contract from landscape validation.
+    project = meta.get("project")
+    return project if isinstance(project, str) and project.strip() else None
+
+
 def nickname(handle_id: str) -> str:
     """Deterministic 2-word nickname from handle_id.
 
@@ -542,6 +549,41 @@ def stamp_run_metadata_for(handle_id: str, fields: dict) -> Optional[Path]:
     except Exception:
         return None
     return _stamp_metadata_at(rd, fields)
+
+
+def revise_run_metadata_for(handle_id: str, revise) -> Optional[dict]:
+    """A stamp DECIDED from the locked snapshot: `revise(existing) -> fields`
+    runs inside the metadata lock and returns the fields to merge — or an
+    empty dict / None to decline (no write, no new inode). Returns the
+    fields merged, {} when `revise` declined, None when the store could
+    not be read or written (the caller keeps its obligation). For the
+    repair paths that must not publish over what another writer settled
+    (review 2026-09-13 r10: an eligibility read OUTSIDE the lock followed
+    by an unconditional merge replayed a kept adoption over a sweep's
+    revert whenever that read failed)."""
+    try:
+        rd = run_dir(handle_id)
+        meta_path = rd / "metadata.json"
+        out: dict = {}
+
+        def _merge(old: str):
+            existing = _parse_meta_or_park(old, meta_path, "revise_run_metadata_for")
+            fields = revise(dict(existing))
+            if not fields:
+                return None
+            for k, v in fields.items():
+                if v is not None:
+                    existing[k] = v
+                    # review r26: report only fields the merge actually wrote.
+                    out[k] = v
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _merge)
+        return out
+    except Exception:
+        return None
 
 
 def _stamp_metadata_at(rd: Optional[Path], fields: dict) -> Optional[Path]:
@@ -1220,13 +1262,87 @@ def open_run(
     return rd
 
 
+def finalized_without_verdict(meta: dict) -> bool:
+    """The finished-without-closure shape: an agenda run, not a dry run,
+    with no goal verdict in its metadata and no ACTIVE verdict marker (an
+    active marker means the verdict is owed, not forgotten)."""
+    _vp = meta.get("verdict_pending")
+    _vp_active = isinstance(_vp, dict) and not _vp.get("resolved_at")
+    return bool(not meta.get("goal_verdict_source")
+                and not _vp_active
+                and meta.get("lane") == "agenda"
+                and not meta.get("dry_run"))
+
+
+def record_finalized_without_verdict(handle_id: str, meta: dict, *, status: str) -> bool:
+    """The finished-without-closure tripwire's record: a captain's-log
+    DONE_WITHOUT_VERDICT event and the outcome ledger row stamped
+    explicitly unverdicted (goal_achieved stays None — we do not know —
+    the source records WHY it is absent). Shared by `close_run` and the
+    kept-write drain that resolves a finalize's marker later (review
+    2026-09-13 r12: the drain resolved the marker the tripwire had waited
+    on and nothing ever made the honest call). Returns False when a ledger
+    stamp raised — the caller decides whether that defers its own write."""
+    from stop_verdicts import VERDICT_SOURCE_NEVER_STAMPED
+    # Modern runs carry plural loop_ids; the singular metadata.loop_id
+    # stopped being stamped (see the v1-index note above) — reading it
+    # alone made this ledger stamp dead code for every current agenda run
+    # (adversarial review 2026-08-06 R2-2). Old rows keep working via the
+    # singular fallback.
+    _loop_ids = [
+        str(l) for l in (meta.get("loop_ids") or []) if l
+    ] or [s for s in (str(meta.get("loop_id") or ""),) if s]
+    try:
+        from captains_log import log_event, DONE_WITHOUT_VERDICT
+        log_event(
+            DONE_WITHOUT_VERDICT,
+            subject=handle_id,
+            summary=(f"run finalized status={status} with no goal "
+                     "verdict in run metadata — closure never "
+                     "stamped one"),
+            context={"handle_id": handle_id,
+                     "status": str(status),
+                     "lane": str(meta.get("lane", "")),
+                     "loop_id": (_loop_ids[0] if _loop_ids else "")},
+            loop_id=(_loop_ids[0] if _loop_ids else None),
+        )
+    except Exception:
+        log.debug("DONE_WITHOUT_VERDICT event for %s failed", handle_id, exc_info=True)
+    ok = True
+    for _lid in _loop_ids:
+        try:
+            from memory_ledger import stamp_outcome_verdict
+            res = stamp_outcome_verdict(
+                _lid,
+                goal_achieved=None,
+                goal_verdict_source=VERDICT_SOURCE_NEVER_STAMPED,
+                # review r24: eligibility can go stale before the ledger lock.
+                only_unjudged=True,
+            )
+            # the API reports storage failure as a typed result, not a
+            # raise (`write_failed`); `missing` is a valid absence — no
+            # row to make honest (review r13)
+            if getattr(res, "status", None) not in ("updated", "missing", "superseded"):
+                ok = False
+        except Exception:
+            ok = False
+    return ok
+
+
 def close_run(
     handle_id: str,
     *,
     status: str,
     backend_error=None,
+    final: bool = False,
 ) -> Optional[dict]:
     """Finalize a run-dir and return its curated run_card (or None).
+
+    `final=True` is the finalize-time close (handle's finally block, after
+    the verdict marker's resolution): it stamps `finalized_at`, the
+    handle's own record that its finalize RAN — the repair sweeps read it
+    where a host pid cannot tell a finished handle from a live process
+    (review 2026-09-13 r11). The answer-first early close never sets it.
 
     Slices the captain's-log window, snapshots the repo bundle, stamps the
     terminal status (merging an actionable backend_error when present),
@@ -1284,38 +1400,7 @@ def close_run(
                     and not _vp_active
                     and meta.get("lane") == "agenda"
                     and not meta.get("dry_run")):
-                # Modern runs carry plural loop_ids; the singular
-                # metadata.loop_id stopped being stamped (see the v1-index
-                # note above) — reading it alone made this ledger stamp
-                # dead code for every current agenda run (adversarial
-                # review 2026-08-06 R2-2). Old rows keep working via the
-                # singular fallback.
-                _loop_ids = [
-                    str(l) for l in (meta.get("loop_ids") or []) if l
-                ] or [s for s in (str(meta.get("loop_id") or ""),) if s]
-                from captains_log import log_event, DONE_WITHOUT_VERDICT
-                log_event(
-                    DONE_WITHOUT_VERDICT,
-                    subject=handle_id,
-                    summary=(f"run finalized status={status} with no goal "
-                             "verdict in run metadata — closure never "
-                             "stamped one"),
-                    context={"handle_id": handle_id,
-                             "status": str(status),
-                             "lane": str(meta.get("lane", "")),
-                             "loop_id": (_loop_ids[0] if _loop_ids else "")},
-                    loop_id=(_loop_ids[0] if _loop_ids else None),
-                )
-                for _lid in _loop_ids:
-                    try:
-                        from memory_ledger import stamp_outcome_verdict
-                        stamp_outcome_verdict(
-                            _lid,
-                            goal_achieved=None,
-                            goal_verdict_source=VERDICT_SOURCE_NEVER_STAMPED,
-                        )
-                    except Exception:
-                        pass
+                record_finalized_without_verdict(handle_id, meta, status=status)
         except Exception:
             pass
     try:
@@ -1362,6 +1447,9 @@ def close_run(
                 extra["goal_verdict_source"] = VERDICT_SOURCE_RUN_ERRORED
         except Exception:
             pass
+    if final:
+        extra = dict(extra or {})
+        extra["finalized_at"] = datetime.now(timezone.utc).isoformat()
     finalize_failed = False
     try:
         finalize_run(handle_id, status=status, extra=extra)

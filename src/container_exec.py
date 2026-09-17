@@ -29,7 +29,7 @@ import re
 import subprocess
 import tempfile
 import time
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from config import get
 from process_identity import owner_is_current, pid_alive as process_pid_alive, process_start_token
@@ -412,6 +412,26 @@ _last_backend_warn = 0.0
 class ContainerUnavailable(RuntimeError):
     """Raised when `executor.container: require` is set but docker can't run
     the call — the `require` contract refuses rather than silently degrading."""
+
+
+class ContainerAuthExpired(ContainerUnavailable):
+    """The `require` refusal whose cause is the auth breaker (the volume's
+    OAuth session is dead), not docker. Distinct type because the remedy is
+    different and human-shaped: docker-down is an ops fault the run's
+    blocked/recovery machinery may outlive; a dead session needs the operator
+    to re-seed the volume, so the run must PAUSE (typed `container-auth-
+    expired`, §13e environmental family) and resume once the breaker clears.
+    `maro_error_class` is what llm_errors.classify_error keys on — a type
+    marker, not text matching, so a worker step that merely *mentions* auth
+    cannot ride this path (2026-09-13, after the 09-12 expiry churned a
+    `require`-less run to the host and a `require` run would have churned
+    blocked-step retries against a session no retry can revive)."""
+    maro_error_class = "container_auth"
+    # The breaker owns this failure's story (same flag the subprocess adapter
+    # sets on a container-lane auth failure): FailoverAdapter must neither
+    # trip the process-wide backend circuit (host creds are healthy) nor emit
+    # its generic host `/login` alert on top of the breaker's precise one.
+    container_auth_owned = True
 
 
 def enforce_backend_container_contract(adapter, executor: bool) -> None:
@@ -946,24 +966,17 @@ def _reseed_probe(tripped_at: float) -> Tuple[bool, str]:
     full file). True only for a live-shaped file (refreshToken present —
     the CLI wipes it after a failed refresh) NEWER than the trip; see the
     section comment for why both conditions."""
-    cred_path = f"{AUTH_MOUNT}/.credentials.json"
-    ok, out = _run([
-        "docker", "run", "--rm", *_user_args(),
-        "-e", f"HOME={CONTAINER_HOME}",
-        "--mount", (f"type=volume,source={AUTH_VOLUME},"
-                    f"target={AUTH_MOUNT},readonly"),
-        "--entrypoint", "sh", container_image(),
-        "-c", (f"stat -c %Y {cred_path} && "
-               f"{{ grep -c refreshToken {cred_path} || true; }}"),
-    ], _RESEED_PROBE_TIMEOUT_S)
+    # Shared reader with the liveness recorder (review 2026-09-13): the old
+    # `grep -c refreshToken` counted KEY TEXT, so a wiped session that kept
+    # `"refreshToken": null` or the sibling `refreshTokenExpiresAt` key read
+    # as re-seeded. has_refresh now means the exact field holds a non-empty
+    # string — still shape only, still no credential bytes on the host.
+    ok, info = _credentials_expiry_probe()
     if not ok:
-        return False, f"credentials probe failed: {out[:120]}"
-    try:
-        first, _, rest = out.partition("\n")
-        mtime = float(first.strip())
-        has_refresh = int(rest.strip().splitlines()[0]) > 0
-    except Exception as exc:
-        return False, f"credentials probe unparseable: {exc}"
+        from context_budget import clip as _clip
+        return False, _clip(str(info.get("detail") or "credentials probe failed"), 160)
+    mtime = float(info["mtime"])
+    has_refresh = bool(info["has_refresh"])
     if not has_refresh:
         return False, "credentials still wiped (no refresh token) — not re-seeded"
     if mtime <= tripped_at:
@@ -973,6 +986,15 @@ def _reseed_probe(tripped_at: float) -> Tuple[bool, str]:
         # and loosening the comparison errs toward false self-clear →
         # re-trip → notification loop, the worse direction.
         return False, "credentials unchanged since trip — not re-seeded"
+    # The reader also hands back the refresh token's own expiry; a restored
+    # backup or a re-written file whose token is already past it is not a
+    # re-seed, whatever its mtime says (review round 2, 2026-09-13). An
+    # unknown expiry (0) stays shape-only, as before.
+    exp = float(info.get("refresh_expires_at") or 0.0)
+    if exp > 0 and exp <= time.time():
+        from datetime import datetime, timezone
+        when = datetime.fromtimestamp(exp, tz=timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+        return False, f"credentials rewritten but the refresh token expired {when} — not re-seeded"
     return True, "auth volume re-seeded (fresh credentials with refresh token)"
 
 
@@ -1031,6 +1053,248 @@ def auth_breaker_blocks() -> Optional[str]:
     except Exception:
         log.debug("auth_breaker_blocks failed (failing open)", exc_info=True)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Auth liveness (2026-09-13): the breaker is REACTIVE — the first casualty of
+# every session expiry was a real run (08-12, 09-12). The session's own
+# expiry is knowable in advance: the volume's credentials carry
+# `refreshTokenExpiresAt` (the ~30-day lifetime whose end IS the monthly
+# outage; the access token is refreshed by every run and never the problem).
+# The heartbeat reads that timestamp on its own cadence (one docker run per
+# _AUTH_LIVENESS_TTL_S, no token spend, TIMESTAMPS ONLY — the credential
+# bytes never transit to the host, same rule as _reseed_probe) into a state
+# file; system_health's container_auth probe reads the file (no docker in a
+# probe) and goes SILENT with the re-seed date while there is still time to
+# act. Warn margin: a fixed 3 days — long enough to cover a weekend, short
+# enough that the warning is not standing noise for 27 days a month.
+# ---------------------------------------------------------------------------
+
+_AUTH_LIVENESS_TTL_S = 6 * 3600.0
+AUTH_EXPIRY_WARN_DAYS = 3.0
+_LIVENESS_PROBE_TIMEOUT_S = _RESEED_PROBE_TIMEOUT_S
+
+
+def _auth_liveness_path():
+    from pathlib import Path
+    from config import memory_dir
+    return Path(memory_dir()) / "container_auth_liveness.json"
+
+
+def _credentials_expiry_probe() -> Tuple[bool, dict]:
+    """Read the auth volume's session timestamps (epoch seconds) — nothing
+    else. Returns (ok, {"has_refresh", "refresh_expires_at",
+    "access_expires_at", "mtime"}) or (False, {"detail": ...})."""
+    cred_path = f"{AUTH_MOUNT}/.credentials.json"
+    # Inside the container: the exact nested field must be a non-empty
+    # string to count as a refresh token; expiry fields are read as numbers
+    # when they are numbers (or numeric strings) and 0 otherwise. A file
+    # that is missing, unreadable, not JSON or not the CLI's shape is a
+    # FAILED observation (fixed one-line message on stderr, exit 1 — never a
+    # traceback carrying file contents), not evidence of a wiped session:
+    # reporting it as the zero frame made a half-written file read as
+    # "expired" and dropped the last good sample (review round 2,
+    # 2026-09-13). Only a real object lacking the token is "wiped".
+    script = (
+        "import json,os,sys\n"
+        f"p={cred_path!r}\n"
+        "try:\n"
+        "    m=int(os.stat(p).st_mtime); d=json.load(open(p))\n"
+        "    o=d.get('claudeAiOauth') if isinstance(d,dict) else None\n"
+        "except Exception:\n"
+        "    o=None\n"
+        "if not isinstance(o,dict): sys.exit('credentials file missing, unreadable or not the CLI shape')\n"
+        "def ms(v):\n"
+        "    try: v=float(v)\n"
+        "    except (TypeError,ValueError,OverflowError): return 0\n"
+        "    return int(v//1000) if v==v and 0<v<1e14 else 0\n"
+        "t=o.get('refreshToken')\n"
+        "print(m, int(isinstance(t,str) and t.strip()!=''),"
+        " ms(o.get('refreshTokenExpiresAt')), ms(o.get('expiresAt')))\n"
+    )
+    ok, out = _run([
+        "docker", "run", "--rm", *_user_args(),
+        "-e", f"HOME={CONTAINER_HOME}",
+        "--mount", (f"type=volume,source={AUTH_VOLUME},"
+                    f"target={AUTH_MOUNT},readonly"),
+        "--entrypoint", "python3", container_image(), "-c", script,
+    ], _LIVENESS_PROBE_TIMEOUT_S)
+    if not ok:
+        return False, {"detail": f"credentials expiry probe failed: {out[:120]}"}
+    # Exactly one line of exactly four non-negative integers, the flag in
+    # {0,1}: anything else is not our frame (review 2026-09-13 — a permissive
+    # parse accepted preceding junk and flags like -1/2 as "has refresh").
+    try:
+        lines = [ln for ln in out.strip().splitlines() if ln.strip()]
+        if len(lines) != 1:
+            raise ValueError(f"{len(lines)} lines")
+        parts = lines[0].split()
+        if len(parts) != 4 or not all(re.fullmatch(r"[0-9]{1,12}", x) for x in parts):
+            raise ValueError("not four integers")
+        mtime, has_refresh, refresh_exp, access_exp = (int(x) for x in parts)
+        if has_refresh not in (0, 1):
+            raise ValueError("flag outside {0,1}")
+    except Exception as exc:
+        return False, {"detail": f"credentials expiry probe unparseable: {exc}"}
+    return True, {
+        "mtime": mtime, "has_refresh": bool(has_refresh),
+        "refresh_expires_at": refresh_exp, "access_expires_at": access_exp,
+    }
+
+
+# A record older than this is no longer evidence about the session; the
+# heartbeat should have replaced it (8 × the 6 h cadence — two days).
+_AUTH_LIVENESS_STALE_S = 48 * 3600.0
+# checked_at further in the future than this is a clock/hand-edit problem,
+# not a fresh record.
+_AUTH_LIVENESS_SKEW_S = 300.0
+_TS_MAX = 1e11   # epoch-seconds sanity bound (year ~5138)
+
+
+def _finite_in(v: Any, lo: float, hi: float) -> bool:
+    """A real (non-bool) number, finite, within [lo, hi]. Total: a JSON
+    integer too large for a float (math.isfinite(10**400) raises
+    OverflowError — review round 2, 2026-09-13) is simply out of range."""
+    import math
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return False
+    try:
+        f = float(v)
+    except (OverflowError, ValueError):
+        return False
+    return math.isfinite(f) and lo <= f <= hi
+
+
+def _valid_liveness_record(data: Any, *, now: Optional[float] = None,
+                           _nested: bool = False) -> Optional[dict]:
+    """The record if it is one we wrote and can still trust, else None.
+    Validation happens ONCE, here at the file boundary (review 2026-09-13:
+    string booleans, NaN/inf/oversized timestamps and future checked_at all
+    walked into the verdict). Strict types: bool means bool, timestamps are
+    finite numbers inside sane bounds, checked_at is not in the future.
+    Total — never raises on any JSON value. `last_good` nests one level:
+    a sample inside a sample is dropped, not recursed."""
+    now = time.time() if now is None else now
+    if not isinstance(data, dict) or isinstance(data.get("ok"), bool) is False:
+        return None
+    ca = data.get("checked_at")
+    if not _finite_in(ca, 0.0, now + _AUTH_LIVENESS_SKEW_S) or ca <= 0:
+        return None
+    if data["ok"]:
+        hr = data.get("has_refresh")
+        if not isinstance(hr, bool):
+            return None
+        for k in ("refresh_expires_at", "access_expires_at", "mtime"):
+            if not _finite_in(data.get(k, 0), 0.0, _TS_MAX):
+                return None
+    if "last_good" in data:
+        lg = None if _nested else _valid_liveness_record(data.get("last_good"), now=now, _nested=True)
+        data = dict(data)
+        if lg is None or not lg.get("ok"):
+            data.pop("last_good", None)
+        else:
+            data["last_good"] = lg
+    return data
+
+
+def auth_liveness_state(*, now: Optional[float] = None) -> Optional[dict]:
+    """The last persisted liveness record, validated, or None. File read
+    only; an unreadable/invalid/future-dated record reads as absent (so it
+    is refreshed, never trusted)."""
+    import json
+    try:
+        data = json.loads(_auth_liveness_path().read_text(encoding="utf-8"))
+        return _valid_liveness_record(data, now=now)
+    except Exception:
+        return None
+
+
+def _liveness_age_ok(rec: dict, max_age_s: float, *, now: float) -> bool:
+    age = now - float(rec.get("checked_at", 0.0))
+    return 0 <= age < max_age_s
+
+
+def refresh_auth_liveness(*, max_age_s: float = _AUTH_LIVENESS_TTL_S,
+                          force: bool = False) -> Optional[dict]:
+    """Heartbeat-cadence refresh of the liveness record. No-op (None) when
+    the container lane is off; returns the fresh-enough existing record
+    without touching docker; otherwise probes and persists. Never raises.
+
+    Serialized on the record's lock (review 2026-09-13: two overlapping
+    heartbeats each launched a docker probe and the slower, older sample
+    could overwrite the newer). The lock is held across the probe (≤ 20 s).
+    A failed probe never erases the last successful sample: it rides along
+    as `last_good` so a docker outage cannot turn an expiry warning into a
+    false "recovered" on the health lane. The lock is REQUIRED (round 2):
+    under MARO_FILELOCK_FAIL_OPEN the default contract proceeds unlocked,
+    which is the overlap race wearing the fix's clothes — a lock that
+    cannot be taken leaves the record alone and returns what is on disk."""
+    import json
+    from file_lock import locked_write, atomic_write, FileLockTimeout
+    try:
+        if container_mode() == "off":
+            return None
+        path = _auth_liveness_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            _lock = locked_write(path, require=True)
+            _lock.__enter__()
+        except FileLockTimeout as exc:
+            log.warning("container auth liveness refresh skipped — record lock busy (%s)", exc)
+            return auth_liveness_state()
+        try:
+            now = time.time()
+            prior = auth_liveness_state(now=now)
+            if prior is not None and not force and _liveness_age_ok(prior, max_age_s, now=now):
+                return prior
+            ok, info = _credentials_expiry_probe()
+            record: dict = {"checked_at": now, "ok": ok, **info}
+            if not ok and prior is not None:
+                good = prior if prior.get("ok") else prior.get("last_good")
+                if good:
+                    record["last_good"] = {k: v for k, v in good.items() if k != "last_good"}
+            atomic_write(path, json.dumps(record, sort_keys=True) + "\n")
+            return record
+        finally:
+            _lock.__exit__(None, None, None)
+    except Exception:
+        log.warning("container auth liveness refresh failed (record not updated)", exc_info=True)
+        return None
+
+
+def auth_liveness_verdict(state: Optional[dict], *, now: Optional[float] = None,
+                          warn_days: float = AUTH_EXPIRY_WARN_DAYS) -> Tuple[str, str]:
+    """('ok' | 'warn' | 'expired' | 'unknown', detail). Pure; no I/O."""
+    from context_budget import clip as _clip
+    now = time.time() if now is None else now
+    state = _valid_liveness_record(state, now=now)
+    if not state:
+        return "unknown", "session expiry not yet probed (heartbeat records it)"
+    if not state.get("ok"):
+        good = state.get("last_good")
+        if good:
+            level, detail = auth_liveness_verdict(good, now=now, warn_days=warn_days)
+            from datetime import datetime, timezone
+            seen = datetime.fromtimestamp(float(good["checked_at"]), tz=timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+            return level, (f"{detail} [last good sample {seen}; latest probe failed: "
+                           f"{_clip(str(state.get('detail') or ''), 80)}]")
+        return "unknown", str(state.get("detail") or "expiry probe failed")
+    if not _liveness_age_ok(state, _AUTH_LIVENESS_STALE_S, now=now):
+        return "unknown", "liveness record is stale (heartbeat has not refreshed it in 48 h)"
+    if not state.get("has_refresh"):
+        return "expired", "credentials hold no refresh token (session wiped after a failed refresh)"
+    exp = float(state.get("refresh_expires_at") or 0.0)
+    if exp <= 0:
+        return "unknown", "credentials carry no refreshTokenExpiresAt"
+    from datetime import datetime, timezone
+    when = datetime.fromtimestamp(exp, tz=timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+    days = (exp - now) / 86400.0
+    if days <= 0:
+        return "expired", f"refresh token expired {when} — re-seed the {AUTH_VOLUME} volume"
+    if days <= warn_days:
+        return "warn", (f"refresh token expires {when} ({days:.1f} d) — re-seed the "
+                        f"{AUTH_VOLUME} volume before then (interactive `claude /login`)")
+    return "ok", f"refresh token valid until {when} ({days:.0f} d)"
 
 
 def _current_loop_id() -> str:
@@ -1138,6 +1402,15 @@ def _resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
         if auth_block is None:
             return container_name(_current_loop_id(), next(_seq_counter))
         reason = f"container auth breaker tripped ({auth_block[:120]})"
+        if mode == "require":
+            raise ContainerAuthExpired(
+                "executor.container=require but the container lane is "
+                f"unavailable: {reason} — re-seed the {AUTH_VOLUME} volume "
+                "(interactive `claude /login` inside the executor image; "
+                "`maro-bootstrap container-setup` prints the command); the "
+                "breaker clears itself on the next executor call after the "
+                "re-seed and the paused run can resume"
+            )
     if mode == "require":
         raise ContainerUnavailable(
             f"executor.container=require but the container lane is unavailable: {reason}"

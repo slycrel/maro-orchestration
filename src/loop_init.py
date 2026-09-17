@@ -247,8 +247,10 @@ def _initialize_loop(
     admission_wait_s: Optional[float] = None,
     defer_learning: bool = False,
     defer_maintenance: bool = False,
+    defer_resume_settlement: bool = False,
     measurement_class: str = "",
     handle_id: str = "",
+    loop_id: Optional[str] = None,
 ) -> tuple:
     """Phase A: Initialize loop — setup adapter, project, ancestry, hooks.
 
@@ -272,10 +274,15 @@ def _initialize_loop(
     ctx.repo_path = repo_path or ""
     ctx.defer_learning = defer_learning
     ctx.defer_maintenance = defer_maintenance
+    ctx.defer_resume_settlement = defer_resume_settlement
     ctx.measurement_class = measurement_class
     ctx.handle_id = handle_id
 
-    ctx.loop_id = str(uuid.uuid4())[:8]
+    if loop_id:
+        from checkpoint import ID_REF_RE as _id_re
+        if not isinstance(loop_id, str) or not _id_re.fullmatch(loop_id):
+            raise ValueError(f"loop_id {loop_id!r} is not a loop id")
+    ctx.loop_id = str(loop_id or "") or str(uuid.uuid4())[:8]
     ctx.started_at = time.monotonic()
     ctx.start_ts = datetime.now(timezone.utc).isoformat()
 
@@ -410,9 +417,19 @@ def _initialize_loop(
     # a disambiguated one. Stamp it so nothing has to guess.
     try:
         from runs import stamp_run_metadata
-        stamp_run_metadata({"project": ctx.project})
+        # review r30: RESUME re-enters loop_init, so a refused re-attempt must
+        # demote a stale successful-attempt marker before admission.
+        if stamp_run_metadata({"project": ctx.project, "execution": "pending"}) is None:
+            # review r31: best-effort failure is observable before admission can refuse.
+            log.warning(
+                "attempt provenance not recorded for %s — a stale execution marker may survive a refused attempt",
+                ctx.project,
+            )
     except Exception:
-        log.debug("project metadata stamp failed", exc_info=True)
+        log.warning(
+            "attempt provenance not recorded for %s — a stale execution marker may survive a refused attempt",
+            ctx.project, exc_info=True,
+        )
 
     # Admission gate: atomically claim the per-project slot (flock, held for
     # the process's lifetime). Two runs on one project stomp each other's
@@ -483,6 +500,20 @@ def _initialize_loop(
                 )
     except ImportError as _gate_exc:
         log.debug("admission gate unavailable: %s", _gate_exc)
+
+    # review r29: every path that proceeds to steps (held slot, intentionally
+    # ungated/no-slot, worktree, or unavailable gate) stamps provenance only
+    # after the refused-busy return above is no longer reachable.
+    try:
+        from runs import stamp_run_metadata
+        if stamp_run_metadata({"execution": "loop"}) is None:
+            raise OSError("metadata stamp returned no path")
+    except Exception:
+        log.warning(
+            "execution provenance not recorded for %s — its deliverables will not be curated",
+            ctx.loop_id,
+            exc_info=True,
+        )
 
     # Run-lifetime lease: a per-loop flock held from here until process
     # death. Checkpoints only carry an in_flight pid while a step executes,

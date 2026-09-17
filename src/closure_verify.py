@@ -24,6 +24,10 @@ if TYPE_CHECKING:
     from conversation import ConversationChannel
 
 from context_budget import clip, VERDICT_PROSE_CAP
+# Single grammar source: regression_ledger harvests obligations with the
+# same runner/non-exec patterns closure classifies probes with.
+from regression_ledger import (VERIFICATION_RUNNER_RE as _TEST_RUNNER,
+                               NON_EXEC_RUNNER_FLAGS_RE as _NON_EXEC_RUNNER_FLAGS)
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
 
 log = logging.getLogger("maro.closure_verify")
@@ -869,6 +873,116 @@ def _strip_coverage_echo_gaps(gaps: List[str],
             if not str(g).strip().lower().startswith("unverified claim")]
 
 
+_MAX_REGRESSION_RERUNS = 8
+
+
+def _run_regression_obligations(rows: Optional[list], *, cwd: Optional[str],
+                                timeout_per_check: int) -> List[dict]:
+    """Re-run harvested obligations; one check_results row per obligation.
+
+    Each row is re-parsed through `regression_ledger.parse_verification_command`
+    and executed as argv with shell=False in the cwd the ledger RECORDED
+    (the executor's worktree/clone or project dir plus any `cd` prefix) —
+    never in closure's own cwd, which is the workspace path and not where
+    the step ran. A row that no longer parses, or whose recorded cwd is
+    gone, is inconclusive (verifier failure), never a goal failure.
+
+    Rows carry `regression: True` plus the proving step's provenance so the
+    judge and the record can tell "passed at step 3, fails now" from a
+    fresh probe. The kill switch is honoured here too: an off switch stays
+    off even when a checkpoint written while it was on still carries rows.
+    """
+    import os as _os
+    import subprocess as _sp
+    from regression_ledger import (parse_verification_command as _parse_rg,
+                                   classify_rerun as _classify_rg,
+                                   has_failure_tally as _tally_rg,
+                                   regression_enabled as _rg_enabled)
+    out: List[dict] = []
+    if not rows or not _rg_enabled():
+        return out
+    for row in list(rows or [])[:_MAX_REGRESSION_RERUNS]:
+        if not isinstance(row, dict):
+            continue
+        cmd = safe_str(row.get("command", ""))
+        if not cmd:
+            continue
+        step_no = row.get("step_no", 0)
+        base = {
+            "description": f"regression: passed at step {step_no}, re-run at closure",
+            "command": cmd,
+            "modality": _classify_probe_modality(cmd),
+            "plan_index": -1,
+            "regression": True,
+            "origin_step": step_no,
+            "origin_step_text": safe_str(row.get("step_text", ""))[:160],
+        }
+        parsed = _parse_rg(cmd)
+        if parsed is None:
+            out.append({**base, "exit_code": -1, "stdout": "",
+                        "stderr": "obligation is not a single runner invocation — not run",
+                        "passed": False, "outcome": "inconclusive"})
+            continue
+        run_cwd = row.get("cwd")
+        if not isinstance(run_cwd, str) or not run_cwd:
+            run_cwd = cwd
+        if not run_cwd or not _os.path.isdir(run_cwd):
+            out.append({**base, "exit_code": -1, "stdout": "",
+                        "stderr": f"recorded cwd unavailable ({run_cwd or 'none'}) — check not run",
+                        "passed": False, "outcome": "inconclusive",
+                        "env_unresolved": True})
+            continue
+        base["cwd"] = run_cwd
+        env = dict(_os.environ)
+        env.update(parsed.env)
+        try:
+            proc = _sp.run(parsed.argv, shell=False, capture_output=True, text=True,
+                           timeout=timeout_per_check, cwd=run_cwd, env=env)
+            # The process COMPLETED, so a failure tally in its output is
+            # the runner's own verdict and wins whatever the exit code
+            # (a wrapper can swallow the status, a 127 can be the
+            # runner's child). Only then the verifier-failure classes
+            # (runner missing, permission, timeout text) — and only then
+            # the family's evidence rule: exit 0 without the passing tally
+            # is inconclusive, never a pass.
+            _combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
+            if _tally_rg(_combined):
+                outcome = "fail"
+            elif _check_outcome(exit_code=proc.returncode, stderr=proc.stderr) == "inconclusive":
+                outcome = "inconclusive"
+            else:
+                outcome = _classify_rg(parsed.family, proc.returncode, _combined)
+            out.append({**base, "exit_code": proc.returncode,
+                        "stdout": proc.stdout[:500], "stderr": proc.stderr[:300],
+                        "passed": outcome == "pass",
+                        "outcome": outcome})
+        except _sp.TimeoutExpired:
+            out.append({**base, "exit_code": -1, "stdout": "", "stderr": "timed out",
+                        "passed": False, "outcome": "inconclusive"})
+        except (OSError, ValueError) as exc:
+            # ENOENT / EACCES: the runner is not on this host — verifier
+            # failure, classified by _check_outcome like a generated check.
+            out.append({**base, "exit_code": -1, "stdout": "", "stderr": str(exc),
+                        "passed": False,
+                        "outcome": _check_outcome(exit_code=-1, stderr=str(exc))})
+    return out
+
+
+def _detect_regression_gap(check_results: List[dict]) -> str:
+    """Reason text when any regression row hard-failed; "" otherwise."""
+    failed = [r for r in check_results
+              if r.get("regression") and r.get("outcome") == "fail"]
+    if not failed:
+        return ""
+    parts = []
+    for r in failed[:3]:
+        parts.append(f"`{clip(str(r.get('command', '')), 120)}` passed at step "
+                     f"{r.get('origin_step', '?')} and fails at closure "
+                     f"(exit {r.get('exit_code')})")
+    more = f" (+{len(failed) - 3} more)" if len(failed) > 3 else ""
+    return "; ".join(parts) + more
+
+
 def verify_goal_completion(
     goal: str,
     steps: list,
@@ -883,6 +997,7 @@ def verify_goal_completion(
     diagnosis=None,
     loop_id: str = "",
     project: str = "",
+    regression_obligations: Optional[list] = None,
 ) -> ClosureVerdict:
     """Director closure check: verify the goal was actually achieved.
 
@@ -1242,12 +1357,37 @@ def verify_goal_completion(
                     "outcome": _check_outcome(exit_code=-1, stderr=_stderr),
                 })
 
+        # Regression obligations (regression_ledger.py, 2026-09-16): re-run
+        # every verification command a DONE step already ran and passed.
+        # Same runner, same cwd, same outcome classes as the generated
+        # checks; rows are marked `regression` with the proving step so
+        # the judge and the record can tell "passed at step 3, fails now"
+        # from a fresh probe. A hard fail downgrades below; inconclusive
+        # (tool missing on this host, timeout) never does.
+        check_results.extend(_run_regression_obligations(
+            regression_obligations, cwd=cwd,
+            timeout_per_check=timeout_per_check))
+
         # Prepend pre-flight results so the director sees missing
         # preconditions before it ever interprets the LLM-generated checks.
         # When everything passed at pre-flight there's no need to expose
         # them — keeps the check feed clean for the common case.
         if _preflight_results and any(not r["passed"] for r in _preflight_results):
             check_results = _preflight_results + check_results
+
+        # An INCONCLUSIVE regression re-run (recorded cwd gone, runner
+        # missing on this host) is verifier noise about a PROVEN command.
+        # It is removed from the evidence set HERE, before anything reads
+        # it — counts, the all-passed confidence guard, modality
+        # distribution, audit eligibility, the judge prompt — and appended
+        # back only into the persisted record (round-3 review: filtering
+        # the counts alone left the row steering every other guard).
+        # Regression rows that ran (pass/fail) stay and count like any check.
+        _excluded_regression = [r for r in check_results
+                                if r.get("regression") and r.get("outcome") == "inconclusive"]
+        if _excluded_regression:
+            _kept_ids = {id(r) for r in _excluded_regression}
+            check_results = [r for r in check_results if id(r) not in _kept_ids]
 
         if not check_results:
             _emit_skip("no_check_results")
@@ -1592,8 +1732,23 @@ def verify_goal_completion(
         # bounded view the write sites apply (run d2f4e2f4: card
         # showed goal_achieved=false beside a 0.92-confidence positive
         # summary with the reason only in the worker log).
+        # Regression downgrade: mechanical, never audited away — the row
+        # IS clean failure evidence (a command the run proved now fails).
+        regression_gap_reason = _detect_regression_gap(check_results)
+        if regression_gap_reason:
+            if complete:
+                log.warning("closure: regression downgrade — %s", regression_gap_reason)
+            complete = False
+            gaps = list(gaps) + [f"Regression: {regression_gap_reason}"]
+            # Mechanical evidence: a command the run itself proved now
+            # fails. The judge's confidence in its own reading is beside
+            # the point — floor it so the director's demotion (>=0.7) and
+            # restart (>=0.6) rules see the failure instead of an
+            # under-confident "incomplete" that no consumer acts on.
+            confidence = max(confidence, 0.7)
         downgrade_reason = "; ".join(
-            r for r in (behavioral_gap_reason, diagnosis_gap_reason) if r
+            r for r in (behavioral_gap_reason, diagnosis_gap_reason,
+                        regression_gap_reason if regression_gap_reason and not complete else "") if r
         )
         if downgrade_reason:
             summary = (
@@ -1892,13 +2047,21 @@ def verify_goal_completion(
                     # preflight rows — those aren't plan checks).
                     **({"plan_index": r["plan_index"]}
                        if type(r.get("plan_index")) is int else {}),
+                    # Regression provenance (regression_ledger, 2026-09-16):
+                    # the record must say "passed at step K" beside the
+                    # re-run, or the downgrade reads as a fresh probe.
+                    **({"regression": True,
+                        "origin_step": r.get("origin_step"),
+                        "origin_step_text": safe_str(r.get("origin_step_text"))[:160],
+                        "cwd": safe_str(r.get("cwd"))}
+                       if r.get("regression") else {}),
                     **(
                         {"target_file_content":
                          safe_str(r.get("target_file_content"))[:2000]}
                         if r.get("target_file_content") else {}
                     ),
                 }
-                for r in check_results
+                for r in check_results + _excluded_regression
             ],
         })
 
@@ -1954,13 +2117,8 @@ _MODALITY_PATTERNS = (
 # but ONLY for recognized runners: the flags are runner semantics, and a
 # generic `python3 smoke.py --dry-run` still executes the program
 # (round-3 review 2026-08-11).
-_TEST_RUNNER = re.compile(
-    r"\b(pytest|go test|cargo test|(npm|pnpm|yarn) (run )?test|make test|tox)\b",
-    re.I,
-)
-_NON_EXEC_RUNNER_FLAGS = re.compile(
-    r"(^|\s)--?(no-run|collect-only|co|list-?tests?|dry-run|list)\b", re.I,
-)
+# _TEST_RUNNER / _NON_EXEC_RUNNER_FLAGS: imported from regression_ledger at
+# the top of this module — one grammar for harvest and probe classification.
 
 _STATIC_HINTS = re.compile(
     r"\b(grep|rg|test -[efdrs]|cat|head|tail|wc -[lc]|ls |find |jq |go build|go vet|tsc --noEmit|ruff|flake8|mypy)\b",

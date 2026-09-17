@@ -266,9 +266,11 @@ class OutcomeVerdictStampResult:
     ``invalid`` (R3-3) means the CALLER's verdict value was malformed
     (non-bool ``goal_achieved``) and the row was deliberately left
     untouched — the smallest honest signal for a refused stamp.
+    ``superseded`` means the row already carries a judged verdict; the
+    placeholder was not written — an honest decline, not a failure.
     """
 
-    status: Literal["updated", "missing", "write_failed", "invalid"]
+    status: Literal["updated", "missing", "write_failed", "invalid", "superseded"]
     attempts: int = 0
     error: str = ""
 
@@ -881,6 +883,40 @@ def mark_outcomes_superseded(handle_id: str, *, max_attempts: int = 1) -> int:
     return 0
 
 
+def _may_placeholder_repair(row: dict) -> bool:
+    """Allow an unjudged placeholder row, rejecting sourceless verdict traces.
+
+    Known placeholder sources remain repairable even with their normal verdict
+    timestamps/history; an absent or empty source is repairable only when no
+    other verdict-operation evidence exists.  # review r29: zero is evidence.
+    """
+    # review r27: exclusion-only and malformed exclusion markers are judged provenance.
+    from stop_verdicts import VERDICT_PLACEHOLDER_SOURCES
+    source = row.get("goal_verdict_source")
+    _placeholder_source = (
+        isinstance(source, str) and source in VERDICT_PLACEHOLDER_SOURCES)
+    _sourceless = source is None or source == ""
+    # review r29: zero confidence is still stamped verdict evidence. Empty
+    # history is only a schema-shaped placeholder and proves no operation.
+    _has_verdict_evidence = (
+        any(
+            field in row and row.get(field) is not None
+            for field in ("goal_verdict_at", "goal_verdict_confidence")
+        )
+        or (
+            "verdict_history" in row
+            # review r30: exactly [] alone means no operation; malformed or
+            # populated values are evidence and therefore fail closed.
+            and row.get("verdict_history") != []
+        )
+    )
+    _sourceless_clean = _sourceless and not _has_verdict_evidence
+    source_ok = _placeholder_source or _sourceless_clean
+    exclusion_ok = ("verdict_excluded" not in row
+                    or row.get("verdict_excluded") is False)
+    return row.get("goal_achieved") is None and source_ok and exclusion_ok
+
+
 def stamp_outcome_verdict(
     loop_id: str,
     *,
@@ -888,6 +924,7 @@ def stamp_outcome_verdict(
     goal_verdict_source: str,
     goal_verdict_confidence: Optional[float] = None,
     max_attempts: int = 1,
+    only_unjudged: bool = False,
 ) -> OutcomeVerdictStampResult:
     """Atomically stamp a verdict, distinguishing absence from write failure.
 
@@ -941,7 +978,7 @@ def stamp_outcome_verdict(
     attempts = max(1, int(max_attempts))
     from file_lock import atomic_write, locked_write
     for attempt in range(1, attempts + 1):
-        updated = {"hit": False}
+        updated = {"hit": False, "superseded": False}
 
         def _stamp(old: str) -> str:
             lines = old.splitlines()
@@ -961,6 +998,10 @@ def stamp_outcome_verdict(
             if target_idx is None:
                 return old
             row = json.loads(lines[target_idx])
+            # review r27: the centralized predicate preserves every judged or excluded shape byte-for-byte.
+            if only_unjudged and not _may_placeholder_repair(row):
+                updated["superseded"] = True
+                return old
             # Re-stamp honesty (Jeremy decree 2026-08-10: corrections may
             # flip a verdict "but be honest about it and note they were
             # failures at run time"): overwriting an existing judged
@@ -1017,6 +1058,8 @@ def stamp_outcome_verdict(
                     return OutcomeVerdictStampResult(
                         "missing", attempts=attempt)
                 new = _stamp(old)
+                if updated["superseded"]:
+                    return OutcomeVerdictStampResult("superseded", attempts=attempt)
                 if not updated["hit"]:
                     log.debug(
                         "stamp_outcome_verdict: no outcomes row with loop_id=%s",

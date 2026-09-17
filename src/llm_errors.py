@@ -20,9 +20,10 @@ error shape).
 
 from __future__ import annotations
 
+import math
 import subprocess
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 
 # The six classes (+ FATAL for everything unmatched).
 RETRY_BACKOFF = "retry_backoff"        # transient — same-backend ladder
@@ -34,6 +35,7 @@ INPUT_TOO_LARGE = "input_too_large"    # context overrun — retry/failover usel
 OUTPUT_CAP_EXCEEDED = "output_cap_exceeded"  # utility call blew its own token cap — caller's fallback, never failover
 BUDGET_RUNAWAY = "budget_runaway"      # run's runaway cost circuit tripped — never retry/failover
 TOKEN_RUNAWAY = "token_runaway"        # ONE subprocess call crossed the per-call ingest ceiling — step blocked, run continues
+CONTAINER_AUTH = "container_auth"      # executor.container=require and the auth volume's session is dead — PAUSE the run, human re-seeds
 FATAL = "fatal"                        # unclassified — propagate raw
 
 
@@ -163,6 +165,21 @@ _INPUT_PATTERNS = (
     "maximum context length", "413",
 )
 
+# A TERMINAL failure (the CLI ran and reported a result object of its own)
+# classifies from that object's error fields, and only by the phrases the
+# CLI/API author — never the bare status codes or single words above,
+# which a partial-work `result` mentions incidentally (review round 20,
+# 2026-09-13: "Read invoice 401 before stopping." ahead of a reset in
+# `errors[]` classified a healthy host as auth-dead and lost the pause).
+_TERMINAL_BILLING_PHRASES = (
+    "credit balance is too low", "insufficient_quota", "requires more credits",
+    "payment required", "quota exceeded",
+)
+_TERMINAL_INPUT_PHRASES = (
+    "prompt is too long", "context_length_exceeded", "request_too_large",
+    "maximum context length",
+)
+
 
 def _action_for(cls: str, backend: str) -> str:
     """Message registry — say exactly what to run (design §2)."""
@@ -174,6 +191,12 @@ def _action_for(cls: str, backend: str) -> str:
         return ("The API key for this backend was rejected (auth error). Check the "
                 "key in your environment/config, or unset it to fall back to "
                 "another configured backend.")
+    if cls == CONTAINER_AUTH:
+        return ("The executor container's Claude session has expired "
+                "(executor.container=require). Re-seed the maro-claude-auth "
+                "volume: run the interactive login from `maro-bootstrap "
+                "container-setup` (`claude /login` inside the executor image), "
+                "then resume the paused run.")
     if cls == BILLING_ACTIONABLE:
         return ("Backend credits/quota exhausted (not a rate limit — waiting will "
                 "not help). Top up the account, or configure another backend "
@@ -195,6 +218,13 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
     carry retry-looking markers (429 / 402); auth outranks retry because
     401/403 must never burn the ladder.
     """
+    # A BackendError already IS a classification: FailoverAdapter wraps an
+    # actionable failure in one so downstream surfaces render the fix. Re-
+    # classifying its rendered text lost the class (review 2026-09-13: the
+    # container_auth refusal came back as auth_actionable/failover after the
+    # wrap, and the typed pause never fired). Structured info outranks text.
+    if isinstance(exc, BackendError) and isinstance(getattr(exc, "info", None), ErrorInfo):
+        return exc.info
     msg = str(exc).lower()
     exc_type = type(exc).__name__
 
@@ -217,6 +247,49 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
         return _mk(BUDGET_RUNAWAY)
     if isinstance(exc, TokenRunawayError):
         return _mk(TOKEN_RUNAWAY)
+    # Type marker, not text: container_exec.ContainerAuthExpired carries it.
+    # Outranks the auth text patterns below because the remedy differs — no
+    # failover (the API lane would run the worker OUTSIDE the container the
+    # require contract demands), no retry: the run pauses until re-seeded.
+    if getattr(exc, "maro_error_class", "") == CONTAINER_AUTH:
+        return _mk(CONTAINER_AUTH)
+
+    # The CLI RAN and reported a terminal execution failure of its own
+    # (error_max_turns and kin). The binary is fine and the work is partly
+    # done: neither a retry nor a failover may replay it on another backend
+    # (review round 12, 2026-09-13: the generic "subprocess failed" text
+    # routed it to FAILOVER and the wrapper re-ran the finished work
+    # elsewhere). STRUCTURED evidence decides here, ahead of every text
+    # pattern below (round 20: the display message carries the partial-work
+    # `result`, and an incidental "401"/"402"/"413" in it classified a
+    # rate-limited terminal as a host auth/billing/input failure — the
+    # healthy host circuit tripped, another backend replayed the work, the
+    # no-tokens pause was lost). The markers come from the terminal
+    # object's own fields (llm._mark_terminal_failure): the shared
+    # rate-limit reading, the shared auth reading, and the error fields'
+    # text for the authored billing/input phrases only.
+    if getattr(exc, "maro_terminal_failure", False):
+        _ttext = str(getattr(exc, "maro_terminal_text", "") or "").lower()
+        if getattr(exc, "maro_rate_limited", False):
+            # A stated limit is a wait, not a replay.
+            return _mk(RETRY_AT, retryable=True)
+        if getattr(exc, "maro_terminal_auth", False):
+            # The CLI names a dead HOST credential: same remedy as the
+            # text pattern below, decided from the object's fields.
+            return _mk(AUTH_ACTIONABLE, failover=True)
+        if "limit" in _ttext and "resets" in _ttext:
+            return _mk(RETRY_AT, retryable=True)
+        if any(p in _ttext for p in _TERMINAL_BILLING_PHRASES):
+            return _mk(BILLING_ACTIONABLE, failover=True)
+        if any(p in _ttext for p in _TERMINAL_INPUT_PHRASES):
+            return _mk(INPUT_TOO_LARGE)
+        return _mk(FATAL)
+
+    # The CLI ran to a result this adapter could not convert (round 20):
+    # a protocol failure of THIS call — never a replay elsewhere, whatever
+    # its message text happens to match.
+    if getattr(exc, "maro_protocol_failure", False):
+        return _mk(FATAL)
 
     if any(p in msg for p in _INPUT_PATTERNS):
         return _mk(INPUT_TOO_LARGE)
@@ -269,7 +342,74 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
     return _mk(FATAL)
 
 
+def kill_evidence(exc: BaseException) -> Tuple[str, int, float]:
+    """What a killed/refused adapter call leaves behind, read ONCE for every
+    outcome builder (review round 8, 2026-09-13: the worker lane copied the
+    class but dropped the partial output and the runaway's measured
+    ingest that step outcomes keep). Returns (partial_result_text,
+    fresh_input_tokens, estimated_cost_usd): the partial output is the
+    only record of what the call did before dying (the tail, framed);
+    the runaway fields are the spend the brake exists to account for."""
+    _u = call_usage_evidence(exc)
+    return _u["partial"], _u["tokens_in"], _u["cost"]
+
+
+def evidence_attr(exc: BaseException, name: str, default=None):
+    """Read an evidence attribute off `exc` or, failing that, its cause
+    chain: FailoverAdapter re-raises actionable failures as a fresh
+    BackendError `from` the adapter's exception, so the evidence rides the
+    cause, not the wrapper (review round 9, 2026-09-13)."""
+    _e, _hops = exc, 0
+    while _e is not None and _hops < 8:
+        _v = getattr(_e, name, None)
+        if _v is not None:
+            return _v
+        _e, _hops = getattr(_e, "__cause__", None), _hops + 1
+    return default
+
+
+# No token counter or dollar figure a call can produce is this large; a
+# JSON integer past it is malformed (review round 14, 2026-09-13: a valid
+# JSON integer of 400 digits passed as a finite int, then the cost
+# estimator's float conversion raised OverflowError ahead of the pause
+# seam). Bounded here so every consumer prices what it accepts.
+COUNTER_MAX = 10 ** 15
+
+
+def finite_nonneg(v, cast, default):
+    """Accounting is total, finite, bounded and non-negative or it is the
+    default (review round 9: int(inf) raised OverflowError past the blocked
+    builder's guard, NaN reached cost records, a negative subtracted;
+    round 14: an oversized integer overflowed the pricer)."""
+    try:
+        x = cast(v if v is not None else default)
+    except Exception:
+        return default
+    if isinstance(x, float) and not math.isfinite(x):
+        return default
+    if x > COUNTER_MAX:
+        return default
+    return x if x >= 0 else default
+
+
+def call_usage_evidence(exc: BaseException) -> Dict[str, Any]:
+    """Everything a failed/killed adapter call leaves behind, as one record
+    (review round 10, 2026-09-13: the 3-tuple carried input tokens and
+    cost only — a failure after cache-served work recorded zero tokens
+    and, through the wrapper with zero fresh input, zero spend). Keys:
+    partial, tokens_in, tokens_out, cache_read, cost. Never raises."""
+    _p = str(evidence_attr(exc, "maro_partial_output", "") or "")
+    return {
+        "partial": f"[partial output before kill]\n{_p[-2000:]}" if _p else "",
+        "tokens_in": finite_nonneg(evidence_attr(exc, "fresh_input_tokens", 0), int, 0),
+        "tokens_out": finite_nonneg(evidence_attr(exc, "fresh_output_tokens", 0), int, 0),
+        "cache_read": finite_nonneg(evidence_attr(exc, "fresh_cache_read_tokens", 0), int, 0),
+        "cost": finite_nonneg(evidence_attr(exc, "estimated_cost_usd", 0.0), float, 0.0),
+    }
+
+
 def is_actionable(info: ErrorInfo) -> bool:
     """True when the user must act (auth/billing/input) — these surface on
     every channel (stderr, run metadata, notify, doctor)."""
-    return info.error_class in (AUTH_ACTIONABLE, BILLING_ACTIONABLE, INPUT_TOO_LARGE)
+    return info.error_class in (AUTH_ACTIONABLE, BILLING_ACTIONABLE, INPUT_TOO_LARGE,
+                                CONTAINER_AUTH)

@@ -1115,6 +1115,105 @@ def test_run_agent_loop_fan_out_dry_run():
     assert result.status in ("done", "dry_run", "stuck")
 
 
+def test_r29_loop_project_and_execution_stamps_follow_admission(
+        monkeypatch, tmp_path):
+    # review r29: project identity precedes admission, while loop provenance
+    # is a later, separate declaration that only an admitted run may carry.
+    _setup_workspace(monkeypatch, tmp_path)
+    import runs
+    stamps = []
+    monkeypatch.setattr(
+        runs, "stamp_run_metadata",
+        lambda fields: stamps.append(dict(fields)) or tmp_path / "metadata.json",
+    )
+    run_agent_loop(
+        "Produce the R28 report", project="r28-loop-project",
+        dry_run=True, verbose=False,
+    )
+    # review r30: each attempt first demotes stale provenance to pending.
+    assert {"project": "r28-loop-project", "execution": "pending"} in stamps
+    assert {"execution": "loop"} in stamps
+    assert stamps.index({"project": "r28-loop-project", "execution": "pending"}) < stamps.index(
+        {"execution": "loop"})
+
+
+def test_r29_a_refused_busy_run_carries_no_execution_provenance(
+        monkeypatch, tmp_path):
+    # review r29: a refused run keeps its resolved project for diagnosis but
+    # cannot claim the active loop's deliverable-scanning provenance.
+    _setup_workspace(monkeypatch, tmp_path)
+    import interrupt
+    import runs
+    stamps = []
+    monkeypatch.setattr(
+        runs, "stamp_run_metadata",
+        lambda fields: stamps.append(dict(fields)) or tmp_path / "metadata.json",
+    )
+
+    def _busy(*args, **kwargs):
+        raise interrupt.LoopBusy(
+            "r29-busy-project", {"loop_id": "active-loop", "pid": 1234})
+
+    monkeypatch.setattr(interrupt, "acquire_project_slot", _busy)
+    result = run_agent_loop(
+        "Produce the R29 report", project="r29-busy-project",
+        dry_run=True, verbose=False,
+    )
+    assert result.status == "refused_busy"
+    # review r30: refusal retains the freshly demoted pending attempt marker.
+    assert {"project": "r29-busy-project", "execution": "pending"} in stamps
+    assert not any(stamp.get("execution") == "loop" for stamp in stamps)
+
+
+def test_r30_a_refused_resume_demotes_stale_loop_provenance(
+        monkeypatch, tmp_path):
+    # review r30: a RESUME that loses admission cannot inherit its prior loop marker.
+    _setup_workspace(monkeypatch, tmp_path)
+    import interrupt
+    import runs
+    stamps = []
+    metadata = {"execution": "loop"}
+
+    def _stamp(fields):
+        stamps.append(dict(fields))
+        metadata.update(fields)
+        return tmp_path / "metadata.json"
+
+    monkeypatch.setattr(runs, "stamp_run_metadata", _stamp)
+    monkeypatch.setattr(
+        interrupt, "acquire_project_slot",
+        lambda *a, **k: (_ for _ in ()).throw(interrupt.LoopBusy(
+            "r30-busy-project", {"loop_id": "active", "pid": 1234})),
+    )
+
+    result = run_agent_loop(
+        "Resume the report", project="r30-busy-project",
+        dry_run=True, verbose=False)
+
+    assert result.status == "refused_busy"
+    assert {"project": "r30-busy-project", "execution": "pending"} in stamps
+    assert metadata["execution"] == "pending"
+    assert not any(stamp == {"execution": "loop"} for stamp in stamps)
+
+
+def test_r31_failed_pre_admission_provenance_warns_and_continues(
+        monkeypatch, tmp_path, caplog):
+    # review r31: the non-raising metadata failure form is still operator-visible.
+    _setup_workspace(monkeypatch, tmp_path)
+    import logging
+    import runs
+    monkeypatch.setattr(runs, "stamp_run_metadata", lambda fields: None)
+    caplog.set_level(logging.WARNING, logger="maro.loop")
+
+    result = run_agent_loop(
+        "Produce the R31 report", project="r31-loop-project",
+        dry_run=True, verbose=False,
+    )
+
+    assert result.status in ("done", "dry_run", "stuck")
+    assert "attempt provenance not recorded for r31-loop-project" in caplog.text
+
+
 def test_run_agent_loop_fan_out_dependency_falls_back_sequential():
     """When steps have dependencies, fan-out gate blocks parallel path (sequential used)."""
     dependent_steps = [

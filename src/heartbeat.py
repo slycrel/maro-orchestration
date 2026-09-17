@@ -445,6 +445,43 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
                      _orphans["stamped"])
     except Exception:
         log.debug("verdict-orphan sweep failed", exc_info=True)
+    # Its own scope: a malformed record that fails the verdict sweep must
+    # not starve the transition sweep on the same tick (review 2026-09-13
+    # round 8). Kept settlements from THIS process are drained here too.
+    try:
+        from audit_repair import sweep_transition_orphans
+        _pt_orphans = sweep_transition_orphans(limit=5)
+        if _pt_orphans.get("stamped") or _pt_orphans.get("retried"):
+            result["transition_orphans_settled"] = (
+                int(_pt_orphans.get("stamped") or 0) + int(_pt_orphans.get("retried") or 0))
+            log.info("heartbeat: transition sweep reverted %s run(s), wrote %s kept settlement(s)",
+                     _pt_orphans.get("stamped", 0), _pt_orphans.get("retried", 0))
+    except Exception:
+        log.debug("heartbeat: transition-orphan sweep failed", exc_info=True)
+    # Its own scope: a finalized run whose story was never told — the
+    # process died between the final close and its emit, or a configured
+    # hook failed — has a RESOLVED marker by then, so neither sweep above
+    # revisits it (review 2026-09-13 round 13).
+    try:
+        from audit_repair import sweep_untold_finalizes
+        _untold = sweep_untold_finalizes(limit=5)
+        if _untold.get("told"):
+            result["untold_finalizes_told"] = _untold["told"]
+            log.info("heartbeat: untold-finalize sweep told %s run(s)", _untold["told"])
+    except Exception:
+        log.debug("heartbeat: untold-finalize sweep failed", exc_info=True)
+
+    # Dead-run sweep: a worker killed mid-flight (operator kill, OOM, reboot)
+    # never reaches finalize_run; stamp it `stranded` from its dead pid so the
+    # rerun brief stops reading it as "possibly still in flight" (2026-09-07).
+    try:
+        from audit_repair import sweep_dead_runs
+        _dead = sweep_dead_runs(limit=5)
+        if _dead.get("stamped"):
+            result["dead_runs_stamped"] = _dead["stamped"]
+            log.info("dead-run sweep stamped %d run(s)", _dead["stamped"])
+    except Exception:
+        log.debug("dead-run sweep failed", exc_info=True)
 
     # Async-tail phase 3 stranded-tail sweep: a run whose tail process died —
     # or whose parent never dispatched one — leaves its jobs pending in
@@ -500,15 +537,28 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
                 from notify import emit as _notify_emit
                 _in_flight_note = (f"; step {entry['in_flight']} was in flight"
                                    if entry["in_flight"] else "")
+                if entry.get("claim_state") == "unresolved":
+                    _how = (f"A resume as run {entry['claim_handle']} claimed it and left "
+                            f"no checkpoint — inspect that run, then: "
+                            f"maro resume {entry['loop_id']} --reclaim")
+                elif entry.get("claim_state"):
+                    _how = (f"A resume as run {entry['claim_handle']} claimed it and its "
+                            f"checkpoint cannot be read — repair that record before resuming")
+                else:
+                    _how = f"Resume with: maro resume {entry['loop_id']}"
+                if entry.get("finalized_status"):
+                    _what = (f"Run {entry['handle_id'] or entry['loop_id']} finalized "
+                             f"({entry['finalized_status']}) without proving its checkpoint "
+                             f"consumed ({entry['done']}/{entry['total']} steps done)")
+                else:
+                    _what = (f"Run {entry['handle_id'] or entry['loop_id']} died "
+                             f"mid-loop ({entry['done']}/{entry['total']} steps done"
+                             f"{_in_flight_note})")
                 _notify_emit("stranded_run", {
                     "handle_id": entry["handle_id"],
                     "loop_id": entry["loop_id"],
-                    "message": (
-                        f"Run {entry['handle_id'] or entry['loop_id']} died "
-                        f"mid-loop ({entry['done']}/{entry['total']} steps done"
-                        f"{_in_flight_note}). "
-                        f"Resume with: maro resume {entry['loop_id']}"
-                    ),
+                    "claim_state": entry.get("claim_state"),
+                    "message": f"{_what}. {_how}",
                 })
             except Exception as exc:
                 log.debug("sweep: stranded_run notify failed: %s", exc)
@@ -528,6 +578,23 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
                   f"executor container(s): {', '.join(killed)}", file=sys.stderr)
     except Exception as exc:
         log.debug("sweep: stranded-container reap failed: %s", exc)
+
+    # Container auth liveness (2026-09-13): record the auth volume's session
+    # expiry on the heartbeat cadence (one docker run per 6h, timestamps
+    # only, no token spend) so system_health can warn BEFORE the monthly
+    # expiry takes a real run down. No-op when the container lane is off.
+    try:
+        from container_exec import refresh_auth_liveness, auth_liveness_verdict
+        _live = refresh_auth_liveness()
+        if _live is not None:
+            _lvl, _ldetail = auth_liveness_verdict(_live)
+            result["container_auth_liveness"] = _lvl
+            result["container_auth_liveness_detail"] = _ldetail
+            if verbose and _lvl != "ok":
+                print(f"[heartbeat] container auth liveness {_lvl}: {_ldetail}",
+                      file=sys.stderr)
+    except Exception as exc:
+        log.debug("sweep: container auth liveness refresh failed: %s", exc)
 
     # Containerized self-dev (C3/C4): recover + reap scratch clones leaked by a
     # crash between provision and finalize. Retention-safe — a clone is removed
@@ -712,7 +779,19 @@ def _find_resumable_runs() -> list:
     except Exception:
         return out
     for ckpt in ckpts:
-        if ckpt.is_complete():
+        if ckpt.is_complete() or ckpt.is_consumed():
+            continue          # finished, or already resumed successfully
+        _claim_state = None
+        try:
+            from checkpoint import (resume_claim_state, RESUME_CLAIM_LIVE,
+                                    RESUME_CLAIM_SUPERSEDED)
+            _claim_state = resume_claim_state(ckpt)
+            if _claim_state in (RESUME_CLAIM_LIVE, RESUME_CLAIM_SUPERSEDED):
+                continue      # a resume is in progress, or its successor exists
+            # unresolved / indeterminate: NOT auto-resumable, but the
+            # operator must hear about it (r1 Skeptic 9) — the row carries
+            # the claim and the notification names the recovery path.
+        except Exception:
             continue
         # Run-lease first: held → owner alive even between steps (when the
         # checkpoint carries no in_flight pid at all); present-unheld →
@@ -729,28 +808,42 @@ def _find_resumable_runs() -> list:
             if pid and _alive(pid):
                 continue  # still running
         # run finalized? (legacy-dir checkpoints have no handle_id — treat
-        # unlinked checkpoints as stale history, not resumable)
-        if not ckpt.handle_id:
+        # unlinked checkpoints as stale history, not resumable). A claimed
+        # source is the exception: its claim names the successor run, and
+        # the operator must hear about it whether or not the SOURCE had a
+        # handle (r2 finding 8).
+        if not ckpt.handle_id and not _claim_state:
             continue
-        try:
-            from runs import run_dir
-            meta = _json.loads((run_dir(ckpt.handle_id) / "metadata.json")
-                               .read_text(encoding="utf-8"))
-            # "stranded" is the sweep's own non-terminal stamp — such runs
-            # stay resumable; anything else (done/stuck/error) is finalized.
-            if meta.get("status") and meta.get("status") != "stranded":
-                continue
-            _meta_pid = int(meta.get("pid") or 0)
-            if _meta_pid and _alive(_meta_pid):
-                continue  # owner process alive (e.g. mid-closure) — not stranded
-        except Exception:
-            continue
+        _finalized_status = None
+        if ckpt.handle_id:
+            try:
+                from runs import run_dir
+                meta = _json.loads((run_dir(ckpt.handle_id) / "metadata.json")
+                                   .read_text(encoding="utf-8"))
+                # "stranded" is the sweep's own non-terminal stamp — such runs
+                # stay resumable; anything else (done/stuck/error) is finalized.
+                if meta.get("status") and meta.get("status") != "stranded":
+                    if not _claim_state:
+                        continue
+                    # a claimed source whose run finalized without proving
+                    # the source consumed: still the operator's, but not
+                    # "died mid-loop" (r3 finding 8)
+                    _finalized_status = str(meta.get("status"))
+                _meta_pid = int(meta.get("pid") or 0)
+                if _meta_pid and _alive(_meta_pid):
+                    continue  # owner process alive (e.g. mid-closure) — not stranded
+            except Exception:
+                if not _claim_state:
+                    continue
         out.append({
             "loop_id": ckpt.loop_id,
             "handle_id": ckpt.handle_id,
-            "done": len(ckpt.completed),
+            "done": ckpt.done_count,
             "total": len(ckpt.steps),
             "in_flight": (ckpt.in_flight or {}).get("index"),
+            "claim_state": _claim_state,
+            "claim_handle": (ckpt.resume_claim or {}).get("handle_id") if _claim_state else None,
+            "finalized_status": _finalized_status,
         })
     return out
 
@@ -806,6 +899,27 @@ def run_heartbeat(
     if not dry_run:
         try:
             _sw = stranded_state_sweep(verbose=verbose)
+            # The liveness verdict is an observation, not a recovery —
+            # the recorder only returned it (review round 5, 2026-09-13:
+            # the non-verbose heartbeat dropped the warning on the floor,
+            # and the health narration rode goal-run closure only, so an
+            # idle box never heard it). Surface it as a check and run the
+            # health lane's edge-triggered narration for this one probe.
+            _lvl = str(_sw.get("container_auth_liveness") or "")
+            if _lvl and _lvl != "ok":
+                report.checks["container_auth"] = (
+                    f"{'fail' if _lvl == 'expired' else 'warn'}: "
+                    f"{_sw.get('container_auth_liveness_detail') or _lvl}")
+            if _lvl:
+                # Every observation, ok included (review round 6): the edge
+                # is told-silent → OK; a heartbeat-only box that skipped the
+                # OK samples never re-armed, so the NEXT expiry's warning
+                # would have been swallowed as already narrated.
+                try:
+                    from system_health import run_health_probes
+                    run_health_probes(only=("container_auth",))
+                except Exception as _hp_exc:
+                    log.debug("container auth health narration failed: %s", _hp_exc)
             if any(_sw.values()):
                 _clones = _sw.get("swept_clones") or {}
                 report.checks["stranded_sweep"] = (

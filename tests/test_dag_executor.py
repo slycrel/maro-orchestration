@@ -421,3 +421,88 @@ class TestDagWithParsedDeps:
         # Steps 2 and 3 should start within a small window of each other (parallel)
         delta_23 = abs(started_at[2] - started_at[3])
         assert delta_23 < 0.05, f"Steps 2 and 3 started too far apart: {delta_23:.3f}s"
+
+
+# ---------------------------------------------------------------------------
+# Prerequisite gate in the DAG lane (step_gate, 2026-09-16)
+# ---------------------------------------------------------------------------
+
+class TestDagPrerequisiteGate:
+    def _run(self, raw_steps, fail_at, monkeypatch=None, gate_implicit=False):
+        from planner import parse_dependencies
+        clean_steps, deps = parse_dependencies(raw_steps)
+        ran = []
+
+        def _fake_exec(**kwargs):
+            n = kwargs["step_num"]
+            ran.append(n)
+            if n in fail_at:
+                return _make_outcome("blocked", "", clean_steps[n - 1])
+            return _make_outcome("done", f"r{n}")
+
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec), \
+             patch("step_gate.gate_implicit_enabled", return_value=gate_implicit):
+            outcomes = _run_steps_dag(
+                goal="gate", steps=clean_steps, deps=deps, adapter=_make_adapter(),
+                ancestry_context="", tools=[], verbose=False, max_workers=3,
+                tagged_steps=raw_steps,
+            )
+        return outcomes, sorted(ran)
+
+    def test_declared_edge_from_blocked_dep_is_not_released(self):
+        outcomes, ran = self._run(
+            ["fetch", "parse [after:1]", "report [after:2]", "next"], fail_at={1})
+        assert [o["status"] for o in outcomes] == ["blocked", "blocked", "blocked", "done"]
+        assert outcomes[1]["stuck_reason"].startswith(
+            "not executed — declared prerequisite not met: step 1 ended blocked")
+        # Transitive: step 3 declared step 2, which was gated, so it is gated too.
+        assert outcomes[2]["stuck_reason"].startswith(
+            "not executed — declared prerequisite not met: step 2 ended blocked")
+        # Step 4 follows 3 by the sequential default (soft): released and run.
+        assert ran == [1, 4]           # neither dependent reached the adapter
+
+    def test_sequential_default_edge_stays_soft(self):
+        outcomes, ran = self._run(["fetch", "parse", "report [after:1]"], fail_at={1})
+        # 2 depends on 1 by the sequential default → soft, still runs.
+        assert outcomes[1]["status"] == "done"
+        # 3 declared 1 → gated.
+        assert outcomes[2]["status"] == "blocked"
+        assert ran == [1, 2]
+
+    def test_gate_implicit_config_hardens_default_edges(self):
+        outcomes, ran = self._run(["fetch", "parse", "report"], fail_at={1}, gate_implicit=True)
+        assert [o["status"] for o in outcomes] == ["blocked", "blocked", "blocked"]
+        assert ran == [1]
+
+    def test_resumed_suffix_enforces_nothing(self):
+        """A checkpoint suffix is re-numbered from 1 while its tags still
+        name the original plan: no declared edge may hard-gate."""
+        from planner import parse_dependencies
+        raw = ["orig step 2", "orig step 3 [after:1]", "orig step 4 [after:1]"]
+        clean_steps, deps = parse_dependencies(raw)
+
+        def _fake_exec(**kwargs):
+            n = kwargs["step_num"]
+            return _make_outcome("blocked" if n == 1 else "done", "", clean_steps[n - 1])
+
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec), \
+             patch("step_gate.gate_implicit_enabled", return_value=True):
+            outcomes = _run_steps_dag(
+                goal="gate", steps=clean_steps, deps=deps, adapter=_make_adapter(),
+                ancestry_context="", tools=[], verbose=False, max_workers=2,
+                tagged_steps=raw, identity_intact=False)
+        assert [o["status"] for o in outcomes] == ["blocked", "done", "done"]
+
+    def test_without_tagged_steps_nothing_is_enforced(self):
+        from planner import parse_dependencies
+        clean_steps, deps = parse_dependencies(["fetch", "parse [after:1]"])
+
+        def _fake_exec(**kwargs):
+            n = kwargs["step_num"]
+            return _make_outcome("blocked" if n == 1 else "done", "", clean_steps[n - 1])
+
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
+            outcomes = _run_steps_dag(
+                goal="gate", steps=clean_steps, deps=deps, adapter=_make_adapter(),
+                ancestry_context="", tools=[], verbose=False, max_workers=2)
+        assert [o["status"] for o in outcomes] == ["blocked", "done"]

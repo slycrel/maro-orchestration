@@ -38,7 +38,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os  # review r27: atomic served-artifact replacement closes temporary file descriptors.
 import shutil
+import stat  # review r31: one discovery stat classifies regular deliverable files.
+import tempfile  # review r27: deliverables stage in the destination directory before publish.
+from datetime import datetime, timezone  # review r30: sidecar time is a freezeable naming input.
+from uuid import uuid4  # review r30: same-process sidecars need per-call identity.
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -126,9 +131,23 @@ def _run_dir_for(handle_id: str) -> Optional[Path]:
 def _read_meta(rd: Path) -> dict:
     p = rd / "metadata.json"
     try:
-        return json.loads(p.read_text())
+        # review r26: metadata is written as UTF-8; make that boundary explicit.
+        return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _read_meta_strict(rd: Path) -> Optional[dict]:
+    # review r23: unreadable metadata must not erase a card's real verdict.
+    try:
+        # review r26: reject duplicate keys as well as torn/non-UTF-8 metadata.
+        meta = loads_clean((rd / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # review r25: a crash-torn UTF-8 sequence is unreadable too — it
+        # must decline (warned) like any other failed read, not raise
+        # into whichever caller's blanket except happens to catch it.
+        return None
+    return meta if isinstance(meta, dict) else None
 
 
 def run_result(handle_id: str, run_dir: Optional[Path] = None) -> Optional[dict]:
@@ -347,6 +366,9 @@ _DELIVERABLE_NAME_HINTS = ("final_report", "report", "summary", "shortlist",
                            "verdict")
 # How many ranked deliverables get copied into <run>/artifact/ for serving.
 _SERVED_ARTIFACTS_CAP = 12
+# review r29: provenance gating is versioned by rollout time, not by whether
+# best-effort metadata fields happened to survive their writes.
+_EXECUTION_PROVENANCE_SINCE = "2026-09-16T16:20:00+00:00"  # review r30: after marker commit.
 
 
 def _parse_ts(iso: str) -> Optional[float]:
@@ -358,10 +380,24 @@ def _parse_ts(iso: str) -> Optional[float]:
         return None
 
 
+def _aware_ts(iso: str) -> Optional[float]:
+    """Timestamp only when its timezone is explicit.  # review r30: legacy is host-independent."""
+    try:
+        from datetime import datetime
+        parsed = datetime.fromisoformat(iso)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.timestamp()
+    except Exception:
+        return None
+
+
 def _project_dir_for(meta: dict) -> Optional[Path]:
     """Resolve the project dir a run wrote into, '' project → None."""
-    slug = str(meta.get("project") or "").strip()
-    if not slug:
+    from runs import recorded_project_verbatim
+    # review r26: this caller needs the runs module's verbatim directory identity.
+    slug = recorded_project_verbatim(meta)
+    if slug is None:
         try:
             from agent_loop import _goal_to_slug
             slug = _goal_to_slug(str(meta.get("prompt") or ""))
@@ -389,20 +425,47 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     names then size ranked. The top pick is COPIED into <run>/artifact/ so
     the viz server (which serves runs_root only) can serve it and completion
     messages can link the actual report."""
+    # review r29: thin is always non-loop execution, including old records.
+    if meta.get("execution") == "thin":
+        return
+    # review r29: legacy is a time property. Modern or unparseable records
+    # need affirmative loop provenance even if both best-effort stamps failed.
+    _started_ts = _aware_ts(str(meta.get("started_at") or "").strip())
+    _cutoff_ts = _aware_ts(_EXECUTION_PROVENANCE_SINCE)
+    _legacy = (
+        _started_ts is not None
+        and _cutoff_ts is not None
+        and _started_ts < _cutoff_ts
+        and meta.get("lane") != "now"
+        # review r30: pre-marker thin prompts were still non-loop execution.
+        and not str(meta.get("prompt") or "").lstrip().lower().startswith("mode:thin")
+    )
+    if meta.get("execution") != "loop" and not _legacy:
+        return
     pdir = _project_dir_for(meta)
     started = str(meta.get("started_at") or "").strip()
     if pdir is None or not started:
         return
+    _ended_ts = None
+    _ended_raw = str(meta.get("ended_at") or "").strip()  # review r31: None/"" = still running or crashed = unbounded (recorded).
+    if _ended_raw:
+        _ended_ts = _aware_ts(_ended_raw)
+        if _ended_ts is None:
+            # review r31: an explicit but unsafe end never opens an unbounded scan.
+            log.info("curation: refusing deliverable scan with invalid ended_at for %s", rd)
+            return
     try:
         from artifact_check import files_modified_since
-        changed = files_modified_since(pdir, started, limit=100)
+        changed = files_modified_since(
+            pdir, started, limit=100, until_ts=_ended_ts)
     except Exception:
         return
     candidates: List[Path] = []
+    candidate_stats: Dict[Path, os.stat_result] = {}
     for rel in changed:
         p = pdir / rel
         name = p.name
-        if (not p.is_file() or name in _DELIVERABLE_EXCLUDE
+        if (p.is_symlink() or name in _DELIVERABLE_EXCLUDE
                 or name.startswith(".") or name.endswith(".lock")):
             continue
         # step-N-output.txt / step-N-transcript.json are execution logs the
@@ -413,11 +476,15 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
         if p.suffix.lower() not in (".md", ".txt", ".json", ".csv", ".html"):
             continue
         try:
-            if p.stat().st_size == 0:
+            snapshot = p.stat()
+            # review r31: rank and cards share this single validated discovery snapshot.
+            if (not stat.S_ISREG(snapshot.st_mode) or snapshot.st_size == 0
+                    or (_ended_ts is not None and snapshot.st_mtime > _ended_ts)):
                 continue
         except OSError:
             continue
         candidates.append(p)
+        candidate_stats[p] = snapshot
     if not candidates:
         return
 
@@ -445,11 +512,8 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
         name = p.name.lower()
         hinted = any(h in name for h in _DELIVERABLE_NAME_HINTS)
         is_prose = p.suffix.lower() in (".md", ".txt")
-        try:
-            st = p.stat()
-            size, mtime = st.st_size, st.st_mtime
-        except OSError:
-            size, mtime = 0, 0.0
+        snapshot = candidate_stats[p]
+        size, mtime = snapshot.st_size, snapshot.st_mtime
         post_hoc = bool(recovery_start is not None and mtime >= recovery_start)
         # Recency before size: the run's final synthesis lands LAST, not
         # largest. calm-echo 2026-07-17: an early wrong draft (5.3KB,
@@ -458,9 +522,6 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
         return (not hinted, not is_prose, post_hoc, -mtime, -size)
 
     candidates.sort(key=_rank)
-    card["deliverables"] = [
-        {"path": str(p), "bytes": p.stat().st_size} for p in candidates[:3]
-    ]
     # Copy ALL ranked candidates, not just the top pick: 83a2c805
     # (2026-08-05) — the audit loop's AUDIT_NOTE outranked steal_list.md
     # on recency, so the run's actual deliverable never reached the served
@@ -469,34 +530,80 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     served: List[str] = []
     served_sources: Dict[str, str] = {}
     omitted: List[Dict[str, str]] = []
+    validated: List[Path] = []
     try:
         dest_dir = rd / "artifact"
         dest_dir.mkdir(parents=True, exist_ok=True)
         taken: set = set()
         for i, p in enumerate(candidates):
+            snapshot = candidate_stats[p]
+            try:
+                current = os.stat(p)
+                unchanged = (
+                    (current.st_ino, current.st_size, current.st_mtime)
+                    == (snapshot.st_ino, snapshot.st_size, snapshot.st_mtime)
+                    and (_ended_ts is None or current.st_mtime <= _ended_ts)
+                )
+            except OSError:
+                unchanged = False
+            if not unchanged:
+                omitted.append({"path": str(p), "reason": "changed-after-check"})
+                continue
             # No silent caps (adversarial review 2026-08-06 R2-5): the cap
             # and first-wins collision rule both stand — but what they drop
             # is recorded, so "all ranked deliverables" reads honestly as
             # "all served, N omitted" instead of pretending completeness.
             if i >= _SERVED_ARTIFACTS_CAP:
+                validated.append(p)
                 omitted.append({"path": str(p), "reason": "over-cap"})
                 continue
             if p.name in taken:
+                validated.append(p)
                 omitted.append({"path": str(p),
                                 "reason": "basename-collision"})
                 continue
+            # review r27: publish each served artifact atomically within its destination directory.
+            _tmp_path = None
             try:
-                shutil.copy2(p, dest_dir / p.name)
+                _tmp_fd, _tmp_name = tempfile.mkstemp(
+                    dir=dest_dir, prefix=f".{p.name}.", suffix=".tmp")
+                os.close(_tmp_fd)
+                _tmp_path = Path(_tmp_name)
+                shutil.copy2(p, _tmp_path)
+                current = os.stat(p)
+                if ((current.st_ino, current.st_size, current.st_mtime)
+                        != (snapshot.st_ino, snapshot.st_size, snapshot.st_mtime)
+                        or (_ended_ts is not None and current.st_mtime > _ended_ts)):
+                    # review r31: only a copy of the discovery inode/window may be served.
+                    omitted.append({"path": str(p), "reason": "changed-after-check"})
+                    _tmp_path.unlink(missing_ok=True)
+                    _tmp_path = None
+                    continue
+                os.replace(_tmp_path, dest_dir / p.name)
             except Exception:
                 log.debug("deliverable copy failed for %s", p, exc_info=True)
+                if _tmp_path is not None:
+                    try:
+                        _tmp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                if not any(o["path"] == str(p) for o in omitted):
+                    omitted.append({"path": str(p), "reason": "copy-failed"})  # review r31: an honest reason for a copy that raised.
                 continue
             taken.add(p.name)
+            validated.append(p)
             served.append(f"{rd.name}/artifact/{p.name}")
             # Source path per served name: the attribution join key. A
             # basename alone credits every same-named writer (R2-6).
             served_sources[p.name] = str(p)
     except Exception:
         log.debug("artifact dir setup failed for %s", rd, exc_info=True)
+    # review r31: discarded copies cannot survive in the user-facing ranking.
+    if validated:
+        card["deliverables"] = [
+            {"path": str(p), "bytes": candidate_stats[p].st_size}
+            for p in validated[:3]
+        ]
     if served:
         card["deliverable_link_path"] = served[0]
         card["served_artifacts"] = served
@@ -1455,6 +1562,7 @@ _CURATOR_SPECS: List[CuratorSpec] = [
                                    "goal_verdict_downgrade_reason",
                                    "goal_verdict_gaps",
                                    "clarification_question",
+                                   "clarification_answer", "operator_ask",
                                    "stop_verdict", "stop_evidence",
                                    "pause_reason", "pause_family",
                                    "verdict_pending")),
@@ -1722,11 +1830,190 @@ def maintain_run_card(card: dict, run_dir: Path,
     return card
 
 
-def _write_run_card(rd: Path, card: dict) -> None:
-    from file_lock import atomic_write, locked_write
+_CARD_PUBLISH_ATTEMPTS = 3
+
+
+def _pure_card_keys() -> set:
+    """Keys owned by the pure build, including its fixed envelope."""
+    # review r26: one ownership list drives every preserve-then-rebuild publish.
+    keys = {"handle_id", "nickname", "goal", "lane", "model", "started_at",
+            "ended_at", "_curation"}
+    for fn in CURATORS:
+        keys.update(_SPEC_BY_NAME[fn.__name__].output_keys)
+    return keys
+
+
+def _maintenance_card_keys() -> set:
+    # review r26: maintenance may merge only the keys its phase owns.
+    keys = {"_maintenance"}
+    for fn in MAINTENANCE:
+        keys.update(_SPEC_BY_NAME[fn.__name__].output_keys)
+    return keys
+
+
+def _park_unreadable_card(card_path: Path, old: str, *, empty: bool = False) -> bool:
+    """Preserve unreadable bytes; return whether replacement is authorized."""
+    # review r26: sidecar I/O stays outside the card critical section.
+    if empty:
+        log.warning(
+            "refresh_run_card_classification: existing run_card.json is empty "
+            "in %s — rebuilt from run data; maintenance-owned keys were not recoverable",
+            card_path.parent.name)
+        return True  # review r28: empty files contain no old bytes to preserve.
+    sidecar = card_path.with_name(
+        card_path.name + ".unreadable-"
+        + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        # review r29: a pid disambiguates simultaneous preservers whose
+        # timestamp resolution collides across processes.
+        + f"-{os.getpid()}"
+        + f"-{uuid4().hex[:8]}"  # review r30: threads share pid and clock tick.
+    )
+    try:
+        # review r29: preserve via the repository's fsynced temp-and-replace
+        # writer so success never exposes a partial sidecar.
+        from file_lock import atomic_write
+        atomic_write(sidecar, old, errors="surrogateescape", durable=True)  # review r30: sidecar survives card replacement.
+        kept = f"old bytes preserved at {sidecar.name}"
+        preserved = True
+    except OSError:
+        kept = "old bytes could NOT be preserved to a sidecar"
+        preserved = False
+    if preserved:
+        log.warning(
+            "refresh_run_card_classification: run_card.json unreadable in %s "
+            "— rebuilt from run data (%s); maintenance-owned keys were not recoverable",
+            card_path.parent.name, kept)
+    else:
+        # review r28: do not claim a rebuild when preservation denied publication.
+        log.warning(
+            "refresh_run_card_classification: run_card.json unreadable in %s "
+            "— %s; leaving the card untouched",
+            card_path.parent.name, kept)
+    # review r28: publication may replace corrupt bytes only after preservation succeeds.
+    return preserved
+
+
+def _publish_pure_card(handle_id: str, rd: Path, *, status: Optional[str] = None,
+                       initial_meta: Optional[dict] = None) -> Optional[tuple]:
+    """Optimistically build and publish a pure card from a stable snapshot.
+
+    Returns ``(published_card, metadata_snapshot)``.  Curators always run
+    outside the lock; the lock contains only revalidation, old-card parsing,
+    merging, and serialization.
+    """
+    from file_lock import locked_rmw
     card_path = rd / "run_card.json"
-    with locked_write(card_path):
-        atomic_write(card_path, json.dumps(card, indent=2))
+    snapshot = deepcopy(initial_meta) if initial_meta is not None else _read_meta_strict(rd)
+    # review r27: only the exact corrupt bytes already parked may be replaced.
+    parked_old: Optional[str] = None
+    for _attempt in range(_CARD_PUBLISH_ATTEMPTS):
+        if snapshot is None:
+            log.warning("run-card publication: metadata unreadable for run %s", rd.name)
+            return None
+        build_meta = deepcopy(snapshot)
+        if status:
+            build_meta.setdefault("status", status)
+        # review r26: all curators, including copies and synthesis, run unlocked.
+        rebuilt = _build_run_card(handle_id, rd, build_meta)
+        state = {"card": None, "next_meta": None, "bad_old": None,
+                 "empty_old": False}
+
+        def _merge(old: str) -> Optional[str]:
+            # review r26: cheap optimistic revalidation prevents stale rollback.
+            current = _read_meta_strict(rd)
+            if current is None or current != snapshot:
+                state["next_meta"] = current
+                return None
+            existed = card_path.exists()
+            try:
+                if not existed:
+                    card = {}
+                elif not old.strip():
+                    if parked_old is None or old != parked_old:
+                        state["bad_old"] = old
+                        state["empty_old"] = True
+                        return None
+                    card = {}
+                else:
+                    card = loads_clean(old)
+                    if not isinstance(card, dict):
+                        raise ValueError("run_card.json is not a JSON object")
+            except (ValueError, TypeError):
+                if parked_old is None or old != parked_old:
+                    state["bad_old"] = old
+                    return None
+                card = {}
+            for key in _pure_card_keys():
+                if key not in rebuilt:
+                    card.pop(key, None)
+            card.update(deepcopy(rebuilt))
+            state["card"] = card
+            return json.dumps(card, indent=2)
+
+        # review r27: a corrupt card that changes between park and re-merge
+        # is parked in turn (only the exact bytes already parked may be
+        # replaced), and the rebuilt card is reused across parks — curators,
+        # including answer synthesis, never run again for a sidecar.
+        for _park in range(_CARD_PUBLISH_ATTEMPTS):
+            locked_rmw(card_path, _merge, default="")
+            if state["bad_old"] is None or state["card"] is not None:
+                break
+            if not _park_unreadable_card(
+                    card_path, state["bad_old"], empty=state["empty_old"]):
+                # review r28: failed preservation leaves the original card authoritative.
+                log.warning(
+                    "run-card publication declining: old bytes could not be "
+                    "preserved for run %s",
+                    rd.name,
+                )
+                return None
+            parked_old = state["bad_old"]
+            state["bad_old"], state["empty_old"] = None, False
+        if state["card"] is not None:
+            return state["card"], snapshot
+        if state["bad_old"] is not None:
+            log.warning("run-card publication: run_card.json kept arriving "
+                        "unreadable for run %s; declining", rd.name)
+            return None
+        snapshot = state["next_meta"]
+    # review r26: a moving record is safer left for the next sweep than stale.
+    log.warning("run-card publication: metadata kept moving for run %s; declining", rd.name)
+    return None
+
+
+def _publish_maintenance(rd: Path, card: dict, snapshot: dict) -> Optional[dict]:
+    """Merge maintenance-owned keys over the fresh on-disk card."""
+    from file_lock import locked_rmw
+    card_path = rd / "run_card.json"
+    state = {"card": None, "metadata_moved": False}
+    owned = _maintenance_card_keys()
+
+    def _merge(old: str) -> Optional[str]:
+        # review r26: if metadata moved, preserve the fresher writer's pure
+        # classification and still attach only this pass's maintenance keys.
+        current = _read_meta_strict(rd)
+        try:
+            fresh = loads_clean(old)
+            if current is None or not isinstance(fresh, dict):
+                return None
+        except (ValueError, TypeError):
+            return None
+        for key in owned:
+            if key in card:
+                fresh[key] = deepcopy(card[key])
+            else:
+                fresh.pop(key, None)
+        # review r26: record revalidation without changing the merge: a moved
+        # snapshot still publishes maintenance only, never stale pure keys.
+        state["metadata_moved"] = current != snapshot
+        state["card"] = fresh
+        return json.dumps(fresh, indent=2)
+
+    locked_rmw(card_path, _merge, default="")
+    if state["metadata_moved"]:
+        log.debug("run-card maintenance: metadata moved for %s; pure keys preserved",
+                  rd.name)
+    return state["card"]
 
 
 def curate_run(handle_id: str, status: Optional[str] = None,
@@ -1736,16 +2023,22 @@ def curate_run(handle_id: str, status: Optional[str] = None,
     Best-effort: returns None and never raises on a missing/unreadable run.
     """
     try:
-        rd, meta = _resolve_run(handle_id, status, run_dir)
-        if rd is None:
+        rd = run_dir or _run_dir_for(handle_id)
+        if rd is None or not rd.is_dir():
             return None
-        card = _build_run_card(handle_id, rd, meta)
+        # review r26: curate and refresh share the same optimistic publisher.
+        published = _publish_pure_card(handle_id, rd, status=status)
+        if published is None:
+            return None
+        card, snapshot = published
         # Persist useful, side-effect-free curation before trust-bearing
         # maintenance. A process interruption cannot erase the mined card.
-        _write_run_card(rd, card)
+        meta = deepcopy(snapshot)
+        if status:
+            meta.setdefault("status", status)
         maintain_run_card(card, rd, meta)
-        _write_run_card(rd, card)
-        return card
+        final = _publish_maintenance(rd, card, snapshot)
+        return final
     except Exception:
         return None
 
@@ -1760,62 +2053,13 @@ def refresh_run_card_classification(
     then merge over the existing card so maintenance-only promotion state and
     other extensions survive. Trust-bearing maintenance never re-runs.
     """
-    rd, meta = _resolve_run(handle_id, None, run_dir)
-    if rd is None:
+    rd = run_dir or _run_dir_for(handle_id)
+    if rd is None or not rd.is_dir():
         return None
-    rebuilt = _build_run_card(handle_id, rd, meta)
-    card_path = rd / "run_card.json"
-    if not card_path.is_file():
-        _write_run_card(rd, rebuilt)
-        return rebuilt
-
-    from file_lock import locked_rmw
-    refreshed = {"card": None}
-
-    def _merge(old: str) -> str:
-        # Preserve-then-rebuild (adversarial r2, Architect HIGH): the old
-        # `except: card = {}` silently DESTROYED an unreadable card twice
-        # over — maintenance-owned keys gone from the rewrite, and the torn
-        # bytes (the only copy) overwritten. Refresh exists to re-propagate
-        # verdicts after audit repair, so a corrupt card must still
-        # self-heal (pinned 2026-08-13) — but the torn original is run
-        # data: it goes to a sidecar first and the loss is WARNed, never
-        # silent. loads_clean additionally refuses byte-tainted-but-valid
-        # content that plain json.loads would launder into \udcXX escapes.
-        try:
-            card = loads_clean(old)
-            if not isinstance(card, dict):
-                raise ValueError("run_card.json is not a JSON object")
-        except (ValueError, TypeError):
-            from datetime import datetime, timezone
-            sidecar = card_path.with_name(
-                card_path.name + ".unreadable-"
-                + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
-            try:
-                sidecar.write_bytes(old.encode("utf-8", "surrogateescape"))
-                kept = f"old bytes preserved at {sidecar.name}"
-            except OSError:
-                kept = "old bytes could NOT be preserved to a sidecar"
-            log.warning(
-                "refresh_run_card_classification: run_card.json unreadable "
-                "in %s — rebuilt from run data (%s); maintenance-owned keys "
-                "were not recoverable", rd.name, kept)
-            card = {}
-        # Only-when-stamped pure keys the rebuild OMITTED must be removed,
-        # not merely left un-overwritten — a resolved verdict_pending (or a
-        # re-stamp that dropped goal_verdict_gaps) otherwise survives every
-        # refresh as a stale claim (review 2026-08-13). Maintenance keys are
-        # untouched: only keys the PURE curators own are eligible.
-        for fn in CURATORS:
-            for key in _SPEC_BY_NAME[fn.__name__].output_keys:
-                if key not in rebuilt:
-                    card.pop(key, None)
-        card.update(deepcopy(rebuilt))
-        refreshed["card"] = card
-        return json.dumps(card, indent=2)
-
-    locked_rmw(card_path, _merge)
-    return refreshed["card"]
+    # review r26: first-card and existing-card refreshes use the same bounded
+    # unlocked-build/locked-revalidate publication discipline as curate_run.
+    published = _publish_pure_card(handle_id, rd)
+    return published[0] if published is not None else None
 
 
 def refresh_step_flags(handle_id: Optional[str] = None) -> int:

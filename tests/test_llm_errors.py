@@ -13,6 +13,7 @@ import pytest
 from llm_errors import (
     AUTH_ACTIONABLE,
     BILLING_ACTIONABLE,
+    CONTAINER_AUTH,
     FAILOVER,
     FATAL,
     INPUT_TOO_LARGE,
@@ -289,3 +290,88 @@ def test_actionable_failover_alert_dedups_and_carries_chain(monkeypatch):
     # Second walk in the same process: no second alert for the same key.
     assert walk().content == "answer"
     assert len(events) == 1
+
+
+class _MarkedAuthExpired(RuntimeError):
+    """Stand-in for container_exec.ContainerAuthExpired: the classifier keys
+    on the type marker, never on the message text."""
+    maro_error_class = CONTAINER_AUTH
+
+
+def test_container_auth_marker_outranks_text_and_never_fails_over():
+    # The message deliberately carries a backend-auth pattern ("oauth token
+    # expired") AND a subprocess-death pattern: the marker must win, and the
+    # policy must be pause-shaped (no retry, no failover — the API lane
+    # would run the worker outside the container the require contract
+    # demands).
+    exc = _MarkedAuthExpired(
+        "executor.container=require but the container lane is unavailable: "
+        "container auth breaker tripped (oauth token expired); claude subprocess failed")
+    info = classify_error(exc, backend="subprocess")
+    assert info.error_class == CONTAINER_AUTH
+    assert info.retryable is False and info.failover is False
+    assert is_actionable(info)
+    assert "maro-claude-auth" in info.user_action and "/login" in info.user_action
+
+
+def test_container_auth_marker_is_a_type_marker_not_a_string_match():
+    # Plain text mentioning the class name does not qualify.
+    info = classify_error(RuntimeError("container_auth something"))
+    assert info.error_class != CONTAINER_AUTH
+
+
+def test_backend_error_keeps_its_structured_classification():
+    # Review 2026-09-13: FailoverAdapter wraps an actionable failure in
+    # BackendError; re-classifying the wrapper's TEXT lost the class (the
+    # container_auth refusal came back as auth_actionable/failover). The
+    # wrapper's own ErrorInfo is the classification.
+    from llm_errors import BackendError, ErrorInfo
+    info = ErrorInfo(error_class=CONTAINER_AUTH, backend="subprocess", retryable=False,
+                     failover=False, user_action="re-seed the maro-claude-auth volume",
+                     detail="container auth breaker tripped (oauth token expired)")
+    wrapped = BackendError(info)
+    assert "oauth token expired" in str(wrapped)          # text that WOULD misclassify
+    got = classify_error(wrapped, backend="subprocess")
+    assert got is info and got.error_class == CONTAINER_AUTH and got.failover is False
+
+
+@pytest.mark.parametrize("fresh, cost", [
+    (float("inf"), 0), (1e400, float("nan")), (-7, -1), ("many", None), (None, "x"), (float("inf"), float("-inf")),
+])
+def test_kill_evidence_is_total_finite_and_nonnegative(fresh, cost):
+    # Round 9: int(inf) raised OverflowError past the blocked builder's
+    # guard; NaN reached cost records; a negative subtracted from totals.
+    from llm_errors import kill_evidence
+    e = RuntimeError("killed")
+    e.maro_partial_output = "abc"; e.fresh_input_tokens = fresh; e.estimated_cost_usd = cost
+    assert kill_evidence(e) == ("[partial output before kill]\nabc", 0, 0.0)
+
+
+def test_kill_evidence_reads_through_the_failover_wrapper():
+    from llm_errors import kill_evidence
+    cause = RuntimeError("killed")
+    cause.maro_partial_output = "abc"; cause.fresh_input_tokens = 7; cause.estimated_cost_usd = 0.5
+    wrapper = RuntimeError("wrapped")
+    wrapper.__cause__ = cause
+    assert kill_evidence(wrapper) == ("[partial output before kill]\nabc", 7, 0.5)
+    assert kill_evidence(RuntimeError("bare")) == ("", 0, 0.0)
+
+
+@pytest.mark.parametrize("value, cast, want", [
+    (10 ** 400, int, 0), (10 ** 16, int, 0), (10 ** 12, int, 10 ** 12),
+    (1e300, float, 0.0), (float(10 ** 15), float, float(10 ** 15)), ("1" + "0" * 400, int, 0),
+])
+def test_finite_nonneg_is_bounded(value, cast, want):
+    # Round 14: a valid JSON integer of 400 digits passed as a finite int
+    # and overflowed the float pricer ahead of the pause seam.
+    from llm_errors import finite_nonneg, COUNTER_MAX
+    assert finite_nonneg(value, cast, cast(0)) == want
+    assert COUNTER_MAX == 10 ** 15
+
+
+def test_an_oversized_terminal_counter_keeps_the_others():
+    from llm_errors import call_usage_evidence
+    exc = RuntimeError("claude subprocess failed")
+    exc.fresh_input_tokens = 10 ** 400; exc.fresh_output_tokens = 9; exc.estimated_cost_usd = 0.12
+    ev = call_usage_evidence(exc)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (0, 9, 0.12)

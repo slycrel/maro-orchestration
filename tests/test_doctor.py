@@ -124,6 +124,37 @@ class TestRunDoctor:
         assert "telegram_offset.txt" in captured.out
         assert "foo.lock" in captured.out
 
+    @pytest.mark.parametrize("level, expect", [
+        ("expired", "✗   Container auth session — EXPIRED — refresh token expired 2026-09-12; re-seed"),
+        ("warn", "✗   Container auth session — WARN — refresh token expires in 2 days; re-seed"),
+        ("ok", "✓   Container auth session — valid until 2026-10-12"),
+        ("unknown", "✓   Container auth session — expiry NOT ESTABLISHED (no liveness record)"),
+    ])
+    def test_container_auth_session_row_reads_the_expiry_record(self, capsys, monkeypatch, tmp_path,
+                                                                 level, expect):
+        # Review round 6 (2026-09-13): doctor showed four green container rows
+        # for a KNOWN-expired session — the breaker is reactive (clear until
+        # the first casualty) and doctor never read the heartbeat's expiry
+        # record. Now a fifth row does, and names "unknown" as such.
+        import container_exec as ce
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setattr(ce, "container_mode", lambda: "require")
+        monkeypatch.setattr(ce, "container_mode_raw", lambda: "require", raising=False)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker up"))
+        monkeypatch.setattr(ce, "image_probe", lambda image: (True, "image present"))
+        monkeypatch.setattr(ce, "auth_volume_probe", lambda: (True, "volume present"))
+        monkeypatch.setattr(ce, "auth_breaker_state", lambda: (None, "ok"))
+        details = {"expired": "refresh token expired 2026-09-12",
+                   "warn": "refresh token expires in 2 days",
+                   "ok": "valid until 2026-10-12",
+                   "unknown": "no liveness record"}
+        monkeypatch.setattr(ce, "auth_liveness_state", lambda: {})
+        monkeypatch.setattr(ce, "auth_liveness_verdict", lambda rec: (level, details[level]))
+        run_doctor()
+        out = capsys.readouterr().out
+        assert "✓   Container auth breaker — clear" in out
+        assert expect in out, out
+
 # ---------------------------------------------------------------------------
 # _scan_config_paths — burned-in absolute paths from another machine
 # ---------------------------------------------------------------------------

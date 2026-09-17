@@ -21,7 +21,8 @@ from typing import Any, Dict, List, Optional
 
 from ancestry import Origin
 from stop_verdicts import PAUSE_OP_MANUAL
-from loop_types import LoopContext, StepOutcome, _orch, MAX_RESTART_DEPTH
+from loop_types import (LoopContext, StepOutcome, _orch, MAX_RESTART_DEPTH,
+                        MARK_APPLIED, MARK_PENDING)
 from loop_artifacts import _write_plan_manifest
 from loop_planning import _shape_steps
 from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
@@ -225,6 +226,16 @@ def _write_iteration_artifacts(
     """
     o = _orch()
 
+    # NEXT.md marks earlier rows still owe (a failed mark_item, or a
+    # producer that records none) are applied before every snapshot, so
+    # the file records the mirror's true state (chunk 8; the parallel
+    # lane retries the same way).
+    try:
+        from loop_planning import settle_item_marks as _settle_marks
+        _settle_marks(ctx.project or "", step_outcomes)
+    except Exception as _settle_exc:
+        log.warning("NEXT.md mark settlement failed for loop %s: %s", ctx.loop_id, _settle_exc)
+
     # Checkpoint
     try:
         from checkpoint import write_checkpoint as _write_ckpt
@@ -232,6 +243,10 @@ def _write_iteration_artifacts(
             ctx.loop_id, ctx.goal, ctx.project or "", steps, step_outcomes,
             executor_session=executor_session,
             world_facts=ctx.world_facts.to_list(),
+            regression=ctx.regression.to_list(),
+            step_indices=list(getattr(ctx, "step_indices", []) or []),
+            plan_items=getattr(ctx, "plan_items", None),
+            parallel_fan_out=getattr(ctx, "parallel_fan_out", 0),
         )
     except Exception as _exc:
         # Affects loop resumability — silent loss means a crashed loop can't restart.
@@ -474,13 +489,31 @@ def _check_loop_interrupts(
                 else:
                     new_remaining = _shape_steps(new_remaining, label="interrupt")
                     added = [s for s in new_remaining if s not in remaining_steps]
-                    if added:
-                        new_idxs = o.append_next_items(ctx.project, added)
-                        existing_count = len(remaining_steps)
-                        remaining_steps = new_remaining
-                        remaining_indices = remaining_indices[:existing_count] + new_idxs
-                    else:
-                        remaining_steps = new_remaining
+                    # Re-pair text ↔ item index by TEXT, whatever the
+                    # interrupt did to the order: a priority interrupt
+                    # PREPENDS its steps and the old `old_indices + new`
+                    # concatenation left the urgent step wearing the next
+                    # planned step's item number (review 2026-09-16 r1
+                    # finding 4 — the checkpoint then mapped the urgent
+                    # step's row onto that planned step's position and a
+                    # resume skipped work that never ran). A corrective
+                    # replacement likewise keeps only the surviving texts'
+                    # indices.
+                    _old_pairs: Dict[str, List[int]] = {}
+                    for _t, _ix in zip(remaining_steps, remaining_indices):
+                        _old_pairs.setdefault(_t, []).append(_ix)
+                    _new_pool = list(o.append_next_items(ctx.project, added)) if added else []
+                    _paired: List[int] = []
+                    for _t in new_remaining:
+                        _ixs = _old_pairs.get(_t)
+                        if _ixs:
+                            _paired.append(_ixs.pop(0))
+                        elif _new_pool:
+                            _paired.append(_new_pool.pop(0))
+                        else:
+                            _paired.append(-1)
+                    remaining_steps = new_remaining
+                    remaining_indices = _paired
                     o.append_decision(ctx.project, [
                         f"[loop:{ctx.loop_id}] interrupt({intr.intent}) from {intr.source}: {intr.message[:60]}",
                     ])
@@ -942,10 +975,17 @@ def _process_done_step(
     """
     o = _orch()
     if item_index >= 0:
+        # The row built from this outcome carries the mirror state (chunk
+        # 8): applied here, or pending — settled at the next snapshot or,
+        # after a crash, by the resume.
         try:
             o.mark_item(ctx.project, item_index, o.STATE_DONE)
+            outcome["item_mark"] = MARK_APPLIED
         except OSError as _mark_exc:  # FileLockTimeout: ledger contended — the run result matters more than the checkbox
-            log.warning("mark_item(DONE) failed for %s#%d: %s", ctx.project, item_index, _mark_exc)
+            log.warning("mark_item(DONE) failed for %s#%d (recorded as an owed mark on the "
+                        "row; settled at the next snapshot or by a resume): %s",
+                        ctx.project, item_index, _mark_exc)
+            outcome["item_mark"] = MARK_PENDING
 
     # Write to scratchpad
     if not isinstance(step_result, str):

@@ -126,11 +126,24 @@ def check_prerequisites(
     return result
 
 
+def _current_lineage() -> Optional[str]:
+    """The executing run's lineage root, for the graveyard's scope filter;
+    None (workspace rows only) when there is no current run or it cannot be
+    resolved — never everything."""
+    try:
+        from recall import lineage_root
+        from runs import current_handle_id
+        return lineage_root(current_handle_id() or "") or None
+    except Exception:
+        return None
+
+
 def _try_resurrect(topic: str, *, verbose: bool = False) -> List[str]:
     """Search graveyard for topic; resurrect hits. Returns lesson texts (up to 3)."""
     try:
         from memory import search_graveyard
-        hits = search_graveyard(topic, resurrect=True, limit=3)
+        hits = search_graveyard(topic, resurrect=True, limit=3,
+                                lineage=_current_lineage())
         if hits:
             if verbose:
                 log.info("prereq: resurrected %d lesson(s) for topic %r", len(hits), topic[:40])

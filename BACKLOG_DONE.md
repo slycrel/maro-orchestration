@@ -1,5 +1,514 @@
 # Backlog — Completed Archive
 
+## The run that ends a resume settles its source — SHIPPED 2026-09-17 (LoopsBench chunk 9)
+
+**Found:** chunk-7 r1 Architect 3: the CLI proved-overwritten-or-consumed
+after a done resume, but a library resume (`run_agent_loop(
+resume_from_loop_id=)`) claimed its source in `_load_resume` and never
+consumed it — a finished API resume left the source claimed-not-consumed,
+so a later resume was refused as live/superseded (correct, but opaque, and
+a different answer from the CLI's "already resumed as X"). Two entry
+points, two endings for one fact.
+
+**Doctrine:** consumption belongs to whoever makes the run's LAST status
+decision, through ONE function (`checkpoint.settle_resume_source`): the
+loop's own finalize for library callers (the end of Phase G, after the
+merge-backs that can demote), the CLI for its lane (after its closure
+verification, which can demote). A run that ends other than done keeps
+its claim untouched: the claim IS the replay barrier. Consumption is a
+compare-and-consume on the claim's nonce under the file lock — the
+permit authorizes the mutation it represents.
+
+**Shipped:**
+- `checkpoint.ResumePermit` (source path, nonce, source_loop_id) replaces
+  the (source, permit) tuple in `ctx.resume_claim_release`
+  (`Optional[ResumePermit]`); `permit_of` builds it from a claimed object
+  (None without a claim or a loop id); `finalize_refusal` releases
+  through it.
+- `checkpoint.source_is_settled` (re-read of the PINNED canonical path —
+  never re-resolved, a symlink there is refused: the complete successor,
+  or the consumed source naming this successor; anything else False),
+  `consume_claimed` (under `locked_write(require=True)`: the file must
+  record the permit's loop AND a claim with the permit's nonce, and not
+  be consumed by another successor; checkpoint-module `atomic_write`, dir
+  fsync, read-back) and `settle_resume_source` (settled → True; else
+  consume, then re-prove — a consume that reports success without a
+  record is not trusted).
+- `loop_finalize.settle_resume_claim` at the LAST status decision of
+  Phase G (after both merge-back blocks; a demotion stamps
+  `external-interrupt` like they do), on the parallel lane's result in
+  `agent_loop`, and after an auto-recovery child returns
+  (`successor_loop_id` = the child that finished the work). Deferred by
+  `LoopContext.defer_resume_settlement` (new `run_agent_loop` kwarg,
+  threaded through `loop_init`).
+- `cli._cmd_resume` passes `defer_resume_settlement=True`, takes the
+  permit right after claiming (canonical path, before admission nulls the
+  object's permit) and settles with `settle_resume_source` right AFTER
+  `_closure_verdict_pass` and BEFORE deferred learning; not settled →
+  `incomplete` with `RESUME_UNSETTLED_REASON` + `external-interrupt`
+  stamped; the run's close status stays `error` until the settlement
+  decides. The CLI never consumes an alias.
+- `_load_resume` refuses a dry-run resume before any lookup or claim.
+
+**Review:** r1 Skeptic + Architect (7 + 7): the settlement sat at the HEAD of Phase G (consumed sources for runs the merge-backs then demoted), the CLI's verify-only path could not tell an overwritten source from a consumed one, the (source, permit) tuple was untyped, a dry run could claim and consume a real checkpoint — all fixed in the design above. r2 Skeptic on the fix diff (5 HIGH + 2 MED): cheap fixes landed — the CLI settles right after closure and BEFORE deferred learning, `_status` stays `error` until the settlement decides (an interrupt in between never closes the run as done), a CLI demotion stamps `external-interrupt`; `consume_claimed` locks with `require=True` (the fail-open escape hatch never applies to the compare-and-consume); the permit's canonical path is PINNED at admission — never re-resolved, a symlink appearing there is refused by proof and consume alike; four must-detects added. Design residue queued (below). STOP RULE: no r3.
+
+**Residue (BACKLOG, chunk-7 residue list):** a HANDLE resume overwrites
+its source with the successor's checkpoints before closure can demote
+(pre-existing chunk-7 shape; lead: provisional successor address until
+closure accepts); Phase G's artifacts / ledger / learning record `done`
+before the settlement can demote it (merge-back precedent; lead: a
+structural Phase-G split — gates, then settlement, then status-bearing
+records); the auto-recovery claim names the parent while settlement
+names the child (lead: transfer the claim to the child before recovery
+starts); the loop's checkpoint writer is still outside the per-file lock
+claim / release / consume share (identity-level admission ledger).
+
+Tests: tests/test_resume_settlement.py (13) + updates in
+test_resume_claim.py, test_resume_lookup.py, test_stranded_sweep.py.
+
+## A NEXT.md mark a row still owes is durable state, settled from the checkpoint — SHIPPED 2026-09-17 (LoopsBench chunk 8)
+
+**Found:** chunk-5 r2 lead: a `mark_item` that failed at step time (NEXT.md
+locked) was retried only by the parallel lane's next snapshot and never by
+the sequential lane, and nothing durable recorded it — a crash in between
+left the checkpoint saying done while NEXT.md said TODO, so NEXT.md-driven
+work (heartbeat drain, a later run over the project) could execute the item
+again. Review r1 widened the class: producers that never marked (the
+milestone-advisor `skipped` row), marked and swallowed the failure (the
+parallel-batch branch) or could not record the result (the blocked
+"advance" flow) all reported the mirror as up to date by default; the first
+cut's verify-then-mark read the ledger outside the lock the rewrite took
+(a check that proved nothing), and read an unreadable ledger as drift.
+
+**Doctrine:** the checkpoint is the authoritative execution record and
+NEXT.md its mirror; the mirror catches up FROM the record, never the other
+way round; a mirror whose identity drifted (ledger edited) is surfaced, not
+blindly marked.
+
+**Shipped:**
+- `StepOutcome.item_mark` / `CompletedStep.item_mark` ∈ {`applied`,
+  `pending`, `drifted`, `attempt`} (loop_types, checkpoint). A terminal row (done /
+  blocked / skipped) on a real item is BORN `pending` unless its producer
+  records the applied mark (`_process_done_step`, the terminal blocked
+  mark in `loop_blocked`, the gate / stuck / batch sites) — a producer
+  that records nothing yields one redundant idempotent mark, never a lie;
+  attempt rows (retry / re-decompose / split / stuck-advisor) are born
+  `attempt` — not the item's verdict: they owe nothing AND supersede
+  nothing (r3: born `applied` they counted as the item's latest row and
+  erased a carried pending row's debt without a mark). On load only the
+  literal strings `pending` / `drifted` / `attempt` survive (absent, bool,
+  anything else → `applied`). `export_human` renders both owed states.
+- ONE settler, `loop_planning.settle_item_marks`: blocked → `!`, done /
+  skipped → `x`; the LATEST VERDICT row per item carries the obligation
+  (an earlier pending row is superseded; `attempt` rows are skipped when
+  finding the latest). Every settlement is a
+  COMPARE-AND-MARK: `orch_items.mark_item(expected_text=)` checks under
+  the ledger lock that the item exists, still names this text
+  (`normalize_item_text`: first physical line, `[boundary]` removed,
+  whitespace collapsed; the settler strips `[resume note: …]` prefixes
+  first) and that the text is unique — `ItemIdentityError` (a ValueError)
+  otherwise, nothing written. Identity failure → `drifted` (WARNING +
+  DECISIONS.md line, never retried); any other failure → stays `pending`.
+- Retry / settle sites: before every sequential snapshot
+  (`_write_iteration_artifacts`), at every parallel snapshot for carried
+  rows (the lane's own nodes are `_mark_node`'s, and their rows carry
+  `_row_mark` = applied ⇔ the lane recorded that very state, in the file
+  AND the returned rows, refreshed after the final pass — this hop's rows
+  only, r3: the carried prefix was being re-indexed by node), at loop exit
+  (`_execute_main_loop` settles and writes the checkpoint once more when
+  anything is still owed OR a row was appended after the last snapshot —
+  a `continue` after the last step never reached a snapshot; r3: a retry
+  cut short by `max_iterations` owes nothing and was lost), and by the resume in `_preflight_checks` BEFORE any step
+  executes (foreign carried rows → `drifted`; a settler failure is a
+  warning, never a refusal).
+
+**Review:** r1 Skeptic+Architect (10 findings: 4 HIGH — parallel result
+rows disagreed with the file; unreadable ledger read as drift; verify-then-
+mark race; producers born "applied" — all fixed as ONE design change:
+tri-state + compare-and-mark + born-pending) → r2 Skeptic on the fix diff
+(6: one REGRESSION — born-pending attempt rows re-marked a finished item
+blocked → attempt rows born applied + latest-row coalescing; skipped last
+step never snapshotted → loop-exit flush; `[boundary]` false drift →
+identity normalization; parallel final-pass retry; terminal blocked mark
+recorded; foreign carried rows drifted) → r3 Skeptic (regression check:
+1 HIGH — attempt rows born `applied` superseded a carried pending row /
+were lost at a max-iteration cut → 4th state `attempt` + verdict-only
+coalescing + exit flush on unsnapshotted rows; 2 MED — parallel final
+refresh re-indexed the carried prefix → fixed; lossy identity
+normalization → residue) → STOP RULE, no round 4. Suite 83 green.
+
+**Residue (BACKLOG, under the chunk-5 lead):** lossy identity
+normalization (shared first line / `[boundary]` twin → false `drifted`);
+max-iteration termination reaches no verdict (NEXT.md keeps DOING); the
+milestone-advisor REPHRASE (c) executes a text the ledger never held;
+step-time marks still trust the item index; the dead parallel-batch
+branch; `append_next_items` multi-line numbering; the stuck path's
+post-break checkpoint.
+
+Tests: tests/test_item_mark_debt.py (34) + tests/test_parallel_checkpoint.py.
+
+## A resume claims its source checkpoint before it executes — SHIPPED 2026-09-17 (LoopsBench chunk 7)
+
+**Found:** chunk-6 r3 finding 2: after a `done` resume whose consumption
+FAILED (disk full / EACCES / lost run-dir context) the run was demoted to
+`incomplete`, but the source checkpoint stayed intact, unconsumed and
+resumable AGAIN — a second `maro resume` replayed steps whose external
+effects had already happened. Nothing durable said "someone already ran
+this". The review rounds widened the class: the API path
+(`run_agent_loop(resume_from_loop_id=)`) never recorded anything;
+`branch_checkpoint` copied a mid-resume source into a fresh replayable
+file; a handed-in `resume_checkpoint=` object was trusted as a snapshot.
+
+**Fix:** `Checkpoint.resume_claim = {handle_id, pid, claimed_at, token,
+nonce, successor_loop_id, successor_path?}` written into the EXACT
+selected source by `checkpoint.mark_checkpoint_claimed(loop_id, path=,
+handle_id=, expected=<the admitted CheckpointLookup>, successor_loop_id=,
+successor_path=, reclaim=)` — a compare-and-swap under the per-file lock
+(`file_lock.locked_rmw`) keyed on the sha256 DIGEST of the bytes admitted
+(`CheckpointLookup.digest`; semantic equality was wrong — a file with no
+`timestamp` parses as "now" every read), refusing consumed / complete /
+claim-gated files, validating the proposed claim before any write,
+fsyncing the directory entry, and reading the file BACK; it returns the
+read-back object carrying two transient fields (`resume_permit` = the
+nonce, `resume_source` = the path) that make the claim read as OURS —
+never the pid. `resume_claim_status(ckpt) -> (state, detail)`: None (no
+claim / consumed / our permit), `live` (claimant alive by pid + start
+token), `superseded` (a successor checkpoint naming another loop exists at
+`run_dir(handle)/build/checkpoint.json`, `ckpt_<successor_loop_id>.json`
+or the recorded `successor_path` — read with the successor's identity),
+`unresolved` (claimant dead, every successor address PROVEN absent),
+`indeterminate` (a successor address unreadable / mismatched — no override
+opens it). Consumers: `maro resume` refuses all four, `--reclaim` (new
+flag) overrides only `unresolved`; the loader `_load_resume` is the policy
+boundary for the API path too — it admits under the CLI's pidfile lock
+(`checkpoint.resume_lock_name`), probes the source's own owner (run lease,
+then in-flight pid), claims after EVERY refusal check (never for a
+complete file), and for a preloaded object REQUIRES the permit (taken
+atomically, one-shot), re-reads the exact source once and requires the
+on-disk nonce to match; `branch_checkpoint` refuses a claimed source; the
+heartbeat skips `live`/`superseded` and SURFACES `unresolved`/
+`indeterminate` rows (legacy sources too, with `claim_state`,
+`claim_handle`, `finalized_status`) and its `stranded_run` notification
+names the recovery (`--reclaim` or repair). A refusal before the first
+step releases the claim: `finalize_refusal` → `release_checkpoint_claim`
+(locked, nonce-checked, never rewrites a file that no longer carries our
+claim), `run_agent_loop` releases on an `_initialize_loop` early return or
+exception, and the CLI builds the adapter BEFORE claiming so nothing
+fallible sits between the claim and the loop. `run_agent_loop(loop_id=)`
+lets the CLI pre-mint the successor loop id the claim names (grammar
+`checkpoint.ID_REF_RE`, which the CLI's ref grammar now aliases). A
+present-but-malformed `resume_claim` makes the file LOOKUP_INVALID, not
+"unclaimed". Consumed dominates: a consumed file's claim gates nothing.
+
+**Tests:** `tests/test_resume_claim.py` (claim on disk before the loop,
+durable, permit one-shot; unwritable claim → nothing ran; live claim
+refuses at CLI/API/heartbeat and the same pid is NOT our own; dead
+claimant + successor → superseded, `--reclaim` does not apply; dead
+claimant + proven-absent successor → unresolved, `--reclaim` re-claims;
+unreadable / EACCES / third-loop successor → indeterminate; pid-reuse
+token; malformed claims incl. path-escape handles → INVALID; CAS by
+bytes incl. the legacy no-timestamp file and a pre-write malformed handle;
+refusal-before-first-step releases on API (project mismatch never claims;
+restore failure releases) and CLI (init early return, init exception,
+adapter failure, release failure keeps the claim); a permitted object
+admits exactly one run; two threads cannot both take one permit; API
+admission under a held lock refuses; API refuses while the source loop is
+alive; API claim names the ambient run dir's checkpoint address; heartbeat
+surfaces unresolved / legacy / finalized rows; branching a claimed source
+refuses; `--reclaim` parsed) + `tests/test_resume_lookup.py` (the chunk-6
+write-failure test splits "claim fails → nothing ran" from "claim lands,
+later writes fail → demoted, claim kept, source refuses again"; the
+preloaded test claims first and pins ONE exact-source re-read) +
+`tests/test_plan_node_ids.py` unchanged (complete-file API resume runs
+nothing, cross-project refusal leaves no claim).
+
+**r1 (Skeptic + Architect, codex gpt-5.6-sol):** 21 findings → 9 classes
+fixed (CAS + read-back, permit-not-pid, indeterminate successor, strict
+claim parse + handle grammar, API path claims + branch refusal, successor
+at its id address, heartbeat surfaces unresolved, exact-path test spy).
+**r2 (Skeptic, fix diff):** 10 findings — one REGRESSION of the r1 fix
+(semantic CAS refused legacy no-timestamp files) → digest CAS; permit
+required + one-shot on the preloaded path; API admission lock; claim
+validated before write; claim after project check; id-address successor
+identity; release on pre-step refusal; heartbeat legacy rows; pre-minted
+id grammar. **r3 (Skeptic, fix-2 diff):** 9 findings → all cheap, landed
+(atomic permit take; digest between the CLI's two reads; adapter before
+claim; API owner probe; locked RMW for claim + release; init-exception
+release; `successor_path`; heartbeat reads metadata for claimed rows;
+"no second read" contract corrected). STOP RULE: no round 4; design
+residue queued in BACKLOG under the chunk-3 bullets.
+
+## Explicit resume is fail-closed end to end — SHIPPED 2026-09-16 (LoopsBench chunk 6)
+
+**Found:** three chunk-3 leads (r2 findings 1 and 3, the class): (1) a torn
+`<run-dir>/build/checkpoint.json` carries its loop_id INSIDE the JSON, so
+the run-dir scan could not attribute it and `_load_resume` read it as
+ABSENT → started fresh and replayed every step's side effects; (2) `maro
+resume` validated one file under its admission lock, then the loop
+RE-READ the id (a torn write in between took the fresh branch); (3) both
+pre-execution refusals (cost gate, resume refusal) returned after
+`_initialize_loop` acquired the project slot, run lease, running marker,
+busy-policy worktree and container scratch clone, and relied on
+destructors to release them.
+
+**Fix (doctrine: explicit resume may start fresh ONLY on ABSENT — unknown
+is not absent; a refused run ends like a finished run):**
+`checkpoint.find_checkpoint(loop_id) -> CheckpointLookup(state, ckpt,
+path, detail)` is the ONE loader, states `found / absent / invalid /
+mismatch / io_error`. The id-addressed file decides on its own (torn →
+invalid, unreadable → io_error, names another loop → mismatch — never
+"absent, keep looking"); a run-dir file that parses and names another loop
+is not ours; a DAMAGED run-dir file is ours when its run dir's
+`metadata.json` names this loop (`loop_ids` / `loop_id`, schema-checked),
+not ours when the metadata names only others, and UNATTRIBUTABLE when the
+metadata cannot say — reported with its path and "cannot say" instead of
+absent, because it cannot rule this loop out. The lookup calls the raw
+`runs` helpers inside its own try (any exception → io_error) and lists run
+dirs with `os.scandir` (an unreadable runs root raises; `Path.glob`
+swallowed it). `load_checkpoint` is the lossy wrapper. `Checkpoint.from_dict`
+requires a non-empty string `loop_id` and a string `goal` (an empty id used
+to resume as loop '' → fresh). `_load_resume(ctx, id, *, preloaded=None)`:
+FOUND proceeds, ABSENT starts fresh, everything else refuses with the
+detail; `preloaded` is the `Checkpoint` the CLI validated under its lock,
+used as-is (must be a `Checkpoint` naming the requested id), and
+`run_agent_loop(resume_checkpoint=)` always routes it through the resume
+load. CLI: `_lookup_resume_checkpoint(ref)` reads the HANDLE-addressed
+file first (it decides when it exists; an embedded `handle_id` that differs
+from the ref is MISMATCH), only ABSENT falls through to the loop-id
+lookup; `_load_resume_checkpoint(ref)` stays the lossy seam (Checkpoint or
+None) and `_cmd_resume` names the damaged file on None; after the re-read
+under the lock the lock identity is recomputed and a change refuses.
+`loop_finalize.release_loop_resources(ctx)` (slot → lease → running
+marker) is the ONE release path — `_finalize_loop`, `finalize_refusal`
+and the fence refusal all use it; `finalize_refusal(ctx, result)` copies
+the typed stop verdict onto the result, stamps it into run metadata,
+discards the scratch clone then the busy-policy worktree (nothing to
+merge), releases, wakes the heartbeat. `_refuse_resume` stamps
+`external-interrupt`, the cost gate `out-of-budget` (was unstamped).
+Side-find: `runs.open_run` pins the run-dir contextvar and `_cmd_run` /
+`_cmd_resume` then wrapped the loop in `scoped_run_dir(_rd)`, which
+restores what was current at ITS entry — the pin outlived the command;
+both unpin to the prior value right after `open_run`.
+
+**Tests** `tests/test_resume_lookup.py` (new): the five lookup states of
+the id-addressed file (torn / other loop / dir-as-file) and the lossy
+wrapper's contract; run-dir attribution (ours / theirs / unattributable /
+found); a raising lookup is io_error; an unattributable torn run-dir file
+refuses an explicit resume through the REAL loop, attributed-to-other
+starts fresh; a preloaded checkpoint is used without a second read (and a
+wrong-id / empty-id / non-Checkpoint hand-over is refused); JSON-valid
+non-checkpoints and invalid UTF-8 are INVALID; malformed metadata shapes
+cannot attribute; an unreadable runs root is io_error; `maro resume
+<handle>` through the real parser succeeds when an unrelated run dir holds
+unattributable damage (and the run-dir scope does not leak), and refuses a
+handle file embedding another handle; the lock-identity re-read refusal
+releases the lock; the CLI names the damaged file and hands the object
+over; a refusal releases `clone → worktree(keep_on_failure=False) → slot →
+lease → running` with the verdict stamped; the cost gate through the real
+loop clears the marker and stamps `out-of-budget`; the fence refusal goes
+through the shared helper.
+
+**Round-1 review (4 lenses, gpt-5.6-sol) → fixed in the same chunk:** (A)
+the CLI seam's return type change broke two `test_stranded_sweep` tests —
+seam restored, lookup alongside; (B) empty / non-string `loop_id` was
+FOUND and the loop's truthiness gate skipped the resume — strict
+`from_dict`, unconditional resume load, type-checked hand-over; (C) a
+string `loop_ids` iterated char by char attributed the damage to loops
+"a","b",… — schema check; (D) lossy `_runs_root` / `_rundir_checkpoint_path`
+and `Path.glob` read an unreadable runs root as absent — raw helpers +
+`os.scandir`; (E) loop-id-first resolution let unrelated unattributable
+damage shadow a valid handle file, and the handle read trusted the
+embedded `handle_id` — handle-first + mismatch; (F) the locked re-read
+could change lock identity — recomputed and refused; (G) refusals leaked
+the container scratch clone; the fence refusal had its own release trio —
+clone cleanup in `finalize_refusal`, fence refusal through the shared
+helper; (H) invalid UTF-8 escaped the classifier as io_error — decoded
+inside the parse try; release failures now log at warning. Declined by
+doctrine: garbage `completed` rows stay dropped-not-refused (chunk-2
+decision, pinned by `test_from_dict_negative_controls_drop_or_demote_garbage`).
+
+**Round-2 Skeptic on the fix → round 3 (the fix regressed / missed):** (1)
+`find_checkpoint` still existence-checked id addresses with `Path.exists()`
+and filtered run-dir candidates with `is_file()` — both swallow EACCES and
+dangling links into False → absent → fresh — every address is now READ
+(no preflight; a dangling link at a checkpoint address is io_error; the
+scan `stat()`s each candidate and only "nothing lexists" skips); (2) the
+lock re-read compared identity only — a same-identity snapshot with FEWER
+finished positions (stale writer) was handed to the loop — now refused
+("lost finished positions [..]"), as is a different source path; (3) a
+successful handle resume was never consumed nor proven (checkpoint writes
+swallow failures, so a failed final write reported `done` with the source
+still resumable) — the source path is re-read after `done`: proven only if
+it now holds the complete successor, else consumed in place via the new
+`mark_checkpoint_consumed(path=)`, else demoted to `incomplete`; (4) the
+handle-first resolution interpolated the raw CLI ref into `runs.run_dir`
+(`/tmp/owned`, `../victim`, `a/b` escaped the runs root) — ref grammar
+`[A-Za-z0-9][A-Za-z0-9._-]{0,127}` validated first; (5) an existing run
+dir with no checkpoint fell through to the loop-id scan and was shadowed
+by unrelated damage — an existing run dir decides (ABSENT for that
+handle); (6) the restored lossy seam made `_cmd_resume` look up TWICE on
+failure, so the reported path need not be the observation that refused —
+one typed lookup per read (the two seam-patching tests now patch the typed
+resolver with real `Checkpoint`s); (7) the fence refusal still had its own
+ending and never woke the heartbeat — it now stamps and returns through
+`finalize_refusal`. Eight more tests (28 total in the file).
+
+**Round-3 Skeptic on the round-2 fix → cheap fixes landed, design residue
+queued (stop rule: 3 rounds is the budget):** (1) the re-read guard
+compared only finished positions — an older between-step snapshot that
+dropped the in-flight marker (or the plan text, or a row's identity)
+passed — now the two pre-execution snapshots must be IDENTICAL
+(`to_dict()` equality, after the completed/consumed messages); (3)
+consumption was policy only in the CLI — `_load_resume` (the API path)
+now refuses a consumed checkpoint, `branch_checkpoint` refuses to branch
+one, the heartbeat's resumable-run scan skips them; (4) `path=`
+consumption replaced a symlink instead of its target — `realpath` first;
+(5) `lexists` on the final path missed a dangling ANCESTOR (`build ->
+missing`), and `root.is_dir()` / `_old_checkpoint_dirs`'s `is_dir()`
+swallowed EACCES — `_classify_missing` walks the address top-down (first
+un-stat-able component: exists → dangling → io_error, else absent), the
+runs root is `os.stat`'ed, the old root is read unfiltered, the CLI's
+handle-dir probe uses the same classifier; (6) handles and loop ids come
+from ONE 8-hex generator — a ref that is both a run handle and another
+loop's id with its own file is refused as ambiguous (hint: the loop's
+own handle), an empty handle dir no longer hides a loop file or a damaged
+id-addressed file. Declined / queued: (2) a failed consumption after a
+`done` run demotes the status but leaves the source replayable (a durable
+resume claim BEFORE execution is the design — BACKLOG); (7) the proof
+re-read and the consumption run outside any lock shared with checkpoint
+writers (the chunk-3 "consumption can race a late writer" lead, still
+queued). Four more tests (32 in the file). Suites 73/74/75 green.
+
+## Parallel lanes write the checkpoint — SHIPPED 2026-09-16 (LoopsBench chunk 5)
+
+**Found:** chunk-2 r1 finding 8 / chunk-3 re-examination: the sequential
+loop's parallel-batch branch is unreachable in production and the DAG /
+fan-out lane (`loop_parallel._run_parallel_path`, Phase D, returns before
+Phase E/F) wrote NO checkpoint — a crash mid-DAG resumed as nothing done and
+re-ran every finished node — and marked NEXT.md items only at the very end
+(a crash left every finished node TODO). Blocked on durable plan-node ids
+(chunk 4) until today.
+
+**Fix (doctrine: every finished node is durable, in every lane; one loader
+resumes both lanes' files):** `_run_steps_dag` routes every row commit
+(done, execution error, timeout, not-started, pre-gated, gated dependent)
+through one `_commit(step_idx, outcome)` under `results_lock`, which calls
+`on_progress(snapshot)` in the same critical section (two workers finishing
+together cannot race an older snapshot over a newer one);
+`_run_steps_parallel` calls `on_progress` on its coordinator thread per
+landed outcome. `_run_parallel_path(carried_outcomes=)` supplies
+`_write_progress`: marks each newly committed node's item once
+(`_mark_node`) and writes `write_checkpoint(TAGGED plan, carried rows + one
+`_fanout_row` per committed node, world_facts, regression,
+step_indices=items, plan_items=ctx.plan_items)`, plus a final write with
+every returned row. The plan is the tagged text because a resume re-parses
+`[after:N]` from it and verifies carried items against NEXT.md (which
+mirrors the tagged text). Carried rows now lead the lane's LoopResult too.
+Written only when the lane runs on real items; direct callers without
+`step_indices` keep the old behaviour (positional rows, no write).
+`agent_loop` passes `_resume_completed` into the lane.
+
+**Tests** `tests/test_parallel_checkpoint.py`: fresh DAG whose worker for D
+dies with a BaseException after A/B/C committed → three growing writes,
+the file resumes with only D remaining, A/B/C already marked, the resume
+finishes every item and its checkpoint is complete; resumed DAG suffix
+writes carry A's row in front with the suffix plan/items and the original
+binding; `_commit` unit: every commit path reaches `on_progress`, snapshots
+strictly grow, an `OSError` from the hook never fails the lane; fan-out
+lane per-outcome progress; direct call without items writes nothing.
+
+**Round-1 review (4 lenses, gpt-5.6-sol) → fixed in the same chunk:**
+(A) a node's row was durable BEFORE its decisions / world facts /
+regression obligations were recorded (the parallel path never harvested
+regression at all) — `_node_effects(k, oc)` now runs ONCE per done node
+before its row is written, direct callers included; (B) `_marked` was a
+once-only set recorded before `mark_item` succeeded — now `Dict[int,str]`
+= the last APPLIED NEXT state, so a failed mark is retried at the next
+snapshot and a DAG timeout row later replaced by the worker's real result
+moves the item `!` → `x`; (C) the status domain is closed at the lane
+boundary (`_TERMINAL_STATUSES = {done, blocked, skipped}`,
+`_normalize_outcome`: anything else → blocked with `stuck_reason
+"unrecognized outcome status …"`; `skipped` finishes its position AND
+marks its item done); (E) the fan-out lane's six result-mutation sites go
+through one coordinator-side `_commit`, persistence latency is excluded
+from the workers' deadline (`wait(FIRST_COMPLETED)` loop, deadline extended
+by each landed outcome's processing time), and a late future that RAISED is
+reconciled as `parallel execution error`, not left as a timeout; (F)
+execution policy travels with the checkpoint — `Checkpoint.parallel_fan_out`
+(persisted by every writer from the new `LoopContext.parallel_fan_out`),
+restored by `cli._cmd_resume`, so `maro resume` of a DAG-written file
+re-enters the DAG lane when the unfinished suffix still has a parallel
+level (a pure chain runs sequentially, correctly); (H) the whole
+`_write_progress` body incl. the final write and `_mark_node` is one
+non-fatal boundary. Seven more tests (12 total): timeout-then-late-success
+`['!','x']`; mark failure retried once; status domain; a committed node's
+world fact in its own write and in `ctx.world_facts` before the crash;
+marker RuntimeError on the final write contained; fan-out slow hook does
+not time out a finished peer + late raise → execution error; a REAL
+`cli._cmd_resume` of a DAG-written file (crash on D, suffix D..G with a
+parallel level) re-enters `_run_steps_dag` with exactly the four
+unfinished nodes and marks their items (by loop id through
+`cli._cmd_resume`; the parser / handle-id / `team:` origin is not on the
+test path).
+
+**Round-2 Skeptic on the fix → round 3 (the fix regressed two things):**
+(3) the DAG worker's `_commit` now runs `_node_effects` on the completing
+WORKER thread, so `record_step_decisions` mutated `loop_shared_ctx` while a
+peer iterated it in `step_exec` context assembly ("dictionary changed size
+during iteration" → the innocent peer ended as an execution-error row) —
+fixed at the readers (`list(shared_ctx.items())`, one C-level copy under
+the GIL; `WorldFactLedger` iterations likewise, since `observe()` can now
+run on a lane thread); (4) the DAG timeout path's check-and-commit was two
+lock sections after the `_commit` refactor, so a worker's real `done`
+landing in the gap was overwritten by the synthetic `blocked` — fixed with
+`_commit(..., only_if_absent=True)` (one critical section; the post-pool
+fill uses it too); (2) `_effects_done` was acknowledged BEFORE the effects
+ran, so a transient failure was never retried — acknowledged only after
+every effect ran without raising; (6) a worker returning None hit
+`AttributeError` in gating — `_contract_row` at the executor boundary in
+both workers, both `_commit`s and `_normalize_outcome`; (5) at the fan-out
+timeout a future that is already done is landed as itself (`_land`) before
+any synthetic row; the deadline extension stays (bounded by #outcomes ×
+hook time) and `_fanout_timeout` is advisory by construction — the pool's
+exit waits for running workers. Three more tests (15 total): None-returning
+worker → contract row in both lanes + its declared dependent gated; the
+deterministic legal interleaving (scheduler lock wrapped so the worker's
+`done` lands the first time the coordinator leaves the lock) → the row and
+snapshot stay `done`; a transient world-fact recorder failure → recorded on
+the retry.
+
+**Round-3 Skeptic on the round-2 fix (last round):** (1, HIGH) the
+status domain was closed AFTER scheduling — a `pending` prerequisite dict
+was committed unchanged, the scheduler did not see it as UNMET, and its
+declared dependent ran (the status-domain test faked the scheduler) —
+fixed: `_normalize_outcome` IS the executor boundary in both workers
+(non-dict and non-terminal alike) and at both `_commit`s; a real
+`_run_steps_dag` test asserts the dependent's adapter is never called;
+(2, HIGH) one live `loop_shared_ctx` iteration remained
+(`team.firewall_shared_ctx`, reachable from a worker's team-worker
+creation) — snapshotted; (3, MED) a whole-bundle effects retry re-appended
+decisions to the append-only journal — per-family acknowledgement
+(`decisions` / `facts` / `regression`), a family that ran is not re-run
+when a later one fails; (4, MED) `_run_in_step_worktree` merges back
+unconditionally, so a blocked (incl. contract) row's partial file changes
+merge — pre-existing policy, BACKLOG. Two more tests (17 total).
+
+**Residue → BACKLOG:** a failed NEXT.md mark followed by a crash before
+the next snapshot leaves a done row with a TODO item (process-local retry
+cannot cover it; a durable mark debt reconciled on resume is the lead —
+same two-file shape as the sequential lane); decision-journal rows have
+no idempotency key (a crash between a node's effects and its row, or any
+re-run, appends duplicates — `(loop_id, item, ordinal/content hash)` is
+the lead); worktree merge-back ignores the outcome status (a contract /
+blocked row's partial changes merge); no in-flight marker in the parallel lanes (a
+missing row re-runs — the safe direction); the dead sequential
+parallel-batch branch; a hand-forged carried row whose item collides with
+a suffix item promotes that suffix position (same shape in the sequential
+lane — row provenance / persisted position is the fix); the run report's
+"N/M done" counts carried rows against the suffix denominator (same shape
+as sequential finalize); the two-file kill window between a NEXT.md mark
+and the checkpoint `os.replace` (errs toward re-running).
+
 This is the history of shipped items. When something gets completed in BACKLOG.md, it moves here with its context intact so we keep the "why" / "how" / "source" for future reference.
 
 Live items are in [BACKLOG.md](BACKLOG.md). This file is ingested by the correspondence module so `dev-recall` can surface prior decisions, rejected approaches, and "already-tried" context during new work.
@@ -7,6 +516,188 @@ Live items are in [BACKLOG.md](BACKLOG.md). This file is ingested by the corresp
 Last split: 2026-04-16 (session 34).
 
 Rotation policy (2026-08-16): when this file outgrows whole-file readability (256KB Read limit), older records rotate verbatim to `docs/history/backlog-done-*.md` segments at a session boundary; recent records (roughly the last two weeks of ship dates) stay here. Segments so far: `backlog-done-2026-04-to-08-p{1,2,3}.md`.
+
+---
+
+## Durable plan-node ids — SHIPPED 2026-09-16 (LoopsBench chunk 4)
+
+**Found:** the root residue every review this week converged on (chunk-1
+r2 findings 6–7 `/tmp/adversarial-review.K4zIne`, chunk-1 r3 "DAG lane
+schedules a resumed suffix by re-numbered tags", chunk-2 r2 duplicate-text /
+permuted-mapping leads, chunk-3 "build the ids first"). A resumed suffix was
+re-numbered from 1 while its `[after:N]` tags still named the original plan:
+the gate degraded every declared edge to SOFT on any resume
+(`plan_identity_intact(resumed=True)`), the DAG lane scheduled the suffix by
+self-depending tags ("upstream dep did not complete"), and — found while
+scoping — a resume RE-DECOMPOSED the goal (paid planner call, plan thrown
+away), appended a second copy of the plan to `NEXT.md` and paired the suffix
+with those fresh items by position, so the original items were never
+marked.
+
+**Fix (doctrine: a plan node IS its NEXT.md item; the original numbering is
+bound to items once and travels with the checkpoint; identity uncertainty
+degrades to SOFT, never refuses; only a checkpoint that NAMES another
+project or cannot be read refuses):**
+`Checkpoint.step_items` (item per plan step) + `Checkpoint.plan_items` (the
+ORIGINAL number→item binding, verbatim, never recomputed), both through ONE
+validator `checkpoint.validate_identity` at writer and loader (unique
+non-negative ids, `-1` may repeat, bound step items in strictly increasing
+plan order, else the offending list is dropped WHOLE; never manufactures
+`-1`); `from_dict` raises on a non-string step so the resume refuses instead
+of crashing after the restore. `loop_planning._load_resume` runs BEFORE
+Phase B and owns the one carry decision: the remaining steps become the
+preset plan (`preset_source="resume"`, an empty suffix plans nothing); a
+checkpoint naming a different project refuses; each carried (item, text)
+pair is verified against the current NEXT.md (`_items_name_these_steps`) and
+the whole identity is dropped on any mismatch. `_mirror_plan_items` (one
+boundary for every lane — extracted from `_prepare_execution`, called before
+Phase D for the fan-out/DAG lanes) keeps the carried items or appends fresh
+ones and sets `LoopContext.plan_items`; `_run_parallel_path(step_indices=)`
+rows carry the item as their index and mark it done/blocked.
+`step_gate.prerequisite_verdict(plan_items=)` resolves a tag's number to an
+ITEM and reads its latest outcome, carried rows included; the implicit edge
+is the original plan's {k-1}. `step_gate.remap_suffix_deps` re-keys a
+suffix's edges to suffix positions (finished carried prerequisite =
+satisfied; carried blocked/skipped = pre-gated when enforced) before
+`build_execution_levels`, the `use_dag` decision and
+`_run_steps_dag(declared=, pre_gated=)`. Every checkpoint writer passes the
+binding. Deleted: `plan_number_of`, the `_preflight_checks` id-only loader
+branch.
+
+**Review:** round 1 four Codex lenses (`/tmp/adversarial-review.dMNbXh`) →
+classes A (identity validated after the parallel lanes ran), B (validators
+accepted duplicate/swapped/fractional identity → hard gate on an ambiguous
+binding), D (line-offset ids), F (non-string step), G (dead compatibility
+paths) fixed in one fix diff; C (unreadable run-dir checkpoint reads absent)
+pinned out-of-scope (chunk-3 residue). Round 2 one Skeptic on the fix diff
+(`/tmp/adversarial-review.CrC7H0`): 2 HIGH + 4 MED + 1 LOW, all verified,
+5½ fixed in one small diff — a reordered binding survived validation (the
+binding is monotone by construction: consecutive NEXT.md lines, so
+`plan_items` must be strictly increasing); any negative other than -1 is
+corruption; a duplicate task text at the original's line offset verified in
+its place (duplicate texts now read as ambiguous → identity dropped);
+`_mirror_plan_items` keeps a defensive project check for direct callers;
+`maro resume` now prints `stuck_reason` (json field / text → stderr) with a
+CLI refusal test; the gate-writer site is asserted through the gate flow
+test. Pinned, not fixed: an unreadable NEXT.md still crashes fresh
+mirroring after the loader degraded (pre-existing — `append_next_items`
+reads utf-8 on every fresh run); the rotation writer site has no flow test.
+No round 3 (nothing regressed). Tests `tests/test_plan_node_ids.py`:
+loader must-detects (dup / swapped / fractional / bool / short + negative
+controls), writer never manufactures `-1`, non-string steps refuse, verdict
+through the binding with a fresh-run equivalence control, remap cases incl.
+the self-dependence must-detect, DAG pre-gating, loop flows (resume keeps
+NEXT.md items with the planner patched to raise; empty suffix; declared edge
+ENFORCED after resume; DAG lane takes the remapped suffix and marks the
+original items; cross-project refusal with fan-out 0 and 2; NEXT.md drift
+degrades to fresh items; writer spy on the binding at every site; the real
+`cli._cmd_resume` through the loop).
+
+**Residue → BACKLOG:** NEXT.md ids are line offsets (immutable id lead);
+reshaping after the DAG decision; DAG lane checkpoint write (now
+unblocked); discriminated checkpoint loader; duplicate-text interrupt
+re-pairing; pre-execution refusals bypass finalize (admission half);
+unreadable NEXT.md crashes mirroring (typed mirroring failure lead).
+
+## Checkpoint write torn-file window + fail-open resume — FIXED 2026-09-16 (LoopsBench chunk 3)
+
+**Found:** chunk-1 QA round (write in place → a kill mid-write left a torn
+file the resume path read as "no checkpoint"); chunk-2 / chunk-3 reviews
+(an explicit resume of an unreadable or unrestorable checkpoint silently
+started fresh = replayed every step's side effects).
+
+**Fix:** `write_checkpoint` and `branch_checkpoint` write through
+`file_lock.atomic_write` (mkstemp beside the target + fsync + os.replace;
+process-kill safe, not power-loss durable, needs a writable parent dir; a
+failed write is now a WARNING, still non-fatal). `loop_planning` fails an
+explicit resume CLOSED (early-return `stuck` with the path) when the
+checkpoint file exists but cannot be read, or loaded but its restore raised;
+an absent checkpoint still starts fresh. Two Skeptic rounds (r2: fallback-file loop-id mismatch now refused, lookup errors refuse, refusal stamps a stop verdict + trace edge, warning names the path; structural leads → BACKLOG); tests in
+`tests/test_checkpoint_atomic.py` (no temp files; simulated crash before the
+rename keeps the previous checkpoint byte-identical with a negative control
+on the attempted rename; mechanism pin on both writers; torn-file resume →
+stuck with no step executed; absent → fresh; restore-raises → stuck).
+
+**Residue → BACKLOG:** consumption racing a late writer; DAG/fan-out lane
+writes no checkpoint (the sequential batch branch is unreachable); durable
+plan-node ids.
+
+
+## Checkpoint resume never skipped completed rows — FIXED 2026-09-16 (LoopsBench chunk 2)
+
+**Found:** round-2 Skeptic of the LoopsBench chunk-1 diff
+(`/tmp/adversarial-review.K4zIne`, finding 7), pre-existing HIGH. Every
+checkpoint row stored `StepOutcome.index` — the NEXT.md item the loop
+assigned — while `Checkpoint.remaining_steps` / `next_step_index` /
+`export_human` read it as a 1-based plan position. Live checkpoints on this
+box held `completed idx = [13, 49, 11, 12]` for 2–7-step plans, so
+`resume_from` returned the WHOLE plan and a resumed run re-executed
+finished steps (duplicate side effects), and the chunk-1 gate's blocked row
+never made a resume skip anything.
+
+**Fix (landed with this entry):** `CompletedStep.position` (1-based plan
+position, 0 = not a plan step) written from the loop's own
+`step_indices` mapping at all four writer sites; a checkpoint-level
+`positioned` marker (serialized, carried by `branch_checkpoint`) so a
+positioned file whose rows all sit at 0 is never read as legacy; a
+positioned file finishes a position only when its LATEST row is
+`done`/`skipped` — a blocked row never finishes one (retry-requeued,
+superseded by sub-steps, or gate-refused: a resume is the operator's retry
+and re-runs beats skips); `is_complete()` = nothing remains (a row count
+over-reported after one resume and the CLI refused the second resume);
+`done_count` for the progress surfaces; `from_dict` coerces persisted rows
+(integral-only ints, non-dict rows dropped, string marker = legacy);
+duplicate item ids in the mapping resolve to position 0; the interrupt
+handler re-pairs text ↔ item index by text (a priority interrupt prepended
+text but concatenated indices old+new, so the urgent step wore the next
+planned step's item number). Legacy files (no marker) keep the pre-fix
+reading exactly.
+
+**Review:** two Skeptic rounds (r1 8 findings → 7 class fixes; r2 6
+findings → 4 fixes + 2 direction decisions recorded in
+`checkpoint._done_positions`'s docstring). No round 3: r2 surfaced no
+regression in the r1 fix, only the direction dispute (decided: blocked
+never finishes) and residue that belongs to durable plan-node ids.
+Suites 58–60. Tests: `tests/test_checkpoint_resume_positions.py` (live
+shape, legacy negative control, carried-only positioned file, blocked
+never finishes, two-hop crash→resume→crash→resume through the loop, exact
+text↔position pairing captured at the one writer all four sites alias,
+gate-site capture, interrupt re-pairing, CLI `_cmd_resume` guard).
+
+**Residue:** parallel-batch checkpoint boundary; duplicate step texts /
+permuted mappings (durable plan-node ids); corrupt-resume fail-open policy;
+`write_checkpoint` in-place write — all pinned in BACKLOG under the
+LoopsBench chunk-1 residue section.
+
+
+### SHIPPED 2026-09-07 — Live (in-step) ask for time-boxed inputs — a 2FA code dies with the step that asked for it (FOUND 2026-09-07, mail arc design)
+
+The ask lane ends the step, the container dies, and the resume takes minutes (post-pause tail + admission + pre-flight). A 2FA code is consumed by the session that requested it, so a browser login cannot survive the pause: the resumed run gets a fresh challenge and a fresh code. Needed: a time-boxed in-step variant — the worker writes the ask, keeps its process alive and polls for an answer file in scratch; the engine watches the ask file mid-step, fires the same card + Hermes leg, and drops the operator's reply into scratch when it arrives (`maro answer` writes the file instead of enqueueing a resume when the asking step is still live). Jeremy 2026-09-07: not willing to tie his SMS number to the mini, willing to relay a code by hand — so the loop has to close inside the code's lifetime (~10 min). Design owed; the mail goal cannot finish without it (`docs/ENV_REQUEST_DESIGN.md` §8). **Live evidence 2026-09-07 04:18Z:** run 084d3c1f, on its self-built browser image, drove a real Playwright login and landed on Yahoo's challenge-selector page, then wrote the ask ("Yahoo 2FA code required") through the pause lane — the question is pending and any code relayed into it arrives at a dead session. This is now the only piece between the mail goal and delivery.
+
+**Shipped 2026-09-07** with the ask-grounding gate (`docs/OPERATOR_ASK_DESIGN.md` §7–§8; decision c6a3bb47). Trigger: 084d3c1f's fourth question carried a dead link and no code had been sent; after Jeremy's "I never received a code" the run asked the identical question again.
+
+**Telegram answer loop — the operator-question lane, SHIPPED both engines 2026-09-06.**
+Decree `1d1ad8b0` (Jeremy): build it out, and keep it "the rare exception,
+not the norm". Design: `docs/OPERATOR_ASK_DESIGN.md`. Python:
+`src/operator_ask.py` — the execute frame names `$MARO_ASK`; a worker's
+JSON ask file (question / why / no_input_alternative / tried) becomes the
+typed pause `awaiting-clarification` with a 24 h time box
+(`ask.timeout_hours`), an `operator_question` escalation-class event
+(Telegram card + Hermes inbox), and `maro answer <handle> "<text>"`
+resumes the run by handle through the continuation lane (RESUME, same
+identity, answer in the ancestry context). Hermes gate verb `answer`
+(`dispatch.py answer`, source `hermes-ssh`); inbox prompt + SKILL say
+reply = `answer`, never a fresh dispatch. `maro asks [--sweep]` is the
+ledger. Go: `question` / `answer` records, `needs answer:` terminal,
+`maro-go answer` re-runs the goal `--after` the asked run with the answer
+as `--context`, `maro-go asks`. First live firing owed (the mail re-ask).
+
+*Original entry:* Hermes polls the bot; Maro's `telegram_listener.py` runs
+nowhere; `dispatch.py` has no resume verb; a `clarification_needed`
+returns the question and only a fresh dispatch follows. Needs: a
+pending-question pause (`pause.*` family) with a time box, a resume path
+keyed on the run, and the navigation class Jeremy named — wait for the
+answer, or try a path that needs no input, and record which.
 
 ---
 

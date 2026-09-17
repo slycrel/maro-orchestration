@@ -406,10 +406,15 @@ func RelatedContext(rs *RunState, runs map[record.RunID]*RunState, get func(thou
 	if ls.Relation == RelationRerun {
 		if a := prior.Latest(); a != nil && a.Plan != nil {
 			b.WriteString("Its plan (reuse or revise):\n")
+			after := planAfter(a.Plan) // its declared prerequisites are part of the plan
 			for i, ref := range a.Plan.Steps {
 				st, err := get(ref)
 				if err != nil {
 					return nil, err
+				}
+				if len(after[i]) > 0 {
+					fmt.Fprintf(&b, "%d. %s (after %s)\n", i+1, st, ordinals(after[i]))
+					continue
 				}
 				fmt.Fprintf(&b, "%d. %s\n", i+1, st)
 			}

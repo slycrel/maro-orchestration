@@ -11,6 +11,7 @@ Real API calls are NOT made in tests — subprocess tests mock the binary.
 """
 
 import json
+import subprocess
 import sys
 import os
 from pathlib import Path
@@ -2529,6 +2530,350 @@ class TestContainerExecutorWrap:
                 a.complete([LLMMessage("user", "build a thing")], executor=True)
         assert getattr(ei.value, "container_auth_owned", False) is True
 
+    @pytest.mark.parametrize("mode, expect_class", [("require", "container_auth"), ("on", None)])
+    def test_first_casualty_under_require_carries_the_container_class(self, monkeypatch, tmp_path,
+                                                                       mode, expect_class):
+        # Review round 4: the CLI auth failure that TRIPS the breaker raised a
+        # text-classified RuntimeError — the first casualty got the host
+        # /login remedy and no typed pause; only the next executor call
+        # (resolver → ContainerAuthExpired) paused. Under `require` the
+        # first casualty carries the class; under `on` the lane degrades to
+        # the host by design and the step stays an ordinary block.
+        import container_exec as ce
+        import notify
+        from llm_errors import classify_error
+        from stop_verdicts import pause_reason_for_error_class
+        ce.reset_container_caches()
+        breaker = tmp_path / "breaker.json"
+        monkeypatch.setattr(ce, "_auth_breaker_path", lambda: breaker)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: mode if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe",
+                   return_value=self._mock_auth_failure(container_executed=True)):
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert getattr(ei.value, "container_auth_owned", False) is True
+        info = classify_error(ei.value, backend="subprocess")
+        if expect_class:
+            assert info.error_class == expect_class and info.failover is False
+            assert pause_reason_for_error_class(info.error_class) == "container-auth-expired"
+            assert "maro-claude-auth" in info.user_action
+        else:
+            assert info.error_class != "container_auth"
+
+    @pytest.mark.parametrize("second", ["auth", "rate"])
+    def test_a_retry_that_dies_of_auth_is_the_container_story(self, monkeypatch, tmp_path, second):
+        # Review round 5: a container call was rate-limited, its retry came
+        # back "OAuth session expired" — the retry loop broke out and raised
+        # the generic "claude rate-limited after N retries" error, skipping
+        # the breaker and the class marker: host /login remedy, no pause,
+        # host circuit tripped. Control: a retry that is STILL rate-limited
+        # keeps the rate-limit error.
+        import container_exec as ce
+        import notify
+        from llm_errors import classify_error
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        auth = self._mock_auth_failure(container_executed=True)
+        seq = [limited, auth if second == "auth" else limited, limited]
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 2
+        with patch("llm._run_subprocess_safe", side_effect=seq) as run:
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        if second == "auth":
+            assert run.call_count == 2
+            assert "rate-limited" not in str(ei.value)
+            assert getattr(ei.value, "container_auth_owned", False) is True
+            info = classify_error(ei.value, backend="subprocess")
+            assert info.error_class == "container_auth" and info.failover is False
+            assert ce.auth_breaker_snapshot() is not None, "the breaker must trip"
+        else:
+            assert run.call_count == 3
+            assert "rate-limited after 2 retries" in str(ei.value)
+            assert ce.auth_breaker_snapshot() is None
+
+    def test_a_terminal_auth_result_outranks_an_earlier_rate_limit_event(self, monkeypatch, tmp_path):
+        # Review round 6: a stream carrying a rejected rate_limit_event AND
+        # ending in "OAuth session expired" kept _still_rate_limited=True —
+        # another backoff cycle, then the rate-limit error past the breaker.
+        # The terminal error result names the remedy.
+        import container_exec as ce
+        import notify
+        from llm import _rate_limited_failure
+        from llm_errors import classify_error
+        event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+        mixed = event + "\n" + json.dumps({"type": "result", "subtype": "success", "is_error": True,
+                                           "result": "OAuth session expired · Please run /login"})
+        assert _rate_limited_failure(mixed) is False
+        assert _rate_limited_failure(event) is True
+        assert _rate_limited_failure("You've hit your limit · resets 3pm") is True
+        assert _rate_limited_failure(json.dumps({"type": "result", "is_error": True,
+                                                 "result": "You have hit your limit"})) is True
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 3
+        with patch("llm._run_subprocess_safe", side_effect=[
+                limited, MagicMock(returncode=1, stderr="", container_executed=True, stdout=mixed)]) as run:
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 2
+        assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+        assert ce.auth_breaker_snapshot() is not None
+
+    def test_a_terminal_auth_in_the_errors_array_is_the_container_story(self, monkeypatch, tmp_path):
+        # Review round 7: the CLI's error_during_execution envelope carries
+        # its text in `errors: [...]`, not `result`; the predicate, the
+        # breaker attribution and the display detail read only `result`.
+        import container_exec as ce
+        import notify
+        from llm import _rate_limited_failure, _terminal_error_text
+        from llm_errors import classify_error
+        env = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                          "errors": ["OAuth session expired · Please run /login"]})
+        event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+        assert _terminal_error_text(json.loads(env)) == "OAuth session expired · Please run /login"
+        assert _terminal_error_text({"type": "result", "result": "r", "errors": ["e"]}) == "r"
+        assert _terminal_error_text({"type": "result", "errors": [{"code": 7}]}) == '{"code": 7}'
+        assert _terminal_error_text(None) == "" and _terminal_error_text({"errors": "not-a-list"}) == ""
+        assert _rate_limited_failure(event + "\n" + env) is False
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 3
+        with patch("llm._run_subprocess_safe", side_effect=[
+                limited, MagicMock(returncode=1, stderr="", container_executed=True,
+                                   stdout=event + "\n" + env)]) as run:
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 2
+        assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+        assert ce.auth_breaker_snapshot() is not None
+
+    def test_a_nonzero_success_payload_ends_the_retry(self, monkeypatch, tmp_path):
+        # Review round 7: the retry accepted success on rc==0 only; a non-zero
+        # exit with a complete success result (the supported rc=1 shape)
+        # whose text mentioned a rate limit was replayed and finally
+        # reported as rate-limited.
+        import container_exec as ce
+        import notify
+        from llm import _rate_limited_failure
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        success = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                              "result": "Completed the rate limit configuration change."})
+        assert _rate_limited_failure(success) is False
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 3
+        with patch("llm._run_subprocess_safe", side_effect=[
+                limited, MagicMock(returncode=1, stderr="", container_executed=True, stdout=success),
+                limited]) as run:
+            resp = a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 2
+        assert "Completed the rate limit configuration change." in resp.content
+        assert a._rate_limit_wait == 60, "success resets the backoff"
+
+    def test_a_non_auth_terminal_failure_is_never_replayed(self, monkeypatch, tmp_path):
+        # Round 11: only auth text outranked an earlier rejected
+        # rate_limit_event; an `error_max_turns` behind one bought a replay
+        # of an executor call that had already done its work.
+        import container_exec as ce
+        from llm import _rate_limited_failure
+        event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+        maxed = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                            "result": "Reached max turns (20)", "usage": {"input_tokens": 37, "output_tokens": 9},
+                            "total_cost_usd": 0.12})
+        assert _rate_limited_failure(event + "\n" + maxed) is False
+        # controls: the terminal failure itself naming the limit IS the story; no object → the stream decides
+        limited = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                              "result": "You've hit your limit · resets 3pm"})
+        assert _rate_limited_failure(event + "\n" + limited) is True
+        assert _rate_limited_failure(limited) is True
+        assert _rate_limited_failure(event) is True
+        assert _rate_limited_failure("You've hit your limit · resets 3pm") is True
+        ce.reset_container_caches()
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        ok = MagicMock(returncode=0, stderr="", container_executed=False,
+                       stdout=json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "second"}))
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe", side_effect=[
+                MagicMock(returncode=1, stderr="", container_executed=False, stdout=event + "\n" + maxed), ok]) as run:
+            with pytest.raises(RuntimeError, match="max turns") as ei:
+                a.complete([LLMMessage("user", "build a thing")])
+        assert run.call_count == 1, "one launch — the finished work is not replayed"
+        from llm_errors import call_usage_evidence
+        assert call_usage_evidence(ei.value)["tokens_in"] == 37
+
+    @pytest.mark.parametrize("bad", ["input_tokens", "output_tokens", "cache_read_input_tokens", "total_cost_usd"])
+    def test_one_malformed_terminal_counter_keeps_the_others(self, monkeypatch, bad):
+        # Round 11: one `try` around every conversion let a single malformed
+        # field make a paid failure look free.
+        from llm_errors import call_usage_evidence
+        body = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                "result": "OAuth session expired - Please run /login",
+                "usage": {"input_tokens": 37, "output_tokens": 9, "cache_read_input_tokens": 100},
+                "total_cost_usd": 0.12}
+        if bad == "total_cost_usd":
+            body["total_cost_usd"] = "many"
+        else:
+            body["usage"][bad] = "many"
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=0, stderr="", container_executed=False, stdout=json.dumps(body))):
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")])
+        ev = call_usage_evidence(ei.value)
+        expect = {"partial": "", "tokens_in": 37, "tokens_out": 9, "cache_read": 100, "cost": 0.12}
+        expect[{"input_tokens": "tokens_in", "output_tokens": "tokens_out",
+                "cache_read_input_tokens": "cache_read", "total_cost_usd": "cost"}[bad]] = 0
+        assert ev == expect, (bad, ev)
+
+    @pytest.mark.parametrize("flag", ["true", None, 0, "", False])
+    def test_a_malformed_terminal_flag_still_outranks_a_rate_limit_event(self, monkeypatch, tmp_path, flag):
+        # Round 10: _rate_limited_failure kept its own truthy-flag reading,
+        # so an auth-error envelope with a malformed (or clear) flag behind
+        # a rejected rate_limit_event bought another launch instead of the
+        # breaker + class marker. One terminal-status reading now.
+        import container_exec as ce
+        import notify
+        from llm import _rate_limited_failure
+        from llm_errors import classify_error
+        event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+        mixed = event + "\n" + json.dumps({"type": "result", "subtype": "error_during_execution",
+                                           "is_error": flag, "result": "OAuth session expired · Please run /login"})
+        assert _rate_limited_failure(mixed) is False
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        ok = MagicMock(returncode=0, stderr="", container_executed=True,
+                       stdout=json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Repeated"}))
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe", side_effect=[MagicMock(returncode=0, stderr="", container_executed=True, stdout=mixed), ok]) as run:
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 1, "one launch — no replay behind the rate-limit event"
+        assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+        assert ce.auth_breaker_snapshot() is not None
+
+    @pytest.mark.parametrize("envelope", ["result", "errors"])
+    def test_a_zero_exit_with_an_explicit_error_result_is_a_failure(self, monkeypatch, tmp_path, envelope):
+        # Review round 8: the failure path required rc != 0; an explicit
+        # `is_error: true` terminal result on a zero exit became an EMPTY
+        # ordinary response — past the breaker, the classifier, the pause.
+        # The payload is ground truth in both directions.
+        import container_exec as ce
+        import notify
+        from llm import _terminal_failure
+        from llm_errors import classify_error
+        body = {"type": "result", "subtype": "error_during_execution", "is_error": True}
+        if envelope == "result":
+            body["result"] = "OAuth session expired · Please run /login"
+        else:
+            body["errors"] = ["OAuth session expired · Please run /login"]
+        assert _terminal_failure(json.dumps(body)) is True
+        assert _terminal_failure(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok"})) is False
+        assert _terminal_failure("plain text") is False
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=0, stderr="", container_executed=True, stdout=json.dumps(body))) as run:
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 1
+        assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+        assert ce.auth_breaker_snapshot() is not None
+        # control: a zero exit with a success payload is still a success
+        ok = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done"})
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=0, stderr="", container_executed=True, stdout=ok)):
+            with pytest.raises(RuntimeError):  # the breaker is tripped now → typed refusal, no launch
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        ce.clear_auth_breaker() if hasattr(ce, "clear_auth_breaker") else None
+
+    def test_a_zero_exit_error_result_during_a_retry_is_a_failure_too(self, monkeypatch, tmp_path):
+        import container_exec as ce
+        import notify
+        from llm_errors import classify_error
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        err0 = MagicMock(returncode=0, stderr="", container_executed=True, stdout=json.dumps(
+            {"type": "result", "subtype": "error_during_execution", "is_error": True,
+             "errors": ["OAuth session expired · Please run /login"]}))
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 3
+        with patch("llm._run_subprocess_safe", side_effect=[limited, err0, limited]) as run:
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 2
+        assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+
+    def test_a_retry_that_times_out_is_not_replayed(self, monkeypatch, tmp_path):
+        # Review round 6: TimeoutExpired inside the retry loop `continue`d —
+        # a killed executor step (which may have acted) was launched again
+        # and, on exhaustion, the STALE rate-limit text was the cause and
+        # the timeout's partial output was gone. Same contract as the
+        # initial call: raise the timeout error with its partial output.
+        import container_exec as ce
+        import notify
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        limited = MagicMock(returncode=1, stderr="", container_executed=True,
+                            stdout="You've hit your limit · resets 3pm")
+        killed = subprocess.TimeoutExpired(cmd=["claude"], timeout=600, output="partial work already performed")
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_max_retries = 3
+        with patch("llm._run_subprocess_safe", side_effect=[limited, killed, limited]) as run:
+            with pytest.raises(RuntimeError, match="timed out") as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 2, "a killed retry is never replayed"
+        assert "rate-limited" not in str(ei.value)
+        assert getattr(ei.value, "maro_partial_output", "") == "partial work already performed"
+        assert a._rate_limit_wait > 60, "the backoff still persists for the next call"
+
     def test_failover_stands_down_for_container_owned_auth_error(self, monkeypatch):
         # One container auth death must not trip the process-wide subprocess
         # circuit (healthy HOST calls would reroute to the next, paid,
@@ -3309,3 +3654,1373 @@ class TestExplicitBackendAlwaysWrapped:
         adapter = build_adapter(api_key="sk-ant-test")
         assert isinstance(adapter, FailoverAdapter)
         assert not isinstance(adapter._adapters[0], FailoverAdapter)
+
+
+@pytest.mark.parametrize("flag", ["true", "false", None, 1, "TRUE"])
+def test_a_malformed_terminal_error_flag_never_reads_as_success(flag):
+    # Round 9: `is_error: "true"` on a zero exit carried an explicit
+    # auth-error envelope past the failure path as ordinary content.
+    from llm import _terminal_failure, _extract_success_result
+    err = {"type": "result", "subtype": "error_during_execution", "is_error": flag,
+           "result": "OAuth session expired - Please run /login"}
+    assert _terminal_failure(json.dumps(err)) is True
+    odd = {"type": "result", "subtype": "success", "is_error": flag, "result": "done"}
+    assert _terminal_failure(json.dumps(odd)) is True
+    assert _extract_success_result(json.dumps(odd)) is None
+
+
+def test_terminal_failure_controls():
+    from llm import _terminal_failure, _extract_success_result
+    ok = {"type": "result", "subtype": "success", "is_error": False, "result": "done"}
+    assert _terminal_failure(json.dumps(ok)) is False and _extract_success_result(json.dumps(ok)) == ok
+    absent = {"type": "result", "subtype": "success", "result": "done"}
+    assert _terminal_failure(json.dumps(absent)) is False and _extract_success_result(json.dumps(absent)) == absent
+    # an error subtype is a failure even with the flag clear
+    assert _terminal_failure(json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": False})) is True
+    assert _terminal_failure("not json at all") is False
+
+
+def test_a_terminal_failure_after_work_keeps_its_usage():
+    # Round 9: an auth failure AFTER work was recorded as zero tokens and
+    # zero spend; the terminal object's usage now rides the exception.
+    from llm_errors import kill_evidence
+    from step_exec import _blocked_outcome_from_exc
+    body = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+            "result": "OAuth session expired - Please run /login",
+            "usage": {"input_tokens": 37, "output_tokens": 9}, "total_cost_usd": 0.12}
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=0, stderr="", container_executed=False, stdout=json.dumps(body))):
+        with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+            a.complete([LLMMessage("user", "build a thing")])
+    assert kill_evidence(ei.value) == ("", 37, 0.12)
+    out = _blocked_outcome_from_exc(ei.value, tokens_in=3)
+    assert out["tokens_in"] == 40 and out["provider_cost_usd"] == pytest.approx(0.12), out
+    assert out["tokens_out"] == 9, out  # round 10: output usage survives too
+    # through the failover wrapper (raised `from` the adapter's error)
+    wrapper = RuntimeError("wrapped"); wrapper.__cause__ = ei.value
+    assert _blocked_outcome_from_exc(wrapper)["tokens_in"] == 37
+    # control: a pre-launch refusal carries no usage
+    assert kill_evidence(RuntimeError("refused before launch")) == ("", 0, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Review round 12 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+def _r12_frame(subtype, **extra):
+    d = {"type": "result", "subtype": subtype, "is_error": subtype != "success",
+         "result": extra.pop("result", "done" if subtype == "success" else "OAuth session expired - Please run /login")}
+    d.update(extra)
+    return json.dumps(d)
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_the_last_result_frame_is_the_terminal_one(rc):
+    # Round 12: `_extract_result_object` kept the FIRST result frame while
+    # `_parse_stream_json` kept the LAST — a capture with a success frame
+    # ahead of an auth-error frame completed as a confident `done`.
+    from llm import _extract_result_object, _parse_stream_json, _terminal_failure
+    success_then_error = _r12_frame("success") + "\n" + _r12_frame("error_during_execution")
+    error_then_success = _r12_frame("error_during_execution") + "\n" + _r12_frame("success")
+    for text in (success_then_error, error_then_success):
+        assert _extract_result_object(text) == _parse_stream_json(text)["result"], "one rule for both readers"
+    assert _terminal_failure(success_then_error) is True
+    assert _terminal_failure(error_then_success) is False
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=success_then_error)):
+        with pytest.raises(RuntimeError, match="OAuth session expired"):
+            a.complete([LLMMessage("user", "build a thing")])
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=error_then_success)):
+        assert a.complete([LLMMessage("user", "build a thing")]).content == "done"
+
+
+def test_a_terminal_execution_failure_never_fails_over():
+    # Round 12: `error_max_turns` and kin became the generic "claude
+    # subprocess failed (rc=1)" text, which the classifier reads as
+    # FAILOVER — the wrapper replayed finished executor work on the next
+    # backend. The CLI ran; its own terminal verdict is the step's.
+    from llm import FailoverAdapter
+    from llm_errors import classify_error, FATAL, AUTH_ACTIONABLE, RETRY_AT
+    maxed = _r12_frame("error_max_turns", result="Reached max turns (20)",
+                       usage={"input_tokens": 37, "output_tokens": 9}, total_cost_usd=0.12)
+    launched = []
+
+    class _Spy:
+        backend = "anthropic"; model_key = "spy"
+        def complete(self, messages, **kw):
+            launched.append(messages); return LLMResponse(content="replayed")
+    primary = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=maxed)):
+        with pytest.raises(RuntimeError, match="Reached max turns") as ei:
+            FailoverAdapter([primary, _Spy()]).complete([LLMMessage("user", "build a thing")])
+    assert launched == [], "a terminal execution failure is never replayed elsewhere"
+    info = classify_error(ei.value)
+    assert info.error_class == FATAL and not info.failover and not info.retryable, info
+    assert getattr(ei.value, "maro_terminal_failure", False) is True
+    # controls: auth text keeps its actionable class (and its one failover);
+    # a stated reset is still a wait; a plain subprocess crash still fails over
+    # (round 20: the terminal markers are STRUCTURAL — the one production
+    # writer stamps them from the terminal object, and the classifier
+    # reads the object's verdicts, never the display text)
+    from llm import _mark_terminal_failure
+    auth = RuntimeError("claude subprocess failed (rc=1): OAuth session expired - Please run /login")
+    _mark_terminal_failure(auth, {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                                  "result": "OAuth session expired - Please run /login"})
+    assert classify_error(auth).error_class == AUTH_ACTIONABLE
+    reset = RuntimeError("claude subprocess failed (rc=1): You've hit your limit · resets 3pm")
+    _mark_terminal_failure(reset, {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                                   "result": "You've hit your limit · resets 3pm"})
+    assert classify_error(reset).error_class == RETRY_AT
+    # a hand-set marker without the object's verdicts is the safe direction: fatal, no replay
+    bare = RuntimeError("claude subprocess failed (rc=1): OAuth session expired - Please run /login")
+    bare.maro_terminal_failure = True
+    assert classify_error(bare).error_class == FATAL and not classify_error(bare).failover
+    assert classify_error(RuntimeError("claude subprocess failed (rc=137): killed")).failover is True
+
+
+@pytest.mark.parametrize("usage, want, warned", [
+    ({"input_tokens": None, "cache_creation_input_tokens": 30}, 30, False),
+    ({"cache_creation_input_tokens": 30}, 30, False),
+    ({"input_tokens": "many", "cache_creation_input_tokens": 30}, 30, True),
+    ({"input_tokens": 5, "cache_creation_input_tokens": "lots"}, 5, True),
+    ({"input_tokens": 5, "cache_creation_input_tokens": 30}, 35, False),
+])
+def test_a_null_input_counter_keeps_the_cache_creation_ingest(caplog, usage, want, warned):
+    # Round 12: cache creation was read only when input_tokens was non-null,
+    # so a terminal frame with a null/absent input counter lost its (larger)
+    # uncached ingest entirely.
+    import logging
+    from llm_errors import call_usage_evidence
+    body = _r12_frame("error_during_execution", usage=usage, total_cost_usd=0.12)
+    a = ClaudeSubprocessAdapter()
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=1, stderr="", container_executed=False, stdout=body)):
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")])
+    assert call_usage_evidence(ei.value)["tokens_in"] == want
+    assert ("malformed" in caplog.text) is warned
+
+
+def test_a_terminal_failure_after_work_keeps_the_assistant_text():
+    # Round 12: usage rode the terminal exception; what the call actually
+    # said and did (assistant text, tool_use) did not — the blocked step's
+    # result stayed "" and the pause card had nothing to show.
+    from llm_errors import call_usage_evidence
+    from step_exec import _blocked_outcome_from_exc
+    assistant = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "Listed two messages: invoice, newsletter."},
+        {"type": "tool_use", "name": "imap_read", "input": {}}]}})
+    body = assistant + "\n" + _r12_frame("error_during_execution",
+                                          usage={"input_tokens": 37, "output_tokens": 9}, total_cost_usd=0.12)
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=body)):
+        with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+            a.complete([LLMMessage("user", "build a thing")])
+    ev = call_usage_evidence(ei.value)
+    assert "Listed two messages" in ev["partial"] and "[tool_use: imap_read]" in ev["partial"]
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (37, 9, 0.12)
+    out = _blocked_outcome_from_exc(ei.value)
+    assert "Listed two messages" in out["result"] and out["tokens_in"] == 37, out
+    # control: a frame with no assistant events attaches nothing
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False,
+            stdout=_r12_frame("error_during_execution"))):
+        with pytest.raises(RuntimeError) as ei2:
+            a.complete([LLMMessage("user", "build a thing")])
+    assert call_usage_evidence(ei2.value)["partial"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Review round 13 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_a_diagnostic_result_object_cannot_override_the_terminal_frame(rc):
+    # Round 13: `_extract_result_object` promoted any brace-delimited object
+    # anywhere in the capture while `_parse_stream_json` framed complete
+    # lines — a result-shaped object inside a diagnostic line outranked the
+    # real terminal frame (auth failure read as success, breaker bypassed).
+    from llm import _extract_result_object, _parse_stream_json, _terminal_failure
+    auth = _r12_frame("error_during_execution")
+    diag_ok = 'diagnostic: ' + _r12_frame("success", result="Finished the task.")
+    text = auth + "\n" + diag_ok
+    assert _extract_result_object(text) == _parse_stream_json(text)["result"]
+    assert _terminal_failure(text) is True
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text)):
+        with pytest.raises(RuntimeError, match="OAuth session expired"):
+            a.complete([LLMMessage("user", "build a thing")])
+    # the mirror: a diagnostic-embedded ERROR cannot fail a real success line
+    ok = _r12_frame("success", result="Finished the task.")
+    text2 = ok + "\ndiagnostic: " + auth
+    assert _terminal_failure(text2) is False
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text2)):
+        assert a.complete([LLMMessage("user", "build a thing")]).content == "Finished the task."
+    # compatibility: a pretty-printed single object behind a warning line still parses
+    pretty = "warning: something\n" + json.dumps(json.loads(ok), indent=2)
+    assert _extract_result_object(pretty)["result"] == "Finished the task."
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=0, stderr="", container_executed=False, stdout=pretty)):
+        assert a.complete([LLMMessage("user", "build a thing")]).content == "Finished the task."
+    # and a lone diagnostic-embedded object is not a protocol event at all
+    assert _extract_result_object("diagnostic: " + ok) is None
+
+
+def test_a_successful_frame_counts_cache_creation_ingest(caplog):
+    # Round 13: the terminal branch summed input + cache creation; its
+    # success sibling read raw counters and dropped cache creation, so
+    # every successful call under-reported total input downstream.
+    import logging
+    ok = _r12_frame("success", result="Finished the task.",
+                    usage={"input_tokens": 5, "cache_creation_input_tokens": 30,
+                           "cache_read_input_tokens": 100, "output_tokens": 9})
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=0, stderr="", container_executed=False, stdout=ok)):
+        resp = a.complete([LLMMessage("user", "build a thing")])
+    assert (resp.input_tokens, resp.cache_read_tokens, resp.output_tokens) == (135, 100, 9)
+    bad = _r12_frame("success", result="Finished the task.",
+                     usage={"input_tokens": "many", "cache_creation_input_tokens": 30,
+                            "cache_read_input_tokens": None, "output_tokens": 9})
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=0, stderr="", container_executed=False, stdout=bad)):
+            resp = a.complete([LLMMessage("user", "build a thing")])
+    assert (resp.input_tokens, resp.cache_read_tokens, resp.output_tokens) == (30, 0, 9)
+    assert "input_tokens='many' malformed" in caplog.text
+
+
+@pytest.mark.parametrize("order", ["malformed-first", "malformed-last"])
+def test_a_malformed_assistant_event_keeps_the_other_partial_evidence(caplog, order):
+    # Round 13: one assistant event whose `message` was a list raised out
+    # of the partial reader; the outer guard then attached NOTHING — the
+    # valid text collected beside it was lost, at DEBUG.
+    import logging
+    from llm import _parse_stream_json
+    from llm_errors import call_usage_evidence
+    good = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "work already performed"}]}})
+    bad = json.dumps({"type": "assistant", "message": ["malformed"]})
+    bad2 = json.dumps({"type": "assistant", "message": {"content": "not a list"}})
+    events = [bad, bad2, good] if order == "malformed-first" else [good, bad, bad2]
+    body = "\n".join(events + [_r12_frame("error_during_execution",
+                                           usage={"input_tokens": 37, "output_tokens": 9}, total_cost_usd=0.12)])
+    # the stream parser survives the same events and still finds the frame
+    parsed = _parse_stream_json(body)
+    assert parsed["result"]["subtype"] == "error_during_execution"
+    a = ClaudeSubprocessAdapter()
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=1, stderr="", container_executed=False, stdout=body)):
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+                a.complete([LLMMessage("user", "build a thing")])
+    ev = call_usage_evidence(ei.value)
+    assert "work already performed" in ev["partial"] and ev["tokens_in"] == 37
+    assert "2 malformed assistant event(s)/block(s) skipped" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Review round 14 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+_R14_INIT = json.dumps({"type": "system", "subtype": "init", "session_id": "s1", "tools": []})
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_an_init_event_does_not_suppress_the_pretty_printed_terminal_frame(rc):
+    # Round 14: `_parse_stream_json` fell back to the document scanner only
+    # when NO event line parsed; an `init` line ahead of a pretty-printed
+    # result left it with None while `_extract_result_object` found the
+    # frame — at rc=0 the whole capture was delivered as prose (a
+    # flag_stuck answer completed as done, usage 0).
+    from llm import _extract_result_object, _parse_stream_json
+    ok = json.loads(_r12_frame("success", result="Finished the task.",
+                               usage={"input_tokens": 5, "cache_creation_input_tokens": 30, "output_tokens": 9}))
+    text = _R14_INIT + "\n" + json.dumps(ok, indent=2)
+    assert _parse_stream_json(text)["result"] == _extract_result_object(text) == ok
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text)):
+        resp = a.complete([LLMMessage("user", "build a thing")])
+    assert resp.content == "Finished the task." and (resp.input_tokens, resp.output_tokens) == (35, 9)
+    err = json.loads(_r12_frame("error_during_execution"))
+    text2 = _R14_INIT + "\n" + json.dumps(err, indent=2)
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text2)):
+        with pytest.raises(RuntimeError, match="OAuth session expired"):
+            a.complete([LLMMessage("user", "build a thing")])
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_a_nested_result_object_never_replaces_its_document(rc):
+    # Round 14: the whole-document fallback kept scanning the LINES INSIDE
+    # the object it had just decoded, so a result-shaped object nested in
+    # a pretty-printed error's `errors[]` outranked the error itself.
+    from llm import _extract_result_object, _terminal_failure
+    nested_ok = {"type": "result", "subtype": "success", "is_error": False, "result": "diagnostic example: finished"}
+    err = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+           "errors": ["OAuth session expired - Please run /login", nested_ok]}
+    text = json.dumps(err, indent=2)
+    assert _extract_result_object(text)["subtype"] == "error_during_execution"
+    assert _terminal_failure(text) is True
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text)):
+        with pytest.raises(RuntimeError, match="OAuth session expired"):
+            a.complete([LLMMessage("user", "build a thing")])
+    # the mirror: an error nested inside a real success is data too
+    ok = {"type": "result", "subtype": "success", "is_error": False, "result": "Finished the task.",
+          "notes": {"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "x"}}
+    text2 = json.dumps(ok, indent=2)
+    assert _terminal_failure(text2) is False
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=text2)):
+        assert a.complete([LLMMessage("user", "build a thing")]).content == "Finished the task."
+
+
+def test_malformed_auxiliary_events_keep_the_terminal_result(caplog):
+    # Round 14: the round-13 guards covered message/content only — a
+    # list-valued rate_limit_info raised on .get and a list-valued tool id
+    # raised as a dict key while `_stream_events` re-parsed the capture, so
+    # a completed call became a parser-origin block with zero accounting.
+    import logging
+    from llm import _parse_stream_json
+    events = [
+        json.dumps({"type": "rate_limit_event", "rate_limit_info": ["bad"]}),
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": ["bad"], "name": "Bash", "input": {}},
+            {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "x"}}]}}),
+        json.dumps({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": [], "content": "x"},
+            {"type": "tool_result", "tool_use_id": "t1", "content": "the file"}]}}),
+        _r12_frame("success", result="Finished the task.",
+                   usage={"input_tokens": 37, "output_tokens": 9}, total_cost_usd=0.12),
+    ]
+    body = "\n".join(events)
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        parsed = _parse_stream_json(body)
+    assert parsed["result"]["subtype"] == "success" and parsed["rate_limited"] is False
+    assert [(e["name"], e["output"]) for e in parsed["tool_events"]] == [("Read", "the file")]
+    assert "3 malformed event(s)/block(s) skipped" in caplog.text
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=0, stderr="", container_executed=False, stdout=body)):
+        resp = a.complete([LLMMessage("user", "build a thing")])
+    assert resp.content == "Finished the task." and (resp.input_tokens, resp.output_tokens) == (37, 9)
+    assert resp.cost_usd == pytest.approx(0.12)
+
+
+# ---------------------------------------------------------------------------
+# Review round 15 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+_R15_NESTED_OK = '{"type": "result", "subtype": "success", "is_error": false, "result": "diagnostic example: finished"}'
+_R15_NESTED_ERR = '{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": "x"}'
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+@pytest.mark.parametrize("indent", ["    ", ""])
+def test_a_compact_nested_object_on_its_own_line_is_data(rc, indent):
+    # Round 15: round 14 protected only the whole-document fallback; the
+    # line-framed first pass still promoted a COMPACT nested object that
+    # sat on its own line inside a multi-line document (indented or not).
+    from llm import _extract_result_object, _parse_stream_json, _terminal_failure
+    err_doc = ('{\n  "type": "result",\n  "subtype": "error_during_execution",\n  "is_error": true,\n'
+               '  "errors": [\n    "OAuth session expired - Please run /login",\n' + indent + _R15_NESTED_OK
+               + '\n  ]\n}')
+    assert json.loads(err_doc)["subtype"] == "error_during_execution", "fixture is a valid document"
+    assert _extract_result_object(err_doc)["subtype"] == "error_during_execution"
+    assert _parse_stream_json(err_doc)["result"]["subtype"] == "error_during_execution"
+    assert _terminal_failure(err_doc) is True
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=err_doc)):
+        with pytest.raises(RuntimeError, match="OAuth session expired"):
+            a.complete([LLMMessage("user", "build a thing")])
+    ok_doc = ('{\n  "type": "result",\n  "subtype": "success",\n  "is_error": false,\n'
+              '  "result": "Finished the task.",\n  "notes": [\n' + indent + _R15_NESTED_ERR + '\n  ]\n}')
+    assert _terminal_failure(ok_doc) is False
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=False, stdout=ok_doc)):
+        assert a.complete([LLMMessage("user", "build a thing")]).content == "Finished the task."
+    # NDJSON events beside a document: the events still frame as before
+    stream = _R14_INIT + "\n" + err_doc + "\n" + json.dumps({"type": "system", "subtype": "x"})
+    assert _parse_stream_json(stream)["result"]["subtype"] == "error_during_execution"
+
+
+def test_an_oversized_integer_never_hides_the_terminal_frame(caplog):
+    # Round 15: a 5000-digit integer raised Python's int-digit-limit
+    # ValueError (not JSONDecodeError) out of every decode site — in a
+    # side event it hid the auth frame behind it (parser-origin
+    # retry_backoff, no breaker, no pause); inside the frame it hid the
+    # frame itself. Decoding is bounded at the protocol boundary.
+    import logging, sys
+    from llm import _parse_stream_json
+    from llm_errors import call_usage_evidence
+    huge = "1" + "0" * 5000
+    limit_before = sys.get_int_max_str_digits()
+    side = '{"type": "system", "subtype": "init", "n": ' + huge + '}'
+    auth = _r12_frame("error_during_execution", usage={"input_tokens": 37, "output_tokens": 9}, total_cost_usd=0.12)
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=side + "\n" + auth)):
+        with pytest.raises(RuntimeError, match="OAuth session expired") as ei:
+            a.complete([LLMMessage("user", "build a thing")])
+    assert call_usage_evidence(ei.value)["tokens_in"] == 37
+    # the oversized counter INSIDE the frame: frame kept, that field rejected, siblings kept
+    inside = ('{"type": "result", "subtype": "error_during_execution", "is_error": true, '
+              '"result": "OAuth session expired - Please run /login", '
+              '"usage": {"input_tokens": ' + huge + ', "output_tokens": 9}, "total_cost_usd": 0.12}')
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=1, stderr="", container_executed=False, stdout=inside)):
+            with pytest.raises(RuntimeError, match="OAuth session expired") as ei2:
+                a.complete([LLMMessage("user", "build a thing")])
+    ev = call_usage_evidence(ei2.value)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (0, 9, 0.12)
+    assert "input_tokens" in caplog.text and "malformed" in caplog.text
+    # and in a SUCCESS frame
+    ok = ('{"type": "result", "subtype": "success", "is_error": false, "result": "Finished the task.", '
+          '"usage": {"input_tokens": ' + huge + ', "output_tokens": 9}, "total_cost_usd": ' + huge + '}')
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=0, stderr="", container_executed=False, stdout=ok)):
+        resp = a.complete([LLMMessage("user", "build a thing")])
+    assert resp.content == "Finished the task." and (resp.input_tokens, resp.output_tokens) == (0, 9)
+    assert resp.cost_usd == 0.0
+    assert _parse_stream_json(ok)["result"]["usage"]["input_tokens"] == float("inf")
+    assert sys.get_int_max_str_digits() == limit_before, "the global limit is not the fix"
+
+
+def test_malformed_tool_result_text_and_model_usage_keep_the_answer(caplog):
+    # Round 15: two more auxiliary fields aborted a SUCCESSFUL capture —
+    # a non-string tool_result text broke the join, a list-valued
+    # modelUsage raised on .get — and an oversized total_cost_usd
+    # overflowed safe_float. The answer and its counters survive all three.
+    import logging
+    from llm_parse import safe_float
+    assert safe_float(10 ** 400) == 0.0
+    events = [
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "x"}}]}}),
+        json.dumps({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [
+                {"type": "text", "text": {"unexpected": "object"}}, {"type": "text", "text": "the file"}]}]}}),
+        json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Finished the task.",
+                    "usage": {"input_tokens": 37, "output_tokens": 9}, "total_cost_usd": 10 ** 400,
+                    "modelUsage": ["other-model"]}),
+    ]
+    a = ClaudeSubprocessAdapter()
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=0, stderr="", container_executed=False, stdout="\n".join(events))):
+            resp = a.complete([LLMMessage("user", "build a thing")])
+    assert resp.content == "Finished the task." and (resp.input_tokens, resp.output_tokens) == (37, 9)
+    assert resp.cost_usd == 0.0
+    assert [e["name"] for e in resp.tool_events] == ["Read"] and "the file" in resp.tool_events[0]["output"]
+    assert "modelUsage" in caplog.text and "total_cost_usd" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Review round 16 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+_R16_AUTH = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                        "errors": ["OAuth session expired - Please run /login"],
+                        "usage": {"input_tokens": 37, "output_tokens": 9}, "total_cost_usd": 0.12})
+_R16_OK = _R15_NESTED_OK
+_R16_OAUTH = "OAuth session expired - Please run /login"
+
+
+def _r16_container_lane(monkeypatch, tmp_path):
+    """The real container-executed failure seam: `require` mode, docker
+    fine, an isolated breaker file, notifications swallowed, no sleeps."""
+    import container_exec as ce
+    import notify
+    ce.reset_container_caches()
+    monkeypatch.setattr(ce, "_auth_breaker_path", lambda: tmp_path / "breaker.json")
+    monkeypatch.setattr(ce, "_auth_notify_path", lambda: tmp_path / "notified.json")
+    monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+    monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+    monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    return ce
+
+
+def _r16_blocked_story(monkeypatch, tmp_path, stdout, rc=1):
+    """Run a container-executed capture through the real adapter; the
+    failure must be the container-auth story end to end: the class
+    marker, the breaker trip, the typed pause — and ONE launch."""
+    from llm_errors import classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for, PAUSE_ERR_CONTAINER_AUTH
+    ce = _r16_container_lane(monkeypatch, tmp_path)
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 3
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=True, stdout=stdout)) as run:
+        with pytest.raises(RuntimeError, match="claude subprocess failed") as ei:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1, "a terminal auth failure is never replayed"
+    assert classify_error(ei.value, backend="subprocess").error_class == "container_auth"
+    snap = ce.auth_breaker_snapshot()
+    assert snap is not None and _R16_OAUTH in snap["reason"], snap
+    out = _blocked_outcome_from_exc(ei.value)
+    assert out["status"] == "blocked" and environmental_pause_for(out) == PAUSE_ERR_CONTAINER_AUTH
+    return ei.value, out
+
+
+def _r16_success_story(stdout, rc=0):
+    # The mirror runs after a blocked story tripped the (isolated) breaker
+    # in the same test: clear it — `require` would otherwise refuse at
+    # resolve time before the capture is ever read.
+    import container_exec as ce
+    ce.clear_auth_breaker("round-16 mirror control")
+    ce.reset_container_caches()
+    a = ClaudeSubprocessAdapter()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=rc, stderr="", container_executed=True, stdout=stdout)):
+        return a.complete([LLMMessage("user", "build a thing")], executor=True)
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_a_complete_array_document_cannot_override_the_terminal_frame(monkeypatch, tmp_path, rc):
+    # Round 16: the framer started documents only at `{`, so a complete
+    # top-level ARRAY was skipped line by line and a column-0 object inside
+    # it was promoted to an event — an auth failure followed by a
+    # diagnostic array of examples returned the example as the answer.
+    from llm import _extract_result_object, _iter_stream_documents, _parse_stream_json
+    capture = _R16_AUTH + "\n[\n" + _R16_OK + "\n]"
+    assert json.loads(capture.split("\n", 1)[1])[0]["subtype"] == "success", "fixture: a valid array"
+    assert [d["subtype"] for d in _iter_stream_documents(capture)] == ["error_during_execution"]
+    assert _extract_result_object(capture)["subtype"] == "error_during_execution"
+    assert _parse_stream_json(capture)["result"]["subtype"] == "error_during_execution"
+    _r16_blocked_story(monkeypatch, tmp_path, capture, rc=rc)
+    # mirror: an array of error examples after the real success is data
+    mirror = _R16_OK + "\n[\n  " + _R15_NESTED_ERR + ",\n" + _R15_NESTED_ERR + "\n]"
+    assert _extract_result_object(mirror)["subtype"] == "success"
+    assert _r16_success_story(mirror, rc=rc).content == "diagnostic example: finished"
+    # a lone array is no event at all; a torn array still shields its lines
+    assert list(_iter_stream_documents("[\n" + _R16_OK + "\n]")) == []
+    assert _extract_result_object("[\n" + _R16_OK + "\n]") is None
+
+
+@pytest.mark.parametrize("sep", [" ", " ", "", "\x0c", "\x1c", "\r"])
+def test_a_unicode_separator_is_not_a_transport_newline(monkeypatch, tmp_path, sep):
+    # Round 16: `splitlines()` breaks on U+2028 and friends, so a brace
+    # after one INSIDE a diagnostic line became "column 0" — the protocol
+    # frames on LF alone (the repo's JSONL rule; see gc_memory/interrupt).
+    from llm import _extract_result_object, _iter_stream_documents, _parse_stream_json
+    capture = _R16_AUTH + "\ndiagnostic: " + sep + _R16_OK
+    assert [d["subtype"] for d in _iter_stream_documents(capture)] == ["error_during_execution"]
+    assert _parse_stream_json(capture)["result"]["subtype"] == "error_during_execution"
+    _r16_blocked_story(monkeypatch, tmp_path, capture)
+    # positive control: the same two documents on real transport lines
+    plain = _R16_AUTH + "\n" + _R16_OK
+    assert [d["subtype"] for d in _iter_stream_documents(plain)] == ["error_during_execution", "success"]
+    assert _extract_result_object(plain)["subtype"] == "success"
+    # CRLF transport still frames (the CR is line-trailing whitespace)
+    crlf = _R16_AUTH + "\r\n" + _R16_OK + "\r\n"
+    assert [d["subtype"] for d in _iter_stream_documents(crlf)] == ["error_during_execution", "success"]
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_a_document_with_trailing_prose_is_not_an_event(monkeypatch, tmp_path, rc):
+    # Round 16: `raw_decode` stops at the closing brace, so a line that
+    # quoted a result object and went on in prose ("... not a JSON
+    # document") framed as the terminal event. A document must end its
+    # transport line; a quoted one is consumed, never yielded.
+    from llm import _extract_result_object, _iter_stream_documents, _parse_stream_json
+    capture = _R16_AUTH + "\n" + _R16_OK + " not a JSON document"
+    assert [d["subtype"] for d in _iter_stream_documents(capture)] == ["error_during_execution"]
+    assert _parse_stream_json(capture)["result"]["subtype"] == "error_during_execution"
+    _r16_blocked_story(monkeypatch, tmp_path, capture, rc=rc)
+    # mirror: a quoted error document after the real success
+    mirror = _R16_OK + "\n" + _R15_NESTED_ERR + " is the shape the CLI prints on expiry"
+    assert _extract_result_object(mirror)["subtype"] == "success"
+    assert _r16_success_story(mirror, rc=rc).content == "diagnostic example: finished"
+    # trailing whitespace after a document is not prose
+    assert _extract_result_object(_R16_OK + "   \t\n")["subtype"] == "success"
+    # a quoted multi-line document shields its column-0 inner lines
+    quoted = ('{\n  "type": "result",\n  "subtype": "error_during_execution",\n  "is_error": true,\n'
+              '  "errors": [\n' + _R16_OK + '\n  ]\n} was the capture\n' + _R16_AUTH)
+    assert [d["subtype"] for d in _iter_stream_documents(quoted)] == ["error_during_execution"]
+    assert _extract_result_object(quoted)["errors"] == [_R16_OAUTH]
+
+
+def test_leading_whitespace_is_read_as_written(monkeypatch, tmp_path):
+    # Round 16: `.strip()` moved an indented first line to column 0 — the
+    # capture is framed as written; only leading blank transport lines
+    # are (naturally) skipped.
+    from llm import _extract_result_object, _iter_stream_documents
+    capture = "   " + _R16_OK + "\n" + _R16_AUTH
+    assert [d["subtype"] for d in _iter_stream_documents(capture)] == ["error_during_execution"]
+    _r16_blocked_story(monkeypatch, tmp_path, capture)
+    assert _extract_result_object("\n\n" + _R16_OK + "\n")["subtype"] == "success"
+    assert _r16_success_story("\n\n" + _R16_OK + "\n").content == "diagnostic example: finished"
+
+
+def test_an_auth_failure_behind_a_long_diagnostic_still_pauses(monkeypatch, tmp_path):
+    # Round 16: the two auth checks read the DISPLAY rendering's first
+    # 4000 chars, so an explicit OAuth failure after a long diagnostic in
+    # `errors[]` classified as fatal — or, with "rate limit" in the
+    # diagnostic, bought another subprocess launch.
+    from llm import _rate_limited_failure, _terminal_auth_field, _terminal_error_fields
+    long_diag = "diagnostic: " + "x" * 4100 + " (the request hit a rate limit upstream)"
+    env = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                      "errors": [long_diag, _R16_OAUTH]})
+    obj = json.loads(env)
+    assert _terminal_error_fields(obj) == [long_diag, _R16_OAUTH]
+    assert _terminal_auth_field(obj) == _R16_OAUTH
+    assert _rate_limited_failure(env) is False
+    exc, out = _r16_blocked_story(monkeypatch, tmp_path, env)
+    assert _R16_OAUTH in str(exc) or "diagnostic" in str(exc)  # the display detail is bounded, not the class
+
+
+def test_an_auth_failure_in_errors_survives_a_nonempty_result(monkeypatch, tmp_path):
+    # Round 16: `_terminal_error_text` prefers `result` for DISPLAY; that
+    # preference must not decide classification — partial-work text in
+    # `result` hid the OAuth failure carried in `errors[]`.
+    from llm import _rate_limited_failure, _terminal_auth_field, _terminal_error_text
+    env = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                      "result": "Read two messages before the rate limit hit.",
+                      "errors": [_R16_OAUTH]})
+    obj = json.loads(env)
+    assert _terminal_error_text(obj) == "Read two messages before the rate limit hit."  # display, unchanged
+    assert _terminal_auth_field(obj) == _R16_OAUTH
+    assert _rate_limited_failure(env) is False
+    exc, out = _r16_blocked_story(monkeypatch, tmp_path, env)
+    assert "Read two messages" in str(exc)
+
+
+def test_a_long_non_auth_diagnostic_is_not_an_auth_story(monkeypatch, tmp_path):
+    # Negative control for the two tests above: the same long diagnostic
+    # WITHOUT an auth field is what it says — a rate-limit retry, then a
+    # non-auth failure; the breaker stays clear.
+    from llm import _rate_limited_failure, _terminal_auth_field
+    from llm_errors import classify_error
+    long_diag = "diagnostic: " + "x" * 4100 + " (the request hit a rate limit upstream)"
+    env = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                      "result": "partial work", "errors": [long_diag]})
+    assert _terminal_auth_field(json.loads(env)) is None
+    assert _rate_limited_failure(env) is True
+    ce = _r16_container_lane(monkeypatch, tmp_path)
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=True, stdout=env)) as run:
+        with pytest.raises(RuntimeError) as ei:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 2, "a genuine rate-limit story still gets its backoff retry"
+    assert classify_error(ei.value, backend="subprocess").error_class != "container_auth"
+    assert ce.auth_breaker_snapshot() is None
+
+
+# ---------------------------------------------------------------------------
+# Review round 17 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+_R17_LIMITED = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                           "result": "You've hit your limit · resets 3pm",
+                           "usage": {"input_tokens": 100, "output_tokens": 20}, "total_cost_usd": 0.5})
+_R17_LIMITED_2 = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                             "result": "You've hit your limit · resets 4pm",
+                             "usage": {"input_tokens": 50, "output_tokens": 10}, "total_cost_usd": 0.25})
+_R17_SUCCESS = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Finished the task.",
+                           "usage": {"input_tokens": 37, "output_tokens": 9, "cache_read_input_tokens": 5},
+                           "total_cost_usd": 0.12})
+
+
+def _r17_assistant(text):
+    return json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+
+
+def _r17_result(rc, stdout):
+    return MagicMock(returncode=rc, stderr="", container_executed=True, stdout=stdout)
+
+
+def test_an_indented_lone_event_is_not_a_protocol_event(monkeypatch, tmp_path):
+    # Round 17: the framer read the capture as written, but two of its
+    # callers (`_parse_stream_json`, `_stream_events`) still stripped it
+    # first — a lone indented rate_limit_event example bought another
+    # executor launch, an indented result example became the answer with
+    # its usage attributed, while the framer itself saw zero documents.
+    from llm import LLMTool, _iter_stream_documents, _parse_stream_json, _rate_limited_failure
+    _r16_container_lane(monkeypatch, tmp_path)
+    limit_event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+    indented = "  " + limit_event
+    assert list(_iter_stream_documents(indented)) == []
+    assert _parse_stream_json(indented)["rate_limited"] is False
+    assert _rate_limited_failure(indented) is False
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, indented)) as run:
+        with pytest.raises(RuntimeError, match="claude subprocess failed"):
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1, "an indented example is not grounds for another launch"
+    # positive control: the same event at column 0 IS a rate-limit story
+    assert _rate_limited_failure(limit_event) is True
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, limit_event)) as run:
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 2
+    # an indented result example on a clean exit is prose, not a tool call with usage
+    tool = LLMTool(name="flag_stuck", description="stuck", parameters={"type": "object"})
+    example = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                          "result": json.dumps({"tool": "flag_stuck", "reason": "example"}),
+                          "usage": {"input_tokens": 37, "output_tokens": 9}, "total_cost_usd": 0.12})
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(0, "    " + example)):
+        resp = a.complete([LLMMessage("user", "build a thing")], executor=True, tools=[tool])
+    assert resp.tool_calls == [] and (resp.input_tokens, resp.output_tokens, resp.cost_usd) == (0, 0, 0.0)
+    assert resp.content == example
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(0, example)):
+        ctl = a.complete([LLMMessage("user", "build a thing")], executor=True, tools=[tool])
+    assert [t.name for t in ctl.tool_calls] == ["flag_stuck"] and ctl.input_tokens == 37
+
+
+@pytest.mark.parametrize("quote", ["array", "assistant"])
+def test_a_terminal_object_without_error_text_never_reads_the_raw_capture(monkeypatch, tmp_path, quote):
+    # Round 17: with a terminal object that carried no error text, the
+    # breaker fell back to searching the raw capture — an OAuth example
+    # quoted in an assistant message or a diagnostic array tripped it on a
+    # healthy session and every later executor call refused.
+    from llm_errors import classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for
+    ce = _r16_container_lane(monkeypatch, tmp_path)
+    example = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                          "errors": [_R16_OAUTH]})
+    quoted = ("[\n" + example + "\n]") if quote == "array" else _r17_assistant(
+        "If the session had expired the CLI would print: " + _R16_OAUTH)
+    terminal = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True, "errors": []})
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 3
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, quoted + "\n" + terminal)) as run:
+        with pytest.raises(RuntimeError, match="claude subprocess failed") as ei:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1
+    assert classify_error(ei.value, backend="subprocess").error_class == "fatal"
+    assert ce.auth_breaker_snapshot() is None, "a healthy session must not be declared expired"
+    out = _blocked_outcome_from_exc(ei.value)
+    assert out["status"] == "blocked" and environmental_pause_for(out) == ""
+    # positive control: the same capture whose terminal object DOES name the auth failure
+    real = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True, "errors": [_R16_OAUTH]})
+    _r16_blocked_story(monkeypatch, tmp_path, quoted + "\n" + real)
+
+
+def _r17_two_attempts(monkeypatch, tmp_path, second, *, max_retries=3):
+    from llm_errors import call_usage_evidence
+    _r16_container_lane(monkeypatch, tmp_path)
+    first = _r17_assistant("Attempt one read the inbox.") + "\n" + _R17_LIMITED
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = max_retries
+    with patch("llm._run_subprocess_safe", side_effect=[_r17_result(1, first), second]) as run:
+        try:
+            resp = a.complete([LLMMessage("user", "build a thing")], executor=True)
+        except Exception as exc:  # the twins that end in an error
+            return run.call_count, exc, call_usage_evidence(exc)
+    return run.call_count, resp, None
+
+
+def test_paid_rate_limit_attempts_fold_into_the_auth_pause(monkeypatch, tmp_path):
+    # Round 17: each retry overwrote `result`, so the paid first attempt
+    # (100 in / 20 out / $0.50, and its assistant text) vanished from the
+    # eventual auth failure's evidence — the paused step's ledger row
+    # understated the work.
+    from llm_errors import classify_error
+    second = _r17_result(1, _r17_assistant("Attempt two hit the expired session.") + "\n" + _R16_AUTH)
+    launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, second)
+    assert launches == 2 and classify_error(exc, backend="subprocess").error_class == "container_auth"
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (137, 29, pytest.approx(0.62))
+    assert "Attempt one read the inbox." in ev["partial"] and "Attempt two hit" in ev["partial"]
+    assert ev["partial"].index("Attempt one") < ev["partial"].index("Attempt two")
+
+
+def test_paid_rate_limit_attempts_fold_into_the_eventual_success(monkeypatch, tmp_path):
+    launches, resp, _ = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(0, _R17_SUCCESS))
+    assert launches == 2 and resp.content == "Finished the task."
+    # 100 fresh + (37 fresh + 5 cache) — input_tokens is TOTAL input
+    assert (resp.input_tokens, resp.output_tokens, resp.cache_read_tokens) == (142, 29, 5)
+    assert resp.cost_usd == pytest.approx(0.62)
+
+
+def test_paid_rate_limit_attempts_fold_into_a_kill_or_refusal_before_the_next_launch(monkeypatch, tmp_path):
+    from llm_errors import classify_error
+    # a retry killed on its wall clock: the first attempt's spend still rides
+    launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, subprocess.TimeoutExpired(cmd="claude", timeout=5))
+    assert launches == 2 and "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (100, 20, pytest.approx(0.5))
+    assert "Attempt one read the inbox." in ev["partial"]
+    # the breaker trips between attempts: the resolver's refusal carries it too
+    import container_exec as ce
+    calls = {"n": 0}
+    real_resolve = ce.resolve_container_run
+
+    def _resolve(no_tools, executor):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise ce.ContainerAuthExpired("executor.container=require but the container lane is unavailable")
+        return real_resolve(no_tools, executor)
+    monkeypatch.setattr(ce, "resolve_container_run", _resolve)
+    launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(0, _R17_SUCCESS))
+    assert launches == 1 and classify_error(exc, backend="subprocess").error_class == "container_auth"
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (100, 20, pytest.approx(0.5))
+
+
+def test_every_rate_limited_attempt_rides_the_exhaustion_error(monkeypatch, tmp_path):
+    launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(1, _R17_LIMITED_2), max_retries=1)
+    assert launches == 2 and "rate-limited after 1 retries" in str(exc)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (150, 30, pytest.approx(0.75))
+
+
+# ---------------------------------------------------------------------------
+# Review round 18 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+def test_a_quoted_rate_limit_phrase_is_not_a_plain_text_limit_error(monkeypatch, tmp_path):
+    # Round 18: after the structured readers rejected a capture, the
+    # phrase backup searched the WHOLE capture — an indented example with
+    # `"reason": "rate limit"` or a diagnostic array saying "hit your
+    # limit" bought another executor launch for work already done. The
+    # phrase backup is for the CLI's plain-text surface only.
+    from llm import _plain_text_capture, _rate_limited_failure
+    _r16_container_lane(monkeypatch, tmp_path)
+    indented = "  " + json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                                  "result": "example", "reason": "rate limit"})
+    array = "[\n" + json.dumps({"note": "Example message: You have hit your limit"}) + "\n]"
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+    for capture in (indented, array):
+        assert _plain_text_capture(capture) is False and _rate_limited_failure(capture) is False
+        with patch("llm._run_subprocess_safe", return_value=_r17_result(1, capture)) as run:
+            with pytest.raises(RuntimeError, match="claude subprocess failed"):
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert run.call_count == 1, "quoted diagnostics are not grounds for another launch"
+    # positive controls: the CLI's plain-text limit error, and the structured event
+    plain = "You've hit your limit · resets 3pm"
+    assert _plain_text_capture(plain) is True and _rate_limited_failure(plain) is True
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, plain)) as run:
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 2
+    event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+    assert _rate_limited_failure(event) is True
+
+
+@pytest.mark.parametrize("ending", ["retries", "cap"])
+def test_rate_limit_exhaustion_ignores_quoted_auth(monkeypatch, tmp_path, ending):
+    # Round 18: both exhaustion errors interpolated the raw capture head,
+    # so an assistant message quoting an OAuth line ahead of a rate-limit
+    # terminal classified `auth_actionable` — the healthy host circuit
+    # tripped and the outcome lost its no-tokens pause.
+    from llm import FailoverAdapter
+    from llm_errors import call_usage_evidence, classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for, PAUSE_ERR_NO_TOKENS
+    _r16_container_lane(monkeypatch, tmp_path)
+    quoted = _r17_assistant("Example only: " + _R16_OAUTH)
+    capture = quoted + "\n" + _R17_LIMITED
+    inner = ClaudeSubprocessAdapter()
+    if ending == "retries":
+        inner._rate_limit_max_retries = 1
+        launches = 2
+    else:
+        inner._rate_limit_max_retries = 3
+        inner._rate_limit_wait = 601  # the first sleep would pass the 600 s total cap
+        launches = 1
+    wrapper = FailoverAdapter([inner])
+    import llm as _llm
+    _llm._BACKEND_CIRCUIT.clear()
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, capture)) as run:
+        with pytest.raises(Exception) as ei:
+            wrapper.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == launches
+    info = classify_error(ei.value, backend="subprocess")
+    assert info.error_class == "retry_at", info
+    assert _R16_OAUTH not in str(ei.value) and "hit your limit" in str(ei.value)
+    out = _blocked_outcome_from_exc(ei.value)
+    assert environmental_pause_for(out) == PAUSE_ERR_NO_TOKENS
+    assert _llm._circuit_open("subprocess") is None, "a rate-limit exhaustion never trips the host circuit"
+    ev = call_usage_evidence(ei.value)
+    assert ev["tokens_in"] == 100 * launches and ev["cost"] == pytest.approx(0.5 * launches)
+
+
+@pytest.mark.parametrize("brake", ["token", "budget"])
+def test_paid_retry_evidence_survives_a_runaway_kill(monkeypatch, tmp_path, brake):
+    # Round 18: the retry launch caught only TimeoutExpired; a probe-ordered
+    # runaway kill on the retry escaped with its own evidence and without
+    # the replaced attempt's paid work and text.
+    from llm_errors import BudgetRunawayError, TokenRunawayError, call_usage_evidence, classify_error
+    if brake == "token":
+        exc = TokenRunawayError(300000, 250000, estimated_cost_usd=1.25)
+        expect = (300100, 20, 1.75)
+    else:
+        exc = BudgetRunawayError(3.0, 2.0)
+        expect = (100, 20, 0.5)
+    exc.maro_partial_output = "SECOND ATTEMPT WORK"
+    launches, err, ev = _r17_two_attempts(monkeypatch, tmp_path, exc)
+    assert launches == 2 and err is exc
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cost"]) == (expect[0], expect[1], pytest.approx(expect[2]))
+    assert "Attempt one read the inbox." in ev["partial"] and "SECOND ATTEMPT WORK" in ev["partial"]
+    assert ev["partial"].index("Attempt one") < ev["partial"].index("SECOND ATTEMPT")
+    assert classify_error(err, backend="subprocess").error_class == (
+        "token_runaway" if brake == "token" else "budget_runaway")
+
+
+# ---------------------------------------------------------------------------
+# Review round 19 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+def test_string_array_diagnostics_never_authorize_retry_or_host_auth(monkeypatch, tmp_path):
+    # Round 19: `_plain_text_capture` tested only for `{`, so a string-only
+    # diagnostic ARRAY passed as plain text — its quoted phrases authorised
+    # a replay and, in the exhaustion message, a host login story.
+    from llm import _failure_detail, _plain_text_capture, _rate_limited_failure
+    from llm_errors import classify_error
+    _r16_container_lane(monkeypatch, tmp_path)
+    capture = json.dumps(["Example: " + _R16_OAUTH, "Example: hit your limit · resets 3pm"])
+    assert _plain_text_capture(capture) is False and _rate_limited_failure(capture) is False
+    assert _failure_detail(capture, None, 300) == "stream capture without a terminal result"
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, capture)) as run:
+        with pytest.raises(RuntimeError) as ei:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1
+    assert _R16_OAUTH not in str(ei.value) and "hit your limit" not in str(ei.value)
+    assert classify_error(ei.value, backend="subprocess").error_class not in ("auth_actionable", "retry_at")
+    # (the no-terminal-object raw auth search for the BREAKER is a recorded
+    # residual — clear it so the controls below launch at all)
+    import container_exec as ce
+    ce.clear_auth_breaker("round-19 control"); ce.reset_container_caches()
+    # the indented twin and a bracketed prefix are structured/unknown too — never phrase-read
+    for shape in ("   " + capture, "[note] " + "You've hit your limit · resets 3pm"):
+        assert _plain_text_capture(shape) is False and _rate_limited_failure(shape) is False
+    # positive controls: the plain-text surface, and the structured event
+    plain = "You've hit your limit · resets 3pm"
+    assert _plain_text_capture(plain) is True and _rate_limited_failure(plain) is True
+    assert _failure_detail(plain, None, 300) == plain
+    event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, event)) as run:
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 2
+
+
+@pytest.mark.parametrize("status", [False, [], {}, "weird", 1, "rejected_soon"])
+def test_a_malformed_rate_limit_status_does_not_relaunch(monkeypatch, tmp_path, caplog, status):
+    # Round 19: every non-null status but "allowed" read as a rejection —
+    # a wrong-typed or unknown value was a confident instruction to
+    # replay an executor call. Only affirmative "rejected" authorises
+    # backoff; anything else is counted as malformed and warned.
+    import logging
+    from llm import _parse_stream_json, _rate_limited_failure
+    _r16_container_lane(monkeypatch, tmp_path)
+    event = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": status}})
+    with caplog.at_level(logging.WARNING, logger="maro.llm"):
+        parsed = _parse_stream_json(event)
+    assert parsed["rate_limited"] is False and "malformed" in caplog.text
+    assert _rate_limited_failure(event) is False
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, event)) as run:
+        with pytest.raises(RuntimeError, match="claude subprocess failed"):
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1
+    # controls: allowed (and allowed_warning) → not limited, no warning; rejected → limited
+    caplog.clear()
+    for ok in ("allowed", "allowed_warning"):
+        with caplog.at_level(logging.WARNING, logger="maro.llm"):
+            assert _parse_stream_json(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": ok}}))["rate_limited"] is False
+    assert "malformed" not in caplog.text
+    assert _parse_stream_json(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}))["rate_limited"] is True
+
+
+@pytest.mark.parametrize("ending", ["retries", "cap", "rc0"])
+def test_a_reset_in_errors_behind_a_partial_result_still_pauses(monkeypatch, tmp_path, ending):
+    # Round 19: the retry predicate read every terminal field, but the
+    # exhaustion classification read the bounded display message — with
+    # `result: "partial work"` and the reset in `errors[]`, the display
+    # preferred the partial work, the terminal marker classified `fatal`,
+    # and the exhausted limit missed its no-tokens pause. The limit is now
+    # stated structurally (`maro_rate_limited`).
+    from llm import _rate_limited_failure, _terminal_rate_limited
+    from llm_errors import call_usage_evidence, classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for, PAUSE_ERR_NO_TOKENS
+    _r16_container_lane(monkeypatch, tmp_path)
+    terminal = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                           "result": "partial work", "errors": ["You've hit your limit · resets 3pm"],
+                           "usage": {"input_tokens": 100, "output_tokens": 20}, "total_cost_usd": 0.5})
+    assert _terminal_rate_limited(json.loads(terminal)) is True and _rate_limited_failure(terminal) is True
+    a = ClaudeSubprocessAdapter()
+    rc = 1
+    if ending == "retries":
+        a._rate_limit_max_retries = 1; launches = 2
+    elif ending == "cap":
+        a._rate_limit_max_retries = 3; a._rate_limit_wait = 601; launches = 1
+    else:  # a zero exit with the same explicit terminal failure (rounds 8/9)
+        a._rate_limit_max_retries = 1; launches = 2; rc = 0
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(rc, terminal)) as run:
+        with pytest.raises(RuntimeError) as ei:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == launches
+    assert "partial work" in str(ei.value), "the display detail is unchanged"
+    assert getattr(ei.value, "maro_terminal_failure", False) and getattr(ei.value, "maro_rate_limited", False)
+    assert classify_error(ei.value, backend="subprocess").error_class == "retry_at"
+    assert environmental_pause_for(_blocked_outcome_from_exc(ei.value)) == PAUSE_ERR_NO_TOKENS
+    ev = call_usage_evidence(ei.value)
+    assert ev["tokens_in"] == 100 * launches and ev["cost"] == pytest.approx(0.5 * launches)
+    # negative control: a terminal failure that says nothing about a limit stays fatal
+    other = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                        "result": "partial work", "errors": ["ran out of turns"]})
+    assert _terminal_rate_limited(json.loads(other)) is False
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, other)):
+        with pytest.raises(RuntimeError) as ei2:
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert classify_error(ei2.value, backend="subprocess").error_class == "fatal"
+
+
+# ---------------------------------------------------------------------------
+# Review round 20 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("prose", [
+    "Read invoice 401 before stopping.",
+    "Read billing note 402 first.",
+    "Read ticket 413 before stopping.",
+    "Check the unauthorized-senders list, then stop.",
+])
+def test_incidental_status_words_in_partial_work_do_not_override_the_terminal_verdict(monkeypatch, tmp_path, prose):
+    # Round 20: the classifier matched the display message against the
+    # input/billing/auth text patterns BEFORE the round-19 rate-limit
+    # marker, so a partial-work `result` mentioning "401"/"402"/"413"
+    # classified a rate-limited terminal as a host auth/billing/input
+    # failure — the healthy host circuit tripped, another backend could
+    # replay the work, and the no-tokens pause was lost.
+    import llm as _llm
+    from llm import FailoverAdapter
+    from llm_errors import call_usage_evidence, classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for, PAUSE_ERR_NO_TOKENS
+    _r16_container_lane(monkeypatch, tmp_path)
+    _llm._BACKEND_CIRCUIT.clear()
+    terminal = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                           "result": prose, "errors": ["You've hit your limit · resets 3pm"],
+                           "usage": {"input_tokens": 100, "output_tokens": 20}, "total_cost_usd": 0.5})
+    inner = ClaudeSubprocessAdapter()
+    inner._rate_limit_max_retries = 3
+    inner._rate_limit_wait = 601  # the first sleep would pass the total cap: one launch
+    wrapper = FailoverAdapter([inner])
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(1, terminal)) as run:
+        with pytest.raises(Exception) as ei:
+            wrapper.complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1
+    assert getattr(ei.value, "maro_rate_limited", False) is True
+    assert classify_error(ei.value, backend="subprocess").error_class == "retry_at"
+    assert environmental_pause_for(_blocked_outcome_from_exc(ei.value)) == PAUSE_ERR_NO_TOKENS
+    assert _llm._circuit_open("subprocess") is None, "the healthy host circuit stays closed"
+    ev = call_usage_evidence(ei.value)
+    assert ev["tokens_in"] == 100 and ev["cost"] == pytest.approx(0.5)
+    # controls: the CLI's AUTHORED phrases in the error fields still decide
+    a = ClaudeSubprocessAdapter()
+    a._rate_limit_max_retries = 1
+
+    def _classify(obj, container_executed=True):
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=1, stderr="", container_executed=container_executed, stdout=json.dumps(obj))):
+            with pytest.raises(RuntimeError) as e2:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        return classify_error(e2.value, backend="subprocess").error_class
+
+    base = {"type": "result", "subtype": "error_during_execution", "is_error": True, "result": prose}
+    assert _classify({**base, "errors": ["Your credit balance is too low to access the API."]}) == "billing_actionable"
+    assert _classify({**base, "errors": ["prompt is too long: 250000 tokens > 200000 maximum"]}) == "input_too_large"
+    assert _classify({**base, "errors": ["ran out of turns"]}) == "fatal"
+    # a dead HOST credential named by the CLI (host lane) is still the host's auth story
+    assert _classify({**base, "errors": [_R16_OAUTH]}, container_executed=False) == "auth_actionable"
+
+
+def test_a_conversion_failure_after_paid_retries_keeps_the_evidence(monkeypatch, tmp_path):
+    # Round 20: prior-attempt evidence was added only AFTER the successful
+    # capture converted; a conversion failure (a wrong-typed `tool` field
+    # raised out of a set lookup) escaped with no usage at all — a paid
+    # call became a zero-accounting blocked step. Two fixes: the field is
+    # validated, and conversion is an evidence-preserving boundary.
+    from llm import LLMTool
+    from llm_errors import classify_error
+    a = ClaudeSubprocessAdapter()
+    tools = [LLMTool(name="complete_step", description="d", parameters={"type": "object", "properties": {}})]
+    assert a._parse_tool_call('{"tool": ["complete_step"], "x": 1}', tools) is None
+    assert a._parse_tool_call('{"tool": {"name": "complete_step"}}', tools) is None
+    assert a._parse_tool_call('{"tool": "complete_step", "x": 1}', tools).name == "complete_step"
+    # the real conversion of such a terminal no longer raises
+    odd = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                      "result": '{"tool": ["complete_step"], "x": 1}',
+                      "usage": {"input_tokens": 37, "output_tokens": 9}, "total_cost_usd": 0.12})
+    _r16_container_lane(monkeypatch, tmp_path)
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(0, odd)):
+        resp = a.complete([LLMMessage("user", "build a thing")], executor=True, tools=tools)
+    assert resp.tool_calls == [] and resp.input_tokens == 37 and resp.cost_usd == pytest.approx(0.12)
+    # the boundary: any conversion failure carries the final capture's usage
+    # AND the replaced attempts', once each, and never becomes a replay
+    boom = TypeError("cannot use 'list' as a set element (unhashable type: 'list')")
+    monkeypatch.setattr(ClaudeSubprocessAdapter, "_collect", lambda self, events: (_ for _ in ()).throw(boom))
+    launches, exc, ev = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(0, _R17_SUCCESS))
+    assert launches == 2 and exc is boom
+    # fresh input 100 + 37; the 5 cache reads ride separately; $0.50 + $0.12
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cache_read"], ev["cost"]) == (137, 29, 5, pytest.approx(0.62))
+    assert "Attempt one read the inbox." in ev["partial"]
+    assert getattr(exc, "maro_protocol_failure", False) is True
+    assert classify_error(exc, backend="subprocess").error_class == "fatal"
+    # a message that happens to match a replay pattern still never replays
+    boom2 = RuntimeError("claude subprocess failed while converting the result")
+    monkeypatch.setattr(ClaudeSubprocessAdapter, "_collect", lambda self, events: (_ for _ in ()).throw(boom2))
+    launches, exc2, ev2 = _r17_two_attempts(monkeypatch, tmp_path, _r17_result(0, _R17_SUCCESS))
+    assert exc2 is boom2 and ev2["cost"] == pytest.approx(0.62)
+    assert classify_error(exc2, backend="subprocess").error_class == "fatal"
+
+
+# ---------------------------------------------------------------------------
+# Review round 21 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+def test_a_host_circuit_trip_does_not_block_the_container_lane(monkeypatch, tmp_path):
+    # Round 21: FailoverAdapter's process-wide "subprocess" circuit is the
+    # HOST credential domain's, but every later executor call under
+    # `require` was skipped by it too — refused with the host's /login
+    # story, never reaching the resolver, never stamping the container-auth
+    # pause, never rechecking the re-seed.
+    import container_exec as ce
+    import llm as _llm
+    from llm import FailoverAdapter
+    from llm_errors import classify_error
+    from step_exec import _blocked_outcome_from_exc
+    from stop_verdicts import environmental_pause_for, PAUSE_ERR_CONTAINER_AUTH
+    _r16_container_lane(monkeypatch, tmp_path)
+    _llm._BACKEND_CIRCUIT.clear()
+    host_dead = MagicMock(returncode=1, stderr="", container_executed=False, stdout=_R16_AUTH)
+    # 1. a HOST call dies of the host's expired session: the host circuit trips
+    with patch("llm._run_subprocess_safe", return_value=host_dead) as run:
+        with pytest.raises(Exception) as e1:
+            FailoverAdapter([ClaudeSubprocessAdapter()]).complete([LLMMessage("user", "plan")], executor=False)
+    assert run.call_count == 1 and classify_error(e1.value, backend="subprocess").error_class == "auth_actionable"
+    assert _llm._circuit_open("subprocess") is not None
+    # 2. an executor call with the CONTAINER breaker tripped reaches the resolver: the typed pause
+    ce.note_container_failure(_R16_OAUTH)
+    with patch("llm._run_subprocess_safe", return_value=host_dead) as run:
+        with pytest.raises(Exception) as e2:
+            FailoverAdapter([ClaudeSubprocessAdapter()]).complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 0, "the resolver refuses before any launch"
+    assert classify_error(e2.value, backend="subprocess").error_class == "container_auth"
+    assert environmental_pause_for(_blocked_outcome_from_exc(e2.value)) == PAUSE_ERR_CONTAINER_AUTH
+    # 3. a healthy container session serves the executor call despite the open host circuit
+    ce.clear_auth_breaker("round-21 control"); ce.reset_container_caches()
+    assert _llm._circuit_open("subprocess") is not None
+    with patch("llm._run_subprocess_safe", return_value=_r17_result(0, _R17_SUCCESS)) as run:
+        resp = FailoverAdapter([ClaudeSubprocessAdapter()]).complete([LLMMessage("user", "build a thing")], executor=True)
+    assert run.call_count == 1 and resp.content == "Finished the task."
+    # 4. negative control: a plain HOST call is still skipped by the open circuit
+    with patch("llm._run_subprocess_safe", return_value=host_dead) as run:
+        with pytest.raises(Exception) as e4:
+            FailoverAdapter([ClaudeSubprocessAdapter()]).complete([LLMMessage("user", "plan")], executor=False)
+    assert run.call_count == 0 and classify_error(e4.value, backend="subprocess").error_class == "auth_actionable"
+    _llm._BACKEND_CIRCUIT.clear()
+
+
+def test_an_overdeep_side_document_does_not_hide_the_auth_terminal(monkeypatch, tmp_path):
+    # Round 21: the framer caught ValueError only; on Python 3.12 the
+    # recursive decoder raised RecursionError out of the terminal
+    # extraction, ahead of every verdict — an auth terminal behind a
+    # 10,000-deep side document became an unclassified, unpaid failure.
+    import json as _json
+    from llm import _extract_result_object, _iter_stream_documents
+    deep = "[" * 10000 + "]" * 10000
+    capture = deep + "\n" + _R16_AUTH
+    # the real decoder (this interpreter may accept the depth; either way the terminal frames)
+    assert _extract_result_object(capture) is not None and "OAuth" in _json.dumps(_extract_result_object(capture))
+    _r16_blocked_story(monkeypatch, tmp_path, capture)
+    # the must-detect fixture: the decoder that raises on depth
+    real = _json.JSONDecoder.raw_decode
+
+    def _raising(self, s, idx=0):
+        if s.startswith("[[[[", idx):
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(self, s, idx)
+    monkeypatch.setattr(_json.JSONDecoder, "raw_decode", _raising)
+    with pytest.raises(RecursionError):
+        _json.JSONDecoder().raw_decode(deep, 0)
+    docs = list(_iter_stream_documents(capture))
+    assert len(docs) == 1 and docs[0].get("type") == "result"
+    import container_exec as ce
+    ce.clear_auth_breaker("round-21 second story"); ce.reset_container_caches()
+    _r16_blocked_story(monkeypatch, tmp_path, capture)
+
+
+def test_a_paid_terminal_failure_then_a_permitted_failover_keeps_all_usage(monkeypatch, tmp_path):
+    # Round 21: the adapter attached the failed hop's evidence, but the
+    # wrapper abandoned that exception when the next backend succeeded —
+    # the response carried the fallback's usage only, and worker/director
+    # totals undercounted the run.
+    import llm as _llm
+    from llm import FailoverAdapter
+    from llm_errors import call_usage_evidence, classify_error
+    _llm._BACKEND_CIRCUIT.clear()
+    billing = json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                          "result": "", "errors": ["Your credit balance is too low to access the API."],
+                          "usage": {"input_tokens": 37, "output_tokens": 9, "cache_read_input_tokens": 100},
+                          "total_cost_usd": 0.12})
+    fallback = MagicMock()
+    fallback.backend = "anthropic"; fallback.model_key = "fb"; fallback.container_capable = False
+    fallback.complete = MagicMock(return_value=LLMResponse(content="fallback completed", input_tokens=10,
+                                                            output_tokens=2, cost_usd=0.03))
+    import notify
+    monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=billing)) as run:
+        resp = FailoverAdapter([ClaudeSubprocessAdapter(), fallback]).complete([LLMMessage("user", "plan")])
+    assert run.call_count == 1 and fallback.complete.call_count == 1
+    assert resp.content == "fallback completed"
+    # 10 + (37 fresh + 100 cache); 2 + 9; 100; $0.03 + $0.12
+    assert (resp.input_tokens, resp.output_tokens, resp.cache_read_tokens) == (147, 11, 100)
+    assert resp.cost_usd == pytest.approx(0.15)
+    # the failed-then-failed twin: the final exception carries every hop's spend, once
+    _llm._BACKEND_CIRCUIT.clear()
+    dead = MagicMock()
+    dead.backend = "anthropic"; dead.model_key = "fb"; dead.container_capable = False
+    boom = RuntimeError("HTTP 402 Payment Required")
+    boom.fresh_input_tokens = 5; boom.estimated_cost_usd = 0.01
+    dead.complete = MagicMock(side_effect=boom)
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=billing)):
+        with pytest.raises(Exception) as ei:
+            FailoverAdapter([ClaudeSubprocessAdapter(), dead]).complete([LLMMessage("user", "plan")])
+    assert classify_error(ei.value, backend="anthropic").error_class == "billing_actionable"
+    ev = call_usage_evidence(ei.value)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cache_read"]) == (42, 9, 100) and ev["cost"] == pytest.approx(0.13)
+    # negative control: a single-hop success carries only its own usage
+    _llm._BACKEND_CIRCUIT.clear()
+    ok = MagicMock(); ok.backend = "anthropic"; ok.model_key = "fb"; ok.container_capable = False
+    ok.complete = MagicMock(return_value=LLMResponse(content="solo", input_tokens=10, output_tokens=2, cost_usd=0.03))
+    r2 = FailoverAdapter([ok]).complete([LLMMessage("user", "plan")])
+    assert (r2.input_tokens, r2.output_tokens, r2.cache_read_tokens, r2.cost_usd) == (10, 2, 0, 0.03)
+    _llm._BACKEND_CIRCUIT.clear()
+
+
+# ---------------------------------------------------------------------------
+# Review round 22 (2026-09-13)
+# ---------------------------------------------------------------------------
+
+def _r22_billing_capture(partial="FIRST"):
+    return _r17_assistant(partial) + "\n" + json.dumps({
+        "type": "result", "subtype": "error_during_execution", "is_error": True,
+        "result": "", "errors": ["Your credit balance is too low to access the API."],
+        "usage": {"input_tokens": 37, "output_tokens": 9, "cache_read_input_tokens": 100},
+        "total_cost_usd": 0.12})
+
+
+def _r22_dead(backend="anthropic"):
+    dead = MagicMock()
+    dead.backend = backend; dead.model_key = "fb"; dead.container_capable = False
+    boom = RuntimeError("HTTP 402 Payment Required")
+    boom.fresh_input_tokens = 5; boom.estimated_cost_usd = 0.01; boom.maro_partial_output = "FINAL"
+    dead.complete = MagicMock(side_effect=boom)
+    return dead
+
+
+def test_failed_hops_preserve_a_wrapped_final_hops_evidence(monkeypatch):
+    # Round 22: `_add_call_evidence` read the target's counters with a
+    # shallow getattr, but a final hop that arrives as a BackendError keeps
+    # its evidence on its CAUSE — adding the earlier hops wrote wrapper
+    # attributes that shadowed the final hop's own counters and partial
+    # text from every chain-aware reader.
+    import llm as _llm
+    import notify
+    from llm import FailoverAdapter, _add_call_evidence
+    from llm_errors import BackendError, call_usage_evidence, classify_error
+    monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+    # the unit: adding to a wrapper whose evidence rides its cause
+    cause = RuntimeError("inner"); cause.fresh_input_tokens = 5; cause.estimated_cost_usd = 0.01
+    cause.maro_partial_output = "FINAL"
+    wrapped = BackendError(classify_error(RuntimeError("HTTP 402 Payment Required"), backend="anthropic"))
+    wrapped.__cause__ = cause
+    _add_call_evidence(wrapped, {"fresh_in": 37, "out": 9, "cache_read": 100, "cost": 0.12}, "FIRST")
+    ev = call_usage_evidence(wrapped)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cache_read"]) == (42, 9, 100) and ev["cost"] == pytest.approx(0.13)
+    assert "FIRST" in ev["partial"] and "FINAL" in ev["partial"] and ev["partial"].index("FIRST") < ev["partial"].index("FINAL")
+    # the flow: nested real wrappers — the inner wrapper wraps the final hop
+    _llm._BACKEND_CIRCUIT.clear()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=_r22_billing_capture())):
+        with pytest.raises(Exception) as ei:
+            FailoverAdapter([ClaudeSubprocessAdapter(), FailoverAdapter([_r22_dead()])]).complete(
+                [LLMMessage("user", "plan")])
+    assert isinstance(ei.value, BackendError)
+    ev = call_usage_evidence(ei.value)
+    assert (ev["tokens_in"], ev["tokens_out"], ev["cache_read"]) == (42, 9, 100) and ev["cost"] == pytest.approx(0.13)
+    assert "FIRST" in ev["partial"] and "FINAL" in ev["partial"]
+    _llm._BACKEND_CIRCUIT.clear()
+
+
+def test_a_paid_failover_tail_ledger_and_call_records_match_the_complete_call(monkeypatch):
+    # Round 22: the tail ledger row and the runaway meter read the response
+    # BEFORE the failed hops' spend was folded in, so a closure/gate call
+    # recovered through a permitted failover returned the right bill and
+    # persisted the fallback's only; the failed hop's own call record
+    # carried no usage at all.
+    import llm as _llm
+    import metrics, notify, runs
+    from llm import FailoverAdapter
+    from metrics import tail_cost_scope
+    monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+    rows, records = [], []
+    monkeypatch.setattr(metrics, "record_step_cost",
+                        lambda step_text, ti, to, status, **kw: rows.append({"step": step_text, "ti": ti, "to": to, **kw}))
+    monkeypatch.setattr(runs, "record_llm_call",
+                        lambda prompt, output, **kw: records.append(kw) or None)
+    fallback = MagicMock()
+    fallback.backend = "anthropic"; fallback.model_key = "fb"; fallback.container_capable = False
+    # (a fresh response per call, as a real adapter returns)
+    fallback.complete = MagicMock(side_effect=lambda *a, **k: LLMResponse(
+        content="fallback completed", input_tokens=10, output_tokens=2, cost_usd=0.03, model="fb-model"))
+    _llm._BACKEND_CIRCUIT.clear()
+    with patch("llm._run_subprocess_safe", return_value=MagicMock(
+            returncode=1, stderr="", container_executed=False, stdout=_r22_billing_capture())):
+        with tail_cost_scope("tl-22", "closure"):
+            resp = FailoverAdapter([ClaudeSubprocessAdapter(), fallback]).complete(
+                [LLMMessage("user", "judge it")], purpose="closure verdict")
+    assert resp.cost_usd == pytest.approx(0.15)
+    # ONE tail row, carrying the complete call
+    assert len(rows) == 1 and rows[0]["loop_id"] == "tl-22"
+    assert (rows[0]["ti"], rows[0]["to"], rows[0]["cache_read_tokens"]) == (147, 11, 100)
+    assert rows[0]["provider_cost_usd"] == pytest.approx(0.15)
+    # per-hop call records stay distinct, each with its own bill
+    assert len(records) == 2
+    failed, ok = records
+    assert failed["error"].startswith("RuntimeError") and (failed["tokens_in"], failed["tokens_out"]) == (137, 9)
+    assert failed["cost_usd"] == pytest.approx(0.12)
+    assert not ok.get("error") and (ok["tokens_in"], ok["tokens_out"]) == (10, 2) and ok["cost_usd"] == pytest.approx(0.03)
+    # the runaway meter, armed, sees the complete call too
+    _llm._BACKEND_CIRCUIT.clear()
+    rows.clear(); records.clear()
+    import threading
+    meter = {"spent_usd": 0.0, "ceiling_usd": 100.0, "lock": threading.Lock()}
+    seen = []
+    monkeypatch.setattr(metrics, "estimate_cost", lambda ti, to, model="", cache_read_tokens=0: seen.append((ti, to, cache_read_tokens)) or 0.0)
+    fa = FailoverAdapter([ClaudeSubprocessAdapter(), fallback])
+    token = _llm._RUN_COST_METER.set(meter)
+    try:
+        with patch("llm._run_subprocess_safe", return_value=MagicMock(
+                returncode=1, stderr="", container_executed=False, stdout=_r22_billing_capture())):
+            fa.complete([LLMMessage("user", "judge it")], purpose="closure verdict")
+    finally:
+        _llm._RUN_COST_METER.reset(token)
+    assert seen and seen[-1] == (147, 11, 100)
+    _llm._BACKEND_CIRCUIT.clear()

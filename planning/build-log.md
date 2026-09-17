@@ -2531,6 +2531,172 @@ prompt-template version bump, fold parity) and F20 (answer→follow-up as
 one recoverable sequence, or a retry verb); census r30's five HIGHs
 (6a09e8bd) against F19–F21.
 
+## Post-v1 — LoopsBench item 1, Go side: the plan's declared prerequisites are an execution contract (2026-09-17)
+
+Jeremy, the same morning: *"The current active dev branch should be the
+succession branch. I think you're not targeting that and making changes
+on the 'old' maro fork. We should correct that at the next opportunity."*
+LoopsBench chunks 1–9 (2026-09-16/17) had landed on the Python mainline
+(`main` e855c018). Correction applied here: the two LoopsBench gaps port
+to THIS engine as features; chunks 2–9's substrate plumbing (atomic
+checkpoint writes, resume claims / permits / consumption, NEXT.md mark
+debt) is answered by construction on this side — the lease excludes a
+second driver, the epoch stales a dead one, every commit is keyed and
+idempotent, the fold is the checkpoint, and an in-flight invocation is
+reused rather than replayed. Nothing of it ports.
+
+**Subtraction artifact.**
+
+| Item | Required by | Kept? |
+|---|---|---|
+| `{"step": <text>, "after": [k...]}` in the plan grammar; `Plan.Edges []StepEdge` (plan/2) | item 1: the planner's edges are a contract the executor honours | kept |
+| The gate in the step loop: a step whose declared prerequisite did not end `done` is recorded `gated` (step_done/2: no invocation, no verdict, `gated_by`, a result that says so) and its dependents gate in turn | item 1; fold parity (a gated record re-derives from the plan and the earlier outcomes; an executed record must have had none) | kept |
+| Sequential order stays soft (an `unclear`/`unjudged` step does not stop the next one); `blocked` still stops the run | v1 §5 behaviour; the Python gate's "sequential default soft unless configured" | kept, unchanged |
+| A ready-frontier / DAG executor (run independent steps out of order) | Python chunk 1's parallel lane | **deleted** — this engine runs a plan one step at a time by design (§5); `{"parallel": …}` is the fan-out. Edges only GATE here |
+| `[after:N]` text grammar inside a step's prose (Python) | Python planner convention | **deleted** — the plan is JSON; the field is typed, validated once at the boundary |
+| Hard-gating on `unjudged` | the judge boundary refused its output: the prerequisite is not SHOWN done | kept — the fail-closed direction; the closure judge still sees the step's real result |
+| Prompt template versioning for `stepPrompt` | F9's note: the fold re-derives the execute request byte-for-byte | **not needed** — a plan without edges renders byte-for-byte as before, so every earlier record re-derives; the "(after 1, 3)" suffix appears only for an edged step |
+| Test seam `CrashAt = "stage#N"` (the Nth occurrence) | proving the reuse arithmetic after a gated step (the second execute) | kept; 8 lines in `crash()` |
+
+**Build.** `run.StepEdge`, `Plan.Edges`/`EdgesAt`/`planAfter`,
+`validAfter`; `StepGated` + `StepDone.GatedBy`; `ParsePlan` reads
+`{"step", "after"}` and `after` on a parallel object; `planPrompt` teaches
+the grammar ("declare only real prerequisites"); `stepPrompt` shows
+"(after …)"; `gatedBy`/`gatedText` are the ONE derivation the driver
+writes and the fold re-derives; `countExec`/`countJudge` replace
+`len(prevSteps(prev))` in the reuse arithmetic (a gated step made no
+call; a fork step no execute). Registry: plan → 2, step_done → 2;
+contracts regenerated, `plan.edges` and `step_done.gated_by` declared,
+outcome pattern widened; report 0/0.
+
+**Edge tests (`internal/run/gate_test.go`).** The gate with its negative
+control (step 1 unclear → step 3 gated, 2 executes, 5 judge calls, the
+deliverable and the closure prompt carry the gating text, the executor's
+plan shows "(after 1)", a restart over the gated record writes nothing;
+step 1 done → step 3 runs); transitivity (gated → gated, the text names
+"step 2 ended gated"); the kill matrix over a gated step
+(`after_gated_step`; `after_step_execute#2` — the execute after a gated
+step is REUSED on resume, not replayed); the plan boundary's ten
+refusals + the accepted shapes; forgeries at the door (gated with an
+invocation / without `gated_by` / by a later step; executed with
+`gated_by`) and in the fold (a gated record over a done prerequisite; an
+executed record over an unclear one).
+
+- **116. Port the doctrine, not the code — and say which parts the
+  substrate already answers.** Nine Python chunks reduced to one Go
+  feature because the journal design (lease, epoch, keyed commits, fold,
+  in-flight reuse) IS the resume machinery. Before porting a chunk, ask
+  what its finding would look like on this side; if the answer is "the
+  fold refuses that record", there is nothing to build.
+- **117. A new outcome value is a schema version.** `gated` widened
+  `step_done.outcome`; a v1 reader rejects it (`unknown_value:
+  rejected`), so the kind is /2 and the driver writes /2 — old /1 records
+  fold unchanged (readers accept 1..n). An additive omitted field alone
+  would not have needed the bump; the vocabulary did.
+- **118. Find the in-flight call by its REQUEST, never by counting.**
+  The reuse arithmetic indexed the recovered attempt's invocations by a
+  count of its steps; a step that made no call (gated; a fork step's
+  execute) shifted the index past the landed call and the step was
+  re-executed — a replayed external effect, the exact thing reuse exists
+  to prevent. Counting the calls the steps consumed (this chunk's first
+  fix) repaired the zero-call steps and left the class open: an attempt
+  that REUSED a call and then crashed does not carry it in its own list,
+  so the count and the list belonged to different attempts after a
+  second recovery (r1, both lenses). The fix that closes the class:
+  re-render the exact request the driver would send (judge prompts
+  lensed), address it, and scan every attempt of the run that never
+  recorded an outcome for that call with a receipt. The fold already
+  accepted a reused call only by request parity; the driver now selects
+  by the same key.
+- **119. Render an addition only where it applies, and old records stay
+  re-derivable.** A prompt the fold re-derives byte-for-byte cannot
+  change for existing records; an edged step's "(after …)" appears only
+  when there is an edge, so a plan without one renders exactly as
+  before — no template version, no migration.
+
+Review round 1 (Skeptic + Architect, codex gpt-5.6-sol): 3 HIGH, all
+verified against the tree and fixed the same round — reuse after a
+second recovery (pattern 118 as rewritten), a crash right after a FINAL
+gated step (recovery took the last step's invocation — none — and the
+closure could not record with a receipt; now the latest step that made a
+call), and the fold accepting a `Fork` at a step whose declared
+prerequisite did not end done (the gate was re-derived at the StepDone
+only). 4 MED fixed: `ParsePlan` decided text-vs-parallel from zero
+values; the rerun context dropped the prior plan's edges; the
+`Outcome.Steps` comment lied; `planAfter` was quadratic. Queued as
+design residue: the reader accepts `/1` records carrying `/2` vocabulary
+(`record.Validate` takes 1..n and `ValidateWire` is version-blind — a
+substrate change for every kind); the plan invocation's request is not
+re-derived by the fold (pre-existing; needs versioned plan-prompt
+templates so live histories still fold); structured gated counts / a
+tail signal; an all-fork or fork-then-gated plan has no representative
+execute receipt at all (the "representative invocation" Outcome design);
+CLI-level coverage of the grammar.
+
+Round 2 (one Skeptic on the fix diff): 2 HIGH + 5 MED, all verified
+and fixed the same round. HIGH: request matching turned a recall-policy
+change between a crash and its recovery (a different block → a different
+request → no match) from a bricked journal (the old ordinal reuse cited a
+call the fold's `stepRequest` then refused) into a REPLAYED outward call;
+now the recovery fails closed, naming the landed call (`uncited()` — a
+landed execute no step record cites — when the attempt does not continue
+the recovered selection). HIGH: the NOW lane's `execute()` had the same
+second-recovery hole (it walked only `prev.Invocations`); it now scans
+every unrecorded attempt latest-first. MED: judge prompts carry no
+ordinal, so two steps with the same text and result share a judge
+request and the earlier step's unjudged call stood in for the later
+step's — a step's judge is the call made AFTER its execute (attempt
+`from` after invocation `after`, or any later attempt); a verdict an
+intermediate attempt committed from a reused call was searched on the
+call's attempt (a third recovery wrote a twin) — now found by
+`Source.Ref`; the outcome stamped the resumer's model over a landed call
+made by another (the fold binds them) — `lastModel` rides with
+`lastExec`; `join` present-but-empty on a text step was accepted —
+pointer; the fork judge had no crash seam — `after_fork_judge`, and its
+test now asserts the verdict cites the landed call. Tests: three-attempt
+kills for AGENDA (5 seam pairs, step verdicts counted once) and NOW, the
+recall-policy flip (no replay, an honest failed outcome), the identical-
+steps judge ordering, the model change over a final gated recovery.
+STOP RULE: no round 3 (no regression; the residue above is design).
+
+- **123. A request is not a stage key when two stages can render the
+  same bytes.** Execute prompts carry the ordinal; judge prompts do not.
+  Reuse by request alone let an earlier step's judge call answer for a
+  later identical step. When the key can collide, order the search by
+  the stage's own structure (the judge call comes after its execute)
+  rather than widen the key on the wire.
+- **124. A reuse rule has a lane twin.** The AGENDA fix left the NOW
+  lane's `execute()` with the identical second-recovery hole. Census
+  every lane's reader of "the recovered attempt's invocations" when the
+  rule changes.
+- **125. When a recovery cannot reproduce a landed call's request, fail
+  closed naming the call.** Re-rendering under a new selection and
+  finding nothing is not "nothing landed"; the honest outcome is a
+  failure that cites the call, never a second effect.
+
+- **120. A forged record stays in the journal: one history per forgery.**
+  Three plan forgeries submitted to one journal were all refused for the
+  FIRST one's reason and two of the three expectations passed by
+  coincidence. `forge` submits before it folds; a must-detect fixture
+  that reuses a harness across forgeries is testing the first forgery
+  three times.
+- **121. Presence, not zero value, decides a grammar.** A step object was
+  read as text-or-parallel from decoded zero values, so `{"step": "b",
+  "parallel": []}` was a text step and `{"step": "", "parallel": [...]}`
+  a parallel one. When the shape is chosen by WHICH key is present,
+  decode into pointers and require exactly one.
+- **122. Re-derive a gate at every record that can precede the gated
+  one.** The fold checked the gate on the `StepDone`; a parallel step
+  emits a `Fork` first, and a forged fork ran children through an
+  otherwise accepted history. When a stage can emit records before its
+  terminal one, the gate is re-derived at each of them.
+
+Owed on this branch: LoopsBench item 2 (regression obligations — re-run
+what a step verified, over the recorded `tool_effect` rows, at restart
+and closure); the r1 residue above plus "continue the producing
+selection" as the non-failing answer to pattern 125; F9, F20, the r30
+census (unchanged).
+
 ## Judgment — one typed seam, four providers, a shadow arm (2026-09-17, branch `jev`)
 
 A judgment is now a typed question with a typed answer, not a prompt
@@ -2566,20 +2732,20 @@ agreement, the disagreements and the latency; `judgment replay` runs a
 labelled corpus past any set of providers; an unreachable provider is a
 skipped line, never a failed run.
 
-- **116. A second opinion must be asked in its own name.** The first live
+- **126. A second opinion must be asked in its own name.** The first live
   shadowed run forwarded the primary's model into the wire body and the
   provider answered HTTP 400 for a model it does not serve. Recorded as a
   failed shadow with the run untouched — the arm working exactly as
   designed *and* a bug. The question, the state and the vocabulary
   travel; the model belongs to the provider.
-- **117. A judgment's own defaults registry.** The Python
+- **127. A judgment's own defaults registry.** The Python
   `docs/DEFAULTS.md` census demands a reader in `src/` for every dotted
   key in a table row, so a Go key placed there fails the Python suite.
   The Go engine gets `go/DEFAULTS.md` plus `internal/defaults`, censused
   in both directions, and the Python doc points at it in prose. Two
   engines, two registries, one rule: OFF when it spends, ON when it only
   adds evidence.
-- **118. Review r1 of the seam: the finding every seat found was the one
+- **128. Review r1 of the seam: the finding every seat found was the one
   the tests could not.** Four Codex seats converged on the same HIGH from
   independent probes: the AGENDA invocation closure sent every judge to
   the incumbent backend whatever `--judge-provider` said. The
@@ -2595,13 +2761,13 @@ skipped line, never a failed run.
   requires EOF, refuses duplicate keys and un-normalised distributions;
   the sidecar bounds its framing. Record:
   `docs/history/2026-09-17-judgment-providers-adversarial-review.md`.
-- **119. A true finding can still be out of scope.** "Old journals no
+- **129. A true finding can still be out of scope.** "Old journals no
   longer fold" was correct and was settled with binaries, not argument:
   the `successor` engine already refuses the live shadow-go journal at
   the intent prompt (84a7c12a changed it on 09-07 with no version
   dispatch). Journal↔template versioning is an engine gap, recorded as a
   lead, not a fix bolted onto this seam.
-- **120. Three rounds, each one deeper into the fix layer.** r2 found the
+- **130. Three rounds, each one deeper into the fix layer.** r2 found the
   r1 scrub applied to one representation (bytes after the parse, the
   reason after the clip); r3 found the r2 scrub blind to a `\u`-escaped
   key and the r2 fold blind to Unicode (`ſcore` is `score` to

@@ -269,6 +269,83 @@ def test_run_heartbeat_sheriff_unavailable():
     assert report.health_status == "critical"
 
 
+@pytest.mark.parametrize("level", ["warn", "expired", "ok"])
+def test_nonverbose_heartbeat_surfaces_the_expiry_verdict(monkeypatch, tmp_path, level):
+    """Review round 5 (2026-09-13): the sweep recorded the container-auth
+    expiry verdict but the non-verbose heartbeat rendered only recovery
+    counts, and the health narration rode goal-run closure — an idle box
+    never heard the warning. Now: a heartbeat check plus the health lane's
+    edge-triggered narration for that one probe. Control: ok is silent."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import container_exec as ce
+    import system_health as sh
+    monkeypatch.setattr(ce, "refresh_auth_liveness", lambda: {"refresh_expires_at": 1.0})
+    monkeypatch.setattr(ce, "auth_liveness_verdict",
+                        lambda rec: (level, f"session {level}: refresh token expires 2026-09-15"))
+    probed = []
+    monkeypatch.setattr(sh, "run_health_probes", lambda **kw: probed.append(kw) or {})
+    with patch("heartbeat.check_system_health", return_value=_make_mock_health()), \
+         patch("heartbeat.check_all_projects", return_value=[]), \
+         patch("heartbeat.write_heartbeat_state"), \
+         patch("heartbeat._log_heartbeat"), \
+         patch("heartbeat._is_interactive_session_active", return_value=True):
+        report = run_heartbeat(dry_run=False, verbose=False, escalate=False)
+    if level == "ok":
+        # Round 6: the OK observation is delivered too — it is the recovery
+        # half of the edge; skipping it left narrated="silent" forever.
+        assert "container_auth" not in report.checks
+        assert probed == [{"only": ("container_auth",)}]
+    else:
+        expect = "fail" if level == "expired" else "warn"
+        assert report.checks["container_auth"] == (
+            f"{expect}: session {level}: refresh token expires 2026-09-15")
+        assert probed == [{"only": ("container_auth",)}]
+        assert report.health_status == "healthy", "no per-tick Telegram alert for a warning"
+
+
+def test_heartbeat_only_narrates_warning_recovery_warning(monkeypatch, tmp_path):
+    """Review round 6: through the real health state machine — a heartbeat-
+    only box (no goal-run finalization) must narrate SILENT on the warning,
+    RECOVERED after the re-seed, and SILENT again on the next expiry.
+    Round 5 skipped the ok samples, so the second warning was swallowed as
+    already narrated."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import container_exec as ce
+    import system_health as sh
+    from captains_log import set_log_path, load_log, SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED
+    monkeypatch.setattr(sh, "_snapshot_path", lambda: tmp_path / "system_health.json")
+    set_log_path(tmp_path / "captains_log.jsonl")
+    try:
+        state = {"level": "warn"}
+        monkeypatch.setattr(ce, "refresh_auth_liveness", lambda: {"refresh_expires_at": 1.0})
+        monkeypatch.setattr(ce, "auth_liveness_verdict", lambda rec: (state["level"], "detail"))
+        streak = []
+        monkeypatch.setattr(sh, "DECLARED_PROCESSES", [
+            sh.ProcessDeclaration(name="streaky", description="d", expectation="e",
+                                  probe=lambda prior: streak.append(1) or (sh.OK, "fine", {})),
+            sh.ProcessDeclaration(
+                name="container_auth", description="container auth", expectation="e",
+                probe=lambda prior: ((sh.OK if state["level"] == "ok" else sh.SILENT), state["level"], {}))])
+        def _tick(level):
+            state["level"] = level
+            with patch("heartbeat.check_system_health", return_value=_make_mock_health()), \
+                 patch("heartbeat.check_all_projects", return_value=[]), \
+                 patch("heartbeat.write_heartbeat_state"), \
+                 patch("heartbeat._log_heartbeat"), \
+                 patch("heartbeat._is_interactive_session_active", return_value=True):
+                return run_heartbeat(dry_run=False, verbose=False, escalate=False)
+        _tick("warn"); _tick("ok"); _tick("warn")
+        kinds = [e.get("event_type") for e in load_log(limit=1000)
+                 if e.get("event_type") in (SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED)]
+        assert kinds == [SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED, SUBSYSTEM_SILENT], kinds
+        assert streak == [], "the streak probe never runs on the heartbeat cadence"
+        assert json.loads((tmp_path / "system_health.json").read_text()).get("cycle", 0) == 0
+    finally:
+        set_log_path(None)
+
+
 # ---------------------------------------------------------------------------
 # CLI integration
 # ---------------------------------------------------------------------------

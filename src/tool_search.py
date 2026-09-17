@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-from typing import List, Optional
+from typing import List, Optional, Any
 
 log = logging.getLogger("maro.tool_search")
 
@@ -171,24 +171,44 @@ def format_tool_search_result(schemas: List[dict]) -> str:
 # Injection helper: add tool_search to a tool list if deferred tools exist
 # ---------------------------------------------------------------------------
 
-def inject_tool_search_if_needed(schemas: List[dict]) -> List[dict]:
+def _tool_field(tool: Any, key: str, default: Any = None) -> Any:
+    """A field of a tool in EITHER shape — schema dict or llm.LLMTool."""
+    if isinstance(tool, dict):
+        return tool.get(key, default)
+    return getattr(tool, key, default)
+
+
+def inject_tool_search_if_needed(schemas: List[Any]) -> List[Any]:
     """Add the tool_search schema to schemas if any entries are deferred stubs.
 
     Deferred stubs have empty parameters (properties == {}). This function
     detects them and adds tool_search so the model can look up full schemas.
 
-    Call this before passing schemas to the LLM adapter.
+    Call this before passing schemas to the LLM adapter. Accepts schema
+    dicts OR llm.LLMTool objects and appends tool_search in the SAME shape
+    (review round 8, 2026-09-13: execute_step hands it LLMTool objects; the
+    dict-only reader raised AttributeError, swallowed by the caller, so
+    tool_search was never advertised on the first call and the repaired
+    re-call was unreachable through the intended contract).
     """
+    def _props(s):
+        _p = _tool_field(s, "parameters")
+        return _p.get("properties") if isinstance(_p, dict) else None
     has_deferred = any(
-        not s.get("parameters", {}).get("properties")
-        and "[deferred]" in s.get("description", "")
+        not _props(s)
+        and "[deferred]" in str(_tool_field(s, "description") or "")
         for s in schemas
     )
     if not has_deferred:
         return schemas
 
     # Don't double-add
-    if any(s["name"] == "tool_search" for s in schemas):
+    if any(_tool_field(s, "name") == "tool_search" for s in schemas):
         return schemas
 
+    if any(not isinstance(s, dict) for s in schemas):
+        from llm import LLMTool
+        return list(schemas) + [LLMTool(name=TOOL_SEARCH_SCHEMA["name"],
+                                        description=TOOL_SEARCH_SCHEMA["description"],
+                                        parameters=TOOL_SEARCH_SCHEMA["parameters"])]
     return schemas + [TOOL_SEARCH_SCHEMA]

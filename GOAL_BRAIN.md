@@ -1325,6 +1325,27 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   one-agent-per-milestone stays the rule (the scaling-study regime that
   actually penalizes is same-task fan-out).
 
+- **2026-09-16 (Review rounds: 2–3 is the norm — Jeremy: "30 rounds is
+  way way too much; 2-3 should be the norm, 6-7 should be rare. 31 is
+  just we're doing it wrong... I'm not running into this elsewhere, so
+  we are probably 'holding it wrong'"):** item 2 (landscape project
+  binding) ran 31 adversarial rounds and stopped under an orchestrator
+  stop rule (r30 → 6a09e8bd, r31 → e6999d78), after the container-auth
+  chunk ran 22; the r17 flip (codex writes, Claude reviews) changed the
+  fixer, not the generator. Diagnosis in
+  `docs/history/2026-09-16-review-loop-postmortem.md`: the stop decision
+  belonged to the adversary ("no HIGH" is unreachable against best-effort
+  writes), the whole-chunk scope grew every round, the prompt said
+  "attack the fixes first", classes were fixed one instance at a time,
+  and the orchestrator never triaged likelihood × consequence. Standing
+  rule from here: budget 2–3 rounds per CODE chunk (a fourth needs a
+  written reason, a fifth needs Jeremy); round 1 reviews the chunk diff
+  and every verified finding is triaged fix / pin / class / refute;
+  round 2 reads the fix diff only; residuals ship as known-gap pins.
+  The r31 design residue (checked pause API for every producer;
+  per-attempt provenance records) is a BACKLOG item, not a round 32.
+
+- **2026-09-16 (LoopsBench is directly relevant — Jeremy: "I think it's directly relevant to maro, and poe-codex agrees"; "Let's do 1 and 2 and lay the proper groundwork for 3 for later"):** the Dependency Planning Gap and the missing automated regression verification from Microsoft's LoopsBench (arXiv:2608.00267, analysed by run 0b0a8fb6) are Maro's gaps too — the planner computed a DAG and a ready-frontier that the sequential lane never consulted, and nothing re-ran what a step had already verified. Built the same day: `step_gate.py` (declared `[after:]` edges hard-gate the sequential lane; sequential-default edges soft unless `execution.gate_implicit_prerequisites`) and `regression_ledger.py` (passing test-runner commands harvested from DONE steps' transcripts, re-run at closure, a hard fail downgrades the verdict). Item 3 (PCD prerequisite field) is groundwork only: `scripts/prereq-census.py` measures 28.5% explicit edges on this box; `docs/PCD_PREREQUISITE_FIELD_DESIGN.md` stages planner-native first, PCD second, with falsifiers. Review under the new 2–3 round budget; "if we can manage to not rabbit hole on reviews I think we can move forwards much quicker."
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
@@ -1506,6 +1527,21 @@ Dormant (deliberately parked, not dropped):
   (`loop_parallel.py` passes the session adapter through; the one surviving
   re-tier site `loop_execute.py:_select_step_adapter` fail-safes by explicit
   contract on `dry_run`/non-LLMAdapter, not by accident).
+
+- **2026-09-17 (The active dev branch is `successor` — Jeremy):** after
+  LoopsBench chunks 1–9 (2026-09-16/17) landed on the Python mainline
+  (`main` e855c018): *"The current active dev branch should be the
+  succession branch. I think you're not targeting that and making changes
+  on the 'old' maro fork. We should correct that at the next opportunity
+  ... it's mostly salvageable."* Read: engine work targets the Go
+  successor (`go/`, this branch) and lands on `origin/successor`; the
+  Python engine on `main` is the live production arm, not the direction.
+  Applied the same morning: LoopsBench item 1 ported as a Go feature (the
+  plan's declared prerequisites gate execution; build log 2026-09-17);
+  chunks 2–9's substrate plumbing (checkpoint atomicity, resume claims /
+  consumption, NEXT.md mark debt) is answered by the journal design and
+  does not port. Item 2 (regression obligations) is next on this branch.
+  Recorded in the runtime decision journal (449a8fdb).
 
 ## Open questions (system-maintained)
 
@@ -4150,6 +4186,299 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   artifacts as data, not embed them as Go constants. Engine mechanism/
   policy (e.g. the injection-guard scanner itself) staying code is fine;
   its LEARNED inputs are not.
+
+- **2026-09-04 (Successor decrees D1–D9 — Jeremy; SF-13 catch-up for the
+  2026-08-28 pivot that only reached `planning/successor-plan.md`):** the
+  Go work is no longer a port. 08-28: *"look at what our python project
+  does, and implement that in go -- the reasoning, the pattern, the
+  modules... a spiritual successor in golang."* D1 contract-not-port (CPython
+  fidelity renounced); D2 same `~/.maro/workspace/` is the compatibility
+  boundary; D3 contracts may be upgraded on both sides, versioned and
+  written down (→ `docs/CONTRACTS.md`, Phase 1a), never silently; D4 `go-port`
+  frozen, mined only through design notes; D5 reference-allowed clean-room
+  (self-improvement + director hierarchy lean pure-clean-room to INTENT); D6
+  subagents allowed, box serialization is the real limit. Plan-first mode
+  held: *"The plan is the goal for the moment, then we commit to how to
+  implement the plan as phase 2."* Phase 1 (contracts registry 5r fixpoint +
+  behavior suite 6r fixpoint, mutation kill-proof) landed 90f9f601..c7e673ba.
+  09-04, the three phase-2 gates: **D7 v1 scope** = *"Backbone + memory
+  recording, along with the proper hooks for the self-improvement (that we
+  add later). Design should be modular and anti-fragile, with the
+  expectation that we are updating the processing over time (forwards
+  compatible for our internal systems, allowing for rewriting processes and
+  keeping contracts stable)."* **D8** Python lift while the successor builds
+  = contract-sharpening PLUS real defects the suite/reviews surface, no
+  Python behavior redesign. **D9** branch `successor`, Go code rebuilt fresh
+  in this repo's `go/`. Phase 2 commit UNBLOCKED; the full plan lives at
+  `planning/successor-plan.md` on `successor`.
+
+- **2026-09-04 (D10 — separate workspaces, the SPEC is shared — Jeremy;
+  AMENDS D2):** *"Let's keep the workspaces separate. From here on out
+  we're diverged in implementation... we have a target spec, we can
+  forwards-compat move that spec when we need to... input -> black box
+  process -> output should be consistent and the edges are where our
+  success/failures lie, with processing simply implementation... the
+  woven rope is the complexity, not the pattern. I suspect proper higher
+  level contract testing will serve us well."* Read: the Go successor gets
+  its own workspace root; no shared live store. Shared = `docs/CONTRACTS.md`
+  + the behavior suite (the spec), moved forwards-compatibly when needed.
+  Judge at the edges; processing is implementation. Phase 4 compares at
+  the artifact boundary across separate workspaces. Learned outputs still
+  travel between engines as pack DATA. Further contract-testing nuance
+  incoming from Jeremy's work side.
+
+- **2026-09-04 (Phase 2 re-sequenced: vision audit BEFORE the design note —
+  Jeremy):** on hearing the Phase 2 backbone framed around contract mechanics:
+  *"What you just said about contracts concerns me... that's still zoomed in
+  too closely. We have the vision, laid out in a number of iterations within
+  our repo, goal brain, and related documents. Maybe we need to start with
+  auditing or updating our memory... or doing a full audit of our history,
+  where we started and why we are here, essentially in a major refactor to
+  move forward with go for a working-but-incomplete python prototype."* Same
+  sitting: *"implementation, per usual, is yours. I'm here for the
+  conceptuals and guidance on vision"* and *"mostly we kept trying for
+  metaphors to help guide the implementation at a higher level; I think we
+  found some good ones, but those are easier talked about than
+  implemented."* Applied same day: the 07-17 holistic drift review
+  (MILESTONES -6) executed — `docs/history/2026-09-04-holistic-drift-review.md`
+  (verdict: right mountain, heavy pack; metaphor ledger; §8 = the nine
+  vision-level commitments the successor carries); auto-memory vision anchor
+  written; the Phase 2 design note now starts from §8, with CONTRACTS.md +
+  the behavior suite as the check, not the brief. Three decisions queued for
+  Jeremy in §9 (learn-to-get-cheaper as v1 bar; always-on inside the app; the
+  Manti envelope as a v1 gate) — none block the design note.
+
+- **2026-09-04 (D11–D13 — the drift review's three questions answered —
+  Jeremy):** **D11 learning bar:** *"learning changes behavior is before
+  'cheaper', though learning to be cheaper is probably a kind of learning,
+  one of many."* **D12 always-on shape:** *"not an OS wins; I'm cool with a
+  daemon or something, maybe... but no crons for timers and such; this is
+  designed as a process on a machine, even though we have given maro a
+  machine of it's own. (dockerized or other people's machines are not the
+  same context as what we have)."* **D13 envelope + the principle:** *"That
+  is one of many possible goals for testing... I'm fine with that being a
+  target, not fine with it being a hard constraint. Similar to our magic
+  numbers -- we measure overages, we don't chop and break due to them. LLMs
+  want math complete problems, not probabilities and fuzzy logic, and that's
+  where we need to live to be different/do different (and thus be better
+  than a 1-shot LLM call)."* Read: v1 self-improvement hooks are judged on
+  measured behavior change, cost one axis among many; the successor is one
+  process whose background lanes live and die with it, no cron/systemd
+  timers, process-on-a-machine is the design context; the Manti envelope is
+  a measured target, overages surfaced never enforced by breaking; and the
+  harness's reason to exist is living in probability and fuzzy judgement —
+  graded, recoverable verdicts by construction. Recorded D11–D13 in
+  `planning/successor-plan.md` (successor). READING_QUEUE row moved to Done.
+
+- **2026-09-04 (D14–D17 — answers to the drift review's pushback — Jeremy):**
+  **D14 (amends D7):** *"I'm fine if we want to implement these instead of do
+  hooks; your recommendation was to wait, that was my compromise... I'm fine
+  proceeding with the full system rather than leaving that hanging."* → v1 =
+  backbone + memory + FULL self-improvement with the loop closed and
+  measured. **D15 budget posture:** *"until we 'know what we're doing /
+  confident' all the things are on the table; tokens, models, 'spend' is
+  limited by what I'm throwing at this; currently it's $200/mo anthropic,
+  $100/mo openAI, and whatever's left of our fireworks.ai grok tokens. We
+  want to figure this out, then make it optimal... we're still fighting
+  that a bit with chopped input lengths and aborted runs due to 'cost'."* →
+  no cost-driven chopping or aborts in the successor during figure-it-out;
+  meter and report against targets. **D16 thought process vs thoughts:**
+  *"maro's goals are not math, and are never going to be 'correct'. it's
+  processes and patterns can be... we don't want to mix our processing
+  edges (which can be deterministic) with our _output_. Maro is the thought
+  process, the data that flows through it the thoughts; connected, related,
+  and inevitably intertwined, but discrete and meaningfully separate."* →
+  process artifacts are contract-tested hard; thought payloads are declared
+  UNCONSTRAINED on purpose; verdicts are process facts about thoughts (exact
+  in shape, graded in value). The prototype's caps fragility = process
+  constraints leaking onto thoughts. **D17 bitter lesson inside the
+  process:** *"the bitter lesson is within our process, not part of it...
+  where a 1-shot can get better and possibly even replace our learned
+  subsystems; that is itself a learning that should be allowed and
+  organically improved, rather than controlled up front... That's sort of
+  the star skill in action."* → no up-front ages-well/at-risk sort in the
+  engine; a standing champion–challenger against the 1-shot, redundancy
+  recorded as a learning, standing decays organically. D12 stands; worker
+  isolation revisited later. Work-side contract-testing practice distilled
+  (own words, no copies) into `planning/contract-testing-input.md` on
+  `successor`. Recorded D14–D17 in `planning/successor-plan.md`.
+
+- **2026-09-04 (Vision APPROVED for the successor — Jeremy):** on the drift
+  review + D7–D17: *"let's call that a vision approved, though note it's got
+  flaws and that's fine."* Also: *"Crazy how much information is actually in
+  this project, I had no idea the scope when we started. I'm not sorry, and
+  a little nervous where this is all going."* The approval covers
+  `docs/history/2026-09-04-holistic-drift-review.md` §8 (the nine
+  vision-level commitments) as amended by D14–D17. Flaws are acknowledged
+  and accepted, not to be litigated before building. Phase 2 = the v1
+  design note for the FULL system (D14), then build.
+
+- **2026-09-04 (design-doc review depth — Jeremy):** on the successor v1
+  design note's seventh codex round: *"Do we really need 7 review rounds on
+  our guidance doc...?"* No. Applied: review closed at r7 without running the
+  second lens; r1–r2 had reshaped the design (experimental unit, journal +
+  sequencer, durable join, mission outcome), r3–r7 were build-time layering
+  on two subsystems. Standing rule extended: the plan's "one adversarial pass
+  = DONE" applies to design notes as well as code; residue goes to the build
+  queue (note §19). The note gained a one-page vision read on top so the
+  approval surface is the commitments and cuts, not the type definitions.
+  Phase 2 build step 1 is next (`planning/successor-plan.md` Queue).
+
+- **2026-09-04 (Successor v1 design APPROVED, cuts accepted — Jeremy):** *"go,
+  cuts are fine."* Approves the one-page vision read atop
+  `planning/successor-design-v1.md` (v1.6, `successor`) and the four v1 cuts:
+  fork children query + working-copy writes only, outward mutations
+  parent-committed after selection; fixed-N experiments; subprocess +
+  scripted backends; CLI + intake seam. Phase 2 build step 1 begins.
+
+- **2026-09-05 (memory first, then run horizons — Jeremy):** on the
+  features-on-both-sides half of the successor comparison, Jeremy weighed
+  scoped memory against "ecosystem-like goals" — *"we will sometimes run
+  a goal 3-4 times and tweak our overall ask a bit to get the 'right'
+  information we want. I wonder if we need ancillary/related goals;
+  things we can identify that are similar enough to an existing goal
+  that we can leverage, but an additional angle or tangent on them ...
+  I'd love to ask goal-related questions and (maybe a stretch right now)
+  even have maro leverage past runs or learned contexts to give better
+  answers"* — and decided: *"we start there [memory], then get into
+  expanding our run horizons as a growth feature target after ... memory
+  is more supplemental and potentially smaller/adjacent/additive to the
+  existing system rather than a larger change."* Feature 1 = lineage-
+  scoped memory (`--after`, lineage-scoped mints, recall walks the
+  lineage; promotion out of scope) — SHIPPED both engines same day
+  (`tests/test_lineage_memory.py` here; ledger in the successor repo's
+  `planning/feature-lineage-memory.md`). Feature 2 = related goals / run
+  horizon, on both engines, same per-feature cost ledger.
+
+- **2026-09-05 (the relation decision belongs to Maro, not the operator — Jeremy):**
+  on feature 2 (related goals / run horizons): *"long run I'd think the
+  plan step would examine the landscape, decide to pull in
+  'adjacent/related' run context (or not) along with a fresh run, or
+  potentially choose a re-run if it's similar enough. I'm fine to start
+  with an explicit path, but that's pushing that decision that maro
+  should make to the orchestrator IMO; the orchestrator doesn't have the
+  data to make a better decision than maro."* Standing constraint: an
+  explicit operator surface (`--after`) is an override, never the
+  design; the default is that the run reads the landscape and decides
+  (fresh / related / rerun), records the decision, and the decision
+  supersedes string-identity shortcuts (the goal-slug Goal Ancestry
+  block). Design note: successor repo `planning/feature-related-runs.md`.
+- **2026-09-06 (Hermes is an operator first — Jeremy):** *"it's not really
+  operating as an operator IMO, it's more code assistant at this point…
+  but it's an operator first, dev helper second."* And on the mail ask
+  that spiraled (1e92e15c → 0bd44fef): *"all of this is me pushing (again)
+  for maro to figure out how to access it in the first place… if all
+  else fails, there's driving the UI like a user to get access, along
+  with asking questions in telegram."* Finding the same session: the
+  runs' "no credential anywhere on this box" / "Chrome is not installed"
+  are CONTAINER facts, not host facts (`executor.container: on` since
+  2026-07-16; secrets, config, `~/claude` unmounted by design) — the
+  yahoo credentials sit in `~/claude/credentials-backup/…/credentials.txt`
+  and Chrome is installed. Open: the Telegram answer loop was never
+  closed (a `clarification_needed` only comes back as a fresh dispatch);
+  Jeremy names the navigation class to learn: *"if there needs to be an
+  answer, legit it can wait and pause for a time, or it can make an
+  attempt to try something else that doesn't need input."* Next: re-ask
+  the original ask with his planner breakdown.
+- **2026-09-06 (no daily budget that stops work — Jeremy, via dispatch 5c994cd9):**
+  the goal he sent on 2026-09-05: *"There should be no daily budget that
+  stops work."* Context: the $25 repo-default `budget.daily_usd` refused
+  run 1e92e15c (the yahoo-mail capability ask) with `out-of-budget` at
+  $25.87 spent that UTC day; the run he dispatched to remove the cap
+  (5c994cd9) went stuck because the run sandbox mounts the config
+  read-only. The session made the write for him: `~/.maro/config.yml`
+  `budget.daily_usd: 0` (backup `config.yml.bak-2026-09-06-daily-budget`).
+  Per-run breakers, the warn line and the extension ladder are untouched
+  — this retires only the cross-run daily gate, in line with the
+  2026-07-29 caps=circuit-breakers decree and the 2026-08-02 "no big
+  stoppage" ladder. 1e92e15c re-run as a follow-up in its lineage the
+  same session.
+- **2026-09-06 (Go as the shadow-lane challenger, capped and switchable — Jeremy):**
+  on wiring the Go successor into Python's shadow lane: *"Let's wire that
+  with a cap/off switch as a bug if needed, and assume we're fine as far
+  as that goes for the shadow lane."* Wired as its own track
+  (`shadow.go.enabled`, `shadow.go.daily_cap`, own claim dir, own ledger
+  rows — `docs/SHADOW_LANE_DESIGN.md` "The Go track"); export/reseed of
+  the two workspaces judged not worth it (the landscape reads run
+  history, not lessons; imported lineage rows are quarantined) — a light
+  rerun of the comparison protocol ran instead as the post-feature
+  regression check and the shadow baseline (successor
+  `planning/successor-comparison.md`, "Rerun 2026-09-06"). The live flip
+  (`shadow.go.enabled: true` + `shadow.go.binary` in
+  `~/.maro/workspace/config.yml`) is a workspace-config write and stays
+  Jeremy's.
+
+- **2026-09-06 (secrets management is the fix for container blindness — Jeremy; decision 5870f189):**
+  *"I do like that we're running 'secure' dockerized... we probably need a
+  way to manage secrets in a meaningful way; I prefer ENV injection in a
+  container... a more maro-specific management path for all of the
+  different ways it's run, rather than relying on you knowing the secrets
+  or having hermes injecting those directly. So that's ultimately the fix
+  on this one... rather than flipping that functionality on or off...
+  both in python and go... leverage some OSS or free secret management
+  utility."* And later: *"secrets should be both user-injected and
+  maro-derived and we might need meta-data on both."* Shipped the same
+  day in both engines (docs/SECRETS_DESIGN.md): sops + age store at
+  `~/.maro/secrets/` (names cleartext, values encrypted, one file / many
+  box recipients), lookup chain store > legacy plaintext, operator
+  `inject` policy → ENV into the container, the host lane and Go steps,
+  a presence index in every execute frame, cleartext per-name metadata
+  (origin operator|maro, run, service), and the `$MARO_SECRETS_DROP`
+  hand-back for credentials a run obtains. Container stays ON. Hermes
+  dispatch never carries a secret. The M6 Mac mini Jeremy ordered (32 GB,
+  arrives in a few weeks, shared between him and Maro) becomes a third
+  recipient when it lands.
+- **2026-09-06 (Maro answers its own questions; Telegram is the rare exception — Jeremy; decision 1d1ad8b0):**
+  *"I want to push things in the direction of 'maro answers its own
+  questions as much as possible'... having that capability sort of
+  prompts the simpler path of prompt-for-work, which is very easy to slip
+  into prompt-for-decision/judgement/permission from an LLM. So yeah, we
+  need to build that out, and it should be the rare exception, not the
+  norm."* Consequence for the question loop (BACKLOG mailbox arc #3): a
+  pending question pauses the run with a time box and a named no-input
+  alternative the run tries first; an answer resumes the run by handle;
+  asking is a counted, reviewable event, never a default path. Same
+  message, the meta point for this collaboration: *"sometimes that's
+  fantastic, on occasion we'd have been better off talking through things
+  a bit first... ideally we find a good path through the proper cognitive
+  load on both of our sides."* **SHIPPED both engines the same day:**
+  `docs/OPERATOR_ASK_DESIGN.md` — `$MARO_ASK` file contract in the execute
+  frame (rare-exception wording), typed pause with a 24 h time box, `maro
+  answer <handle>` resumes by handle through the continuation lane, Hermes
+  gate `answer` verb, `maro asks` ledger; Go `question`/`answer` records +
+  `maro-go answer|asks`. First live firing owed: the mail re-ask.
+- **2026-09-07 (Maro installs what it needs — root at image build only; escalate to the ORCHESTRATOR, not the user — Jeremy; decision ea9e311f):**
+  After 084d3c1f's third question offered "approval to install Chromium"
+  that the run could not execute (slim image, host uid, no sudo, `--rm`
+  per step): *"the app password is a distraction; the user shouldn't be
+  bootstrapping maro, it should be doing it itself… I'm more interested
+  in solving the pattern here — maro can't 'safely' install software it
+  needs to get its job done; we need to help facilitate that."* Rule
+  agreed: no runtime root ever; root only at `docker build` from an
+  artifact; policy-gated. Then the correction on who decides: *"we should
+  escalate to the orchestrator, not the ask lane unless the orchestrator
+  says so… orchestrator guides in place of the user, user gets involved if
+  they must. So I'd be ok with a notification of the ask and an escalation
+  to the orchestrator (you, poe, or user if CLI which seems unlikely in
+  the future honestly)."* **SHIPPED (Python) the same day:**
+  `docs/ENV_REQUEST_DESIGN.md` — `$MARO_ENV_REQUEST` file contract in the
+  container frame, policy (allowed / escalate / rejected) + per-project
+  grants, per-project executor image layers from a generated Dockerfile
+  under `<workspace>/executor-layers/`, same-step re-run on the new
+  image, `escalation` event with `audience: orchestrator` + Hermes brain
+  prompt that decides (`answer <handle> allow|deny`), grant + build applied
+  on `allow` before the resume. Owed: Go parity, tool presence in the
+  frame, the live in-step ask (2FA codes die with the step), first live
+  firing on the mail goal. Same night: the General Problem note (decision
+  6b3ed05d) — today's mail run ≈ a one-shot prompt; the "learn a language
+  to draw a kanji" class is the target.
+- **2026-09-07 (An ask is a claim — verify a question before the operator sees it; time-boxed inputs are asked LIVE — Jeremy; decision c6a3bb47):** 084d3c1f's fourth question sent Jeremy to a 404 for a 2FA code that had never been sent (the worker stopped on Yahoo's method-chooser page and closed the browser); after his "I never received a code" the resumed run asked the identical question again. Jeremy: *"seems wrong. I feel like the 'verification step' to the output of a step prompt right now…"* — he answered from the user's side and left the internals to Maro. Shipped: `operator_ask.ground` (links must resolve; a code request must say in `sent` how delivery was triggered and must be live) bounces a failing ask to the worker once, then passes it marked `unverified`; the live ask (`watch_live` in the step poll loop, `$MARO_ASK_ANSWER`, `ask.live_wait_s`=600, `delivered` instead of a resume) keeps the browser alive across the question. `docs/OPERATOR_ASK_DESIGN.md` §7–§8.
+- **2026-09-07 (The browser-driven Yahoo app-password mint is "custom, fragile, and definitely not long term" — Jeremy):** after the mail arc closed live (80a5a0dc, 09:04Z) the follow-up to mint an app password through Yahoo's account-security UI failed three times on UI shape (six-box OTP form, decorative `<svg>` overlay intercepting clicks, thrash) and burned five SMS codes; Maro's own navigator parked the fourth dispatch as a waste of another code. Jeremy's read stands as the design verdict: a UI-driving bootstrap against an A/B-tested login is brittle by nature and is not the product. What is durable and proven: the live in-step ask, the secrets drop, the env-request lane, and the IMAP path once an app password exists. Standing recommendation recorded: the one-time app password is a user bootstrap (`maro secrets set YAHOO_APP_PASSWORD --stdin`), after which mail is browser-free; the mint script stays staged, unfired.
+- **2026-09-12 (Mail arc CLOSED — IMAP from the store; and the container lane's degrade-to-host is now the wrong default — system record, decision owed to Jeremy):** Jeremy generated the Yahoo app password by hand ("not too bad"), `maro secrets set YAHOO_APP_PASSWORD`, and run 154ec06a listed the inbox (32 messages, five newest) over IMAP from the injected secret — browser-free, 2FA-free, the standing path (`docs/mail_yahoo.md` in the yahoo project). Two side findings, both BACKLOG'd: the `maro-claude-auth` volume expired again (~monthly; first run paused `llm-unreachable`, honest), and the auth breaker then degraded the second run's executor steps to the HOST, where the worker ignored the `$MARO_SECRETS_FILE` hand-off and decrypted the whole store with the age identity to use two names. Frame hardened; docs updated (SECRETS §9/§10, CONTAINER auth-breaker recurrence, CAPABILITIES row verified, OPERATOR_ASK §8 learned, READING_QUEUE row). Owed to Jeremy: re-seed the volume (interactive `/login`, `stty cols 400`) and decide `executor.container: require` (recommended: an expired session should pause the run, not run the worker as `clawd` beside the key). Project binding is still string identity (two more data points).
+- **2026-09-13 (`executor.container: require` on the runtime box — Jeremy: "let's add the require lane then test it with a re-auth"):** the 09-12 finding (auth-volume expiry → `on`'s degrade-to-host → worker decrypted the whole secrets store beside the age key) closed the way it should: `require` set in the live config with the breaker still tripped and the refusal proven (`ContainerUnavailable` → environmental pause, no host lane possible), Jeremy re-seeded `maro-claude-auth` by interactive `/login` (07:17Z), the breaker cleared itself on the next resolve, and run 520e1b8c repeated the IMAP inbox check with every executor call in a `maro-exec-` container (uid 1001, `YAHOO_*` via container env, no hand-off file, 32 messages / five newest, $2.70). The worker inside went looking for the store and sops/age and found neither — the container is the wall, the frame wording is only the fence. Still owed (BACKLOG): auth liveness probe (expiry is monthly; a run is still the first casualty), typed `container-auth-expired` pause, and the yahoo project's `docs/mail_yahoo.md` "sops fallback" recipe that the 09-12 host-lane worker left behind.
+- **2026-09-13 (Container-auth residuals closed the same day — system record):** the `require` refusal for a dead session is now its own type (`ContainerAuthExpired`, marker `container_auth`) → typed pause `container-auth-expired` on the first refusal (before: classified by text, run churned blocked-step retries), and the heartbeat records the auth volume's `refreshTokenExpiresAt` (timestamps only, 6 h cadence) so the `container_auth` health probe warns ≤ 3 days before the monthly expiry instead of a run being the first casualty (live: valid until 2026-10-12). Backend-auth (dead API key) stays deliberately unmapped — the container session is the one auth shape a human heals in place.
+- **2026-09-13 (Review loops: flip the roles after 4–5 rounds — Jeremy: "after 4-5 rounds let's flip the script -- outsource the code change to codex and we can review it, rather than the opposite with the adversarial review"; "17 rounds is pretty rough"):** the landscape-binding chunk's adversarial loop ran 17 rounds (1–7 on the binding, 8–17 on the run's finish line — the same acknowledgment rule found at one more sender each round). Standing rule: after 4–5 rounds with HIGHs still landing, codex writes the fix (writable `codex exec` in its own worktree, the verified findings as the task) and Claude reviews the diff, runs the suites, and lands — the fixer's blind spot is what repeats, so swap the fixer. Applied from round 17 of this chunk on; the loop itself continues to its fixpoint. Also: the leaked test run dir `c1234567-patient-yarrow` deleted by Jeremy's call.
+
 - **2026-09-17 (Jev / judgment providers — Jeremy, overnight decrees):**
   (1) *Three providers, always* — whatever judged decision a seam takes
   over (step judge, closure judge, intake clarity, routing…), the

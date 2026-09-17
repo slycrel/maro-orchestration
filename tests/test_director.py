@@ -3906,3 +3906,326 @@ def test_projectless_director_log_is_output_rooted(monkeypatch, tmp_path):
     assert expected.exists()
     from orch_items import resolve_artifact_path
     assert resolve_artifact_path(path_str) == expected
+
+
+class TestEnvironmentalRefusalStopsDispatch:
+    """Review round 2 (2026-09-13): a worker ticket refused by the
+    environment (typed container_auth) used to be reviewed, revised and
+    followed by the next ticket — each call re-refused. The director now
+    stops on the first such result and carries the typed pause."""
+
+    def test_refused_ticket_ends_dispatch_without_review(self, monkeypatch, tmp_path):
+        from workers import WorkerResult
+        import director as _director_mod
+        _setup(monkeypatch, tmp_path)
+        calls = []
+        def _refusing(worker_type, task, *, context="", **kw):
+            calls.append(task)
+            return WorkerResult(worker_type=worker_type, ticket=task, status="blocked", result="",
+                                stuck_reason="LLM call failed (container_auth): re-seed the volume",
+                                blocked_origin="adapter", error_class="container_auth")
+        monkeypatch.setattr(_director_mod, "dispatch_worker", _refusing)
+        def _no_review(**kw):
+            raise AssertionError("a refused ticket must not be reviewed")
+        monkeypatch.setattr(_director_mod, "_review_worker_output", _no_review)
+        result = run_director("research and build a report", dry_run=True)
+        assert len(result.tickets) >= 1 and len(calls) == 1
+        assert result.status == "stuck" and result.pause_reason == "container-auth-expired"
+        assert len(result.worker_results) == 1 and result.worker_results[0].error_class == "container_auth"
+        # Round 3: the pause reaches every output surface — the report
+        # (Telegram's whole reply), summary(), and the durable log.
+        assert result.report.startswith("⏸ Directive paused (container-auth-expired)")
+        assert "re-seed the volume" in result.report
+        assert f"{len(result.tickets) - 1} of {len(result.tickets)} ticket(s) not dispatched" in result.report
+        assert "pause_reason=container-auth-expired" in result.summary()
+        import json as _json
+        assert result.log_path, "director log must be written"
+        logs = list(tmp_path.rglob(f"director-{result.director_id}-log.json"))
+        assert len(logs) == 1, logs
+        payload = _json.loads(logs[0].read_text(encoding="utf-8"))
+        assert payload["pause_reason"] == "container-auth-expired"
+        assert payload["worker_results"][0]["error_class"] == "container_auth"
+        assert "re-seed" in payload["worker_results"][0]["stuck_reason"]
+
+    def test_a_refused_revision_also_pauses(self, monkeypatch, tmp_path):
+        from workers import WorkerResult
+        import director as _director_mod
+        from director import ReviewDecision
+        _setup(monkeypatch, tmp_path)
+        calls = []
+        def _dispatch(worker_type, task, *, context="", **kw):
+            calls.append(task)
+            if len(calls) == 1:
+                return WorkerResult(worker_type=worker_type, ticket=task, status="done", result="draft")
+            return WorkerResult(worker_type=worker_type, ticket=task, status="blocked", result="",
+                                stuck_reason="LLM call failed (container_auth): re-seed the volume",
+                                blocked_origin="adapter", error_class="container_auth")
+        monkeypatch.setattr(_director_mod, "dispatch_worker", _dispatch)
+        reviews = []
+        def _review(**kw):
+            reviews.append(1)
+            return ReviewDecision(accepted=False, reason="thin", revision_request="more"), (0, 0)
+        monkeypatch.setattr(_director_mod, "_review_worker_output", _review)
+        # non-dry-run path (the revision branch is gated on it); planning is
+        # stubbed so no adapter call happens outside the dispatch spy
+        from director import Ticket
+        monkeypatch.setattr(_director_mod, "_produce_spec",
+                            lambda directive, adapter, dry_run, _log: (
+                                "spec", [Ticket(ticket_id="t1", worker_type="research", task="find it")], (0, 0)))
+        monkeypatch.setattr(_director_mod, "_challenge_spec", lambda *a, **k: ("spec", (0, 0)), raising=False)
+        result = run_director("research and build a report", dry_run=False, adapter=object())
+        assert len(calls) == 2 and len(reviews) == 1, (calls, reviews)
+        assert result.pause_reason == "container-auth-expired" and result.report.startswith("⏸")
+        # Round 5: the refused revision overwrote the ticket's result and
+        # erased the paid-for draft from the paused directive's report.
+        assert len(result.worker_results) == 1
+        assert result.worker_results[0].status == "blocked"
+        assert result.worker_results[0].unaccepted_draft == "draft"
+        assert "(draft — its revision was refused" in result.report and "\ndraft" in result.report
+        import json as _json
+        logs = list(tmp_path.rglob(f"director-{result.director_id}-log.json"))
+        assert len(logs) == 1, logs
+        assert _json.loads(logs[0].read_text(encoding="utf-8"))["worker_results"][0][
+            "unaccepted_draft_length"] == 5
+
+    @pytest.mark.parametrize("branch", ["ticket", "revision"])
+    def test_pause_report_survives_a_closed_stderr(self, monkeypatch, tmp_path, branch):
+        # Round 5: verbose progress output ran right after the refusal; a
+        # closed stderr raised BrokenPipeError out of run_director before
+        # the typed result, its report or the durable log existed.
+        import io, sys
+        from workers import WorkerResult
+        import director as _director_mod
+        from director import ReviewDecision, Ticket
+        _setup(monkeypatch, tmp_path)
+        class _Broken(io.TextIOBase):
+            def write(self, s):
+                raise BrokenPipeError("stderr closed")
+            def flush(self):
+                raise BrokenPipeError("stderr closed")
+            def close(self):
+                pass  # no flush at GC — the failure under test is the write
+        calls = []
+        def _dispatch(worker_type, task, *, context="", **kw):
+            calls.append(task)
+            if branch == "revision" and len(calls) == 1:
+                return WorkerResult(worker_type=worker_type, ticket=task, status="done", result="draft")
+            monkeypatch.setattr(sys, "stderr", _Broken())
+            return WorkerResult(worker_type=worker_type, ticket=task, status="blocked", result="",
+                                stuck_reason="LLM call failed (container_auth): re-seed the volume",
+                                blocked_origin="adapter", error_class="container_auth")
+        monkeypatch.setattr(_director_mod, "dispatch_worker", _dispatch)
+        monkeypatch.setattr(_director_mod, "_review_worker_output", lambda **kw: (
+            ReviewDecision(accepted=False, reason="thin", revision_request="more"), (0, 0)))
+        monkeypatch.setattr(_director_mod, "_produce_spec",
+                            lambda directive, adapter, dry_run, _log: (
+                                "spec", [Ticket(ticket_id="t1", worker_type="research", task="find it"),
+                                         Ticket(ticket_id="t2", worker_type="research", task="more")], (0, 0)))
+        monkeypatch.setattr(_director_mod, "_challenge_spec", lambda *a, **k: ("spec", (0, 0)), raising=False)
+        result = run_director("research and build a report", dry_run=False, adapter=object(), verbose=True)
+        assert len(calls) == (2 if branch == "revision" else 1)
+        assert result.pause_reason == "container-auth-expired"
+        assert result.report.startswith("⏸ Directive paused (container-auth-expired)")
+        assert result.log_path, "the durable log must still be written"
+        assert len(list(tmp_path.rglob(f"director-{result.director_id}-log.json"))) == 1
+
+    def test_skip_director_carries_the_loop_pause(self, monkeypatch, tmp_path):
+        import director as _director_mod
+        from loop_types import LoopResult
+        _setup(monkeypatch, tmp_path)
+        import agent_loop
+        monkeypatch.setattr(_director_mod, "_is_simple_directive", lambda d: True)
+        monkeypatch.setattr(agent_loop, "run_agent_loop", lambda *a, **k: LoopResult(
+            loop_id="l", project="", goal="g", status="interrupted", steps=[], total_tokens_in=0,
+            total_tokens_out=0, elapsed_ms=1, stuck_reason="env", pause_reason="container-auth-expired"))
+        result = run_director("read the inbox", dry_run=True, skip_if_simple=True)
+        assert result.status == "interrupted" and result.pause_reason == "container-auth-expired"
+        # Round 4: this branch is Telegram's whole reply — it must say so.
+        assert result.report.startswith("⏸ Directive paused (container-auth-expired)")
+        assert "env" in result.report and "did not finish" in result.report
+
+    def test_a_lost_director_log_is_warned_not_silent(self, monkeypatch, tmp_path, caplog):
+        from workers import WorkerResult
+        import director as _director_mod
+        import file_lock
+        _setup(monkeypatch, tmp_path)
+        monkeypatch.setattr(_director_mod, "dispatch_worker",
+                            lambda worker_type, task, *, context="", **kw: WorkerResult(
+                                worker_type=worker_type, ticket=task, status="blocked", result="",
+                                stuck_reason="LLM call failed (container_auth): re-seed",
+                                blocked_origin="adapter", error_class="container_auth"))
+        monkeypatch.setattr(file_lock, "atomic_write",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+        with caplog.at_level("WARNING"):
+            result = run_director("research and build a report", dry_run=True)
+        assert result.log_path is None and result.pause_reason == "container-auth-expired"
+        assert any("director log NOT written" in r.message and "disk full" in r.message
+                   for r in caplog.records)
+
+    def test_a_plain_block_still_runs_the_full_directive(self, monkeypatch, tmp_path):
+        from workers import WorkerResult
+        import director as _director_mod
+        _setup(monkeypatch, tmp_path)
+        calls = []
+        def _blocked(worker_type, task, *, context="", **kw):
+            calls.append(task)
+            return WorkerResult(worker_type=worker_type, ticket=task, status="blocked", result="",
+                                stuck_reason="need more detail", blocked_origin="worker")
+        monkeypatch.setattr(_director_mod, "dispatch_worker", _blocked)
+        result = run_director("research and build a report", dry_run=True)
+        assert len(calls) >= len(result.tickets) and result.pause_reason == ""
+
+
+def test_a_refused_revision_with_partial_output_keeps_both(monkeypatch, tmp_path):
+    # Round 10: draft retention was gated on an EMPTY revision result, so a
+    # refusal carrying partial evidence discarded the paid-for draft; and
+    # the pause report showed neither.
+    from workers import WorkerResult
+    import director as _director_mod
+    from director import ReviewDecision, Ticket, run_director
+    _setup(monkeypatch, tmp_path)
+    calls = []
+    def _dispatch(worker_type, task, *, context="", **kw):
+        calls.append(task)
+        if len(calls) == 1:
+            return WorkerResult(worker_type=worker_type, ticket=task, status="done", result="draft")
+        return WorkerResult(worker_type=worker_type, ticket=task, status="blocked",
+                            result="[partial output before kill]\nREVISION PARTIAL",
+                            stuck_reason="LLM call failed (container_auth): re-seed the volume",
+                            blocked_origin="adapter", error_class="container_auth")
+    monkeypatch.setattr(_director_mod, "dispatch_worker", _dispatch)
+    monkeypatch.setattr(_director_mod, "_review_worker_output",
+                        lambda **kw: (ReviewDecision(accepted=False, reason="thin", revision_request="more"), (0, 0)))
+    monkeypatch.setattr(_director_mod, "_produce_spec",
+                        lambda directive, adapter, dry_run, _log: (
+                            "spec", [Ticket(ticket_id="t1", worker_type="research", task="find it")], (0, 0)))
+    monkeypatch.setattr(_director_mod, "_challenge_spec", lambda *a, **k: ("spec", (0, 0)), raising=False)
+    result = run_director("research and build a report", dry_run=False, adapter=object())
+    assert result.pause_reason == "container-auth-expired" and len(calls) == 2
+    assert result.worker_results[0].unaccepted_draft == "draft"
+    assert "(draft — its revision was refused" in result.report and "\ndraft" in result.report
+    assert "(partial — refused by the environment" in result.report and "REVISION PARTIAL" in result.report
+
+
+def test_director_log_and_totals_carry_worker_cost_and_cache(monkeypatch, tmp_path):
+    # Review round 19: worker rows in the director log and the director's
+    # totals carried tokens only — a ticket's cost and cache reads (the
+    # paid attempts behind a refusal) vanished between the worker and the
+    # run record.
+    _setup(monkeypatch, tmp_path)
+    worker_results = [
+        WorkerResult(worker_type="general", ticket="t1", status="blocked", result="partial",
+                     tokens_in=137, tokens_out=9, cost_usd=0.12, cache_read_tokens=100,
+                     error_class="container_auth", blocked_origin="adapter"),
+        WorkerResult(worker_type="general", ticket="t2", status="done", result="ok",
+                     tokens_in=1, tokens_out=2, cost_usd=0.05, cache_read_tokens=3),
+    ]
+    tickets = [Ticket(ticket_id="t1", worker_type="general", task="do the thing")]
+    path_str = _write_director_log(
+        project=None, director_id="test19", directive="do the thing", spec="[spec]",
+        tickets=tickets, worker_results=worker_results, status="done", elapsed_ms=10,
+        worker_slice=False,
+    )
+    from orch_items import resolve_artifact_path
+    payload = json.loads(resolve_artifact_path(path_str).read_text(encoding="utf-8"))
+    rows = payload["worker_results"]
+    assert (rows[0]["cost_usd"], rows[0]["cache_read_tokens"]) == (pytest.approx(0.12), 100)
+    assert (rows[1]["cost_usd"], rows[1]["cache_read_tokens"]) == (pytest.approx(0.05), 3)
+    # the DirectorResult carries the sums (both worker-result sites feed them)
+    from director import DirectorResult
+    _base = dict(director_id="d", directive="x", plan_acceptance="explicit", status="done", spec="",
+                 tickets=tickets, worker_results=worker_results, review_decisions=[], report="")
+    dr = DirectorResult(cost_usd=0.17, cache_read_tokens=103, **_base)
+    assert (dr.cost_usd, dr.cache_read_tokens) == (0.17, 103)
+    assert (DirectorResult(**_base).cost_usd, DirectorResult(**_base).cache_read_tokens) == (0.0, 0)
+
+
+def test_a_refused_revision_keeps_the_drafts_bill_in_the_durable_log(monkeypatch, tmp_path):
+    # Review round 20: run_director summed every attempt in memory, but a
+    # revision REPLACED the draft's row and the log held only final rows —
+    # a paid draft followed by a refused revision persisted as zero worker
+    # spend. The log now carries the directive's worker totals and the
+    # superseded attempts; the CLI JSON carries the totals too.
+    from workers import WorkerResult
+    import director as _director_mod
+    from director import ReviewDecision, Ticket
+    _setup(monkeypatch, tmp_path)
+    calls = []
+
+    def _dispatch(worker_type, task, *, context="", **kw):
+        calls.append(task)
+        if len(calls) == 1:
+            return WorkerResult(worker_type=worker_type, ticket=task, status="done", result="draft",
+                                tokens_in=137, tokens_out=9, cost_usd=0.12, cache_read_tokens=100)
+        return WorkerResult(worker_type=worker_type, ticket=task, status="blocked", result="",
+                            stuck_reason="LLM call failed (container_auth): re-seed the volume",
+                            blocked_origin="adapter", error_class="container_auth")
+    monkeypatch.setattr(_director_mod, "dispatch_worker", _dispatch)
+    monkeypatch.setattr(_director_mod, "_review_worker_output",
+                        lambda **kw: (ReviewDecision(accepted=False, reason="thin", revision_request="more"), (3, 1)))
+    monkeypatch.setattr(_director_mod, "_produce_spec",
+                        lambda directive, adapter, dry_run, _log: (
+                            "spec", [Ticket(ticket_id="t1", worker_type="research", task="find it")], (0, 0)))
+    monkeypatch.setattr(_director_mod, "_challenge_spec", lambda *a, **k: ("spec", (0, 0)), raising=False)
+    result = run_director("research and build a report", dry_run=False, adapter=object())
+    assert len(calls) == 2 and result.pause_reason == "container-auth-expired"
+    assert result.cost_usd == pytest.approx(0.12) and result.cache_read_tokens == 100
+    assert result.tokens_in == 137 + 3 and result.tokens_out == 9 + 1
+    logs = list(tmp_path.rglob(f"director-{result.director_id}-log.json"))
+    assert len(logs) == 1, logs
+    payload = json.loads(logs[0].read_text(encoding="utf-8"))
+    assert payload["worker_results"][0]["cost_usd"] == 0.0, "the final row is the refusal's own zero"
+    assert payload["worker_totals"] == {"tokens_in": 140, "tokens_out": 10,
+                                        "cost_usd": pytest.approx(0.12), "cache_read_tokens": 100}
+    assert len(payload["superseded_attempts"]) == 1
+    sup = payload["superseded_attempts"][0]
+    assert (sup["status"], sup["tokens_in"], sup["cache_read_tokens"]) == ("done", 137, 100)
+    assert sup["cost_usd"] == pytest.approx(0.12)
+    # the CLI's JSON rendering carries the bill
+    import cli as _cli
+    import io, contextlib
+    monkeypatch.setattr(_director_mod, "run_director", lambda *a, **k: result)
+    buf = io.StringIO()
+    ns = type("NS", (), {"format": "json", "directive": ["x"], "dry_run": False, "project": None,
+                         "verbose": False})()
+    with contextlib.redirect_stdout(buf):
+        _cli._cmd_director(ns)
+    out = json.loads(buf.getvalue())
+    assert out["cost_usd"] == pytest.approx(0.12) and out["cache_read_tokens"] == 100
+
+
+def test_skip_director_carries_the_direct_loops_bill_and_both_json_renderers_agree(monkeypatch, tmp_path):
+    # Review round 21: the skip-director branch copied tokens and the pause
+    # but left the new cost/cache fields at zero, and director.main's JSON
+    # omitted them (cli._cmd_director carried them since round 20).
+    import director as _director_mod
+    from loop_types import LoopResult, StepOutcome
+    _setup(monkeypatch, tmp_path)
+    import agent_loop
+    monkeypatch.setattr(_director_mod, "_is_simple_directive", lambda d: True)
+    step = StepOutcome(index=0, text="read the inbox", status="blocked", result="partial", iteration=0,
+                       tokens_in=137, tokens_out=9, cache_read_tokens=100, provider_cost_usd=0.12)
+    monkeypatch.setattr(agent_loop, "run_agent_loop", lambda *a, **k: LoopResult(
+        loop_id="l", project="", goal="g", status="interrupted", steps=[step], total_tokens_in=137,
+        total_tokens_out=9, elapsed_ms=1, stuck_reason="env", pause_reason="container-auth-expired"))
+    result = run_director("read the inbox", dry_run=True, skip_if_simple=True)
+    assert result.pause_reason == "container-auth-expired" and result.tokens_in == 137
+    assert result.cost_usd == pytest.approx(0.12) and result.cache_read_tokens == 100
+    # both JSON renderers carry the bill
+    import io, contextlib
+    import cli as _cli
+    monkeypatch.setattr(_director_mod, "run_director", lambda *a, **k: result)
+    outs = []
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _director_mod.main(["read", "the", "inbox", "--format", "json"])
+    outs.append(json.loads(buf.getvalue()))
+    buf = io.StringIO()
+    ns = type("NS", (), {"format": "json", "directive": ["x"], "dry_run": False, "project": None,
+                         "verbose": False})()
+    with contextlib.redirect_stdout(buf):
+        _cli._cmd_director(ns)
+    outs.append(json.loads(buf.getvalue()))
+    for out in outs:
+        assert out["cost_usd"] == pytest.approx(0.12) and out["cache_read_tokens"] == 100
+        assert out["pause_reason"] == "container-auth-expired"

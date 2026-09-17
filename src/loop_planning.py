@@ -10,11 +10,17 @@ the pre-flight/prepare-execution phases that run before step execution begins.
 from __future__ import annotations
 
 import logging
+import threading
+from dataclasses import dataclass
 import re as _re
 import sys
 from typing import Any, Dict, List, Optional
 
 from loop_types import (
+    MARK_APPLIED,
+    MARK_ATTEMPT,
+    MARK_DRIFTED,
+    MARK_PENDING,
     _orch,
     _project_dir_root,
     LoopContext,
@@ -75,14 +81,98 @@ def _steps_are_independent(steps: List[str]) -> bool:
     return not any(_DEP_RE.search(s) for s in steps)
 
 
+def _mirror_plan_items(
+    ctx: LoopContext,
+    steps: List[str],
+    *,
+    deps: Optional[Dict[int, Any]] = None,
+    resume: Optional["RestoredCheckpoint"] = None,
+) -> List[int]:
+    """Mirror the plan to NEXT.md (or keep a resume's carried items) and
+    bind the ORIGINAL plan numbers to items (`ctx.plan_items`).
+
+    ONE boundary for every lane (round-1 review, 2026-09-16: the parallel
+    lanes returned before Phase E, so a resumed DAG never marked its
+    original items and reported positions as indices). Called before
+    Phase D for the fan-out / DAG lanes on the unshaped plan, and by
+    `_prepare_execution` after shaping for the sequential lane.
+
+    Durable plan-node ids: a resumed suffix keeps the NEXT.md items the
+    original run bound — `_load_resume` already decided whether the
+    carried identity is trustworthy (same project, items still name these
+    texts); here only the count after shaping can still disqualify it.
+    A fresh run binds `step_indices` itself when the shaped plan is the
+    parsed plan (`step_gate.plan_identity_intact`). None = never bound —
+    every declared edge then degrades to soft.
+    """
+    o = _orch()
+    step_indices: Optional[List[int]] = None
+    carried = False
+    if resume is not None and resume.items:
+        if resume.project and resume.project != (ctx.project or ""):
+            # `_load_resume` refuses this shape; a directly constructed
+            # RestoredCheckpoint is not trusted at the mutation boundary
+            # either (r2 Skeptic finding 5) — foreign items are never marked.
+            log.warning("checkpoint resume: carried items belong to project %r, this run is %r "
+                        "— fresh items appended and plan identity not carried",
+                        resume.project, ctx.project)
+        elif len(resume.items) != len(steps):
+            log.warning("checkpoint resume: %d carried item(s) for %d step(s) after shaping "
+                        "— fresh items appended and plan identity not carried",
+                        len(resume.items), len(steps))
+        else:
+            step_indices = list(resume.items)
+            carried = True
+            o.append_decision(ctx.project, [
+                f"[loop:{ctx.loop_id}] Resumed {resume.loop_id}: {len(steps)} remaining "
+                f"step(s) keep their NEXT.md items",
+            ])
+            log.info("checkpoint resume: %d remaining step(s) keep NEXT.md items %s",
+                     len(steps), step_indices)
+    if step_indices is None:
+        step_indices = o.append_next_items(ctx.project, steps)
+        o.append_decision(ctx.project, [
+            f"[loop:{ctx.loop_id}] Goal: {ctx.goal}",
+            *[f"- step {i}: {s}" for i, s in enumerate(steps, 1)],
+        ])
+
+    if resume is not None:
+        # Only the ORIGINAL binding is ever carried; a suffix's numbering
+        # is never re-bound. Without carried items the suffix's own steps
+        # run under items the binding does not know, so the binding is
+        # dropped too (old rule: a resume is soft).
+        ctx.plan_items = (list(resume.plan_items)
+                          if carried and resume.plan_items else None)
+        if ctx.plan_items is None:
+            log.warning("checkpoint resume: no durable plan binding carried from %s — "
+                        "declared edges are soft for this run", resume.loop_id)
+    else:
+        try:
+            from step_gate import plan_identity_intact as _bind_ok
+            _ok, _why = _bind_ok(step_indices, deps)
+        except Exception as _bind_exc:
+            _ok, _why = False, f"identity check failed: {_bind_exc}"
+        ctx.plan_items = list(step_indices) if _ok else None
+        if not _ok and deps:
+            log.warning("prerequisite gate: plan numbers not bound to items (%s) — "
+                        "declared edges are logged, not enforced, for this run", _why)
+    ctx.step_indices = list(step_indices)
+    return step_indices
+
+
 def _prepare_execution(
     ctx: LoopContext,
     steps: List[str],
     manifest_steps: List[str],
+    *,
+    deps: Optional[Dict[int, Any]] = None,
+    resume: Optional["RestoredCheckpoint"] = None,
 ) -> tuple:
-    """Phase E: Shape steps and write NEXT.md.
+    """Phase E: Shape steps and write NEXT.md (sequential lane).
 
     Returns (steps, step_indices, manifest_steps) — steps may be reshaped.
+    Item mirroring + plan binding live in `_mirror_plan_items` (shared
+    with the parallel lanes).
     """
     _shaped_steps = _shape_steps(steps, label="initial-plan")
     if len(_shaped_steps) != len(steps):
@@ -94,39 +184,446 @@ def _prepare_execution(
             )
         steps = _shaped_steps
         manifest_steps = list(steps)
-
-    o = _orch()
-    step_indices = o.append_next_items(ctx.project, steps)
-    o.append_decision(ctx.project, [
-        f"[loop:{ctx.loop_id}] Goal: {ctx.goal}",
-        *[f"- step {i}: {s}" for i, s in enumerate(steps, 1)],
-    ])
-
+    step_indices = _mirror_plan_items(ctx, steps, deps=deps, resume=resume)
     return steps, step_indices, manifest_steps
+
+
+@dataclass
+class RestoredCheckpoint:
+    """What an explicit resume restores BEFORE the loop decomposes anything.
+
+    `steps` are the remaining plan steps in plan order; `items` their
+    NEXT.md items (None when the checkpoint did not carry a clean list —
+    an older file); `plan_items` the ORIGINAL plan's number→item binding
+    (None when never bound). `completed` are the carried history rows.
+    """
+    loop_id: str
+    ckpt: Any
+    steps: List[str]
+    items: Optional[List[int]]
+    plan_items: Optional[List[int]]
+    completed: List[Any]
+    project: str
+
+
+def _items_name_these_steps(project: str, items: List[int], texts: List[str]) -> bool:
+    """Do the carried NEXT.md items still carry exactly these step texts?
+    Unmirrored (-1) slots are skipped; an unreadable ledger reads as no."""
+    if not project:
+        return False
+    try:
+        o = _orch()
+        _lines, ledger = o.parse_next(project)
+    except Exception as _pn_exc:
+        log.warning("checkpoint resume: NEXT.md for %s unreadable (%s)", project, _pn_exc)
+        return False
+    by_index = {it.index: it for it in ledger}
+    counts: Dict[str, int] = {}
+    for it in ledger:
+        _t = str(it.text).strip()
+        counts[_t] = counts.get(_t, 0) + 1
+    for item, text in zip(items, texts):
+        if item < 0:
+            continue
+        row = by_index.get(item)
+        _want = str(text).strip()
+        if row is None or str(row.text).strip() != _want:
+            return False
+        if counts.get(_want, 0) > 1:
+            # Two lines carry this text: a duplicate inserted at the
+            # original's line offset would verify in its place and be
+            # marked instead (r2 Skeptic finding 2). Text is not an
+            # identity — ambiguous reads as no.
+            return False
+    return True
+
+
+_RESUME_NOTE_RE = _re.compile(r"^(?:\[resume note:.*?\]\s*)+", _re.DOTALL)
+
+
+def item_mark_state(status: str) -> str:
+    """The NEXT.md state a terminal row's item carries: blocked → `!`,
+    done / skipped → `x` (the parallel lane's rule; `skipped` finishes its
+    position). Empty for a non-terminal status (nothing to mark)."""
+    o = _orch()
+    if status == "blocked":
+        return o.STATE_BLOCKED
+    if status in ("done", "skipped"):
+        return o.STATE_DONE
+    return ""
+
+
+def settle_item_marks(project: str, rows: List[Any], *, loop_id: str = "",
+                      source: str = "") -> int:
+    """Apply the NEXT.md marks that rows still owe (`item_mark` PENDING).
+
+    The checkpoint is the authoritative execution record and NEXT.md its
+    mirror (chunk-5 r2 lead, 2026-09-17): a mark that failed at step time
+    used to be retried only by the parallel lane's next snapshot, and
+    nothing durable recorded it — a crash in between left the checkpoint
+    saying done while NEXT.md said TODO, and NEXT.md-driven work could
+    execute the item again. The state now travels with the row; this is
+    the ONE settler every lane and the resume call.
+
+    Every mark here is a compare-and-mark (`mark_item(expected_text=)`,
+    checked under the ledger lock): an item index is a line number, and
+    time has passed since the row was produced. Outcomes, per row:
+      - marked → APPLIED (the debt is paid);
+      - `ItemIdentityError` (item gone, names another text, or the text is
+        duplicated) → DRIFTED: surfaced (WARNING + a DECISIONS.md line,
+        best effort) and never retried — a blind mark would land on
+        another item's line, the unsafe direction; the checkpoint keeps
+        the owed state visible;
+      - any other exception (ledger locked, unreadable, project dir
+        missing) → stays PENDING, retried at the next call.
+    A leading `[resume note: …]` prefix (one or more) on the row's text is
+    ignored when comparing (`orch_items.normalize_item_text` handles the
+    rest). An item's obligation is its LATEST row: an earlier pending row
+    for the same item is superseded and owes nothing (r2 finding 1: it
+    re-marked a later done item blocked) — but only a VERDICT row
+    supersedes: an ATTEMPT row (a blocked retry's record, `MARK_ATTEMPT`)
+    is skipped when finding the latest (r3 finding 1: a carried pending
+    row followed by a fresh attempt lost its debt without a mark).
+    Returns the number of rows marked.
+    """
+    settled = 0
+    if not project:
+        return 0
+    from checkpoint import _as_int
+    from orch_items import ItemIdentityError
+    o = _orch()
+    _latest: Dict[int, int] = {}
+    for _pos, row in enumerate(rows):
+        if getattr(row, "item_mark", MARK_APPLIED) == MARK_ATTEMPT:
+            continue        # not a verdict: supersedes nothing (r3 finding 1)
+        _it = _as_int(getattr(row, "index", -1), -1)
+        if _it >= 0:
+            _latest[_it] = _pos
+    for _pos, row in enumerate(rows):
+        if getattr(row, "item_mark", MARK_APPLIED) != MARK_PENDING:
+            continue
+        item = _as_int(getattr(row, "index", -1), -1)
+        want = item_mark_state(str(getattr(row, "status", "") or ""))
+        if item < 0 or not want:
+            continue
+        if _latest.get(item) != _pos:
+            row.item_mark = MARK_APPLIED
+            log.debug("NEXT.md mark for %s#%d owed by a superseded attempt row — dropped "
+                      "(the item's latest row carries the obligation)", project, item)
+            continue
+        _text = _RESUME_NOTE_RE.sub("", str(getattr(row, "text", "") or ""), count=1)
+        try:
+            o.mark_item(project, item, want, expected_text=_text)
+        except ItemIdentityError as _id_exc:
+            row.item_mark = MARK_DRIFTED
+            log.warning("NEXT.md item %s#%d no longer names step %r (%s) — its %r mark "
+                        "owed by %s was NOT applied; mark it by hand", project, item,
+                        _text[:80], _id_exc, want, source or loop_id or "this run")
+            try:
+                o.append_decision(project, [
+                    f"[loop:{loop_id}] NEXT.md item {item} no longer names "
+                    f"{_text[:80]!r} ({_id_exc}) — its {want!r} mark"
+                    + (f" owed by {source}" if source else "")
+                    + " was not applied; mark it by hand"])
+            except Exception as _dec_exc:
+                log.debug("mark-debt decision line failed: %s", _dec_exc)
+            continue
+        except Exception as _mk_exc:
+            log.warning("mark_item(%s) still failing for %s#%d (retried at the next "
+                        "snapshot): %s", want, project, item, _mk_exc)
+            continue
+        row.item_mark = MARK_APPLIED
+        settled += 1
+        log.info("NEXT.md mark settled: %s#%d → %r%s", project, item, want,
+                 f" (owed by {source})" if source else "")
+    return settled
+
+
+def _load_resume(ctx: LoopContext, resume_from_loop_id: str, *,
+                 preloaded: Any = None) -> tuple:
+    """`_load_resume_admitted` under the resume admission lock when the
+    loader does its own lookup: lookup → checks → claim is ONE critical
+    section, or two library resumes both read the unclaimed file and both
+    claim it (chunk 7 r2 finding 2). The lock is the CLI's (by loop id);
+    a preloaded object was admitted under the CLI's lock already."""
+    if ctx.dry_run:
+        # A dry run simulates steps; a resume claims a real checkpoint and
+        # a simulated "done" would consume it (r1): refuse before any claim.
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"a dry run cannot resume {resume_from_loop_id}: it would claim the real "
+            "checkpoint and a simulated success would consume it — run it for real, "
+            "or branch the checkpoint (`maro checkpoint branch`) — refusing")
+    if preloaded is not None:
+        return _load_resume_admitted(ctx, resume_from_loop_id, preloaded=preloaded)
+    try:
+        from checkpoint import resume_lock_name
+        from proc_lock import acquire_pidfile
+        _adm = acquire_pidfile(resume_lock_name(resume_from_loop_id),
+                               payload={"loop_id": resume_from_loop_id,
+                                        "command": f"resume {resume_from_loop_id} (api)"})
+    except Exception as _adm_exc:
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"resume admission lock for {resume_from_loop_id} failed ({_adm_exc}) — refusing")
+    if _adm.status != "acquired":
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"another resume of {resume_from_loop_id} is being admitted "
+            f"({_adm.status}{': ' + _adm.error if _adm.error else ''}) — refusing")
+    try:
+        return _load_resume_admitted(ctx, resume_from_loop_id, preloaded=None)
+    finally:
+        try:
+            _adm.handle.close()
+        except Exception as _rel_exc:
+            log.debug("resume admission lock release failed: %s", _rel_exc)
+
+
+# Taking a handed-in object's permit is take-AND-clear under this lock,
+# before any blocking work: two threads admitting the same object must not
+# both read the permit (r3 finding 1).
+_PERMIT_TAKE = threading.Lock()
+
+
+def _load_resume_admitted(ctx: LoopContext, resume_from_loop_id: str, *,
+                          preloaded: Any = None) -> tuple:
+    """Load the checkpoint an explicit resume names, or refuse.
+
+    Returns (restored, early_return). Exactly one is set, except when the
+    checkpoint is ABSENT: then both are None and the caller starts fresh
+    (an absent file is the only state that may — chunk-3 reviews). Runs
+    before Phase B so a resume pays no planner call and appends nothing to
+    NEXT.md, and an unreadable checkpoint refuses before either.
+
+    `preloaded`: the CLAIMED `Checkpoint` the caller admitted (the CLI,
+    under its admission lock; the read-back of `mark_checkpoint_claimed`)
+    — never re-resolved by id (chunk 6: the CLI validated one file and the
+    loop re-read the id, a torn write in between took the fresh branch);
+    its permit is taken once and its EXACT source path is re-read once to
+    prove the claim on disk is still ours. Otherwise `checkpoint.find_checkpoint`
+    is the one lookup: FOUND proceeds, ABSENT starts fresh, INVALID /
+    MISMATCH / IO_ERROR refuse with the file named — a damaged run-dir
+    file whose run cannot be attributed is IO_ERROR/INVALID here, not
+    absent (it cannot rule this loop out).
+    """
+    from checkpoint import Checkpoint as _Checkpoint, resume_from as _resume_from
+    if preloaded is not None:
+        _ckpt = preloaded
+        if not isinstance(_ckpt, _Checkpoint):
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"the checkpoint handed to the loop is a "
+                f"{type(_ckpt).__name__}, not a Checkpoint — refusing")
+        if not resume_from_loop_id or _ckpt.loop_id != resume_from_loop_id:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"the checkpoint handed to the loop names loop "
+                f"{getattr(_ckpt, 'loop_id', '')!r}, not {resume_from_loop_id!r} — refusing")
+        # A handed-in object is a CAPABILITY, not a snapshot (r2 finding 1):
+        # it must be the read-back of a claim (`mark_checkpoint_claimed`),
+        # the source must still carry that claim on disk, and the permit is
+        # consumed here — the same object cannot admit a second run.
+        with _PERMIT_TAKE:
+            _permit = getattr(_ckpt, "resume_permit", None)
+            _source = getattr(_ckpt, "resume_source", None)
+            preloaded.resume_permit = None                   # one-shot, taken here
+        if not _permit or not _source:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"the checkpoint handed to the loop for {resume_from_loop_id} carries no "
+                "resume claim — claim it first (mark_checkpoint_claimed) — refusing")
+        from checkpoint import _read_candidate as _read_source
+        _disk = _read_source(_source, resume_from_loop_id)
+        if not _disk.found or (_disk.ckpt.resume_claim or {}).get("nonce") != _permit:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"the resume claim on {_source} is no longer this run's "
+                f"({_disk.detail or 'another claim replaced it'}) — refusing")
+        _ckpt = _disk.ckpt
+        _ckpt.resume_permit, _ckpt.resume_source = _permit, _source
+    else:
+        try:
+            from checkpoint import find_checkpoint, LOOKUP_FOUND, LOOKUP_ABSENT
+            _lk = find_checkpoint(resume_from_loop_id)
+        except Exception as _load_exc:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"checkpoint lookup for {resume_from_loop_id} failed "
+                f"({_load_exc}) — refusing to start fresh")
+        if _lk.state == LOOKUP_ABSENT:
+            log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh",
+                        resume_from_loop_id)
+            return None, None
+        if _lk.state != LOOKUP_FOUND:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"{_lk.detail} — refusing to start fresh "
+                "(repair or delete the file to re-run from scratch)")
+        _ckpt = _lk.ckpt
+    if _ckpt.is_consumed():
+        # The loader is the policy boundary, not only the CLI (r3 HIGH 3):
+        # a library caller handing over a consumed file must not replay it.
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"checkpoint {resume_from_loop_id} was already resumed successfully as "
+            f"{_ckpt.resumed_to_loop_id or 'a newer loop'} — refusing to replay it")
+    from checkpoint import resume_claim_status, resume_claim_detail, mark_checkpoint_claimed
+    _claim, _claim_extra = resume_claim_status(_ckpt)
+    if _claim is not None:
+        # Claimed by another resume (in progress / superseded / unresolved /
+        # indeterminate): the CLI is the override surface (`--reclaim`
+        # re-claims BEFORE handing the object in); the API path never
+        # guesses. A preloaded object carries its claimant's permit.
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            resume_claim_detail(_ckpt, _claim, _claim_extra) + " — refusing")
+    _ckpt_project = str(getattr(_ckpt, "project", "") or "")
+    if _ckpt_project and _ckpt_project != (ctx.project or ""):
+        # An explicit resume runs the checkpoint's OWN plan under its own
+        # project: its completed rows, NEXT.md items and binding all belong
+        # there. Under another project the suffix would run with the
+        # original's completed steps silently absent (round-1 Skeptic
+        # finding 1) and the parallel lanes would enforce the foreign
+        # binding — refuse rather than guess.
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"checkpoint {resume_from_loop_id} belongs to project "
+            f"{_ckpt_project!r}, this run is {ctx.project!r} — refusing; "
+            "resume it under its own project")
+    if preloaded is None and not _ckpt.is_complete():
+        # The source's OWN loop must be gone before anyone claims it (r3
+        # finding 4 — the CLI probes this; the loader is the boundary):
+        # run lease held → alive; no lease record → the in-flight pid.
+        try:
+            from run_lease import probe_owner_alive as _probe_owner
+            _owner = _probe_owner(resume_from_loop_id)
+        except ImportError:
+            _owner = None
+        if _owner is True:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"loop {resume_from_loop_id} is still running (its run lease is held) — refusing")
+        if _owner is None:
+            _pid = int((_ckpt.in_flight or {}).get("pid", 0) or 0)
+            if _pid:
+                from process_identity import pid_alive as _pid_alive
+                if _pid_alive(_pid):
+                    return None, _refuse_resume(
+                        ctx, resume_from_loop_id,
+                        f"loop {resume_from_loop_id} is still running (pid {_pid} is alive) — refusing")
+        # The API path claims its source too (r1 Skeptic 1 / Architect 3):
+        # the loader is the policy boundary, so a library resume records
+        # who runs it BEFORE executing, and refuses when it cannot. After
+        # every refusal check above (a refusal must not leave a claim), and
+        # not for a complete file (nothing remains to replay). The claim
+        # names the address the successor's writer will actually use.
+        from checkpoint import _rundir_checkpoint_path as _succ_home, _checkpoint_path as _id_home
+        _succ_path = _succ_home() or _id_home(ctx.loop_id)
+        _claimed = mark_checkpoint_claimed(
+            resume_from_loop_id, path=_lk.path, handle_id=ctx.handle_id or ctx.loop_id,
+            expected=_lk, successor_loop_id=ctx.loop_id, successor_path=str(_succ_path))
+        if _claimed is None:
+            return None, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"could not record the resume claim in {_lk.path} — refusing to "
+                "execute (nothing ran)")
+        _ckpt = _claimed
+        from checkpoint import permit_of as _permit_of
+        ctx.resume_claim_release = _permit_of(_ckpt)
+    try:
+        _remaining, _done = _resume_from(_ckpt)
+        _items = _ckpt.remaining_items
+        _binding = list(_ckpt.plan_items) if _ckpt.plan_items else None
+        if _items and not _items_name_these_steps(ctx.project or "", _items, list(_remaining)):
+            # A NEXT.md item index is the item's LINE number (orch_items):
+            # a hand edit above the plan shifts every id. The carried ids
+            # must still name these exact texts, else the whole identity
+            # is dropped here — ONE decision the remap, the parallel lanes
+            # and the sequential lane all inherit (round-1 findings on
+            # late validation).
+            log.warning("checkpoint resume: carried NEXT.md items %s no longer name the "
+                        "remaining steps of %s (ledger edited?) — fresh items appended "
+                        "and plan identity not carried", _items, resume_from_loop_id)
+            _items, _binding = None, None
+        restored = RestoredCheckpoint(
+            loop_id=resume_from_loop_id,
+            ckpt=_ckpt,
+            steps=list(_remaining),
+            items=_items,
+            plan_items=_binding,
+            completed=list(_done),
+            project=_ckpt_project,
+        )
+    except Exception as _ckpt_err:
+        # Same direction: the checkpoint loaded but restoring it failed —
+        # an explicit resume does not silently become a replay.
+        return None, _refuse_resume(
+            ctx, resume_from_loop_id,
+            f"checkpoint {resume_from_loop_id} loaded but restore failed "
+            f"({_ckpt_err}) — refusing to start fresh")
+    return restored, None
+
+
+def _refuse_resume(ctx: LoopContext, resume_from_loop_id: str, reason: str) -> LoopResult:
+    """Terminal refusal of an explicit resume (chunk-3 reviews, 2026-09-16).
+
+    An explicit resume whose checkpoint exists but cannot be read, names a
+    different loop, cannot be looked up, or fails to restore must not
+    silently become a fresh run that replays every step's side effects.
+    Like the cost-gate refusal beside it, this returns before any step; it
+    additionally stamps the typed stop verdict and records a trace edge so
+    the run's record says "refused" rather than reading like a crash at
+    preflight (r2 finding 4), and ends through `finalize_refusal` (chunk 6:
+    metadata verdict, worktree discarded, slot / lease / running marker
+    released — the cost gate ends the same way).
+    """
+    log.error("checkpoint resume: %s", reason)
+    try:
+        ctx.stamp_stop("external-interrupt", reason)
+    except Exception as _st_exc:
+        log.debug("resume refusal stop stamp failed: %s", _st_exc)
+    try:
+        from run_trace import record_edge
+        from context_budget import clip as _clip
+        record_edge("plan.resume", "plan.resume_refused",
+                    loop_id=ctx.loop_id, resume_from=resume_from_loop_id,
+                    reason=_clip(reason, 300))
+    except Exception as _tr_exc:
+        log.debug("resume refusal edge failed: %s", _tr_exc)
+    from loop_finalize import finalize_refusal
+    return finalize_refusal(ctx, LoopResult(
+        loop_id=ctx.loop_id, project=ctx.project or "", goal=ctx.goal,
+        status="stuck", stuck_reason=reason,
+    ))
 
 
 def _preflight_checks(
     ctx: LoopContext,
     steps: List[str],
     *,
-    resume_from_loop_id: Optional[str],
     parallel_fan_out: int,
+    resume: Optional[RestoredCheckpoint] = None,
 ) -> tuple:
     """Phase C: Pre-flight — resume, cost gate, plan review, dep parsing, manifest.
 
     Returns (steps, preflight_results: dict, early_return: Optional[LoopResult]).
     If early_return is not None, caller should return it immediately.
     steps may be modified by checkpoint resume.
+
+    `resume`: the checkpoint `_load_resume` restored BEFORE Phase B (the
+    only loader — restoring here, after decomposition, was the paid
+    planner call this chunk removed).
     """
-    # Session resume — load checkpoint and skip completed steps
+    # Session resume — carried rows, ledgers, in-flight note, executor session
     resume_completed: List[StepOutcome] = []
     resume_executor_session: dict = {}
-    if resume_from_loop_id:
+    if resume is not None:
+        resume_from_loop_id = resume.loop_id
         try:
-            from checkpoint import load_checkpoint, resume_from as _resume_from
-            _ckpt = load_checkpoint(resume_from_loop_id)
+            _ckpt = resume.ckpt
             if _ckpt is not None:
-                _remaining, _done = _resume_from(_ckpt)
+                _done = resume.completed
                 for _cs in _done:
                     resume_completed.append(step_from_decompose(
                         _cs.text, _cs.index,
@@ -151,8 +648,45 @@ def _preflight_checks(
                         # falls back to its approximate mode instead of showing
                         # a resumed step as if it just finished.
                         ended_ts="",
+                        item_mark=getattr(_cs, "item_mark", None),
                     ))
-                steps = _remaining
+                # Marks the source still owes (chunk 8): settle them from
+                # the checkpoint BEFORE anything executes, when the carried
+                # rows belong to this project (the loader refuses a
+                # mismatch; a directly built RestoredCheckpoint is not
+                # trusted here either — same rule as `_mirror_plan_items`;
+                # its rows keep their owed state and every later retry is
+                # a compare-and-mark, so a foreign row can only ever mark
+                # an item carrying exactly its own text).
+                if any(_r.item_mark == MARK_PENDING for _r in resume_completed):
+                    if (resume.project or "") == (ctx.project or ""):
+                        try:
+                            settle_item_marks(ctx.project or "", resume_completed,
+                                              loop_id=ctx.loop_id, source=resume_from_loop_id)
+                        except Exception as _settle_exc:
+                            # The owed state stays on the rows (retried at
+                            # the successor's snapshots); never a refusal.
+                            log.warning("checkpoint resume: NEXT.md mark settlement failed "
+                                        "(%s) — owed marks kept on the carried rows",
+                                        _settle_exc)
+                    else:
+                        # Their items live in another project's ledger: no
+                        # settler here may touch them (r2 finding 6: a
+                        # same-text item at the same line in THIS project
+                        # would have been marked). Surfaced as drifted —
+                        # owed, durable, never retried.
+                        for _r in resume_completed:
+                            if _r.item_mark == MARK_PENDING:
+                                _r.item_mark = MARK_DRIFTED
+                        log.warning("checkpoint resume: carried rows of %s belong to project "
+                                    "%r, this run is %r — their owed NEXT.md marks are "
+                                    "recorded drifted, not applied here",
+                                    resume_from_loop_id, resume.project, ctx.project)
+                # Phase B ran on these texts (preset from the restore);
+                # re-take the exact list — the in-flight note below edits
+                # a copy, never `resume.steps` (which `_load_resume`
+                # validated against NEXT.md).
+                steps = list(resume.steps)
                 # World-fact ledger carry (WORLD_FACTS_DESIGN slice 1): the
                 # resumed run must see the facts, not just the surviving
                 # steps. from_list drops malformed rows rather than raising.
@@ -165,6 +699,19 @@ def _preflight_checks(
                                  len(ctx.world_facts.facts))
                     except Exception as _wf_exc:
                         log.warning("world-fact restore failed: %s", _wf_exc)
+                _ckpt_rg = getattr(_ckpt, "regression", None)
+                if _ckpt_rg:
+                    try:
+                        from regression_ledger import (RegressionLedger as _RGL,
+                                                       regression_enabled as _rg_on)
+                        if not _rg_on():
+                            raise RuntimeError("regression.enabled is off — "
+                                               "checkpoint rows not restored")
+                        ctx.regression = _RGL.from_list(_ckpt_rg)
+                        log.info("checkpoint resume: restored %d regression obligation(s)",
+                                 len(ctx.regression))
+                    except Exception as _rg_exc:
+                        log.warning("regression-obligation restore failed: %s", _rg_exc)
                 # In-flight FS-diff injection ((h) slice 3): if the prior
                 # process died mid-step, tell the re-executed step what the
                 # crashed attempt already touched so it completes idempotently
@@ -198,15 +745,19 @@ def _preflight_checks(
                 if ctx.verbose:
                     print(
                         f"[maro] resuming from checkpoint {resume_from_loop_id}: "
-                        f"{len(resume_completed)} steps already done, {len(steps)} remaining",
+                        f"{_ckpt.done_count} steps already done, {len(steps)} remaining "
+                        f"({len(resume_completed)} history rows carried)",
                         file=sys.stderr, flush=True,
                     )
-                log.info("checkpoint resume: loop_id=%s done=%d remaining=%d",
-                         resume_from_loop_id, len(resume_completed), len(steps))
-            else:
-                log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh", resume_from_loop_id)
+                log.info("checkpoint resume: loop_id=%s done=%d remaining=%d rows=%d",
+                         resume_from_loop_id, _ckpt.done_count, len(steps), len(resume_completed))
         except Exception as _ckpt_err:
-            log.warning("checkpoint resume failed (%s), starting fresh", _ckpt_err)
+            # Same direction: the checkpoint loaded but restoring it failed —
+            # an explicit resume does not silently become a replay.
+            return steps, {}, _refuse_resume(
+                ctx, resume_from_loop_id,
+                f"checkpoint {resume_from_loop_id} loaded but restore failed "
+                f"({_ckpt_err}) — refusing to start fresh")
 
     # Upfront cost estimation — fail fast if estimate exceeds budget
     if ctx.cost_budget is not None:
@@ -232,12 +783,18 @@ def _preflight_checks(
                                     steps=len(steps))
                     except Exception:
                         pass
-                    return steps, {}, LoopResult(
+                    _cost_reason = (
+                        f"Estimated cost ${_estimated:.2f} exceeds budget ${ctx.cost_budget:.2f} "
+                        f"(with ${_slush:.2f} slush). Reduce step count or use cheaper models.")
+                    try:
+                        ctx.stamp_stop("out-of-budget", _cost_reason)
+                    except Exception as _cs_exc:
+                        log.debug("cost gate stop stamp failed: %s", _cs_exc)
+                    from loop_finalize import finalize_refusal
+                    return steps, {}, finalize_refusal(ctx, LoopResult(
                         loop_id=ctx.loop_id, project=ctx.project or "", goal=ctx.goal,
-                        status="stuck",
-                        stuck_reason=f"Estimated cost ${_estimated:.2f} exceeds budget ${ctx.cost_budget:.2f} "
-                                     f"(with ${_slush:.2f} slush). Reduce step count or use cheaper models.",
-                    )
+                        status="stuck", stuck_reason=_cost_reason,
+                    ))
                 elif _estimated > ctx.cost_budget * 0.8:
                     log.info("cost estimate $%.2f approaching budget $%.2f (%.0f%%)",
                              _estimated, ctx.cost_budget, _estimated / ctx.cost_budget * 100)
@@ -274,9 +831,28 @@ def _preflight_checks(
     deps: Dict[int, Any] = {}
     levels: Optional[List[Any]] = None
     parallel_levels: List[Any] = []
+    declared: Optional[Dict[int, set]] = None
+    pre_gated: Optional[Dict[int, str]] = None
     try:
         from planner import parse_dependencies, build_execution_levels
         clean_steps, deps = parse_dependencies(steps)
+        if resume is not None and resume.items and resume.plan_items \
+                and len(resume.items) == len(steps):
+            # A suffix's tags name the ORIGINAL plan; parsed as-is they
+            # self-depend after re-numbering (an original `[after:4]` on
+            # what is now step 4 never ran: "upstream dep did not
+            # complete"). Re-key them through the carried binding so the
+            # DAG lane schedules by the real edges; prerequisites that
+            # finished before the crash are satisfied, carried
+            # blocked/skipped ones pre-gate their enforced dependents.
+            from step_gate import (remap_suffix_deps as _remap,
+                                   gate_implicit_enabled as _gate_implicit)
+            deps, declared, pre_gated = _remap(
+                steps, resume.items, resume.plan_items, resume_completed,
+                gate_implicit=_gate_implicit())
+            log.info("checkpoint resume: %d suffix step(s) re-keyed to their original "
+                     "edges (%d declared, %d pre-gated)",
+                     len(deps), len(declared), len(pre_gated))
         levels = build_execution_levels(deps)
         parallel_levels = [l for l in levels if len(l) > 1]
         if parallel_levels:
@@ -353,6 +929,9 @@ def _preflight_checks(
         "proj_fanout_dir": proj_fanout_dir,
         "use_dag": use_dag,
         "use_fanout": use_fanout,
+        # Resume remap products for the DAG lane (None on a fresh run).
+        "declared": declared,
+        "pre_gated": pre_gated,
     }
     return steps, pf, None
 
@@ -364,8 +943,13 @@ def _decompose_goal(
     max_steps: int,
     knowledge_sub_goals: bool,
     permission_context,
+    preset_source: str = "preset",
 ) -> tuple:
     """Phase B: Decompose goal into steps, run prereq checks.
+
+    `preset_source` names where a preset list came from for the trace
+    ("preset" = operator pipeline, "resume" = a checkpoint's remaining
+    steps — which may legitimately be EMPTY and still means "do not plan").
 
     Returns (steps, prereq_context, lessons_context, skills_context, cost_context).
     """
@@ -379,10 +963,11 @@ def _decompose_goal(
     )
 
     # Stage 5: rule hit — use deterministic steps, skip LLM decompose
-    if preset_steps is not None and preset_steps:
+    if preset_steps is not None and (preset_steps or preset_source == "resume"):
         steps = [str(s).strip() for s in preset_steps if str(s).strip()]
         if ctx.verbose:
-            print(f"[maro] pipeline: using {len(steps)} preset steps (no decompose)", file=sys.stderr, flush=True)
+            print(f"[maro] {preset_source}: using {len(steps)} preset steps (no decompose)",
+                  file=sys.stderr, flush=True)
     elif _matched_rule is not None and _matched_rule.steps_template:
         steps = list(_matched_rule.steps_template)
         if ctx.verbose:
@@ -398,7 +983,9 @@ def _decompose_goal(
         from run_trace import record_edge as _rec_plan
         if steps is not None:
             _rec_plan("plan.skills", "plan.decompose", loop_id=ctx.loop_id,
-                      source="preset" if (preset_steps is not None and preset_steps) else "rule",
+                      source=preset_source if (preset_steps is not None
+                                               and (preset_steps or preset_source == "resume"))
+                      else "rule",
                       rule=getattr(_matched_rule, "name", "") if _matched_rule else "",
                       steps=len(steps))
     except Exception:

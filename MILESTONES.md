@@ -963,7 +963,11 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
    Original prep brief: `docs/DELTA_GATE_BUILD_BRIEF.md`; decision
    623eb056.
 
--6. **Holistic drift review (Jeremy, 2026-07-17) — do this in a CLEAN
+-6. **Holistic drift review (Jeremy, 2026-07-17)** — **ANSWERED 2026-09-04:
+   `docs/history/2026-09-04-holistic-drift-review.md`** (verdict: right
+   mountain, heavy pack; three decisions in its §9; the queued memory
+   distillation shipped as the auto-memory vision anchor). Original ask kept
+   below for the method it specified. — **do this in a CLEAN
    session, first thing.** After the delivery-loop/two-tone arc: "Might be
    time to do a wholistic review, and honestly see if we are on target, and
    if the drift moved us in a better direction towards our mountain we

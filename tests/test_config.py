@@ -65,26 +65,34 @@ def test_projects_dir_creates(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_load_yaml_missing_file(tmp_path):
-    assert _load_yaml(tmp_path / "nonexistent.yml") == {}
+    faults: list[str] = []
+    assert _load_yaml(tmp_path / "nonexistent.yml", faults) == {}
+    assert faults == []  # review r18: missing is a default, not a fault
 
 
 def test_load_yaml_valid(tmp_path):
     p = tmp_path / "test.yml"
     p.write_text(yaml.dump({"key": "value", "nested": {"a": 1}}))
-    result = _load_yaml(p)
+    faults: list[str] = []
+    result = _load_yaml(p, faults)
     assert result == {"key": "value", "nested": {"a": 1}}
+    assert faults == []
 
 
 def test_load_yaml_invalid(tmp_path):
     p = tmp_path / "bad.yml"
     p.write_text("{{invalid yaml content")
-    assert _load_yaml(p) == {}
+    faults: list[str] = []
+    assert _load_yaml(p, faults) == {}
+    assert faults == [str(p)]  # review r18: the fault rides the caller's list
 
 
 def test_load_yaml_non_dict(tmp_path):
     p = tmp_path / "list.yml"
     p.write_text("- a\n- b\n- c\n")
-    assert _load_yaml(p) == {}
+    faults: list[str] = []
+    assert _load_yaml(p, faults) == {}
+    assert faults == [str(p)]
 
 
 # ---------------------------------------------------------------------------
@@ -96,12 +104,10 @@ class TestConfigMerge:
     def setup_method(self):
         import config
         config._config_cache = None  # reset cache between tests
-        config._config_cache_key = None
 
     def test_workspace_overrides_user(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
-        config._config_cache_key = None
 
         user_cfg = tmp_path / "user.yml"
         ws_cfg = tmp_path / "ws.yml"
@@ -118,7 +124,6 @@ class TestConfigMerge:
     def test_nested_merge(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
-        config._config_cache_key = None
 
         user_cfg = tmp_path / "user.yml"
         ws_cfg = tmp_path / "ws.yml"
@@ -135,7 +140,6 @@ class TestConfigMerge:
     def test_cache_is_used(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
-        config._config_cache_key = None
 
         user_cfg = tmp_path / "user.yml"
         ws_cfg = tmp_path / "ws.yml"
@@ -157,7 +161,6 @@ class TestConfigMerge:
         import os
         import config
         config._config_cache = None
-        config._config_cache_key = None
 
         user_cfg = tmp_path / "user.yml"
         ws_cfg = tmp_path / "ws.yml"
@@ -180,7 +183,6 @@ class TestConfigMerge:
     def test_reload_clears_cache(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
-        config._config_cache_key = None
 
         user_cfg = tmp_path / "user.yml"
         ws_cfg = tmp_path / "ws.yml"
@@ -198,7 +200,6 @@ class TestConfigMerge:
     def test_workspace_path_change_invalidates_cache(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
-        config._config_cache_key = None
 
         user_cfg = tmp_path / "user.yml"
         ws_one = tmp_path / "ws-one.yml"
@@ -228,12 +229,10 @@ class TestGet:
     def setup_method(self):
         import config
         config._config_cache = None
-        config._config_cache_key = None
 
     def test_simple_key(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
-        config._config_cache_key = None
 
         p = tmp_path / "cfg.yml"
         p.write_text(yaml.dump({"yolo": True}))
@@ -245,7 +244,6 @@ class TestGet:
     def test_nested_key(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
-        config._config_cache_key = None
 
         p = tmp_path / "cfg.yml"
         p.write_text(yaml.dump({"model": {"advisor_tier": "power"}}))
@@ -257,7 +255,6 @@ class TestGet:
     def test_missing_key_returns_default(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
-        config._config_cache_key = None
 
         p = tmp_path / "cfg.yml"
         p.write_text(yaml.dump({"a": 1}))
@@ -560,3 +557,61 @@ class TestParseBool:
             assert config_mod.parse_bool(raw, True, context="x.y") is True
             assert config_mod.parse_bool(raw, False, context="x.y") is False
         assert "unrecognized" in caplog.text
+
+
+def test_r18_concurrent_fault_cannot_poison_cache(monkeypatch, tmp_path):
+    import threading
+    import config
+    import notify
+
+    user = tmp_path / "user.yml"
+    workspace = tmp_path / "workspace.yml"
+    user.write_text("notify: {command: some-hook}\n")
+    workspace.write_text("{}\n")
+    monkeypatch.setattr(config, "_user_config_path", lambda: user)
+    monkeypatch.setattr(config, "_workspace_config_path", lambda: workspace)
+    monkeypatch.setattr(config, "_config_cache", None)
+    real_read = Path.read_text
+    a_paused = threading.Event()
+    b_started = threading.Event()
+    b_done = threading.Event()
+    resume_a = threading.Event()
+    results = {}
+
+    def read(path, *args, **kwargs):
+        if threading.current_thread().name == "r18-A":
+            if path == user:
+                raise OSError("transient user read failure")
+            if path == workspace:
+                a_paused.set()
+                assert resume_a.wait(5)
+        return real_read(path, *args, **kwargs)
+
+    def reader(name):
+        if name == "B":
+            b_started.set()
+        results[name] = config.load_config()
+        if name == "B":
+            b_done.set()
+
+    monkeypatch.setattr(Path, "read_text", read)
+    a = threading.Thread(target=reader, args=("A",), name="r18-A")
+    b = threading.Thread(target=reader, args=("B",), name="r18-B")
+    a.start()
+    try:
+        assert a_paused.wait(5)
+        b.start()
+        assert b_started.wait(5)
+        # review r18: old loads interleave; serialized loads must wait for A.
+        assert not b_done.wait(0.5)
+    finally:
+        resume_a.set()
+        a.join(5)
+        if b.ident is not None:
+            b.join(5)
+    assert not a.is_alive() and not b.is_alive()
+    assert results["A"] == {}
+    assert results["B"]["notify"]["command"] == "some-hook"
+    assert config.get("notify.command") == "some-hook"
+    assert config.load_faults() == []
+    assert notify.hook_owed("run_completed") is True

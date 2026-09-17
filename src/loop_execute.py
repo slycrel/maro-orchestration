@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loop_types import (
+    MARK_APPLIED,
+    MARK_ATTEMPT,
+    MARK_PENDING,
     ContextContribution,
     LoopContext,
     StepOutcome,
@@ -195,6 +198,7 @@ def _execute_main_loop(
     resolve_tools_fn,
     tier_order: Dict[str, int],
     parallel_fan_out: int,
+    deps: Optional[Dict[int, Any]] = None,
 ) -> dict:
     """Phase F: the main execute loop.
 
@@ -298,6 +302,10 @@ def _execute_main_loop(
                     ctx.loop_id, goal, ctx.project or "", steps, step_outcomes,
                     executor_session=_executor_session,
                     world_facts=ctx.world_facts.to_list(),
+                    regression=ctx.regression.to_list(),
+                    step_indices=step_indices,
+                    plan_items=getattr(ctx, "plan_items", None),
+                    parallel_fan_out=getattr(ctx, "parallel_fan_out", 0),
                 )
             except Exception as _rotation_exc:
                 log.warning("executor session rotation checkpoint failed: %s",
@@ -306,6 +314,7 @@ def _execute_main_loop(
     # Step 2: Execute each step in order (dynamic — interrupts may add/replace steps)
     # Pre-populate with any completed steps from a checkpoint resume
     step_outcomes: List[StepOutcome] = list(_resume_completed)
+    ctx.step_indices = list(step_indices or [])  # checkpoint rows map to plan positions through it
     total_tokens_in = 0
     total_tokens_out = 0
     total_cache_read = 0
@@ -315,6 +324,9 @@ def _execute_main_loop(
     _consecutive_max_timeouts = 0  # ceiling-hit timeouts across different steps — adapter health signal
     _MAX_CONSECUTIVE_TIMEOUTS = 3  # bail out if adapter appears hung, not just steps being too large
     iteration = 0
+    # Rows the last checkpoint write covered (chunk 8 r3): the loop-exit
+    # flush below writes once more when rows were appended after it.
+    _rows_snapshotted = 0
     loop_status = "done"
     stuck_reason = None
     completed_context: List[str] = []
@@ -330,6 +342,27 @@ def _execute_main_loop(
     remaining_steps: List[str] = list(steps)
     remaining_indices: List[int] = list(step_indices)
     step_idx = 0  # global step counter (for numbering, includes injected steps)
+    # Prerequisite gate (step_gate.py): with a durable binding
+    # (ctx.plan_items — bound at NEXT.md mirroring on a fresh run, carried
+    # by the checkpoint on a resume) plan numbers resolve to ITEMS and a
+    # resumed suffix keeps its edges. Without one they resolve positionally
+    # only while the shaped plan is the parsed plan and the run is not a
+    # resume. Checked ONCE; when it fails every edge is soft for the whole
+    # run and the log says why.
+    _plan_items = list(ctx.plan_items) if getattr(ctx, "plan_items", None) else None
+    if _plan_items is not None:
+        _gate_intact, _gate_identity_reason = True, ""
+    else:
+        try:
+            from step_gate import plan_identity_intact as _gate_identity
+            _gate_intact, _gate_identity_reason = _gate_identity(
+                step_indices, deps, resumed=bool(resume_completed))
+        except Exception as _gi_exc:
+            _gate_intact, _gate_identity_reason = False, f"identity check failed: {_gi_exc}"
+    if not _gate_intact and deps:
+        log.warning("prerequisite gate: plan identity not intact (%s) — "
+                    "declared edges are logged, not enforced, for this run",
+                    _gate_identity_reason)
     # §6 injection seam: typed contributions bound for the next step's prompt.
     # Contributors append to the ledger; the merge point below drains it
     # exactly once per delivered step. _delivered_contributions keeps the
@@ -340,6 +373,8 @@ def _execute_main_loop(
     _step_retries: Dict[str, int] = {}  # roadblock resilience: retries per step text
     _error_fingerprints: Dict[str, List[str]] = {}  # Phase 62: error fingerprints per step text
     _step_tier_overrides: Dict[str, str] = {}  # step_text → escalated tier on retry
+    _env_retries: Dict[str, int] = {}  # env_request: re-runs of a step after a build/refusal
+    _ask_bounces: Dict[str, int] = {}  # operator_ask grounding: re-runs of a step whose ask failed a probe
     # Phase 57: session-level lagging signal — if verify failures cluster, raise the global tier.
     # Tracks consecutive verify failures; at threshold, adapter baseline escalates.
     _session_verify_failures: int = 0
@@ -590,6 +625,99 @@ def _execute_main_loop(
         step_text = remaining_steps.pop(0)
         item_index = remaining_indices.pop(0) if remaining_indices else -1
 
+        # Prerequisite gate (step_gate.py, LoopsBench follow-up 2026-09-16):
+        # the plan's own [after:N] edges are an execution contract. A step
+        # whose DECLARED prerequisite ended blocked/skipped is recorded
+        # blocked without an adapter call and the loop moves on, so work
+        # never lands on a foundation that did not. Sequential-default
+        # edges are soft (logged) unless execution.gate_implicit_prerequisites.
+        # Unknown prerequisites (no recorded outcome) never gate.
+        try:
+            from step_gate import (prerequisite_verdict as _gate_verdict,
+                                   gate_implicit_enabled as _gate_implicit,
+                                   gate_result_text as _gate_text)
+            _gate = _gate_verdict(
+                step_text, item_index,
+                deps=deps, step_indices=step_indices,
+                step_outcomes=step_outcomes, plan_steps=steps,
+                gate_implicit=_gate_implicit(),
+                superseded=ctx.gate_superseded,
+                identity_intact=_gate_intact,
+                plan_items=_plan_items,
+            )
+        except Exception as _gate_exc:
+            # WARNING, not debug: a gate that silently stops gating is the
+            # failure class this chunk exists to remove.
+            log.warning("prerequisite gate skipped for step %d: %s", step_idx + 1, _gate_exc)
+            _gate = None
+        if _gate is not None and not _gate.ready:
+            if _gate.hard:
+                # Same bookkeeping as an executed step: the counters
+                # advance, the row carries the right iteration, NEXT.md
+                # shows the item blocked, and the checkpoint records the
+                # refusal as history. A resume DOES re-try the dependent
+                # (checkpoint._done_positions: a blocked row never finishes
+                # a position) — the operator's resume is a retry of the
+                # failed prerequisite, so the dependent is re-decided
+                # against the fresh outcome rather than frozen by this row.
+                iteration += 1
+                step_idx += 1
+                _gate_result = _gate_text(_gate)
+                log.warning("prerequisite gate: step %d (plan %d) not executed — %s",
+                            step_idx, _gate.plan_no, _gate.reason)
+                if ctx.verbose:
+                    print(f"[maro] prerequisite gate: {_gate_result}",
+                          file=sys.stderr, flush=True)
+                step_outcomes.append(step_from_decompose(
+                    step_text, item_index,
+                    status="blocked",
+                    result=_gate_result,
+                    iteration=iteration,
+                    confidence="unverified",
+                    started_ts=datetime.now(timezone.utc).isoformat(),
+                ))
+                if item_index >= 0:
+                    try:
+                        o.mark_item(project, item_index, o.STATE_BLOCKED)
+                        step_outcomes[-1].item_mark = MARK_APPLIED
+                    except OSError as _gm_exc:
+                        log.warning("mark_item(BLOCKED) failed for gated %s#%d (the row "
+                                    "keeps the mark owed): %s", project, item_index, _gm_exc)
+                try:
+                    from run_trace import record_edge as _gate_edge
+                    _gate_edge("exec.step", "exec.gate", loop_id=ctx.loop_id,
+                               step_idx=step_idx, plan_no=_gate.plan_no,
+                               unmet=[k for k, _s, _t in _gate.unmet],
+                               explicit=bool(_gate.explicit))
+                except Exception as _ge_exc:
+                    log.debug("gate edge not recorded: %s", _ge_exc)
+                try:
+                    from metrics import record_step_cost
+                    record_step_cost(
+                        step_text=step_text, tokens_in=0, tokens_out=0,
+                        status="blocked", goal=ctx.goal,
+                        model=getattr(ctx.adapter, "model_key", ""),
+                        elapsed_ms=0, loop_id=getattr(ctx, "loop_id", "") or "",
+                    )
+                except Exception as _gc_exc:
+                    log.debug("gated-step record_step_cost failed (non-critical): %s", _gc_exc)
+                try:
+                    from checkpoint import write_checkpoint as _gate_ckpt
+                    _gate_ckpt(ctx.loop_id, ctx.goal, ctx.project or "",
+                               steps, step_outcomes,
+                               executor_session=_executor_session,
+                               world_facts=ctx.world_facts.to_list(),
+                               regression=ctx.regression.to_list(),
+                               step_indices=step_indices,
+                               plan_items=getattr(ctx, "plan_items", None),
+                               parallel_fan_out=getattr(ctx, "parallel_fan_out", 0))
+                    _rows_snapshotted = len(step_outcomes)
+                except Exception as _gk_exc:
+                    log.warning("gated-step checkpoint write failed: %s", _gk_exc)
+                continue
+            log.info("prerequisite gate (soft): step %d (plan %d) runs despite — %s",
+                     step_idx + 1, _gate.plan_no, _gate.reason)
+
         # Cuts-first boundary expansion (Qix-cuts decree, 2026-07-10): a
         # [boundary] step is a plan-here-later marker from planner cuts-first
         # mode. Expand it into real steps WITH the probe findings in context —
@@ -776,6 +904,18 @@ def _execute_main_loop(
                     if _ms_advice:
                         if "(b)" in _ms_advice.lower():
                             log.info("milestone advisor: skip step %d on advice", _would_be_step_idx)
+                            # Record the skip (step_gate, 2026-09-16): a
+                            # step with NO row is "unknown" to the
+                            # prerequisite gate and its dependents run
+                            # on nothing; a `skipped` row is an unmet edge.
+                            step_outcomes.append(step_from_decompose(
+                                step_text, item_index,
+                                status="skipped",
+                                result="skipped on milestone-advisor advice (b)",
+                                iteration=iteration,
+                                confidence="unverified",
+                                started_ts=datetime.now(timezone.utc).isoformat(),
+                            ))
                             continue  # skip this step
                         elif "(c)" in _ms_advice.lower():
                             # Try to extract rephrased text — advisor should lead with it
@@ -854,6 +994,15 @@ def _execute_main_loop(
             # contributor — otherwise the next single step would report a
             # gap measured from before the batch ran.
             _prev_step_ended_monotonic = time.monotonic()
+            if ctx.pause_reason:
+                # A batch member hit an environmental refusal (the batch
+                # helper stamped the typed pause): end the loop the same way
+                # the sequential path does — interrupted, resumable — instead
+                # of scheduling the next step against the same dead lane.
+                loop_status = "interrupted"
+                stuck_reason = f"environmental pause: {ctx.pause_reason}"
+                log.warning("environmental pause (%s) in parallel batch", ctx.pause_reason)
+                break
             continue  # Skip the single-step execution below
 
         iteration += 1
@@ -1046,7 +1195,11 @@ def _execute_main_loop(
             _inflight_ckpt(ctx.loop_id, ctx.goal, ctx.project or "",
                            steps, step_outcomes, in_flight_index=step_idx,
                            executor_session=_executor_session,
-                           world_facts=ctx.world_facts.to_list())
+                           world_facts=ctx.world_facts.to_list(),
+                           regression=ctx.regression.to_list(),
+                           step_indices=step_indices,
+                           plan_items=getattr(ctx, "plan_items", None),
+                           parallel_fan_out=getattr(ctx, "parallel_fan_out", 0))
         except Exception as _if_exc:
             log.debug("in-flight checkpoint write failed (non-fatal): %s", _if_exc)
 
@@ -1117,6 +1270,7 @@ def _execute_main_loop(
         except Exception as _tr_exc:
             log.debug("terrain scan skipped: %s", _tr_exc)
 
+
         _sc_report = None
         try:
             from config import get_bool as _sc_cfg_get
@@ -1179,8 +1333,14 @@ def _execute_main_loop(
             # model swings the figure when steps switch cheap<->mid<->power.
             total_cost_usd += _step_cost
             _total_cost = total_cost_usd
-        except ImportError:
+        except Exception as _cost_exc:
+            # Pricing is telemetry: it must never end the loop ahead of
+            # the pause seam below (round 14: an oversized counter raised
+            # OverflowError here and the refusal never stamped its pause).
+            log.warning("step %d cost estimate failed (accounting incomplete): %s",
+                        item_index, _cost_exc)
             _step_cost = _step_provider_cost
+            total_cost_usd += _step_cost
             _total_cost = total_cost_usd
         log.info("step %d %s tokens_step=%d tokens_total=%d cost_step=$%.4f cost_total=$%.4f model=%s elapsed=%dms iter=%d/%d",
                  step_idx, outcome.get("status", "?"),
@@ -1189,118 +1349,6 @@ def _execute_main_loop(
                  _step_cost, _total_cost,
                  _step_model or "unknown",
                  step_elapsed, iteration, max_iterations)
-
-        # Phase 33: token budget — abort gracefully if exceeded.
-        # Only a run with work LEFT gets demoted: the breaker exists to stop
-        # FURTHER spend, and when the plan is fully consumed there is none —
-        # run 692bd96f (2026-07-11) finished all steps + passed closure, then
-        # the cost stop after the final step stamped it stuck/failed.
-        if token_budget is not None and (total_tokens_in + total_tokens_out) >= token_budget:
-            # Dollars ride along: tokens are the misleading unit (cache reads
-            # bill at ~0.1x, so tokens_in overstates real cost 3-4x) — an
-            # unanswered pause must explain itself in the unit that matters.
-            _budget_note = (
-                f"token_budget={token_budget} exceeded "
-                f"({total_tokens_in + total_tokens_out} total tokens, "
-                f"~${total_cost_usd:.4f} est. spend after step {step_idx})"
-            )
-            if remaining_steps:
-                _bl = _ladder_decision("token")
-                if _bl == "extend":
-                    _ladder_extend("token", _budget_note)
-                    # No break: the raised cap governs from the next check on.
-                elif _bl == "pause":
-                    loop_status = "interrupted"
-                    stuck_reason = (f"budget extension ladder exhausted "
-                                    f"(2 extensions granted): {_budget_note}")
-                    _ladder_pause(_budget_note)
-                    if verbose:
-                        print(f"[maro] paused (budget-decision): {_budget_note}",
-                              file=sys.stderr, flush=True)
-                    break
-                else:
-                    loop_status = "stuck"
-                    stuck_reason = _budget_note
-                    ctx.stamp_stop("out-of-budget", _budget_note)
-                    if verbose:
-                        print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
-                    break
-            else:
-                log.warning("budget exceeded on final step (run kept done): %s",
-                            _budget_note)
-                if verbose:
-                    print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
-                break
-
-        # Cost budget — early warn at the gate's warn line, hard stop at
-        # budget + 20% slush. Truthiness (not `is not None`): 0 means
-        # uncapped, same as the budget.per_run_usd convention — and 0.0 must
-        # never reach the division.
-        if cost_budget and _total_cost > 0:
-            _cost_pct = _total_cost / cost_budget * 100
-            _slush = cost_budget * 0.2
-            if _total_cost >= cost_budget + _slush:
-                _budget_note = (
-                    f"cost_budget=${cost_budget:.2f} + slush=${_slush:.2f} exceeded "
-                    f"(${_total_cost:.4f} total after step {step_idx})"
-                )
-                # Same finished-plan carve-out as the token breaker above.
-                if remaining_steps:
-                    _bl = _ladder_decision("cost")
-                    if _bl == "extend":
-                        _ladder_extend("cost", _budget_note)
-                        # No break: the raised cap governs from the next
-                        # check on (and the runaway meter was re-armed).
-                    elif _bl == "pause":
-                        loop_status = "interrupted"
-                        stuck_reason = (f"budget extension ladder exhausted "
-                                        f"(2 extensions granted): {_budget_note}")
-                        _ladder_pause(_budget_note)
-                        if verbose:
-                            print(f"[maro] paused (budget-decision): {_budget_note}",
-                                  file=sys.stderr, flush=True)
-                        break
-                    else:
-                        loop_status = "stuck"
-                        stuck_reason = _budget_note
-                        ctx.stamp_stop("out-of-budget", _budget_note)
-                        log.warning("cost hard stop: %s", stuck_reason)
-                        if verbose:
-                            print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
-                        break
-                else:
-                    log.warning("cost budget exceeded on final step "
-                                "(run kept done): %s", _budget_note)
-                    if verbose:
-                        print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
-                    break
-            else:
-                # Warn line: the gate's data-driven threshold when set (None
-                # means the gate never ran — fall back to the legacy 80%;
-                # 0.0 is the explicit budget.warn_usd: 0 opt-out).
-                _warn_at = getattr(ctx, "cost_warn_usd", None)
-                if _warn_at is None:
-                    _warn_at = cost_budget * 0.8
-                if _warn_at and _total_cost >= _warn_at and not ctx.cost_warned:
-                    log.warning("cost past typical territory: $%.4f >= warn "
-                                "$%.2f (budget $%.2f, %.0f%%)",
-                                _total_cost, _warn_at, cost_budget, _cost_pct)
-                    ctx.cost_warned = True
-                    # Delivery-lane advisory in EFFORT language — dollars are
-                    # the internal unit, the user hears effort (2026-07-17
-                    # spend-UX decree). Non-blocking; never derails the step.
-                    if getattr(ctx, "channel", None) is not None:
-                        try:
-                            ctx.channel.emit(
-                                "effort_note",
-                                text=("Still working — this run has gone "
-                                      "deeper than most past successful runs "
-                                      "(top ~10% by effort). There's headroom "
-                                      "left, and the runaway breaker is armed "
-                                      "if it stops converging."),
-                            )
-                        except Exception:
-                            log.debug("effort_note emit failed", exc_info=True)
 
         # Runaway cost circuit tripped MID-step (BACKLOG #23e): the adapter
         # seam refused a call because run spend crossed multiplier x
@@ -1330,25 +1378,329 @@ def _execute_main_loop(
         # the follow-up as a same-identity RESUME once the environment heals.
         # Killswitch `pause.environmental` (docs/DEFAULTS.md) restores the
         # old churn-to-stuck behavior.
-        _env_pause = ""
-        try:
-            from config import get as _cfg_get
-            if _cfg_get("pause.environmental", True):
-                from stop_verdicts import pause_reason_for_error_class
-                _env_pause = pause_reason_for_error_class(
-                    outcome.get("error_class") or "")
-        except Exception:
-            _env_pause = ""
+        from stop_verdicts import environmental_pause_for as _env_pause_for
+        _env_pause = _env_pause_for(outcome)
+        # Operator question (operator_ask, decision 1d1ad8b0): the worker
+        # wrote the ask file in the run scratch. Same typed pause as the
+        # pre-run clarity gate (`awaiting-clarification`), so the
+        # continuation lane's strict-affirmative test resumes THIS run by
+        # handle once `maro answer` lands. Read after the step, never from
+        # the worker's prose — a claim "I asked" without the file is not an
+        # ask. Consumed (archived, never deleted) so the next step of the
+        # resumed run cannot re-trigger it.
+        # Environment request (env_request, decision ea9e311f): the worker
+        # wrote what it lacks in the run scratch. In policy → the engine
+        # builds the project's next image layer and runs THIS step again on
+        # it (retry idiom of loop_blocked: re-arm what the step saw, add the
+        # note, re-queue). Out of policy → escalate to the orchestrator on
+        # the same typed pause as a question. Read after the step, never
+        # from the prose; consumed (archived) so a retry cannot re-trigger.
+        if not _env_pause:
+            try:
+                import env_request as _er
+                from container_exec import run_scratch_dir as _er_scratch
+                _er_file = _er.request_path(_er_scratch())
+                _er_req = None
+                _er_note = ""
+                try:
+                    _er_req = _er.read_request(_er_file)
+                except ValueError as _er_bad:
+                    _er.archive_request(_er_file)
+                    _er_note = f"Environment request ignored — {_er_bad}. Write one JSON object with `need` and package lists."
+                if _er_req is not None:
+                    _er.archive_request(_er_file)
+                    _er_out = _er.handle(
+                        _er_req, project=ctx.project,
+                        container=str(_step_venue or "").startswith("container"),
+                        handle_id=ctx.handle_id or "", step=step_text)
+                    if _er_out.kind == "escalate":
+                        from stop_verdicts import PAUSE_OP_CLARIFICATION as _POC
+                        _env_pause = _POC
+                        outcome = dict(outcome)
+                        outcome["status"] = "blocked"
+                        outcome["stuck_reason"] = (
+                            "escalated an install request to the orchestrator: "
+                            + ", ".join(_er_out.verdict.escalate and [f"{s_}:{x_}" for s_, x_, _ in _er_out.verdict.escalate] or []))
+                        outcome["env_request"] = _er_req
+                        _er.pause_for_request(
+                            _er_out, handle_id=ctx.handle_id or "", goal=goal,
+                            project=ctx.project or "default", step=step_text,
+                            loop_id=ctx.loop_id)
+                    else:
+                        _er_note = _er_out.note
+                        try:
+                            from run_trace import record_edge as _er_edge
+                            _er_edge("step.env_request", "env." + _er_out.kind,
+                                     loop_id=ctx.loop_id, step_idx=step_idx,
+                                     added=(_er_out.build.added if _er_out.build else []))
+                        except Exception:
+                            pass
+                if _er_note and not _env_pause:
+                    _env_retries[step_text] = _env_retries.get(step_text, 0) + 1
+                    if _env_retries[step_text] <= _er.MAX_RETRIES_PER_STEP:
+                        log.warning("env_request step=%d: %s — re-running the step",
+                                    step_idx, _er_note[:160])
+                        if verbose:
+                            print(f"[maro] step {step_idx}: {_er_note[:120]}", file=sys.stderr, flush=True)
+                        _pending_context.extend(list(_delivered_contributions))
+                        _pending_context.append("env_request", "context", _er_note)
+                        remaining_steps.insert(0, step_text)
+                        remaining_indices.insert(0, item_index)
+                        step_idx -= 1
+                        continue
+                    log.warning("env_request step=%d: retry cap reached; the step's outcome stands", step_idx)
+            except Exception as _er_exc:
+                log.warning("env-request check failed: %s", _er_exc)
+        _ask = None
+        if not _env_pause:
+            try:
+                import operator_ask as _oa
+                from container_exec import run_scratch_dir as _oa_scratch
+                _ask_file = _oa.ask_path(_oa_scratch())
+                _ask = _oa.read_ask(_ask_file)
+                _live_done = _oa.close_live(_oa_scratch()) if _ask_file is not None else None
+                if _ask:
+                    _oa.archive_ask(_ask_file)
+                    from stop_verdicts import PAUSE_OP_CLARIFICATION as _POC
+                    if _live_done and _live_done.get("answered"):
+                        # Asked live, answered live: the step consumed the
+                        # answer; its own outcome stands. Nothing to pause.
+                        log.info("live ask answered within the step (%s)",
+                                 _ask["question"][:80])
+                        outcome = dict(outcome)
+                        outcome["operator_ask"] = {**_ask, "answered_live": True}
+                    elif _live_done:
+                        # The live window closed with the step: the same
+                        # question becomes a pause (no second card).
+                        _env_pause = _POC
+                        outcome = dict(outcome)
+                        outcome["status"] = "blocked"
+                        outcome["stuck_reason"] = (
+                            f"asked the operator (live window closed): {_ask['question'][:200]}")
+                        outcome["operator_ask"] = _ask
+                        _oa.pause_for_ask(
+                            _ask, handle_id=ctx.handle_id, goal=goal,
+                            step=step_text, loop_id=ctx.loop_id,
+                            record=_live_done, notify=False)
+                    else:
+                        # Grounding (2026-09-07): probe the ask before the
+                        # operator sees it. A failing ask goes back to the
+                        # worker once (re-run idiom); after that it passes
+                        # through marked unverified — honest over blocking.
+                        _problems = _oa.ground(_ask)
+                        _ask_bounces[step_text] = _ask_bounces.get(step_text, 0) + (1 if _problems else 0)
+                        if _problems and _ask_bounces[step_text] <= _oa.MAX_BOUNCES_PER_STEP:
+                            _bounce_note = ("Your question to the operator was NOT sent — "
+                                            "it failed a check: " + " | ".join(_problems)
+                                            + ". Fix it and ask again, or proceed without.")
+                            log.warning("ask bounced step=%d: %s", step_idx, _bounce_note[:200])
+                            if verbose:
+                                print(f"[maro] step {step_idx}: ask bounced — {_problems[0][:100]}",
+                                      file=sys.stderr, flush=True)
+                            try:
+                                from run_trace import record_edge as _ask_edge
+                                _ask_edge("step.ask", "ask.bounced", loop_id=ctx.loop_id,
+                                          step_idx=step_idx, problems=len(_problems))
+                            except Exception:
+                                pass
+                            _pending_context.extend(list(_delivered_contributions))
+                            _pending_context.append("operator_ask", "context", _bounce_note)
+                            remaining_steps.insert(0, step_text)
+                            remaining_indices.insert(0, item_index)
+                            step_idx -= 1
+                            continue
+                        _env_pause = _POC
+                        outcome = dict(outcome)
+                        outcome["status"] = "blocked"
+                        outcome["stuck_reason"] = (
+                            f"asked the operator: {_ask['question'][:200]}")
+                        outcome["operator_ask"] = _ask
+                        _oa.pause_for_ask(
+                            _ask, handle_id=ctx.handle_id, goal=goal,
+                            step=step_text, loop_id=ctx.loop_id,
+                            unverified=_problems)
+            except Exception as _ask_exc:
+                log.warning("operator-ask check failed: %s", _ask_exc)
         if _env_pause:
             loop_status = "interrupted"
             stuck_reason = (outcome.get("stuck_reason")
                             or f"environmental pause: {_env_pause}")
             ctx.stamp_pause(_env_pause)
+            # The refused step is still a step this run paid for (review
+            # round 8, 2026-09-13: this `break` skipped the normal append
+            # below, so a paused run reported steps=0 with tokens on the
+            # books — the parallel path records its blocked member; the
+            # sequential sibling did not). Recorded blocked, with its
+            # accounting and whatever it produced before the refusal.
+            try:
+                step_outcomes.append(step_from_decompose(
+                    step_text, item_index,
+                    status="blocked",
+                    result=str(outcome.get("result", "") or ""),
+                    iteration=iteration,
+                    tokens_in=outcome.get("tokens_in", 0),
+                    tokens_out=outcome.get("tokens_out", 0),
+                    cache_read_tokens=outcome.get("cache_read_tokens", 0),
+                    provider_cost_usd=float(outcome.get("provider_cost_usd", 0.0) or 0.0),
+                    elapsed_ms=step_elapsed,
+                    confidence=outcome.get("confidence", ""),
+                    call_record=outcome.get("call_record", ""),
+                    executor_session_id=outcome.get("executor_session_id", ""),
+                    executor_session_resumed=bool(outcome.get("executor_session_resumed", False)),
+                    started_ts=_step_started_ts,
+                ))
+            except Exception as _rec_exc:
+                log.warning("paused step %d not recorded: %s", item_index, _rec_exc)
+            # Ledger parity (round 12): run cards read spend from
+            # step-costs.jsonl, not from the step objects — this early exit
+            # skipped the blocked path's record_step_cost.
+            try:
+                from metrics import record_step_cost
+                record_step_cost(
+                    step_text=step_text,
+                    tokens_in=outcome.get("tokens_in", 0),
+                    tokens_out=outcome.get("tokens_out", 0),
+                    status="blocked",
+                    goal=ctx.goal,
+                    model=getattr(ctx.adapter, "model_key", ""),
+                    elapsed_ms=step_elapsed,
+                    cache_read_tokens=outcome.get("cache_read_tokens", 0),
+                    loop_id=getattr(ctx, "loop_id", "") or "",
+                    provider_cost_usd=float(outcome.get("provider_cost_usd", 0.0) or 0.0),
+                )
+            except Exception as _cost_exc:
+                log.debug("paused-step record_step_cost failed (non-critical): %s", _cost_exc)
             log.warning("environmental pause (%s): %s", _env_pause, stuck_reason)
             if verbose:
-                print(f"[maro] paused ({_env_pause}): {stuck_reason}",
-                      file=sys.stderr, flush=True)
+                # Never fatal (review round 5): a closed stderr here escaped
+                # the loop before finalization wrote the pause to metadata.
+                try:
+                    print(f"[maro] paused ({_env_pause}): {stuck_reason}",
+                          file=sys.stderr, flush=True)
+                except Exception:
+                    pass
             break
+
+        # Budget breakers run AFTER the environmental/operator classification
+        # above (review round 9, 2026-09-13: a refusal or an operator ask on
+        # the final step at the budget boundary broke out `done` before the
+        # pause seam and the step record). The finished-plan carve-out is
+        # for a DONE final step only — a blocked one still has work left.
+        # (An env-request retry re-queues its step with `continue` above,
+        # so its check lands after the retried step instead — one deferred
+        # check, never a skipped one.)
+        # Phase 33: token budget — abort gracefully if exceeded.
+        # Only a run with work LEFT gets demoted: the breaker exists to stop
+        # FURTHER spend, and when the plan is fully consumed there is none —
+        # run 692bd96f (2026-07-11) finished all steps + passed closure, then
+        # the cost stop after the final step stamped it stuck/failed.
+        if token_budget is not None and (total_tokens_in + total_tokens_out) >= token_budget:
+            # Dollars ride along: tokens are the misleading unit (cache reads
+            # bill at ~0.1x, so tokens_in overstates real cost 3-4x) — an
+            # unanswered pause must explain itself in the unit that matters.
+            _budget_note = (
+                f"token_budget={token_budget} exceeded "
+                f"({total_tokens_in + total_tokens_out} total tokens, "
+                f"~${total_cost_usd:.4f} est. spend after step {step_idx})"
+            )
+            if remaining_steps or outcome.get("status") != "done":
+                _bl = _ladder_decision("token")
+                if _bl == "extend":
+                    _ladder_extend("token", _budget_note)
+                    # No break: the raised cap governs from the next check on.
+                elif _bl == "pause":
+                    loop_status = "interrupted"
+                    stuck_reason = (f"budget extension ladder exhausted "
+                                    f"(2 extensions granted): {_budget_note}")
+                    _ladder_pause(_budget_note)
+                    if verbose:
+                        print(f"[maro] paused (budget-decision): {_budget_note}",
+                              file=sys.stderr, flush=True)
+                    break
+                else:
+                    loop_status = "stuck"
+                    stuck_reason = _budget_note
+                    ctx.stamp_stop("out-of-budget", _budget_note)
+                    if verbose:
+                        print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+                    break
+            else:
+                # No break: the plan is consumed and this step is done, so
+                # the normal bookkeeping below (its step record, ledger
+                # mark) runs and the loop ends on its own.
+                log.warning("budget exceeded on final step (run kept done): %s",
+                            _budget_note)
+                if verbose:
+                    print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+
+        # Cost budget — early warn at the gate's warn line, hard stop at
+        # budget + 20% slush. Truthiness (not `is not None`): 0 means
+        # uncapped, same as the budget.per_run_usd convention — and 0.0 must
+        # never reach the division.
+        if cost_budget and _total_cost > 0:
+            _cost_pct = _total_cost / cost_budget * 100
+            _slush = cost_budget * 0.2
+            if _total_cost >= cost_budget + _slush:
+                _budget_note = (
+                    f"cost_budget=${cost_budget:.2f} + slush=${_slush:.2f} exceeded "
+                    f"(${_total_cost:.4f} total after step {step_idx})"
+                )
+                # Same finished-plan carve-out as the token breaker above.
+                if remaining_steps or outcome.get("status") != "done":
+                    _bl = _ladder_decision("cost")
+                    if _bl == "extend":
+                        _ladder_extend("cost", _budget_note)
+                        # No break: the raised cap governs from the next
+                        # check on (and the runaway meter was re-armed).
+                    elif _bl == "pause":
+                        loop_status = "interrupted"
+                        stuck_reason = (f"budget extension ladder exhausted "
+                                        f"(2 extensions granted): {_budget_note}")
+                        _ladder_pause(_budget_note)
+                        if verbose:
+                            print(f"[maro] paused (budget-decision): {_budget_note}",
+                                  file=sys.stderr, flush=True)
+                        break
+                    else:
+                        loop_status = "stuck"
+                        stuck_reason = _budget_note
+                        ctx.stamp_stop("out-of-budget", _budget_note)
+                        log.warning("cost hard stop: %s", stuck_reason)
+                        if verbose:
+                            print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+                        break
+                else:
+                    log.warning("cost budget exceeded on final step "
+                                "(run kept done): %s", _budget_note)
+                    if verbose:
+                        print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+            else:
+                # Warn line: the gate's data-driven threshold when set (None
+                # means the gate never ran — fall back to the legacy 80%;
+                # 0.0 is the explicit budget.warn_usd: 0 opt-out).
+                _warn_at = getattr(ctx, "cost_warn_usd", None)
+                if _warn_at is None:
+                    _warn_at = cost_budget * 0.8
+                if _warn_at and _total_cost >= _warn_at and not ctx.cost_warned:
+                    log.warning("cost past typical territory: $%.4f >= warn "
+                                "$%.2f (budget $%.2f, %.0f%%)",
+                                _total_cost, _warn_at, cost_budget, _cost_pct)
+                    ctx.cost_warned = True
+                    # Delivery-lane advisory in EFFORT language — dollars are
+                    # the internal unit, the user hears effort (2026-07-17
+                    # spend-UX decree). Non-blocking; never derails the step.
+                    if getattr(ctx, "channel", None) is not None:
+                        try:
+                            ctx.channel.emit(
+                                "effort_note",
+                                text=("Still working — this run has gone "
+                                      "deeper than most past successful runs "
+                                      "(top ~10% by effort). There's headroom "
+                                      "left, and the runaway breaker is armed "
+                                      "if it stops converging."),
+                            )
+                        except Exception:
+                            log.debug("effort_note emit failed", exc_info=True)
 
         step_status = outcome["status"]
         # One record per executed step, plus the step_exec-side demotions.
@@ -1561,6 +1913,7 @@ def _execute_main_loop(
                 step_outcomes.append(step_from_decompose(
                     step_text, item_index,
                     status="blocked",
+                    item_mark=MARK_ATTEMPT,   # an attempt row, not the item's verdict (chunk 8 r2/r3)
                     result=step_result,
                     iteration=iteration,
                     tokens_in=outcome.get("tokens_in", 0),
@@ -1832,8 +2185,10 @@ def _execute_main_loop(
             if item_index >= 0:
                 try:
                     o.mark_item(project, item_index, o.STATE_BLOCKED)
+                    step_outcomes[-1].item_mark = MARK_APPLIED
                 except OSError as _mark_exc:  # FileLockTimeout: ledger contended — the run result matters more than the checkbox
-                    log.warning("mark_item(BLOCKED) failed for %s#%d: %s", project, item_index, _mark_exc)
+                    log.warning("mark_item(BLOCKED) failed for %s#%d (the row keeps the "
+                                "mark owed): %s", project, item_index, _mark_exc)
             o.append_decision(project, [f"[loop:{loop_id}] stuck on step {step_idx}: {stuck_reason}"])
             break
 
@@ -1949,7 +2304,35 @@ def _execute_main_loop(
             tier_escalated_from=_step_tier_from,
             venue=_step_venue,
             artifact_check=outcome.get("artifact_check", ""),
+            # The mirror state `_process_done_step` recorded (chunk 8); a
+            # blocked row that reaches here (the "normal" blocked flow)
+            # records none and is born pending — the next snapshot's
+            # settler applies or re-applies its mark.
+            item_mark=outcome.get("item_mark"),
         ))
+
+        # Regression obligations (regression_ledger.py, 2026-09-16): a step
+        # whose FINAL status is done — after ralph verify, artifact check
+        # and the post-step demotions above — contributes its passing
+        # test-runner commands as obligations closure re-runs. Harvested
+        # here, not at the raw outcome, so a step demoted to blocked never
+        # carries an obligation. The cwd recorded is the one step_exec
+        # stamped beside the transcript (`executor_cwd`: the adapter's own
+        # precedence — explicit project dir, else the run-scoped default);
+        # closure re-runs there, not in its own cwd.
+        if step_status == "done":
+            try:
+                from regression_ledger import regression_enabled as _rg_on
+                if _rg_on() and outcome.get("tool_events"):
+                    _rg_new = ctx.regression.harvest(
+                        outcome.get("tool_events"), step_index=item_index,
+                        step_no=step_idx, iteration=iteration, step_text=step_text,
+                        executor_cwd=outcome.get("executor_cwd") or _proj_artifact_dir or None)
+                    if _rg_new:
+                        log.info("regression obligations step=%d recorded: %s",
+                                 step_idx, "; ".join(_rg_new))
+            except Exception as _rg_exc:
+                log.warning("regression harvest failed for step %d: %s", step_idx, _rg_exc)
 
         # End-of-iteration artifacts: checkpoint, manifest, dead ends, march of nines
         _mon_alert = _write_iteration_artifacts(
@@ -1959,6 +2342,7 @@ def _execute_main_loop(
             update_dead_ends_fn=_update_dead_ends if _dead_ends_available else None,
             executor_session=_executor_session,
         )
+        _rows_snapshotted = len(step_outcomes)
         if _mon_alert:
             _march_of_nines_alert = True
 
@@ -2379,6 +2763,36 @@ def _execute_main_loop(
             # Restart break — outside the try/except, mirroring _ae2
             if loop_status == "restart":
                 break
+
+    # Rows a `continue` appended after the last snapshot (a skipped
+    # milestone step as the final step) never reached the end-of-iteration
+    # artifacts (chunk 8 r2 finding 2): settle the marks still owed and
+    # write the rows once more, so the checkpoint and the mirror hold every
+    # row the run returns. Only when something is owed OR a row was
+    # appended after the last snapshot (r3 finding 1: a retry attempt cut
+    # short by max_iterations owes nothing, so the debt predicate alone
+    # left it out of the checkpoint) — otherwise the last iteration's
+    # snapshot already wrote everything.
+    if (any(getattr(_r, "item_mark", "") == MARK_PENDING for _r in step_outcomes)
+            or len(step_outcomes) > _rows_snapshotted):
+        try:
+            from loop_planning import settle_item_marks as _final_settle
+            _final_settle(ctx.project or "", step_outcomes)
+        except Exception as _fs_exc:
+            log.warning("final NEXT.md mark settlement failed for loop %s: %s", ctx.loop_id, _fs_exc)
+        try:
+            from checkpoint import write_checkpoint as _final_ckpt
+            _final_ckpt(
+                ctx.loop_id, ctx.goal, ctx.project or "", steps, step_outcomes,
+                executor_session=_executor_session,
+                world_facts=ctx.world_facts.to_list(),
+                regression=ctx.regression.to_list(),
+                step_indices=list(getattr(ctx, "step_indices", []) or []),
+                plan_items=getattr(ctx, "plan_items", None),
+                parallel_fan_out=getattr(ctx, "parallel_fan_out", 0),
+            )
+        except Exception as _fc_exc:
+            log.warning("final checkpoint write failed for loop %s: %s", ctx.loop_id, _fc_exc)
 
     # Belt-and-braces (adversarial review 2026-07-15): the merge-point drain
     # only runs when another step executes, so anything still pending when

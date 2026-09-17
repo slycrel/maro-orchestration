@@ -6,6 +6,7 @@ Covers the done≠achieved gap: a step claims a write but produces no artifact.
 import os
 import sys
 import time
+from datetime import datetime, timezone  # review r31: explicit UTC bounds for window tests.
 
 import pytest
 
@@ -21,6 +22,7 @@ from artifact_check import (  # noqa: E402
     check_fabrication,
     extract_write_claims,
     snapshot_dir,
+    files_modified_since,
 )
 
 
@@ -104,6 +106,27 @@ def test_snapshot_skips_vcs_dirs(tmp_path):
     snap = snapshot_dir(tmp_path)
     assert "real.py" in snap
     assert not any(k.startswith(".git") for k in snap)
+
+
+def test_r31_upper_bound_filters_before_the_result_limit(tmp_path):
+    # review r31: later neighbors cannot hide an in-window report behind the cap.
+    since = time.time() - 100
+    until = time.time()
+    for i in range(100):
+        path = tmp_path / f"A{i:03d}.txt"
+        path.write_text("later")
+        os.utime(path, (until + 100, until + 100))
+    report = tmp_path / "ZZZ_FINAL_REPORT.md"
+    report.write_text("answer")
+    os.utime(report, (until - 1, until - 1))
+
+    changed = files_modified_since(
+        tmp_path,
+        datetime.fromtimestamp(since, timezone.utc).isoformat(),
+        limit=100, until_ts=until,
+    )
+
+    assert changed == [report.name]
 
 
 # --- check_fabrication ----------------------------------------------------

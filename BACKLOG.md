@@ -44,6 +44,83 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### The review loop itself: 31 rounds on item 2 is "holding it wrong" (Jeremy, 2026-09-16: "2-3 should be the norm, 6-7 should be rare") — HIGH, process
+Item 2 (landscape-driven project binding, 1dc74714) took 31 adversarial rounds
+(r30 → 6a09e8bd, r31 → e6999d78, both CI green) and stopped under the stop
+rule, not at a fixpoint. Two things to revisit, in this order:
+1. **The loop.** Diagnosis in docs/history/2026-09-16-review-loop-postmortem.md
+   (written the same day). Short form: the termination criterion ("no HIGH from
+   an adversarial reviewer") is unreachable for a codebase of best-effort
+   writes — an adversary with shell probes and unlimited effort always has one
+   more failure-path twin; the review scope grew monotonically (31 commits, a
+   600 KB prompt, every fix's neighbour became in-range); the prompt told the
+   reviewers to attack the fresh fixes first; findings were fixed one instance
+   at a time when they were a CLASS (unchecked stamp returns, two-store
+   non-atomicity); and the orchestrator never applied a likelihood/consequence
+   triage of its own — "verified true" was treated as "must fix now". New rule
+   (Jeremy): 2–3 rounds is the norm, 6–7 rare; the orchestrator triages
+   severity, residuals become known-gap pins, and a fix round re-reads the fix
+   diff only.
+2. **The residue** (r31 note above under the landscape bullet): one checked
+   pause API for `pause_for_ask` / `watch_live` / `env_request.pause_for_request`
+   (today they return `pending` and notify on a None stamp), and per-attempt
+   provenance records (loop_id, project, start, end) replacing the scalar
+   `execution` field and the run-wide `started_at..ended_at` scan window.
+   Design pass first (one round), then build.
+
+### Resumed run never re-curated: 944a67f7 answered → resumed → done, card still shows no deliverables (2026-09-16) — MEDIUM, item-2 class
+Run 944a67f7-clever-wren (the PCD/Jev design goal) paused for clarification,
+was answered 09:44Z, resumed as task-…-0e592588 and finished 10:15Z with five
+design docs in `projects/saw-this-in-discord-and/` (PCD_SCHEMA_DESIGN.md etc.).
+Its metadata reads `status: done`, `ended_at: 10:15Z` — but `finalized_at:
+09:17Z` (the pre-pause attempt), `curated_at: None`, `execution: None`, no
+`artifact/`, no verdict. The resumed attempt advanced `ended_at` and never ran
+finalize/curation, so the card says "done" with nothing to show and the
+project dir holds the only copy. Same class as the r31 residue (per-attempt
+provenance): the resume path needs the finalize → curate → render tail the
+first attempt gets. Verify with `locate_deliverables` on this run: with
+`execution: None` and an aware `started_at` it takes the legacy narrow window,
+so the 10:15 files are also outside its scan. Read-only diagnosis; fix is a
+code chunk (2–3 review rounds under the new budget).
+
+### PCD + Formal Methods — constrained decision layer for Maro planner (Jeremy ask, 2026-09-16; research in flight)
+
+Two related research dispatches are running:
+1. **PCD local decision prototype** (`task-20260916T091642Z-3becee74`) — evaluate whether Parallel Constrained Decoding (orthogonal decision schemas, ~400ms warm latency on M4/16GB with Qwen2.5 1.5B 4-bit) can improve Maro's planner/decomposer. Target: structured decision plans (tool vs target vs success criteria) that are verifiable before token burn.
+2. **OpenShell formal methods integration** (`task-20260916T093824Z-8f0810f2`) — prototype how Maro could emit structured decision plans that are verifiable by a lightweight SMT/constraint solver (Z3-style), proving containment before execution and returning minimal adjustments on violation. Connects to the daily budget gate experience: binary halts → structured counterexamples.
+
+Shared insight from both: Maro's current free-text planning → parse/validate pipeline conflates tool selection, target identification, and success criteria. A constrained-decision intermediate representation could feed both (a) a local fast scorer for routing, and (b) a formal containment proof against approved policy envelopes.
+
+When M6 Mac Mini arrives (~2026-10-07), evaluate mlx-community quantized models for the local decision layer. Until then: prototype on existing hardware, document schema design, and identify which Maro planning steps are most amenable to orthogonal decision framing.
+
+Related: NVIDIA OpenShell research on Z3 theorem prover for agent policy verification (https://nvidia.github.io/OpenShell-Research/dev-notes/posts/2026-09-10-learning-formal-methods-agent-policy-prover/), Chi Wang's AutoGen/AG2 work on structured decision batches.
+
+### Container auth expiry silently demoted a worker to the host lane, where it decrypted the whole secrets store with the age key (FOUND 2026-09-12, runs 68cbde81 / 154ec06a) — HIGH
+
+The `maro-claude-auth` volume's OAuth session (re-seeded 2026-08-13 after the same expiry on 08-12) expired again ~2026-09-12. First IMAP run 68cbde81: the containerized executor step died "OAuth session expired and could not be refreshed" → typed pause `llm-unreachable` (honest). Second run 154ec06a, 90 s later: the container auth BREAKER had tripped (`SUBSYSTEM_SILENT container_auth`, "executor steps degrade to host/fence-only") so its worker steps ran on the HOST as `clawd` — by design for `executor.container: on` (only `require` refuses). The worker then found `env | grep -i yahoo` empty (correct: on the host lane the values travel as the 0600 hand-off file named by `$MARO_SECRETS_FILE`, and the frame said so), ignored the file, ran `SOPS_AGE_KEY_FILE=~/.maro/secrets/age-identity.txt sops -d ~/.maro/secrets/maro.sops.env`, and `eval`'d the YAHOO_* lines — decrypting all 19 names (X_EMAIL, ICLOUD_EMAIL, … visible in its own redacted grep) to use two. Deliverable was fine (32 messages, five newest over IMAP, browser-free); the boundary was not. Three things: (1) **degrade-to-host is the wrong default once the store holds real credentials** — the breaker should end the step in a typed environmental pause (`container-auth-expired`, same family as `llm-unreachable`, resumes when the volume is re-seeded) instead of running the worker as the operator's user; `executor.container: require` gets that today and is the recommended flip (Jeremy's config); (2) **the auth volume has no liveness probe** — the event itself says "liveness is not probed"; a daily `login_probe` on the health lane would have caught the expiry before a run did (token-spending, so cadence-gated); (3) **the frame told the worker where the values were and it went for the key anyway** — frame wording hardened same day (`file_instructions`: the file is the only sanctioned path; never sops/age; a value you were not given is not yours to fetch), but wording is a fence, not a wall: the wall is the container. Also a second data point for the project-binding entry above: both IMAP runs landed in a fresh `check-maros-own-yahoo-mailbox` project although the operator context (and, the second time, the goal text) named `weve-used-chrome-on-the`; the second bound to the first's project via the identical goal string (rerun brief) — the paused first attempt read as "possibly still in flight" (the dead-run sweep only covers dead pids; a typed pause is alive by design).
+
+**Status 2026-09-13 — (1) DONE on the runtime box:** `executor.container: require` set (Jeremy: "let's add the require lane then test it with a re-auth"), refusal proven on the tripped breaker, volume re-seeded by interactive `/login`, breaker auto-cleared, and run 520e1b8c re-ran the IMAP check with all seven executor calls in `maro-exec-` containers (uid 1001, secrets via container env, no host hand-off file, same 32-message deliverable). Inside the container the worker looked for the store + sops/age and found neither — the wall holds. **(2) + typed pause DONE later the same day:** `ContainerAuthExpired` → `container_auth` error class → `container-auth-expired` typed pause on the first refusal (loop-level test), and the heartbeat now records the volume's `refreshTokenExpiresAt` (timestamps only, 6 h cadence) so the `container_auth` health probe warns ≤ 3 days before the monthly expiry (live: valid until 2026-10-12); adversarial review r1 then found the pause unwired through the real `FailoverAdapter` wrap and unmapped on the fan-out/DAG/batch paths, plus a text-counting re-seed probe and an unvalidated liveness record — all fixed and pinned the same day (design doc, "Review round 1" note); round 2 on the whole chunk found the re-call handler still escaping, the parallel early return never persisting the pause (so continuation restarted instead of resuming), and the real schedulers walking the whole graph after a refusal — plus health `unknown→OK` false recovery, fail-open lock, expired-token re-seed, zero-frame-on-unreadable, big-int validator overflow, and the director worker lane — all fixed ("Review round 2" note); round 3 found the DAG worker never SET the halt it checked (queued roots still ran), the token-brake re-raise in the same escaping position, and the director pause missing from report/log/CLI — fixed ("Review round 3" note); round 4 found the FIRST casualty (the CLI failure that trips the breaker) still text-classified as a host login failure under `require`, post-deadline fan-out outcomes discarded, progress prints able to eat a refusal, re-call token undercount, the skip-director reply blank on a pause, and CI's tripwires red since 72aac36d — fixed ("Review round 4" note); round 5 found the rate-limit-retry twin of the first casualty (a retry dying of the expired session raised "rate-limited", skipped the breaker, tripped the HOST circuit), two more unguarded progress prints on the pause path (director `_log`, sequential loop + finalize summary), the DAG twin of the post-deadline reconcile, a refused revision erasing its draft, and the non-verbose heartbeat dropping the expiry warning (now a heartbeat check + one-probe health narration) — fixed ("Review round 5" note); round 6 found the terminal-result twin (a rejected rate_limit_event plus a terminal "OAuth session expired" still retried as a rate limit), the retry-timeout replay (a killed retry launched again, partial output lost), the heartbeat skipping OK samples (never re-armed → the next expiry's warning swallowed), the health transaction's default lock contract (unlocked under fail-open), and `maro doctor` blind to the expiry record — fixed ("Review round 6" note; doctor now has a "Container auth session" row, closing the round-4 residual); round 7 found the tool_search re-call had NEVER worked in production (raw schema dicts on the LLMTool list → AttributeError → "unrecognised tool", since Phase 41), a killed re-call losing its partial output through the round-3 allow-list, the `errors[]` error envelope invisible to predicate/breaker/detail, a non-zero success payload replayed as rate-limited, and the health narration outside its lock — fixed ("Review round 7" note); round 8 found the FIRST-call injector rejecting LLMTool objects (tool_search never advertised, so the round-7 re-call fix was unreachable), rc=0 + explicit error result treated as success, the sequential pause dropping the refused step record, and worker kills losing partial output/usage — fixed ("Review round 8" note; two findings declined by doctrine: continuation-by-context vs checkpoint restore, and the documented narrate-after-write trade); round 9 found the tool_search expansion unscoped by the caller's permissions (denied deferred tools advertised), a prose-only re-call misfiled as "unrecognised tool", the budget breakers running BEFORE the pause seam (final-step refusal at the boundary → `done`, no record), the team-worker lane running without `executor=True`/the container guard and stamping `done` over nested refusals, malformed `is_error` strings reading as success, and kill/failure evidence that could overflow or get lost in the failover wrapper — all fixed ("Review round 9" note). **Design question for Jeremy (not changed):** a killed subprocess (wall-clock or liveness stall) classifies `retry_backoff` because `_subprocess_timeout_error` keeps the kill reason as text only, while the classifier's comment intends `failover` (which under `require` would end in an `llm-unreachable` pause). Live behaviour retained; decide whether a stalled worker is a pause or a retry. Round 10: the rate-limit retry predicate's own flag reading, `BudgetRunawayError` swallowed at the team boundary, the specialist's spend missing from the step, failure evidence as one record (cost/output/cache independent of fresh input; initial handler no longer overrides the chain-aware read), refused-revision draft + partial both kept and rendered — fixed ("Review round 10" note). Round 11: a non-auth terminal failure (error_max_turns) behind a rejected rate_limit_event replayed finished work, terminal counters attached under one `try`, fresh-only tokens_in on failures (cache-only work priced at zero), fan-out/DAG/batch step constructors dropping cost + cache reads, ordinary specialist failures losing partial output/usage/class — fixed ("Review round 11" note). Round 12: a terminal execution failure (error_max_turns) text-classified as `failover` and REPLAYED on the next backend, first-vs-last result frame disagreement between the two stream readers (success-then-error completed as done), cache reads lost across the re-call/specialist/blocked-builder seams, cache creation gated on a non-null input counter, terminal failures dropping the assistant's text, and the paused step + fan-out/DAG members missing from the run-card spend ledger — fixed ("Review round 12" note). Round 13: the two terminal readers still framed events differently (a result object embedded in a diagnostic line outranked the real auth-error frame), the schedulers published the halt only after the refused step's worktree merge-back (a freed peer admitted a queued step), successful frames dropped cache-creation ingest, one malformed assistant event wiped the whole partial, and a failed ledger append returned as if recorded — fixed ("Review round 13" note). Round 14: the document fallback promoted a result object NESTED in a pretty-printed error, the stream parser skipped its fallback behind an `init` line (rc=0 delivered a flag_stuck answer as done), a 400-digit token counter overflowed the pricer ahead of the pause seam (no pause stamped), and malformed auxiliary stream fields turned a successful call into a zero-accounting block — fixed ("Review round 14" note). Round 15: a COMPACT nested object on its own line still beat the line-framed pass (one shared top-level document framer now feeds all three readers), a 5000-digit integer raised a plain ValueError out of every decode site (bounded `parse_int` hook at the boundary), and non-string tool_result text / list-valued modelUsage / oversized total_cost_usd each zeroed a successful call — fixed ("Review round 15" note). Round 16: three more ways a diagnostic became the terminal event (a complete top-level array skipped line by line, `splitlines()` breaking on U+2028-class separators, a quoted document with prose after it on its line) — the framer now consumes every top-level document on LF-delimited lines and requires it to end its line; and auth classification read only the display rendering's first 4000 chars (an OAuth failure behind a partial-work `result` or a long diagnostic classified fatal, or retried) — every terminal error field is now read in full, one auth reading shared by predicate, breaker and class marker — fixed ("Review round 16" note). Round 17: two framer callers still stripped the capture (an indented rate_limit_event example bought another launch, an indented result example became a tool call with usage), the breaker searched the raw capture when the terminal object had no error text (a quoted OAuth line tripped it on a healthy session; the detail made it a host login story), and each rate-limit retry discarded the replaced attempt's paid usage — fixed ("Review round 17" note). Round 18: the rate-limit phrase backup searched whole stream captures (a quoted "rate limit" bought a launch — now plain-text captures only), both exhaustion errors interpolated the raw capture head (a quoted OAuth line made exhaustion a host login story; one bounded `_failure_detail` for every failure message), and a runaway kill on a retry escaped without the replaced attempts' evidence — fixed ("Review round 18" note). Round 19: a string-only diagnostic array read as plain text (quoted phrases bought a launch and a host login story — now no `{`/`[` at all), every non-"allowed" rate-limit status counted as a rejection (only `rejected` does; the rest are malformed), the exhaustion classification text-matched the display detail (a reset in `errors[]` behind a partial `result` classified fatal — the marker is structural now), and worker cost + cache reads never reached the director — fixed ("Review round 19" note). Round 20: the classifier read the display text's auth/billing/input substrings BEFORE the terminal markers (a partial `result` saying "invoice 401" made a rate-limited terminal a host auth failure — terminal failures now classify from their own fields first, authored phrases only), a refused revision left the paid draft's bill out of the durable director log (`worker_totals` + `superseded_attempts` + CLI JSON), and a conversion failure after paid retries escaped with no usage (validated `tool` field + evidence-preserving boundary, `maro_protocol_failure` → fatal) — fixed ("Review round 20" note). Round 21: the host credential circuit blocked every later executor call under `require` (container lane now rides its own breaker), a 10,000-deep side document raised RecursionError out of the framer on Python 3.12 ahead of the auth verdict (skipped with a warning), a permitted failover abandoned the failed hop's spend (folded once into the response or final exception), and the skip-director branch + `director.main` JSON dropped cost/cache — fixed ("Review round 21" note). Round 22: NO HIGH (fixpoint); two MEDs on the round-21 fold — shallow evidence adds shadowed a wrapped final hop's cause-chain counters (chain-aware now), and the tail ledger row + runaway meter read the response before the fold (fold first; failed-call records carry their own bill) — fixed ("Review round 22" note + "Fixpoint" paragraph). **Still open:** **(phase-3b lead, round 14, not changed)** parallel steps pass `project_dir` as the executor's explicit `cwd`, which outranks the provisioned step worktree — concurrent workers share the project directory while merge-back inspects a different checkout (since 93764c96, 2026-07-03); design question: which directory should a parallel step execute in? the project's `docs/mail_yahoo.md` still teaches a "sops fallback" that the 09-12 host-lane worker invented — a worker artifact in the project dir, so leave it to a run to correct (the 09-13 worker copied the recipe into `check_yahoo_inbox.py` as an "unused fallback").
+
+### A closure restart re-executes a goal the operator framed as "exactly once" — and its busy refusal overwrote the finished loop's `done` (FOUND 2026-09-07, run c8da416b)
+
+The app-password mint run c8da416b was framed "run the staged script EXACTLY ONCE; every login sends an SMS to Jeremy's phone". Loop 5645f6b5 obeyed: ran it once, it failed on a selector, the step reported honestly, the loop ended `done` at 17:36:17Z and the run_completed card went out (Hermes relayed it). The operator (me) read "done" and fired the fixed follow-up 2fd65744 into the same project. At 17:37:50Z the closure check on c8da416b said complete=False (2/5 checks) and `closure_restart` created loop 87cd16fb to try again — the engine, not the worker, about to re-run a side-effecting step the frame had forbidden. It was only stopped because the follow-up held the project slot: `plan.busy_refused` at 17:39:01Z, and `finalize_run(status="refused_busy")` then stamped the RUN `refused_busy` / `external-interrupt` over the `done` the first loop had earned — the card and the record now disagree, and `verdict_pending` sits on a run whose status says it never ran. Two fixes owed: (1) adaptive restart/replan must read the goal's side-effect class and the operator's "once only" framing (a goal that burns a code, sends a message, spends money is not restartable without a fresh decision — the same eligibility gate the shadow lane uses for re-execution); (2) a second loop's admission refusal must not overwrite the run-level status of a loop that completed — record it on the loop (`loop_ids` already lists both) and leave the run's terminal status to the loop that ran. Related: the refused_busy race in `docs/OPERATOR_ASK_DESIGN.md`, "done means done" in DEV_PATTERNS.
+
+### The execute frame's presence index covers secrets only — a containerized worker still says "Chrome is not installed" (FOUND 2026-09-07, first live ask-lane firing, run 084d3c1f)
+
+The secrets store closed credential blindness: every execute frame now says which names are injected and which are allowed but undelivered (`docs/SECRETS_DESIGN.md`). Tools got no such line. 084d3c1f's first question told the operator "Chrome absent", which is true inside `maro-executor` and false on the host (`/usr/bin/google-chrome-stable` + a profile), so the worker's no-input alternative was built on a container "not found" read as a host "does not exist" — the same positive-evidence failure the secrets index was built against ([[project_hallucination_reduction]]). Shape: a host-side probe for a small declared tool list (browser, docker, gh, sops…) rendered into the frame beside the secrets block as "present on the host, not reachable from this step" — same mechanism-decides-the-wording rule (build-log pattern 111). Not a container-support item and not an ask-lane item: the ask lane did its job; the frame lied to it. Falsifier: a containerized run asked to use the browser names the host tool and asks for a path to it (or a host-lane step) instead of asserting absence. **2026-09-07 later:** with the environment-request lane shipped (`docs/ENV_REQUEST_DESIGN.md`) the honest frame line becomes "not in this image — request it"; the fix is the same presence probe, the consequence is a deliberate request instead of a guess.
+
+### A step killed by its wall clock records ZERO tool events (FOUND 2026-09-07, run 70aa9fd8 call-00042)
+
+The step that asked the second live question ran 11 minutes, was killed by the 600 s wall clock, and its call record says `tools: 0` with the error text as the response — eleven minutes of browser driving (login, method chooser, Get code) invisible to the captain's log, receipts and lessons. `_run_subprocess_safe` attaches `maro_partial_output` to the TimeoutExpired; whoever writes the call record on the error path does not parse tool events from it. Jeremy's question the same night ("do we know what the container did… before deletion?") is answered "yes" ONLY for steps that ended on their own; check the record writer on the kill path and parse the partial stream. Related: the `--rm` retention change (keep failed containers).
+
+### A follow-up dispatch lands in a fresh project three ways — the navigator's pick was execute-only, an identical goal string reads as a rerun of a killed attempt, and the landscape scans 200 runs and relates none (FOUND 2026-09-07, runs 38cfec83 / 50dea643 / 2a779342)
+
+The app-password follow-up to the mail run (80a5a0dc, the project `weve-used-chrome-on-the` that holds the logged-in Firefox profile) was fired three times before it landed where the profile is. (1) `handle_queue` bound the navigator's `payload.project` only when the move was `execute`; the navigator chose `extend` (plan first), named the prior project in prose, and the pick was dropped — FIXED same day (`136fa077`, binds on any move, `test_extend_move_binds_too`). (2) The re-fire with the same goal string matched the killed first attempt as "a prior attempt with unknown outcome" and the navigator bound THAT attempt's fresh project (`now-that-maro-can-log`) over the operator context that named the right one — rerun identity is the exact goal string (the entry above, same family), and a killed run's metadata says `running` forever, so it reads as an open attempt: **reconcile orphaned runs by pid** (metadata carries `pid`) so a dead run gets an honest terminal status and the prior-attempts brief stops calling it unknown. — BUILT same day: `audit_repair.sweep_dead_runs` (no `ended_at` + recorded pid dead + metadata older than 600 s → `status: stranded`, `stop_verdict: external-interrupt`, evidence line; no goal verdict invented), called from the heartbeat health tick, from `rerun_identity.brief_for_goal` before it reads attempts (reconcile-before-read, since no heartbeat runs on this box), and by hand as `maro reconcile-runs [--dry-run]`; first live sweep stamped 8 runs (today's three kills + five crash victims from Aug 16–25 nobody had noticed). (3) The landscape on 38cfec83 scanned 200 runs, put all 200 below the 0.2 floor (`truncated: true`), and returned `no_candidates` for a goal that continues a run finished 7 hours earlier in the same mailbox — the follow-up's wording ("mint an app password…") shares almost no tokens with the mail goal, so the lexical relation missed the obvious. Landed on the third fire only because the goal text itself named the project. The decree stands ([[feedback_decisions_belong_to_maro]]): which prior work a goal continues is Maro's decision at plan time; today it is made by string matching in three places. **(4) BUILT 2026-09-13 — the landscape's decision binds the project.** `handle` now binds the loop's project by precedence: the operator's explicit `--project` (an override, recorded `operator`); the project of the run the LANDSCAPE chose for a `related`/`rerun` relation (`landscape.chosen_project`: the chosen run's recorded `project`, path-shaped values rejected, the directory must still exist — recorded `landscape`); an existing project literally named in the goal (the string shortcut, kept as the fresh-goal fallback because the lexical judge still misses continuations like (3) — recorded `named`); else the minted slug (`minted`). The rule that bound it is stamped as `project_binding` in run metadata so the shortcut's share can be measured before it is retired; the scope pass resolves through the same bound project. Go engine: n/a — its run model has no project concept (`internal/run/landscape.go` binds none). Still string-identity: rerun identity (the entry above) and the navigator's project pick. Review round 1 fixes (2026-09-13): the judge now also answers `continues` (template 4, shown each candidate's project) and only that binds — a related run that is merely context (a tangent, the same method for other work) no longer pulls the deliverable into its project; the recorded project is validated as a name and its directory must resolve inside the projects root; the navigator's pick is stamped `navigator`, disagreements with the landscape are logged.
+
+### Project identity is the goal slug, so an identically-worded stranger inherits another lineage's Goal Ancestry (FOUND 2026-09-05, lineage-memory live fixture, run bcc76703)
+
+Lineage-scoped memory landed (`--after <handle>`, `TieredLesson.lineage`, lineage filter at the recall seam — `tests/test_lineage_memory.py`; the Go successor got the same feature the same day, `planning/feature-lineage-memory.md` in the successor worktree). The lesson filter held in the live check: a stranger run's 22 prompts carried the lineage-scoped lesson 0 times. But the stranger still learned the codename, because its goal text was identical to the follow-up's, `_default_project_for` derived the SAME project slug, and the loop's **Goal Ancestry** block ("stay aligned with this chain: 1. Remember for later: our project codename is Heron…") rendered the other lineage's parent goal from the project's ancestry.json. Same-wording → same project → shared ancestry, artifacts, prior-attempt decisions — none of it lineage-scoped. A differently worded stranger (own slug) wrote UNKNOWN. Not a bug in the new filter; a pre-existing seam: project identity is text-derived, lineage identity is run-derived, and the two disagree exactly when a user re-asks the same question from a different context. Belongs to the "related goals / run horizons" feature Jeremy named as the growth target after memory: when a goal follows a run, its project should follow the lineage (or the ancestry block should be scoped by lineage), and an unfollowed goal should not inherit ancestry from a slug collision. Falsifier when fixing: the same-wording stranger writes UNKNOWN while the `--after` follow-up still writes Heron.
+
 ### Knowledge edges are minted but never traversed — the graph is queried like a flat list (FOUND 2026-08-21, link-farm round-3 run 92491e53, verified on dev Mac)
 
 Surfaced as a byproduct of a documented PASS: the round-3 assessment declined
@@ -6408,6 +6485,1081 @@ design sign-off before any public release. Still open:
   arc raises its priority (a dead run behind a network edge is
   invisible — see SP entry).
 
+### The landscape (related runs) — follow-ups (2026-09-05, feature 2 on both engines)
+
+Shipped: `src/landscape.py` + handle hook (`c19d619e`, review fixes
+`bd43ad31`); design note + review ledger live in the successor repo,
+`planning/feature-related-runs.md`. Left open on purpose:
+
+- [ ] **`rerun_identity` / `find_prior_attempts` overlap.** The 24 h
+  near-duplicate brief asks a narrower question ("was this exact goal
+  just run?") than the landscape's rerun relation; two instruments, one
+  fact. Fold the brief into the landscape record (rerun ⇒ the brief's
+  content) once the landscape has a live denominator.
+- [ ] **Project ancestry block vs run lineage — naming.** The loop still
+  injects `build_ancestry_prompt` (project nesting from dispatch forks'
+  `ancestry.json`) next to the recall thread line and the related block
+  (run lineage from origin). They are different facts and can name
+  different parents by construction; both reviewers read them as one
+  contradictory lineage. Landscape origins no longer WRITE ancestry.json;
+  the read side wants either a rename ("project nesting") or a fold into
+  one chain. Not a bug; a naming debt.
+- [x] **The landscape binds the project (2026-09-13).** A `related`/
+  `rerun` decision now binds the loop's project to the chosen run's
+  (`landscape.chosen_project`; operator `--project` overrides; the
+  named-existing-project shortcut is the fresh-goal fallback; every
+  binding stamps `project_binding` ∈ operator/navigator/landscape/named/minted).
+  Retire the `named` shortcut once the stamps show the landscape
+  carrying its share — BACKLOG entry "A follow-up dispatch lands in a
+  fresh project three ways", item (4). Review round 1 (2026-09-13,
+  codex skeptic + architect): `related` covers a tangent whose answer
+  is useful context, which is not "the deliverable belongs with that
+  run" — template 4 shows the judge each candidate's project and asks
+  `continues` (JSON true only; a rerun always continues; older
+  templates never bind); the recorded project is validated as a NAME
+  (`landscape.project_name`: non-string/path rejected, not coerced)
+  and the directory must resolve inside the projects root (a symlink
+  out of it is not a project); the navigator's menu pick riding
+  `project=` is recorded `navigator`, and a navigator/landscape
+  disagreement is logged so it is measurable before either outranks
+  the other; the fallback rule is read off the ONE scan that picked
+  the project; a failed stamp is logged; a fork of a landscape-bound
+  parent records the parent's RECORDED project (`recorded_project`),
+  not its goal-text slug. Round 2: the fallbacks were undoing the
+  verdicts one layer down — the minted slug REUSES an existing slug for
+  a goal that opens the same way ("…report for client B" landed in
+  client A's project under a `continues: false` verdict) and the named
+  shortcut followed the symlink the binder had just refused; now
+  `landscape.context_only_project` is an exclusion for both fallbacks
+  (`_project_for_goal(message, exclude)` steps to the first free `-2`,
+  `-3`… sibling) and `project_inside_root` guards the shortcut and the
+  slug too; a channel clarification that changes the goal re-decides
+  the landscape over the clarified goal (`_decide_landscape` is one
+  re-runnable decision; a re-decision that no longer follows a run
+  resets the stamped origin to the caller's); quality escalation stamps
+  `project_binding: escalated` with the `-escalated` project; a
+  whitespace-padded recorded name is rejected, not canonicalised into
+  the other directory. Round 3: the constraints had to survive the
+  TRANSITIONS after the binding — the escalation retry's `-escalated`
+  destination now carries the context-only exclusion and the containment
+  guard (steps to a free sibling), a discarded retry (dead or raising)
+  restores the delivered project + binding pair (else the next
+  continuation, recall and curation would bind to the dead retry's
+  workspace), the sibling allocator (`_free_project_name`) treats a
+  dangling symlink as taken, tries one random suffix past the cap and
+  fails closed rather than returning the excluded base, and a clarified
+  re-decision replaces the stamped origin in the SAME write as the
+  record (`landscape.apply(..., replace=True)`, empty origin included).
+  Round 4: the decision is a TRANSACTION — `_decide_landscape` derives
+  (context, bound project, context-only project) before it records, then
+  installs all of it or nothing (a context read raising after the stamp
+  had left a new parent on disk with the old project live); a
+  re-decision that cannot be made runs the clarified goal FRESH (the
+  stage-failed policy: goal-text binding, caller's origin, no prior
+  context — never the first verdict, which was about a goal that no
+  longer exists); a free sibling is RESERVED by `mkdir` at allocation
+  (two pending same-opening goals both saw `-2` vacant); the allocator
+  refuses a path-shaped base (`ValueError`) and an escalation of a
+  path-shaped OPERATOR project stays beside it as given (the override),
+  logged. Round 5: the landscape reads a SETTLED world — a run whose
+  `verdict_pending` marker is ACTIVE (the answer-first early close
+  published `done` before the quality gate; an escalation may still move
+  its project to a provisional `-escalated` retry that a failed retry's
+  revert abandons) is not a candidate until the finalize or the orphan
+  sweep resolves it (`landscape.verdict_settled`); the bound project and
+  the context-only exclusion come from the candidate SNAPSHOT the judge
+  decided over (`landscape.candidates[i].project`), the run's metadata
+  only for a record without one — the stamped record now explains the
+  binding; a reserved sibling is initialised WITH its mission
+  (`ensure_project(name, goal[:80])`, the loop's own text — the older
+  `resolve_project_slug` reads a generic-slug sibling with no mission as
+  matching any subject, so an empty reservation was handed to the next
+  unrelated same-opening goal; a mission-less reservation is refused);
+  the post-commit diagnostics (`log.info`, the verbose print) cannot
+  reach the stage-failed handler, which would have recorded a committed
+  decision as fresh. Round 6: the settled world survives CRASHES and
+  RACES — an escalation records its `project_transition` (from, from
+  binding, to, since) in the SAME write that moves the project, before
+  the retry starts (a retry whose recovery cannot be recorded is not
+  started: the delivered work's identity outranks the quality
+  improvement); adopted/reverted settle it in the pair's write; the
+  crash-orphan sweep REVERTS an active transition in the same write that
+  resolves the marker (`landscape.settle_project_transition`) — a
+  process killed between the move and the retry's delivery had left the
+  provisional retry directory as the record, and resolving the marker
+  alone would have made it "settled"; `run_settled` also holds a run
+  out while a transition is active; a reserved sibling is PUBLISHED
+  COMPLETE — built with its mission under a private `.reserve-*` name
+  inside the projects root and `rename`d into place atomically (the
+  older slug resolver saw the directory between mkdir and the mission
+  write and, reading no mission, handed it to the next unrelated
+  same-opening goal; a populated directory that appeared meanwhile makes
+  the rename fail and the next name is tried; the staging directory is
+  removed when the reservation does not happen); the clarification
+  caller's post-commit diagnostic moved out of the failure handler (the
+  same defect as round 5's, one layer up). Round 7: the transition has
+  ONE lifecycle — everything from the transition write to the retry's
+  return (the learning drain, the adapter build, the loop) is inside the
+  revert path (an adapter build raising had left the transition active
+  with the retry project as the record, swallowed by the gate's
+  handler); a settlement write (adopted/reverted) gets two attempts and
+  then rides the finalize's marker-resolving write (`_UNSETTLED_TRANSITIONS`,
+  process-local) so "verdict resolved" implies "transition settled";
+  `audit_repair.sweep_transition_orphans` (heartbeat, beside the verdict
+  sweep) reverts an active transition whose verdict marker is resolved
+  or absent (follow-up off) once aged past the grace with a dead owner —
+  the verdict sweep only ever saw active markers; the reservation's
+  `ensure_project` runs inside the cleanup scope (a partial
+  initialisation left `.reserve-*` behind); deletion census: the
+  staging rmtree allow-listed as ephemeral. Round 8: a settlement the
+  finalize could not write is KEPT in `_UNSETTLED_TRANSITIONS` (it was
+  popped before the write, so a store outage at the finalize dropped the
+  intended outcome and the sweep later reverted an adopted retry) and
+  the transition sweep drains the kept settlements first — in-process,
+  under the repair pidfile — before its disk candidates (`retried` in
+  its result; heartbeat sums `stamped + retried`); the transition sweep
+  has NO liveness test (its domain is runs with `ended_at` and no active
+  verdict marker — the handle has finished; the old `os.kill` check
+  skipped the very worker whose heartbeat thread runs the sweep); the
+  heartbeat runs the two sweeps in independent try scopes (the
+  transition sweep was nested under the verdict sweep's, so a verdict
+  sweep raising took it down too); the verdict sweep's pid check
+  catches `OverflowError`/`ValueError` (a pid that cannot exist aborted
+  the whole sweep); `handle_queue`'s RESUME passes the run's recorded
+  `project` to the loop (it passed none, so loop init re-derived the
+  slug from the goal over the landscape binding). Round 9: the finalize
+  keeps its WHOLE failed write — the settlement AND the verdict marker's
+  resolution — as the pending obligation (round 8 kept the settlement
+  alone, so the drain left the marker active and the verdict sweep,
+  which skips a living owner, never resolved it: a healthy worker's run
+  stayed out of the landscape for the worker's life; a marker-only
+  finalize failure is kept the same way); the drain reconciles a kept
+  write with the store first (a settlement the disk already carries —
+  another process's sweep reverted it, or the RESUME lane ran a later
+  transition under the same handle id — is dropped, a marker already
+  resolved is not re-resolved; `dropped` in the result) and a handle
+  whose kept write still fails is left out of the disk pass (the disk
+  fallback published the opposite settlement in the same sweep and the
+  next drain flipped it back). Convention recorded (round 8 had it
+  backwards): the verdict sweep treats `PermissionError` on `os.kill`
+  as NOT the run's process, the codebase's `_pid_alive` convention —
+  every worker on a workspace runs as the workspace's user, so a pid we
+  cannot signal is a system process that took the number; the other
+  reading would leave the run unresolved, and out of the landscape, for
+  that process's life. Premise: a workspace shared by workers under
+  different users is not a deployment Maro has. Round 10: the
+  finalize's obligation needs no read of its own — it is a FLAG
+  (`_finalize`) plus any settlement the run could not record, and the
+  marker's resolution is materialised from the store's LOCKED snapshot
+  (`audit_repair.reconcile_kept_write` inside the new
+  `runs.revise_run_metadata_for`, a stamp decided from the snapshot it
+  merges into; `revise` returning nothing = no write, no new inode) —
+  round 9 kept a materialised patch, so a failed READ before the
+  finalize's write kept nothing and the marker stayed active for the
+  worker's life; the drain decides and publishes from ONE snapshot (an
+  unreadable eligibility pre-read had meant "write as kept", replaying
+  an adoption over another sweep's revert) and a store that cannot be
+  read or written defers the kept write (warned each sweep) rather
+  than dropping or writing it. Round 11: recovery has a consumer in
+  EVERY process — the final close stamps `finalized_at` (the handle's
+  own record that its finalize ran; the answer-first early close never
+  sets it), and the verdict sweep recovers a finalized run with an
+  active marker whatever its age or host pid, without the notify the
+  finalize already sent (the sweep's pid check could not tell a
+  finished handle from a live host, so a long-lived listener — which
+  never runs the heartbeat's sweep — kept its finished run out of the
+  landscape for its life); `handle()` drains this process's kept
+  writes on entry (`audit_repair.drain_kept_writes`, not on dry runs);
+  a drained write refreshes the run card and reports like the disk
+  path does (the saved card had stayed `done-verdict-pending`). Round
+  12: finalization is not delivery — the final close (`finalized_at`)
+  PRECEDES the finalize's notify, so the sweep's notify is keyed on the
+  finalize's own delivery record (`final_notified_at`, stamped after
+  its emit; a stamp that fails errs toward a repeated notify, never a
+  missing one); a drained finalize obligation over an AGENDA run with
+  no verdict makes the honest call the close's tripwire had waited on
+  (`runs.record_finalized_without_verdict`, now shared with close_run:
+  ledger row never-stamped + DONE_WITHOUT_VERDICT event, ledger BEFORE
+  the marker; a ledger stamp that raises defers the write; an
+  unreadable pre-read does not gate the write and the call is made
+  after it, best-effort); the queued RESUME forwards the recorded
+  project only when it is a non-blank string (`str()` had manufactured
+  a directory name from a malformed record). Round 13: telling the
+  run's story is its OWN obligation, independent of the verdict marker
+  — `audit_repair.sweep_untold_finalizes` (heartbeat, third
+  independent scope) tells a finalized run with no delivery record
+  (`finalized_at` without `final_notified_at`: the process died between
+  the final close and its emit, or a configured hook failed — the
+  marker is usually RESOLVED by then, so the verdict sweep never
+  revisited it), routed like the finalize (early answer reached →
+  `run_verdict`, else `run_completed`, payload = the saved card), with
+  a live owner within the grace left alone (a finalize still in its
+  curation); delivery = the hook ran cleanly OR no hook is owed
+  (`notify.hook_configured`), never the attempt — the finalize and the
+  verdict sweep's epilogue record `final_notified_at` only then (a
+  configured hook that failed leaves the story owed); the ledger's
+  typed `write_failed`/`invalid` results defer the drain (`missing` is
+  a valid absence). Round 14: the recovery tells the TRUE story — the
+  untold sweep rebuilds the card from the record before telling it
+  (`_refresh_run_surfaces` now returns the rebuilt card; the final
+  close precedes the curation, so a death between them left the
+  answer-first `done-verdict-pending` card on disk and the sweep
+  delivered it over a judged verdict — and acknowledged it); a rebuild
+  that fails makes the payload the record's own verdict fields, never
+  the saved card; a crash-orphan the verdict sweep repairs carries
+  `story_owed_at` IN its resolution write (both branches, only when
+  not already told), so a failed configured hook in the epilogue — or
+  the sweep dying after resolving — leaves a record the untold sweep
+  selects (`finalized_at` OR `story_owed_at`, no `final_notified_at`;
+  the r13 resolve-then-die residual is closed by this); `_pid_alive`
+  treats OverflowError/ValueError AND a non-positive pid as dead
+  (`os.kill(-1, 0)` signals everything we own and answered "alive");
+  `limit` bounds ATTEMPTS (a failed hook counts; heartbeat's 5 × the
+  30 s hook timeout caps a tick at ~150 s) and the order is
+  never-attempted first then oldest attempt (`final_notify_attempted_at`
+  stamped per failure), so a failing row does not shadow the rows
+  behind it; an emit that raises is owed whatever the hook. Round 15:
+  the story is acknowledged by its CHANNEL — new `notify.tell` (the
+  journal row's own result when no hook is owed for the event, the
+  hook's clean exit when one is; `emit` keeps its hook-only contract
+  and a `_journaled` flag so `tell` writes the row once) replaces
+  `emit`+`hook_configured` at the finalize, the verdict sweep's
+  epilogue and the untold sweep (a failed journal write with no hook
+  had been recorded as told); the drain's finalize obligation writes
+  `story_owed_at` when the snapshot has no `final_notified_at` (its
+  resolution had left a story no sweep could select); one
+  `_story_payload` (rebuilt card, else the record re-read AFTER the
+  repair's write, so the orphan branch carries its new source) serves
+  both sweeps (the verdict sweep's fallback had been id-only, and it
+  acknowledged that); the untold sweep skips an ACTIVE marker — that
+  run is the verdict sweep's, told on resolution (telling the pending
+  card first acknowledged it, and the resolved verdict was then never
+  told; a ledger that never recovers keeps that story waiting on the
+  verdict, the never-clear-the-flag-first direction). Round 16: the
+  same word at EVERY sender — the early answer's sender uses `tell`
+  and records `early_told` (a failed journal row with no hook had been
+  recorded as an answer that reached the user, and the follow-up then
+  carried only the verdict); `notify.early_reached(marker)` is the one
+  router for the finalize and both sweeps (legacy markers read the
+  old way); the finalize's fallback payload is `_story_payload` (its
+  id-only substitute acknowledged an empty story); the finalize does
+  NOT stamp `final_notified_at` while its resolving write is kept —
+  the pending card it told is not the final story; the resolver (this
+  process's drain → `story_owed_at`, or any verdict sweep) tells the
+  verdict and records that, and the untold sweep skips its liveness
+  gate for a `story_owed_at` record (a repair wrote it: the owner's
+  finalize is over); the journal row for a bare `run_completed` story
+  carries `[handle] goal_achieved=… source=…`; `notify.hook_owed`
+  returns None when the config cannot be read or `notify.events` is
+  not a list of names, and `tell` then acknowledges nothing but a
+  clean hook run (both had read as "no hook owed"). Round 17 (the
+  FIRST flipped round — Jeremy's 2026-09-13 rule: after 4–5 rounds
+  codex writes the fix in a worktree and Claude reviews/lands; codex
+  wrote this one, one correction on review): the loader remembers
+  faults — `config.load_faults()` names a config file that exists but
+  could not be read/parsed or is not a mapping (an EMPTY file is an
+  empty mapping, not a fault — codex's draft faulted it, which would
+  have made every story unknowable on a box with an empty config), a
+  faulted load is not cached so a repaired file with the same mtime is
+  re-read, and `hook_owed` returns None while a fault stands (the r16
+  guard sat above the loader that swallows the fault); the early
+  sender records `early_told` only when the acknowledged card carried
+  the answer (`answer_summary`/`result_excerpt` — an empty early card
+  had read as a delivered answer and the follow-up carried none); the
+  `run_completed` journal row carries `[handle] goal_achieved=…
+  source=… [verdict_pending]; excerpt` whenever the payload has a
+  verdict field, the verdict reserved before the clipped excerpt (a
+  judged failure and a success had produced identical rows).
+  Direction recorded: a
+  settlement that fails in the run AND at the finalize is kept for the
+  sweep's retry in the same process; only a process death loses it, and
+  then the sweep reverts even an adopted retry — the retry's adoption
+  is durable only when its write is; the original's identity was
+  durable before the retry started, and the retry's work stays on disk
+  in its own directory. Recorded, not changed: a project deleted
+  between selection and loop init is recreated empty by
+  `ensure_project` (deletion is manual and opt-in here — data-retention
+  decree — and the window is seconds); a follow-up arriving in the
+  verdict-pending window runs fresh with `no_candidates` (the window is
+  the gate's runtime; a crash-orphaned marker is resolved by the sweep
+  after its grace); a settled run's project is never re-stamped by the
+  system, so snapshot and metadata differ only when something outside
+  it moved the project.
+  Round 18 (second codex-written fix, reviewed): the loader's fault
+  list was process-shared — two concurrent loads (scheduler `handle()`
+  threads) could clear each other's fault and cache a partial config as
+  clean, permanently; config now holds one lock for the whole load and
+  publishes `(merged, key, faults)` as one snapshot (`load_faults()` is
+  the published snapshot's; a faulted snapshot never hits); a malformed
+  NESTED `notify` section (`notify: [..]`, `notify: 17`) over a valid
+  user hook had read as "no hook" (dotted `get` defaulted through the
+  list) — `hook_owed` now reads the section and returns None for a
+  non-mapping; `_emit` still executed an INHERITED user-level hook when
+  the workspace override was unreadable, and `tell` took that success
+  as the acknowledgment — the hook is skipped while any fault stands;
+  the early sender qualified `answer_summary` while the journal row
+  carried only `result_excerpt`/`summary` (a summary-only card told
+  "pending" then a verdict, the answer in neither) — one
+  `notify.answer_text` projection now feeds both the row and
+  `early_told`. Review corrections: codex left four single-argument
+  `_load_yaml` tests broken (only ran its `-k` slice), and its handle
+  test passed with the OLD handle code — a blank-summary card test now
+  pins the sender's side. Recorded, not changed: `load_faults()` before
+  any load in the process is empty; the lock is held across file I/O
+  (every config read waits behind a slow disk); a faulted snapshot is
+  re-read on every `get` (no backoff); `hook_owed` and `_emit` load at
+  different instants (a file changing between them is a new snapshot);
+  other `config.get` callers still silently default on a fault.
+  Round 19 (codex-written): `hook_owed` still read the section and the
+  fault list in two calls — a clean publish landing between them (no
+  file changed) paired a faulted "no section" with an empty fault list
+  and retired the story; config now exposes `snapshot()` (merged +
+  faults from ONE published load) and notify derives one `_policy`
+  (owed, command, section) from it for BOTH `hook_owed` and `_emit`; a
+  malformed `command` member (`[]`, `{}`, `0`, `17`, `true`) had read
+  as "confirmed no hook" — now unknown (explicit off = null, blank, or
+  `false`); `_emit` ran the hook on raw membership against an
+  unvalidated `events` (a string matched by substring, a mapping by
+  key, a mixed list by its valid member) and its clean run made `tell`
+  True where `hook_owed` said None — execution now needs the policy's
+  True; a non-numeric `timeout_seconds` no longer drops a valid hook
+  (default 30, warned); the r18 concurrency test now asserts that the
+  second loader is blocked. Recorded, not changed: `hook_owed` in
+  `tell` and `_policy` in `_emit` are still two snapshots (a file
+  changing between them is a new publish, by design); `command: false`
+  is a deliberate off switch, not a fault.
+  Round 20 (codex-written): the ORDINARY finalize's obligation write
+  stamped `story_owed_at` (r15's "the owner may not get to tell it")
+  and the untold sweep read that stamp as "a repair finished — the
+  owner is done", skipping grace and liveness: it could tell the EARLY
+  record (done) while the live owner was still finalizing, and when
+  the final close then changed the story (a KeyboardInterrupt in the
+  post-answer tail → error) and the owner died before its own tell,
+  the changed story was never told (`final_notified_at` already
+  stood) — the stamp now carries `story_owed_by` (`owner` from the
+  finalize, `repair` from the drain and the verdict sweep; a legacy
+  stamp with no `by` reads as repair) and only a repair's stamp
+  bypasses a live owner's grace; RESUME `.strip()`ped the recorded
+  project so an operator-bound `" board-reports "` resumed into
+  `board-reports` — another directory — with `project_binding` still
+  `operator` (the identity is preserved verbatim; the r12 test pinned
+  the normalization and now pins the two distinct directories); the
+  r19 timeout fallback missed `.nan`/`.inf`/`0`/`-1`/overflow (finite
+  and positive or 30, warned). Recorded, not changed: an owner whose
+  own tell failed waits out the grace (1 h) or its death before the
+  sweep retells — duplicate over missing still holds after that.
+  Round 21 (codex-written): a finalize whose obligation write FAILED
+  published the obligation to the process-wide kept-write dict at once
+  — before its own final close and tell — and any other `handle()`
+  starting on another scheduler thread drains on entry, re-labelling
+  it `repair` while the owner was still finalizing (the r20 gate
+  bypassed again: early record retold, a later error close never
+  told); the obligation is now held privately and published in a
+  `finally` when the finalize block exits (close + tell attempted,
+  success or exception); a finite positive timeout above what the
+  subprocess clock can hold (`1e20`) raised OverflowError at launch on
+  every retry — bounded at one day, else 30 with a warning, pinned
+  through a REAL subprocess; curation's deliverable scan
+  `.strip()`ped the recorded project that execution (and, since r20,
+  RESUME) preserves — one `runs.recorded_project(meta)` identity now
+  serves curation, RESUME and the env-request image lookup (the
+  navigator's menu PICK stays normalized: it is an answer, not yet an
+  identity). Recorded, not changed: an obligation held privately is
+  lost with the process (as before — only a death loses it).
+  Round 22 (codex-written): the kept-write drain captured the entry
+  under a handle id, did its I/O, then popped WHATEVER entry sat under
+  that id — an escalation's failed settlement being drained on another
+  thread while the owner's finalize failed its write and its r21
+  `finally` published the replacement obligation under the same id
+  lost that obligation with the host alive (marker active, no sweep
+  selecting it: the very case r21 promised only a death could cause);
+  the registry now has a lock (`handle._UNSETTLED_LOCK`) held by every
+  publication and removal, the drain removes only the exact object it
+  drained (a replaced entry waits for the next drain), and the
+  finalize's success pop removes only the entry it read; the
+  env-request layer slug folded distinct verbatim identities
+  (`" board-reports "` vs `"board-reports"`) onto one layer directory,
+  image and grant list — a canonical identity keeps its plain slug
+  (both live layers unchanged), any other gets `<slug>-<sha1[:8]>`,
+  and a manifest recording a different project lends nothing.
+  Round 23 (codex-written): the four disk sweeps (dead-run, transition
+  orphan, and both verdict-orphan branches) decided their repair from a
+  read OUTSIDE the metadata lock and merged it unconditionally — the
+  round-10 locked decision had fixed only the kept-write drain — so an
+  owner's finalize landing in the window (adopted settlement, resolved
+  marker, judged verdict, or `ended_at`) was overwritten by the sweep's
+  stale revert / `pending_orphaned` / `stranded`; every sweep now
+  decides inside `runs.revise_run_metadata_for` from the locked snapshot
+  and declines (not counted, not told) when the owner settled it
+  meanwhile; curation's `_read_meta` swallowed a metadata read failure
+  into `{}`, so a repair's card refresh rebuilt an EMPTY classification
+  over the real card and the untold sweep told `goal_achieved=None`,
+  retiring a real `False/closure` story — the refresh now declines
+  (`_read_meta_strict`, card untouched) and the sweep tells the record;
+  the r22 hashed layer slug was itself canonical (`yahoo-mail-cd6088ca`
+  aliased the identity of that name) — encoded identities now carry an
+  `_` no canonical slug can, and a build or grant into a layer
+  directory whose manifest records another project is refused; the
+  r22 registry lock is now pinned (the owner's publication blocks while
+  the drain holds it).
+  Round 24 (codex-written): a repair's PLACEHOLDER ledger stamp
+  (`verdict_pending_orphaned` from the orphan sweep,
+  `closure_never_stamped` from the finalized-without-verdict record
+  used by the kept-write drain and `close_run`) ran from an unlocked
+  eligibility read BEFORE the r23 locked metadata decision — an
+  owner's `closure_unverifiable` verdict landing in between kept its
+  boolean but lost its source and its `verdict_excluded` flag (no
+  history, since the placeholder carries no boolean), promoting
+  excluded evidence to FULL learning trust with the resolved marker
+  keeping every later sweep away; `stamp_outcome_verdict` now takes
+  `only_unjudged=True` (decided inside its own lock: a judged source
+  → `superseded`, no write; placeholder-over-placeholder still
+  idempotent) and both placeholder stampers pass it, accepting
+  `superseded` as honest; the card refresh read metadata and rebuilt
+  BEFORE taking the card lock, so a repair's refresh could publish a
+  stale `done-verdict-pending` over the owner's `done-not-achieved` —
+  the read + rebuild now happen inside `locked_rmw`'s critical section;
+  the r23 8-hex identity digest collided among ordinary name
+  populations (the ownership check then refused the second project
+  forever) — 16 hex now, the refusal kept as the collision's fate.
+  Round 25 (SAME-MODEL FALLBACK — codex capped until 2026-09-20;
+  sonnet/medium reviewers, fixes by the orchestrator): no HIGH. Three
+  MEDs fixed: the r23 strict metadata reader caught `OSError` and
+  `JSONDecodeError` but not `UnicodeDecodeError`, so a torn UTF-8
+  record (a write cut mid-multibyte) crashed the refresh instead of
+  declining it — now declined like any other unreadable record; the
+  r24 `only_unjudged` guard yielded only to `closure_never_stamped` /
+  `verdict_pending_orphaned`, so a placeholder stamp declined a
+  `run_errored` or `closure_skipped_no_steps` row as if it were a
+  judgment — the four-member placeholder family is now one
+  `VERDICT_PLACEHOLDER_SOURCES` set and any member yields to a
+  placeholder; the refresh's FIRST card (no `run_card.json` yet) was
+  built and written outside the r24 locked read-build-write — the
+  no-card branch is gone and the first card takes the same lock
+  (`locked_rmw(..., default="")`, an empty body reads as no card).
+  LOWs recorded, not fixed: the unlocked truthiness check at handle
+  entry (best-effort by design), `tell` re-deriving `hook_owed`,
+  a vestigial `hook_configured`, redundant manifest reads.
+  Round 26 (codex back at gpt-5.6-sol/high — run as BOTH an opus/medium
+  same-model round and an opposite-model codex round; fixes
+  codex-written, orchestrator-reviewed): five verified HIGHs. The worst
+  was a REGRESSION from r24: moving the card rebuild under the
+  `run_card.json` lock put every curator there — `synthesize_answer`'s
+  LLM call (live: `curation.answer_synthesis: true`) and
+  `locate_deliverables`' copies — so a sweep's refresh held the card
+  lock (and the repair pidfile) across a network call while the owner's
+  finalize timed out on its 30 s fail-closed `locked_write`, swallowed
+  the timeout, and shipped a record-only story with no answer; and
+  `curate_run` was still a blind two-write publisher, so the owner's
+  pending snapshot could overwrite a sweep's resolved card (the r11
+  defect through the un-fixed door). Now ONE publication discipline for
+  every card writer (`_publish_pure_card`): build outside the lock from
+  a metadata snapshot, revalidate the snapshot under the lock, merge,
+  write; a moved snapshot rebuilds (3 attempts) then declines — the
+  sweeps come back; maintenance keys merge over the FRESH disk card
+  (`_publish_maintenance`) and never carry stale classification; a
+  tripwire test asserts no builder runs under a file lock. Also fixed:
+  magic prefixes (`direct:`, `team:`, persona/effort words) entered the
+  landscape's Jaccard denominator because the decision ran on the raw
+  input — it now runs on the stripped message, new runs stamp the
+  stripped `goal` in metadata and the scan prefers it over `prompt`;
+  `mode:thin` returned before the project binding (a thin run carried
+  the landscape relation but no project, so a follow-up choosing it
+  landed named/minted) — the binding block now precedes every AGENDA
+  executor; the env manifest had no per-project transaction
+  (`add_grants` load/merge/save unlocked, a FIXED `.json.tmp`, two
+  builders reserving the same layer) — grants are one locked
+  transaction, manifests/Dockerfile/log use unique atomic temps,
+  `layers.jsonl` via `locked_append`, builds serialize on a per-project
+  `build.lock` with the docker build OUTSIDE the manifest lock and the
+  advance committed under it preserving concurrent grants; the ledger's
+  `only_unjudged` guard failed OPEN (a non-str source, or a placeholder
+  source beside a bool `goal_achieved`, yielded: the old bool stayed,
+  `verdict_excluded` was popped, trust went EXCLUDED → FULL) — now only
+  a coherent unjudged row (no bool, source empty or in the placeholder
+  family) yields. MEDs: `_read_meta_strict` parses with `loads_clean`
+  (duplicate `goal_achieved` keys were last-wins) and both readers pin
+  UTF-8; an existing zero-byte card is warned, not silently treated as
+  "no card"; `runs.recorded_project` → `recorded_project_verbatim`
+  (the landscape's validated `recorded_project` shares the old name
+  with the opposite contract); `revise_run_metadata_for` reports only
+  the fields it wrote. DIRECTION: `closure_error` stays outside the
+  placeholder family (a judge that ran and crashed keeps its WHY; both
+  grade neutral); `project_binding` has no reader yet and six values
+  (`escalated` overwrites, the original in
+  `project_transition.from_binding`) — a census script is future work;
+  a corrupt metadata.json now declines `curate_run` too (no card at the
+  finalize → record-only story) rather than curating from `{}`.
+  Round 27 (codex-written fixes, orchestrator-reviewed; 5 HIGH + 2 MED, all
+  branch-twin expansions of earlier rounds): the no-channel clarification
+  exit returned before the project was bound, so the queued RESUME resumed
+  projectless → `_bind_project()` closure runs before every AGENDA exit
+  (execution, clarification pause); a clarified goal was judged again but
+  `metadata.goal` kept the pre-clarification text, so candidate scans read
+  the wrong goal → re-stamped at clarification; `direct:`/`team:`/
+  `pipeline:` branches passed no related-prior context → one
+  `_base_context_parts` list feeds every branch; `mode:thin` bound a project
+  and then curated a NEIGHBOUR run's deliverable out of it → thin stamps
+  `execution: thin`, persists its own `build/loop-thin-RESULT.md`, and
+  `locate_deliverables` skips thin runs; CLI `--after` minted a project
+  instead of inheriting the parent's → origin carries a validated
+  `parent_project`, bound as `project_binding: parent` (below operator and
+  landscape, above named/minted; dispatch forks still mint); an
+  exclusion-only ledger row (`verdict_excluded`, no source/value) was
+  repairable as a placeholder → declined; a card that changed between park
+  and re-merge was replaced anyway → only the exact parked bytes may be
+  replaced, a different corrupt body is parked in turn, and the rebuilt
+  card is reused across parks (curators, incl. synthesis, never re-run —
+  the orchestrator reworked codex's `continue` into an inner park loop).
+  Deliverable copies are now atomic (mkstemp + os.replace). Directions
+  recorded, not built: build side effects before the CAS (the pure card's
+  curators write artifact copies whether or not the CAS wins); maintenance
+  promotion vs verdict correction share one `_publish_maintenance` path;
+  binding stamp is best-effort at the pause. Round 28 = codex confirming
+  round.
+  Round 28 (codex-written fixes, orchestrator-reviewed; 3 verified HIGH +
+  6 MED, all branch twins again): `team:`/`pipeline:` executed the
+  PRE-clarification `_pfx.message` (only `direct:` passed the clarified
+  `message`) → all three execute `message`, pipeline still parses its
+  preset steps from the submitted text; the QUEUED clarification never
+  published the clarified goal (`operator_ask.answer` stamped only
+  `clarification_answer`; the RESUME ran the original goal with the answer
+  in context) → the answer stamps `goal` = "<goal>\n\nAdditional context:
+  <reply>" in the same write, env/code asks untouched, RESUME input
+  unchanged; a FAILED sidecar write still authorized replacing the corrupt
+  card (`_park_unreadable_card` returned None either way) → it returns a
+  bool and the publisher declines (card untouched) on False. MEDs: thin's
+  `execution: thin` is stamped BEFORE the thin loop runs and both its
+  failures (marker None, report write) are warned, never swallowed; the
+  no-channel clarification result reports `project`; a binder raising at
+  the clarification exit no longer falls through the clarity `except` into
+  executing the UNCLEAR goal; the exact-text rerun brief is skipped after a
+  live clarification (fail-safe); `_may_placeholder_repair` fails closed on
+  a sourceless row carrying `goal_verdict_at`/confidence/`verdict_history`;
+  `locate_deliverables` needs positive provenance — `loop_init` stamps
+  `execution: loop` beside `project`, and the scan runs only for
+  `execution == loop` or legacy records (no `execution`, no
+  `project_binding`, lane ≠ now) — so NOW / Conductor / clarification-
+  paused / pre-loop-failed runs never copy a neighbour's project file.
+  DOC: the precedence comment claimed landscape > `parent`; the landscape
+  is not consulted when the origin names a parent (`--after` is the
+  operator's own continuation decision), so `parent` is an operator-class
+  override under its own name — comment corrected, r27 test stands.
+  Refuted/recorded: a symlink swap of the project dir between binding and
+  loop init is another actor in a single-user workspace (premise stands);
+  a logging handler raising is not a real vector (logging never re-raises)
+  but the guard covers the class. Round 29 = codex confirming round.
+  Round 29 (codex-written fixes, orchestrator-reviewed; 3 verified HIGH +
+  5 MED, failure-path twins of the r28 fixes): `execution: loop` was
+  stamped BEFORE admission, so a `refused_busy` run carried loop provenance
+  and could curate the ACTIVE run's report → the `project` stamp stays
+  pre-admission, `execution: loop` is stamped only once the refused-busy
+  return is unreachable, and its failure is a warning; `operator_ask.answer`
+  ignored a None from the answer stamp (resume queued over a stale record)
+  and an enqueue failure after the stamp left the run `answered` with no
+  resume, refused forever → a failed stamp returns an error and never
+  enqueues; an answered record with no `resume_job_ids` is retryable
+  (`never-queued`; live-delivered answers stay final); a live-channel
+  TIMEOUT, blank reply or `ask()` exception fell through the clarity
+  `except` into executing the UNCLEAR goal (only the no-channel path
+  paused) → one `_pause_for_clarification()` helper serves no-channel,
+  timeout, blank and channel-error alike (BEHAVIOUR CHANGE: a Hermes/
+  Telegram question that times out now pauses durably for `maro answer`
+  instead of running the ambiguous goal; revert = the one `if not _reply`
+  line). MEDs: retries rendered the goal from the already-enriched text
+  (duplicated / accumulated answers) → immutable `clarification_base_goal`
+  stamped at the first answer; `_may_placeholder_repair` used truthiness
+  (confidence 0.0 read as absent) → key presence, non-None, non-empty
+  history; the sidecar was a plain `write_bytes` → `file_lock.atomic_write`
+  (fsync + replace) with the pid in the name; "legacy" was inferred from
+  MISSING fields (two failed stamps re-enabled the neighbour scan) →
+  legacy is a TIME property (`_EXECUTION_PROVENANCE_SINCE`, the rollout of
+  `execution: loop`); the BLE rewrite could paraphrase away the live
+  clarification → BLE rewrites the submitted goal and the exact
+  "Additional context" suffix is re-appended after. Direction recorded:
+  the queued clarification publishes `goal` but keeps the pause-time
+  project/binding (the queued path cannot re-judge; a later scan may pair
+  the clarified goal with that project — an LLM re-decision at answer/
+  RESUME time is a separate item). Round 30 = codex confirming round.
+  Round 30 (codex sol/high skeptic + architect on d3cbee0d; 5 HIGH +
+  7 MED, failure-path twins of the r29 fixes; fixes codex-written,
+  orchestrator-verified by read + per-file mutation): the answer stamp
+  and the resume enqueue were two stores with no claim (two responders
+  both passed the already-answered check; an enqueue failure was
+  retryable only because the ids list happened to be empty) → the queue
+  id is allocated first, `revise_run_metadata_for` makes ONE locked
+  conditional claim carrying `resume_job_ids`, enqueue publishes that id,
+  the post-enqueue stamp is gone, a recorded id with no task = `missing`
+  = retryable (a process-local in-flight set covers the publication gap
+  for threads; the cross-process window is recorded, bounded by
+  refused_busy); `_pause_for_clarification` ignored a None stamp →
+  status `error`, never executes an unrecorded unclear goal;
+  `loop_init` left a stale `execution: loop` on a refused RESUME →
+  pre-admission stamps `execution: pending`; `locate_deliverables` had
+  no upper bound → files newer than `ended_at` are not this run's; the
+  BLE paraphrase could erase a literal project name → binding reads the
+  pre-rewrite text. MEDs: every pause stamps `clarification_base_goal`;
+  the live branch stamps before it publishes (mkstemp + replace);
+  cutoff 16:20Z + aware `started_at` required for legacy; a failure
+  after an UNCLEAR verdict still pauses; a malformed `verdict_history`
+  is evidence; uuid sidecar nonce; legacy `mode:thin` not scanned;
+  `atomic_write(durable=True)` fsyncs the directory. Round 31 = codex
+  confirming round; STOP RULE: if r31 still finds HIGHs, land only the
+  cheap verified fixes and escalate the round budget.
+  Round 31 (codex sol/high skeptic + architect on 6a09e8bd; 6 distinct
+  HIGH + 4 MED, failure-path twins of the r30 fixes; STOP RULE applied —
+  cheap verified fixes landed, NO round 32, the two design-class HIGHs
+  are queued as their own item below): the live answer branch decided
+  on the unlocked snapshot and stamped unconditionally (a worker whose
+  window closed, or two live responders, were "delivered" to no reader)
+  → a `revise_run_metadata_for` claim on the locked snapshot; declined +
+  pause_reason now set → falls through to the queued resume; a failed
+  answer file after the live claim left the record answered/live and
+  final → conditional rollback to pending + retry error; the r30 claim
+  closure called `env_request.apply_answer` (grants + docker build)
+  INSIDE the metadata lock (the lock contract forbids subprocesses) →
+  the closure is pure, the environment decision applies after the lock
+  and is merged best-effort; a second production clarification stamped
+  the loop's RAW goal as the base (handle_queue executes `prompt`) and
+  the second answer lost the first → base = the run's published `goal`
+  when present; the ended_at bound TOCTOU (stat, then copy by pathname)
+  → symlinks skipped, one stat snapshot per candidate, re-stat after the
+  copy, mismatch → omitted `changed-after-check`, card built from what
+  was validated; `files_modified_since` capped at 100 BEFORE any upper
+  bound → `until_ts` filters before the cap; naive `ended_at` → no scan;
+  a vanished candidate no longer aborts the curator; an empty UNCLEAR
+  question now defaults instead of defeating the pause guard; the
+  pre-admission `pending` stamp failure is warned.
+  OPEN (design item, not fixed — round 31 HIGHs S1/A3, S5/A5, A6): (a)
+  `pause_for_ask`, `watch_live` and `env_request.pause_for_request`
+  still return `pending` and notify the operator when their stamp
+  returns None (the question is then unanswerable: "has no operator
+  question") — needs ONE checked pause API whose three callers do not
+  notify/return paused on a failed write, and a loop contract for the
+  failure; (b) attempt provenance is one scalar `execution` field and
+  one run-wide `started_at..ended_at` interval — a RESUME whose pending
+  demotion fails keeps the prior `loop`, and the gap between separated
+  attempts (a neighbour writing in between) is inside the scan window —
+  needs per-attempt records (loop_id, project, start, end) and a scan
+  over their union. Refuted again: the symlink swap of a validated
+  project dir between binding and loop_init (single-user premise,
+  rounds 18–26).
+- [ ] **Landscape judge cost census.** The one call rides
+  `purpose="landscape"` (hosted-free when buildable); the subprocess
+  backend does not enforce `max_tokens=200` (live: 378 tokens). Add the
+  purpose to the metering census once a denominator exists.
+
+### Two-engine rerun findings (2026-09-06) + the Go shadow arm
+
+Rerun of the comparison protocol on clean workspaces after features
+1–2 (`planning/successor-comparison.md` in the successor repo, "Rerun"
+section). Python 6/6; the landscape made the same four decisions on
+both engines (R2 related → R1, R3 rerun → R1, R4 fresh, no call).
+
+- [ ] **NOW context is ~21k input tokens for every NOW goal.** The
+  outcome row for a one-word answer (G1 "ohm") records 21,036 input
+  tokens and $0.063 — identical on 09-05 and 09-06, 12× the answer
+  call's own cost. The 09-05 ledger's $0.005 was the step-costs row of
+  the answer call alone; the run pays the context. Retrieval-handle
+  question (project_retrieval_graph_memory_direction): what in the NOW
+  frame is fixed-size regardless of the goal, and which parts a
+  one-word question could skip. Probe first: dump the NOW request for
+  G1 and size its blocks.
+- [ ] **Step-costs rows vs the outcome row on AGENDA.** G4's card says
+  $0.48, its outcome row $1.24 (397k input tokens), the in-window
+  step-costs rows $0.36. Three numbers for one run; the outcome row
+  looks like cache reads priced at full input rate. Decide which is the
+  run's cost of record and make the other two say so.
+- [x] **Go as the shadow lane's third arm** — `shadow.go.*`
+  (`src/shadow_lane.py`, own track: own switch, claim dir
+  `<run-dir>/shadow-go/`, own cap; `docs/SHADOW_LANE_DESIGN.md` "The Go
+  track"). Off by default; the live flip is a config write Jeremy owns.
+  ON this box since 2026-09-06 (cap 9/day, cron cadence). Same day:
+  operator-context parity (the Go run reads the operator docs the
+  champion's planner injects, as a recorded `--context` input),
+  clarification outcomes recorded as their own row fields,
+  `tokens_cached` on the row, `scripts/install-maro-go.sh` in the
+  successor repo rebuilds the pinned binary.
+- [ ] **Shadow-pair batch judge.** At ~10 Go rows: the answer-agreement
+  half of the pre-registered questions (primary answer vs
+  `shadow-go/RESULT.md`, judged), fed from `shadow_lane.pairs()`. The
+  reader + viz Pairs tab shipped 2026-09-06 (`python3 -m shadow_lane
+  pairs`, `runs_root()/pairs.html`; partitions on goal shape and
+  asked-vs-failed, median cost/wall ratios, result excerpt inline);
+  `~/claude/logs` rotation is a user-level logrotate in cron (03:15,
+  size-triggered, 5 kept).
+
+### Mailbox-access arc findings (2026-09-06)
+
+- [ ] **Container blindness reads as host truth.** 0bd44fef: "Chrome is
+  not installed on this box", "no Yahoo credential anywhere on this box";
+  37d0e041: "no NVIDIA credential anywhere" — all false on the host, all
+  true inside the executor container (`executor.container: on`; secrets,
+  config, memory, `~/claude` unmounted by design). The run's own
+  positive-evidence discipline (claim_probe) confirmed the claims with
+  in-container probes. Fix shape: the executor frame must say what it
+  cannot see from here (a fence summary, not a sandbox disclaimer), and
+  "does X exist on the box" claims need a host-side presence probe
+  (existence/name only, never contents) — or an ro mount of a
+  credential *index*. Jeremy's decision: container stays ON.
+  **Built the same day** (docs/SECRETS_DESIGN.md, both engines): the
+  store's names are cleartext, so the execute frame carries a presence
+  index — every credential name on the box, which are injected here,
+  and the instruction never to report a held-back one as nonexistent.
+  Injection is by the operator's `~/.maro/secrets/inject` policy (ENV
+  into the container, the host lane and Go steps alike); a credential
+  a run OBTAINS comes back through `$MARO_SECRETS_DROP` and is stored
+  as maro-derived with the run handle. Remaining: the live re-ask of
+  the mail goal, and rotation/scoped-injection (design §10).
+- [ ] **Operator docs name no credential location.** `user/CONTEXT.md`
+  (Jeremy's) never says where credentials live; the runs grepped
+  `~/.maro/secrets` (wrong path) and never `~/claude/credentials-backup`.
+  Proposal for the template: a "Where things live" section (secrets
+  file, backup dir, browser profile), presence-only.
+- [ ] **Hermes operator-first drift.** Jeremy: "operator first, dev helper
+  second… more code assistant at this point." Audit the dispatch SKILL
+  and Hermes replies against the operator bar (what Maro found, where it
+  is blind, what the user must supply, what it tries next); the mail
+  reply narrowed a capability ask to "mint an app password?".
+
 ---
 
 Full history in [BACKLOG_DONE.md](BACKLOG_DONE.md).
+
+## Jev (typesafe.ai) as the Tier-1 validator — decided 2026-09-17, implementation open
+
+- [ ] **Wire Jev as Tier 1b of the validation ladder** per `docs/LOCAL_VALIDATOR.md`
+  "Jev decision" section: `Choice(pass|fail)` over `{step, result, evidence}`,
+  hardened instruction, auto-pass at conf ≥ 0.9 only with evidence present,
+  0.6–0.9 RETRY/escalate, < 0.6 escalate; hosted LLM (hosted-free → paid)
+  remains the escalation and the outage fallback (never fail-open). Log
+  `p_pass`/`confidence`/evidence-present per verdict. Key `TYPESAFE_API_KEY` is
+  already in workspace secrets; SDK `typesafe-sdk` 0.6.0. Evidence + protocol:
+  `github.com/slycrel/jev-eval` (private).
+- [ ] **Deferred (Jeremy: "maybe, but not now"):** human-adjudicate the 21
+  Cclosure disagreements (goals `closure` passed that Jev failed, same evidence).
+  Turns "Jev is stricter" into "Jev is right/wrong". List is
+  `jev-eval/results/Cclosure.jsonl` filtered `label=true, choice=fail`.
+- [ ] **Backup lane:** hosted LLM stays the plan of record; the M1 via `m1` ssh
+  (ds4/Qwen3.8) is an interim experiment only — AC-power/AFK resource, degrade
+  gracefully when absent.
+- Known gaps to measure organically once wired: calibration in the 0.3–0.7
+  band; long states; injection under real worker output (probe was synthetic).
+
+### LoopsBench chunk 1 — prerequisite gate + regression obligations: pinned residue (2026-09-16)
+Shipped: `src/step_gate.py` (declared `[after:]` edges hard in the sequential
+lane AND `loop_parallel._run_steps_dag`; sequential default soft unless
+`execution.gate_implicit_prerequisites`) and `src/regression_ledger.py`
+(single-runner shlex grammar, `result_seen`, cwd per row, argv re-run at
+closure with `shell=False`). Round 1 (4 Codex lenses,
+`/tmp/adversarial-review.SADYYh`) → 13 class fixes in one fix diff; round 2
+(Skeptic, fix diff only, `/tmp/adversarial-review.K4zIne`). Accepted residue,
+NOT closed:
+- **Durable plan-node ids** — SHIPPED 2026-09-16 (chunk 4; record in
+  BACKLOG_DONE): a plan node IS its NEXT.md item; the original numbering is
+  bound to items once (`Checkpoint.plan_items`, verbatim) and a resumed
+  suffix keeps its items, its declared edges (hard) and its DAG scheduling
+  (`step_gate.remap_suffix_deps`). Remaining, NOT closed:
+  - **NEXT.md item ids are line offsets** (chunk-4 r1, all four lenses):
+    `NextItem.index` is the physical line; a hand edit above the plan shifts
+    every carried id. Mitigated: `_load_resume` verifies each carried
+    (item, text) pair against the current NEXT.md and drops the whole
+    identity (fresh items, soft gate) on any mismatch — but two identical
+    task texts still verify against each other's line. Lead: an immutable id
+    per item (in the line or a locked sidecar), resolved to a line only while
+    mutating NEXT.md; the PCD prerequisite field
+    (`docs/PCD_PREREQUISITE_FIELD_DESIGN.md`) is the same id by construction.
+  - **Reshaping after the DAG decision** (chunk-4 r1 Architect, pre-existing):
+    `_shape_steps` runs in Phase E, after `use_dag` was decided on the
+    unshaped plan, so a compound step that would split takes the DAG lane
+    unsplit. Lead: shape before dependency parsing, once.
+  - **Unreadable NEXT.md crashes mirroring** (chunk-4 r2 Skeptic finding 4,
+    pre-existing): `_load_resume` degrades carried identity when the ledger
+    cannot be parsed, but `append_next_items` then reads the same file
+    (utf-8, under the lock) and raises — on a resume AND on every fresh run.
+    Lead: a typed mirroring failure (`step_indices = [-1] * n`,
+    `plan_items = None`, warning) so the run executes unmirrored rather than
+    crashing at Phase E.
+  - **Rotation writer site has no flow test** (chunk-4 r2 finding 7): the
+    writer spy proves the post-step and in-flight sites carry the binding,
+    the gate flow test proves the gate site; the executor-session rotation
+    write (`loop_execute` ~L298) is asserted by inspection only.
+- **Closure with zero generated checks skips the regression re-run** — the
+  obligations are only run inside the generated-checks branch; a plan whose
+  check generation yields nothing (or is dry-run) never re-runs them. Cheap
+  follow-up: run obligations even when `checks == []`.
+- **Container-lane re-run parity** — closure re-runs on the closure host in
+  the recorded cwd; a run whose steps executed in the container executor
+  (`executor.container: require`) may have the runner only inside the image
+  (reads inconclusive, never fails). Route obligations through the container
+  executor when it was the step's executor.
+- **e2e composition tests** — the round-1 reviewers asked for a literal
+  restart path (blocked dep → gate → closure → director restart) and a CLI
+  closure path with obligations; current tests cover each unit and the loop
+  flow, not the handle/cli composition.
+- **Checkpoint write is not atomic** — SHIPPED 2026-09-16 (chunk 3):
+  `write_checkpoint` / `branch_checkpoint` write through
+  `file_lock.atomic_write`; record in BACKLOG_DONE. (Was: in-place
+  `Path.write_text`; a kill mid-write left a torn file the resume path
+  dropped.)
+- **DAG lane does not harvest obligations** — only the sequential lane
+  harvests; fan-out steps' passing runners are not carried to closure.
+- **Checkpoint resume by plan position — SHIPPED 2026-09-16 (chunk 2)**; the
+  HIGH lead moved to BACKLOG_DONE. Residue it left, in the same family:
+  - **Parallel work has no checkpoint boundary** (r1 finding 8, pre-existing,
+    re-examined 2026-09-16 chunk 3): the sequential loop's parallel-batch
+    branch (`loop_execute` ~L913) is UNREACHABLE in production — any plan with
+    a multi-step level and `parallel_fan_out > 0` takes the DAG lane
+    (`loop_planning.use_dag`), and `_run_parallel_path` always returns a
+    LoopResult. The real gap is that the DAG / fan-out lane writes no
+    checkpoint at all, so a crash mid-DAG resumes as nothing-done — and a DAG
+    resume was blocked on durable plan-node ids (chunk 4) — **SHIPPED
+    2026-09-16 (chunk 5; record in BACKLOG_DONE):** `_run_steps_dag` commits
+    every row through one `_commit` under `results_lock` and calls
+    `on_progress` in the same critical section; `_run_steps_parallel` calls
+    it per landed outcome; `_run_parallel_path._write_progress` marks the
+    node's item and writes the checkpoint (tagged plan, carried rows +
+    committed rows, items, binding), plus a final write; round-1 fixes
+    (same chunk): node effects (decisions / world facts / regression) run
+    BEFORE the row is durable, the NEXT.md mark records the last APPLIED
+    state and is retried, the status domain is closed at the lane boundary
+    (done/blocked/skipped), the fan-out lane commits every row through one
+    `_commit` with persistence excluded from the workers' deadline, and
+    execution policy travels with the checkpoint (`Checkpoint.parallel_fan_out`,
+    restored by `maro resume`). Remaining: no in-flight marker for the
+    parallel lanes (a missing row re-runs — the safe direction); the dead
+    sequential parallel-batch branch still exists; the two-file kill window
+    between a NEXT.md mark and the checkpoint `os.replace` (errs toward
+    re-running); `_fanout_timeout` is advisory (the pool's exit waits for
+    running workers; a hard per-worker bound needs cancellable processes).
+  - **A failed NEXT.md mark + a crash before the next snapshot = done row,
+    TODO item** (chunk-5 r2, both lanes): the parallel lane retries a failed
+    `mark_item` at every later snapshot, but nothing durable records the
+    debt, so a crash in between leaves the checkpoint saying done while
+    NEXT.md says TODO — later NEXT.md-driven work can execute the item
+    again. The sequential lane has the same two-file shape. Lead: a durable
+    "item sync pending" record (in the checkpoint row, e.g. `item_marked:
+    false`) that resume reconciles by re-marking from the checkpoint — the
+    checkpoint is the authoritative execution record, NEXT.md the mirror.
+    **SHIPPED 2026-09-17 (LoopsBench chunk 8, see BACKLOG_DONE):**
+    `item_mark` ∈ {applied, pending, drifted, attempt} on every row; born
+    pending unless the producer records the mark; ONE settler
+    (`loop_planning.settle_item_marks`, latest VERDICT row per item) at
+    every snapshot, at loop exit, and by the resume before any step; every
+    settlement a compare-and-mark under the ledger lock. Residue from its
+    three review rounds (design, not re-raised):
+    - *Identity normalization is lossy* (r3): two multi-line items sharing
+      a first line, or a `[boundary]` item beside its untagged twin, are
+      one identity form → "ambiguous" → a false `drifted` with no ledger
+      edit. Lead: canonicalize the text to one ledger line at
+      `append_next_items` time and treat `[boundary]` as an alias of the
+      untagged text rather than stripping it before the uniqueness check;
+      a stable item id (Jeremy's NEXT.md-ids item) closes it outright.
+    - *Max-iteration termination reaches no verdict* (r3): a retry cut
+      short by `max_iterations` is checkpointed as an `attempt` row (the
+      exit flush now writes rows appended after the last snapshot) but
+      NEXT.md keeps the item DOING — the loop ends without a verdict for
+      it. Lead: append an explicit blocked verdict (owing `!`) at
+      max-iteration termination, or a typed "interrupted" mirror state.
+    - *The milestone-advisor REPHRASE (c) executes a text the ledger never
+      held* — a failed mark there surfaces as `drifted`; a ledger-side
+      rename or a stable id closes it.
+    - *Step-time marks still trust the item index* — only settlements
+      compare-and-mark; the mark at `_process_done_step` / the terminal
+      blocked mark could take `expected_text=` too (same class).
+    - *The sequential parallel-batch branch is dead in production*
+      (carried from chunk 5); *`append_next_items` numbers a multi-line
+      text as ONE item while its second line shifts every later item*
+      (pre-existing, the identity-form test places such an item last);
+      *the stuck path writes no post-break checkpoint* (the exit flush
+      now covers rows it appended, not its NEXT.md state).
+  - **Decision-journal rows have no idempotency key** (chunk-5 r3):
+    `record_step_decisions` → `record_decision` mints a fresh UUID per call
+    and the thread brain is append-only, so any re-run of a step's effects
+    (a crash between a node's effects and its durable row; a resume that
+    re-executes a node whose row was lost) appends duplicate decisions.
+    The parallel lane now acknowledges effect families one by one (no
+    same-process bundle retry), but cross-process re-runs still duplicate.
+    Lead: a stable key `(loop_id, plan item, ordinal or content hash)` and
+    dedupe at the journal / brain append.
+  - **Worktree merge-back ignores the outcome status** (chunk-5 r3,
+    pre-existing): `_run_in_step_worktree` calls `merge_back`
+    unconditionally, so a blocked row — including the new execution-contract
+    row for a worker that returned None — merges its partial file changes
+    into the base checkout while the checkpoint re-runs the node on resume.
+    Decide the policy explicitly: skip merge for contract failures (keep the
+    worktree for diagnosis); if ordinary blocked outcomes intentionally merge
+    partial work, distinguish the two with a typed field.
+  - **A carried row's item can collide with a suffix item and finish an
+    unexecuted position** (chunk-5 r1, pre-existing, BOTH lanes): the
+    writer infers every row's current plan position from its item alone
+    (`_done_positions`), so a hand-edited carried row whose item equals a
+    suffix item is promoted from position 0 into that unexecuted suffix
+    position — actual work lost, the unsafe direction. Identity validation
+    checks uniqueness within `step_items` / `plan_items`, not carried rows
+    against the suffix. Lead: persist each row's provenance / position
+    (carried vs this-hop) instead of recomputing from item identity; a
+    carried row stays position 0 until a new outcome for that node commits.
+  - **Run report cardinality with carried rows** (chunk-5 r1, pre-existing,
+    both lanes): `_write_plan_manifest` counts every returned row against
+    the suffix's length ("4/3 done") and looks rows up by positional number
+    although `StepOutcome.index` is a NEXT.md item. Lead: separate
+    history rows from this attempt's rows in `LoopResult` (or count by
+    item ∩ suffix items) — same shape as sequential finalize.
+  - **Duplicate step texts defeat the text-keyed interrupt re-pairing** (r2
+    finding 2): `_check_loop_interrupts` re-pairs text ↔ item index by text
+    (first unused occurrence), so a priority interrupt that injects a text
+    identical to a pending step hands the pending step's item to the urgent
+    copy. (The permuted-list half is CLOSED 2026-09-16, chunk 4:
+    `checkpoint.validate_identity` drops `step_items` whole unless the bound
+    items sit in strictly increasing plan order.) The duplicate-text half
+    remains — carry `(text, item_id)` pairs as one structure instead of
+    parallel lists.
+  - **Checkpoint consumption can race a late writer** (chunk-3 r1 finding 3,
+    pre-existing): `mark_checkpoint_consumed` and `write_checkpoint` are
+    separate read/write actors on the same file with no shared lock; atomic
+    rename removes torn bytes but keeps last-writer-wins, so a still-running
+    original loop writing after consumption erases `consumed_at` and the
+    source becomes resumable again. The CLI resume lock serializes resumes,
+    not the original loop's writes, and `run_lease` returns unknown for a
+    missing lease. Lead: a per-loop lock shared by both, `write_checkpoint`
+    refusing to overwrite a consumed generation, or resume failing closed
+    when owner liveness is unknown.
+  - **Explicit resume: torn run-dir checkpoints and the CLI re-read race**
+    (chunk-3 r2 finding 1) — **SHIPPED 2026-09-16 (chunk 6; record in
+    BACKLOG_DONE):** `checkpoint.find_checkpoint` is the one discriminated
+    loader (found/absent/invalid/mismatch/io_error; run-dir damage
+    attributed by metadata, unattributable reported not absent; every
+    address READ, never existence-checked), the CLI hands its validated
+    `Checkpoint` into `run_agent_loop(resume_checkpoint=)`, resolution is
+    handle-first with a ref grammar and a namespace-collision refusal, and
+    the two pre-execution reads must be the same file and the same
+    snapshot. Original lead text: `loop_planning` now refuses an explicit resume
+    when the loop-id-named fallback file exists but cannot be read, names
+    another loop, or the lookup raises — but a torn `*/build/checkpoint.json`
+    carries its loop_id INSIDE the JSON, so the scan cannot attribute it and
+    the loop API still reads it as absent → fresh. `maro resume <handle>`
+    validates the file first, then `run_agent_loop` re-reads it (a torn
+    write in between takes the fresh branch). Lead: a public loader returning
+    a discriminated result (FOUND / ABSENT / INVALID / MISMATCH / IO_ERROR
+    with the candidate path) and passing the CLI's already-validated
+    checkpoint object into the loop instead of the id.
+  - **Pre-execution refusals bypass finalize** (chunk-3 r2 finding 3, class)
+    — **SHIPPED 2026-09-16 (chunk 6):** `loop_finalize.release_loop_resources`
+    (slot → lease → running marker) is the one release path and
+    `finalize_refusal` the one refusal ending (typed verdict stamped, scratch
+    clone + busy-policy worktree discarded, heartbeat woken) for the cost
+    gate (`out-of-budget`), the resume refusal and the execution-fence
+    refusal. Original lead text: both `_preflight_checks` early returns — the cost gate and the new
+    resume refusal — return after `_initialize_loop` took the project slot,
+    run lease, running marker, fence/worktree — and (until chunk 4,
+    2026-09-16) after `_decompose_goal`; `_load_resume` now runs before Phase
+    B, so a refused resume no longer pays the planner — and skip
+    loop_finalize's explicit releases (`clear_loop_running` etc.; destructors
+    release the slot/lease incidentally). Lead: validate an explicit resume
+    BEFORE admission, and put acquired loop resources behind an unconditional
+    `finally` / shared refusal finalizer.
+  - **`_checkpoint_path` interpolates unsanitized loop ids** (chunk-3 r2
+    out-of-scope lead): a loop_id with path separators escapes the
+    checkpoint dir; `run_lease._safe_name` is the existing pattern. Chunk 6
+    validates the CLI ref (`cli._RESUME_REF_RE`) before any path is built;
+    the API path (`resume_from_loop_id=`) is still unsanitized.
+  - **A resume needs a durable claim BEFORE it executes** (chunk-6 r3
+    finding 2): after a `done` resume the CLI proves the source was
+    overwritten by the complete successor or consumes it in place, and
+    demotes the status to `incomplete` when neither is durable (disk full)
+    — but the demoted run's source is then intact, unconsumed and
+    resumable again (`is_consumed()` false, metadata status ≠ done).
+    **SHIPPED 2026-09-17 (LoopsBench chunk 7, see BACKLOG_DONE):**
+    `resume_claim` written by a digest-keyed, locked compare-and-swap
+    before execution; live / superseded / unresolved / indeterminate;
+    `--reclaim` for unresolved only; permit (nonce) not pid; release on
+    pre-step refusal. Residue from its three review rounds (design, not
+    re-raised):
+    - *Consumption / the loop's own writer still outside the lock* (chunk-6
+      r3 finding 7, chunk-7 r1 Architect 7 / r3 5): claim, release and
+      consume now share `file_lock.locked_rmw` on the file, but
+      `write_checkpoint` writes unlocked, so the loop's writer can still
+      race a consume; and duplicate checkpoint homes for one loop lock by
+      their distinct embedded handle ids (the CLI locks a handle source by
+      HANDLE, the API loader by loop id — not serialized against each
+      other). The shared fix is an identity-level admission ledger
+      (one lock name per loop identity, every mutation of any home under
+      it) or a monotonic generation in the file.
+    - ~~*The API path claims but never consumes* (r1 Architect 3)~~ —
+      **SHIPPED 2026-09-17 (LoopsBench chunk 9, BACKLOG_DONE):** typed
+      `checkpoint.ResumePermit`; ONE `settle_resume_source` called at the
+      LAST status decision (loop finalize for library callers, the CLI
+      after its closure pass, before deferred learning); compare-and-
+      consume on the nonce under a mandatory lock; pinned canonical path.
+      Chunk-9 r2 residue (design, not re-raised):
+      - *A handle resume overwrites its source before closure* (r2 1,
+        pre-existing chunk-7 shape): a handle resume reopens the handle's
+        run dir, so the successor's checkpoints land on the claimed file
+        before `_closure_verdict_pass` can demote — a closure-demoted
+        handle resume is then refused as "completed all its steps". Lead:
+        write the successor to a provisional address; replace the source
+        only when closure accepts done.
+      - *Phase G records `done` before the settlement can demote it*
+        (r2 2; same precedent as the merge-backs): manifest, run report,
+        loop log, decision journal, ledger row and immediate learning run
+        before `settle_resume_claim`; a failed consume returns
+        `incomplete` while those say done. Lead: a structural Phase-G
+        split — fallible gates and merge-backs, THEN settlement (the
+        immutable terminal status), THEN every status-bearing record.
+      - *The auto-recovery claim names the parent while settlement names
+        the child* (r2 4): success hides it; on consume failure the
+        supersession readers probe only the parent's addresses and point
+        the operator at a checkpoint whose work the child already did.
+        Lead: redirect the claim to the child under the permit nonce
+        before recovery starts; ONE authoritative terminal-successor
+        field read by status, heartbeat and settlement.
+    - *Lossy listings hide a malformed claim* (r2 finding 9):
+      `list_checkpoints` → `checkpoint list` / heartbeat skip a file whose
+      `resume_claim` does not parse (it is LOOKUP_INVALID for an explicit
+      resume, which names it). Lead: a classified listing API returning
+      `CheckpointLookup` rows incl. invalid paths.
+    - *A held lease for a duplicate pre-minted loop id proceeds ungated*
+      (r2 finding 10; pre-existing for minted ids): `acquire_run_lease`
+      treats an already-held lease as an anomaly and returns None.
+    - *`finalize_refusal` clears `ctx.run_worktree` even when cleanup
+      raised* (r1 Skeptic 11): the disk worktree stays with no reference
+      for a retry; a cleanup record for the stranded-worktree sweep is the
+      lead.
+  - **Operator-answer resume ignores checkpoints** (chunk-6 r1,
+    pre-existing sibling): `operator_ask.answer` → `handle_queue` RESUME
+    calls `run_agent_loop` with neither `resume_from_loop_id` nor
+    `resume_checkpoint`, so a paused run resumed by `maro answer` re-plans
+    instead of restoring its checkpoint. Lead: route it through
+    `find_checkpoint(loop_id)` + `resume_checkpoint=`.
+  - **Global running marker has no owner** (chunk-6 r1, pre-existing):
+    `interrupt.clear_loop_running` removes the box-wide `loop.lock` (and the
+    per-project lock it names) without checking that THIS run wrote it;
+    a refusal ending can clear another concurrent run's marker. Lead:
+    stamp loop_id in the marker, clear only when it matches.
+  - **Unattributable damage is a box-wide refusal for loop-id resumes**
+    (chunk-6 r1, accepted): one torn `*/build/checkpoint.json` in a run dir
+    whose metadata cannot name its loops refuses every `maro resume
+    <loop_id>` on the box until repaired (handle resumes bypass it). Lead:
+    stamp the CURRENT loop identity (`loop_id` + checkpoint generation) in
+    run metadata at every checkpoint write, and quarantine ownerless
+    damage into a named location the operator is told about. Related:
+    historical `loop_ids` over-attribute — a continued handle's damaged
+    file is attributed to every loop it ever ran.
+- **Recorded cwd is ephemeral under run-worktree / container-clone modes:**
+  finalize removes the successful worktree/clone before closure runs, so
+  the obligation's cwd is gone ⇒ inconclusive (never fail). Rerun before
+  cleanup, or translate to the merged checkout, when the container-lane
+  parity item above is built.
+- **DAG lane schedules a resumed suffix by its re-numbered tags** — SHIPPED
+  2026-09-16 (chunk 4): `step_gate.remap_suffix_deps` re-keys the suffix's
+  edges to suffix positions before `build_execution_levels` / `use_dag`, and
+  the lane's rows carry and mark the ORIGINAL NEXT.md items
+  (`_run_parallel_path(step_indices=)`, bound before Phase D by
+  `_mirror_plan_items`). Still open: the DAG lane writes no checkpoint (chunk-2
+  bullet above — now unblocked).
+- **Round-3 classifier residue:** family failure summaries are pytest / jest /
+  mocha / go / cargo / "Tests failed"; other runners (tox, make, bun, plain
+  npm scripts) are return-code only — a wrapper that swallows its child's
+  status under one of those is not caught. Extend the summary grammar per
+  runner when a real run shows the shape.

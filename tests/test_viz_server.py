@@ -46,6 +46,12 @@ def test_allows_root_index(rundir_root):
     assert vs._resolve_allowed_path("/index.html", rundir_root) == (rundir_root / "index.html").resolve()
 
 
+def test_allows_root_pairs_page(rundir_root):
+    """The Pairs tab (the shadow ledger rendered by loop_report) — the
+    fourth exact-name top-level page, 2026-09-06 (Go track live)."""
+    assert vs._resolve_allowed_path("/pairs.html", rundir_root) == (rundir_root / "pairs.html").resolve()
+
+
 def test_allows_root_reading_page(rundir_root):
     """The Reading tab (docs/READING_QUEUE.md rendered by loop_report) sits
     next to index.html at the document root — 2026-07-28 docs-surfacing."""

@@ -1306,3 +1306,30 @@ def test_close_run_finalize_flag_preserves_concurrent_card_write(
         (run_dir("closerun5") / "run_card.json").read_text())
     assert after.get("finalize_failed") is True
     assert after.get("classification_v2") == "landed-mid-close"
+
+
+def test_r26_recorded_project_verbatim_preserves_directory_identity():
+    import runs
+    # review r26: the name makes the verbatim contract unambiguous.
+    assert hasattr(runs, "recorded_project_verbatim")
+    assert runs.recorded_project_verbatim({"project": " x "}) == " x "
+    assert runs.recorded_project_verbatim({"project": "   "}) is None
+    assert runs.recorded_project_verbatim({"project": 17}) is None
+    assert runs.recorded_project_verbatim({}) is None
+
+
+def test_r26_handle_queue_uses_the_verbatim_project_contract():
+    import handle_queue
+    import runs
+    # review r26: caller migration is pinned even without a standalone queue module.
+    assert handle_queue.recorded_project_verbatim is runs.recorded_project_verbatim
+
+
+def test_r26_revise_reports_only_written_fields(monkeypatch, tmp_path):
+    import runs
+    # review r26: None means skip, so it cannot be reported as written.
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    runs.create_run_dir("r26revise", prompt="revise")
+    assert runs.revise_run_metadata_for(
+        "r26revise", lambda _old: {"written": "yes", "skipped": None}
+    ) == {"written": "yes"}

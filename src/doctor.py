@@ -136,6 +136,31 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("LLM backend available", False, f"detection failed: {str(exc)[:60]}"))
 
+    # Secrets store (docs/SECRETS_DESIGN.md, 2026-09-06): sops + age present,
+    # a store that opens here, and no plaintext residue left in the chain.
+    # Absent store = warn-shaped pass (the legacy .env still serves); a store
+    # that exists but cannot be opened here is a real failure.
+    try:
+        import secrets_store as _ss
+        _sst = _ss.check()
+        if not _sst["store"]:
+            results.append(_check(
+                "Secrets store", True,
+                "none yet — `maro secrets init` + `maro secrets migrate` "
+                + ("(sops+age installed)" if _sst["sops"] and _sst["age_keygen"]
+                   else "(install first: brew install sops age)")))
+        else:
+            _opens = _sst["opens_here"]
+            _detail = (f"{len(_sst['names'])} names, "
+                       f"{len(_sst['injectable'])} injectable, "
+                       f"{len(_sst['recipients'])} recipient(s)")
+            if _sst["plaintext_residue"]:
+                _detail += "; plaintext residue: " + ", ".join(_sst["plaintext_residue"])
+            results.append(_check("Secrets store", _opens is not False,
+                                  _detail if _opens else "store present but does not open here: " + _detail))
+    except Exception as exc:
+        results.append(_check("Secrets store", False, f"check failed: {str(exc)[:80]}"))
+
     # Escalation surface — how escalations reach a human. Two independent
     # surfaces (2026-07-12 decree, GOAL_BRAIN Decisions "escalation channel
     # DECREED"): (1) the durable file (output/escalations.jsonl) ships
@@ -279,6 +304,28 @@ def run_doctor() -> bool:
                         f"TRIPPED — {str(_ab.get('reason', ''))[:80]}; re-seed the "
                         "auth volume (maro-bootstrap container-setup step 2)"),
                 ))
+            # Proactive half (review round 6, 2026-09-13): the session's
+            # refresh-token expiry as the heartbeat recorded it. The breaker
+            # above is REACTIVE — clear right up to the first casualty — so
+            # a known-expired session showed four green rows here. File
+            # read only; "unknown" is named as such, not rendered as health.
+            try:
+                from container_exec import auth_liveness_state, auth_liveness_verdict
+                _lv, _ld = auth_liveness_verdict(auth_liveness_state())
+            except Exception as _lexc:
+                _lv, _ld = "unknown", f"liveness record unreadable: {str(_lexc)[:60]}"
+            if _lv == "ok":
+                results.append(_check("  Container auth session", True, _ld))
+            elif _lv == "unknown":
+                results.append(_check(
+                    "  Container auth session", True,
+                    f"expiry NOT ESTABLISHED ({_ld}) — the breaker row above is the "
+                    "only evidence; the heartbeat records the session on its cadence"))
+            else:
+                results.append(_check(
+                    "  Container auth session", False,
+                    f"{_lv.upper()} — {_ld}; re-seed the auth volume "
+                    "(maro-bootstrap container-setup step 2)"))
     except Exception as exc:
         results.append(_check("Container executor", False, str(exc)[:80]))
 

@@ -2,7 +2,7 @@
   "format_version": "2026-09-04",
   "kind": "step_done",
   "envelope": "production",
-  "schema": "step_done/1",
+  "schema": "step_done/2",
   "go_type": "run.StepDone",
   "fields": [
     {
@@ -132,8 +132,15 @@
       "go_type": "run.StepOutcome",
       "omittable": false,
       "is_thought": false
+    },
+    {
+      "name": "GatedBy",
+      "wire": "gated_by",
+      "go_type": "[]int",
+      "omittable": true,
+      "is_thought": false
     }
   ],
-  "source_ref": "ef7810eb",
+  "source_ref": "4dc4d284",
   "generator": "maro-go contracts gen v1"
 }

@@ -16,6 +16,10 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    from checkpoint import ResumePermit
 
 # terrain.py is stdlib-only and imports nothing from the loop — safe to
 # import at module load (this module's whole point is being import-safe).
@@ -23,6 +27,8 @@ from context_budget import clip  # stdlib-only, same import-safe contract
 from terrain import TerrainMemory
 # world_facts.py: same stdlib-only contract as terrain.py.
 from world_facts import WorldFactLedger
+# regression_ledger.py: same stdlib-only contract.
+from regression_ledger import RegressionLedger
 
 
 def _new_terrain() -> "TerrainMemory":
@@ -31,6 +37,10 @@ def _new_terrain() -> "TerrainMemory":
 
 def _new_world_facts() -> "WorldFactLedger":
     return WorldFactLedger()
+
+
+def _new_regression() -> "RegressionLedger":
+    return RegressionLedger()
 
 log = logging.getLogger("maro.loop")
 
@@ -102,6 +112,36 @@ def _project_dir_root():
 # Data types
 # ---------------------------------------------------------------------------
 
+# NEXT.md mirror states of a terminal row (chunk 8) — see StepOutcome.item_mark
+MARK_APPLIED = "applied"
+MARK_PENDING = "pending"
+MARK_DRIFTED = "drifted"
+# An attempt row (a blocked retry / re-decompose / split / stuck-advisor
+# record): not the item's verdict — it owes nothing AND supersedes nothing
+# (r3: born "applied" it counted as the item's latest row and erased the
+# debt a carried pending row still owed).
+MARK_ATTEMPT = "attempt"
+MARK_STATES = frozenset({MARK_APPLIED, MARK_PENDING, MARK_DRIFTED, MARK_ATTEMPT})
+# Row statuses that have a NEXT.md state to apply (checkpoint: done and
+# skipped finish a position; blocked is marked `!`).
+MARK_TERMINAL_STATUSES = frozenset({"done", "blocked", "skipped"})
+
+
+def resolve_item_mark(value: Any, *, index: Any, status: Any) -> str:
+    """The mirror state a row is born with. An explicit known state passes
+    through; None means "not recorded": PENDING for a terminal row on a
+    real item (the settler applies the mark), APPLIED otherwise (nothing
+    to mirror). Any other value reads APPLIED — a state is never
+    manufactured from garbage."""
+    if value in MARK_STATES:
+        return str(value)
+    if value is None:
+        _real_item = isinstance(index, int) and not isinstance(index, bool) and index >= 0
+        if _real_item and status in MARK_TERMINAL_STATUSES:
+            return MARK_PENDING
+    return MARK_APPLIED
+
+
 @dataclass
 class StepOutcome:
     index: int
@@ -149,6 +189,20 @@ class StepOutcome:
                                  # measurable from run records (2026-08-06
                                  # readout: the judged bit lived only in a
                                  # log.info and history was unmeasurable).
+    # NEXT.md mirror state (2026-09-17, LoopsBench chunk 8): the checkpoint
+    # is the authoritative execution record and NEXT.md its mirror, so the
+    # mirror's state travels with the row and the mirror catches up FROM
+    # the record (`loop_planning.settle_item_marks`) at the next snapshot
+    # or, after a crash, by the resume. MARK_APPLIED = nothing owed (the
+    # mark was applied, or there is no item / the row is not terminal);
+    # MARK_PENDING = owed, retried; MARK_DRIFTED = owed but the item no
+    # longer names this row (ledger edited) — surfaced, never retried;
+    # MARK_ATTEMPT = not a verdict (a retry attempt's record): owes nothing
+    # and never supersedes an earlier row's obligation (r3). A
+    # terminal row on a real item is born PENDING unless its producer
+    # records the applied mark (r1: producers that never marked, or marked
+    # and swallowed the failure, reported "applied" by default).
+    item_mark: str = "applied"
 
 
 def step_from_decompose(
@@ -175,6 +229,7 @@ def step_from_decompose(
     tier_escalated_from: str = "",
     venue: str = "",
     artifact_check: str = "",
+    item_mark: Optional[str] = None,
 ) -> StepOutcome:
     """Factory for StepOutcome — centralises defaults so inline construction sites stay DRY.
 
@@ -214,6 +269,7 @@ def step_from_decompose(
         tier_escalated_from=tier_escalated_from,
         venue=venue,
         artifact_check=artifact_check,
+        item_mark=resolve_item_mark(item_mark, index=index, status=status),
     )
 
 
@@ -223,6 +279,9 @@ class LoopResult:
     project: str
     goal: str
     status: str          # "done" | "stuck" | "error" | "interrupted" | "restart"
+                         # | "partial" (done, but a merge-back failed) | "incomplete"
+                         # (done, but the resume source could not be settled, or the
+                         # CLI's closure verdict refuted it)
     steps: List[StepOutcome] = field(default_factory=list)
     stuck_reason: Optional[str] = None
     # Typed stop verdict (stop_verdicts.py) + evidence. Empty = none recorded.
@@ -250,6 +309,9 @@ class LoopResult:
     # data-r2-01: carried out so deferred (post-closure) skill synthesis knows
     # whether this run started with no matching skill — the synthesis trigger.
     had_no_matching_skill: bool = False
+    # Regression obligations harvested during the run (regression_ledger rows)
+    # — handed to closure so it re-runs what the run itself proved.
+    regression_obligations: List[Dict[str, Any]] = field(default_factory=list)
     # Direct CLI closure runs after loop finalization. These declared fields
     # carry its audit decision to output/learning without an untyped side
     # channel or making human-facing warning text the policy predicate.
@@ -451,11 +513,35 @@ class LoopContext:
     # than being rediscovered from ambient run-dir context at finalize.
     measurement_class: str = ""
     handle_id: str = ""
+    # The `checkpoint.ResumePermit` of the resume claim THIS run holds —
+    # released by `finalize_refusal` when the run is refused before its
+    # first step (chunk 7 r2: a benign pre-execution refusal must not leave
+    # the source claimed); SETTLED by the loop's own finalize when the run
+    # ends done (chunk 9: the source is overwritten by the successor or
+    # consumed in place, else the run is `incomplete`). Kept as it is — the
+    # replay barrier — for any other ending.
+    resume_claim_release: Optional["ResumePermit"] = None
 
     # Execution state
     step_outcomes: List[StepOutcome] = field(default_factory=list)
     remaining_steps: List[str] = field(default_factory=list)
     remaining_indices: List[int] = field(default_factory=list)
+    # NEXT.md item index per plan position (step_indices[i] ↔ plan step
+    # i+1) — the checkpoint writer maps outcome rows to plan positions
+    # through it (checkpoint.CompletedStep.position).
+    step_indices: List[int] = field(default_factory=list)
+    # Durable binding of the ORIGINAL plan's numbers to NEXT.md items
+    # (plan_items[k-1] = item of plan step k — what `[after:k]` names).
+    # Set once by loop_planning._prepare_execution: on a fresh run when the
+    # shaped plan IS the parsed plan (step_gate.plan_identity_intact), on a
+    # resume from the checkpoint that carried it. None = never bound — the
+    # gate then degrades every edge to soft. Persisted verbatim by every
+    # checkpoint writer (checkpoint.Checkpoint.plan_items).
+    plan_items: Optional[List[int]] = None
+    # Execution policy this run executes under (fan-out width; 0 =
+    # sequential) — persisted by every checkpoint writer so a resume runs
+    # the same way (`maro resume` re-enters the DAG lane).
+    parallel_fan_out: int = 0
     completed_context: List[str] = field(default_factory=list)
     iteration: int = 0
     step_idx: int = 0
@@ -518,6 +604,17 @@ class LoopContext:
     # resume/replan sees the facts, not just the surviving steps.
     world_facts: "WorldFactLedger" = field(
         default_factory=lambda: _new_world_facts())
+    # Run-scoped regression obligations (regression_ledger.py, 2026-09-16):
+    # verification commands a DONE step ran and passed, harvested from its
+    # real tool transcript; closure re-runs them and a new failure is a
+    # regression. Rides the checkpoint like world_facts.
+    regression: "RegressionLedger" = field(
+        default_factory=lambda: _new_regression())
+    # Item indices of steps replaced by recovery sub-steps (split /
+    # re-decompose in loop_blocked). Their blocked row records the
+    # replacement, not a failed prerequisite: the prerequisite gate
+    # (step_gate.py) treats them as unknown, never as unmet.
+    gate_superseded: set = field(default_factory=set)
     interrupts_applied: int = 0
     # Human-readable descriptions of interrupts applied at the most recent
     # boundary poll — consumed by the §6a injection-trigger director
@@ -552,6 +649,11 @@ class LoopContext:
     # defer_learning silently dropped their whole maintenance tail (Codex
     # 2-lens review of 6f58bf3, consensus HIGH). Only handle.py sets this.
     defer_maintenance: bool = False
+    # Chunk 9: the caller ends the run (the CLI's closure pass runs AFTER
+    # the loop returns and can demote done → incomplete), so the loop's
+    # finalize must not settle the resume source; the caller settles with
+    # `checkpoint.settle_resume_source` once its own status is final.
+    defer_resume_settlement: bool = False
 
     # Adaptive execution (Phase 64)
     steps_since_last_check: int = 0

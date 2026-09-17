@@ -239,6 +239,35 @@ def test_clarity_judges_goal_as_submitted_and_question_is_persisted(monkeypatch,
     assert card["clarification_question"] == "Which thread should I reference?"
 
 
+def test_r31_empty_unclear_question_survives_a_later_failure(monkeypatch, tmp_path):
+    # review r31: an empty generated question falls back before diagnostics can raise.
+    _setup(monkeypatch, tmp_path)
+    real_stderr = sys.stderr
+
+    class _RaisingStderr:
+        def write(self, text):
+            if "clarity check: UNCLEAR" in text:
+                raise OSError("stderr unavailable")
+            return real_stderr.write(text)
+
+        def flush(self):
+            return real_stderr.flush()
+
+    with patch("intent.check_goal_clarity",
+               return_value={"clear": False, "question": ""}), \
+         patch("handle.sys.stderr", _RaisingStderr()):
+        result = handle(
+            "Update the report", force_lane="agenda", dry_run=False,
+            adapter=MagicMock(), verbose=True,
+        )
+
+    assert result.status == "clarification_needed"
+    assert "Could you clarify the goal?" in result.result
+    run_dir = next((tmp_path / "runs").glob(f"{result.handle_id}*"))
+    meta = json.loads((run_dir / "metadata.json").read_text())
+    assert meta["clarification_question"] == "Could you clarify the goal?"
+
+
 def test_handle_build_loop_source_skips_quality_gate(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     monkeypatch.setenv("MARO_YOLO", "true")
@@ -400,7 +429,7 @@ class TestEffortModifier:
 class TestModeThinModifier:
     """mode:thin prefix strips keyword and routes to factory_thin loop."""
 
-    def _run(self, monkeypatch, tmp_path, goal):
+    def _run(self, monkeypatch, tmp_path, goal, **handle_kwargs):
         _setup(monkeypatch, tmp_path)
 
         # Patch at module level so `from factory_thin import run_factory_thin` picks it up
@@ -425,7 +454,8 @@ class TestModeThinModifier:
         # Patch build_adapter so no real LLM calls are made
         _stub_build_adapter(monkeypatch)
 
-        result = handle(goal, force_lane="agenda")
+        # review r26: expose handle kwargs so binding variants share the thin fixture.
+        result = handle(goal, force_lane="agenda", **handle_kwargs)
         return result, _called_thin
 
     def test_mode_thin_strips_prefix(self, monkeypatch, tmp_path):
@@ -446,6 +476,128 @@ class TestModeThinModifier:
         _setup(monkeypatch, tmp_path)
         result = handle("research nootropics", dry_run=True)
         assert result.message == "research nootropics"
+
+    def test_r26_mode_thin_records_the_landscape_binding(self, monkeypatch, tmp_path):
+        import json
+        import landscape
+        import runs
+        from orch_items import projects_root
+        # review r26: thin returns only after the chosen prior's project is stamped.
+        _setup(monkeypatch, tmp_path)
+        (projects_root() / "prior-project").mkdir(parents=True)
+        prior = "r26thinprior"
+        runs.create_run_dir(prior, prompt="Update revenue forecast dashboard",
+                            extra_metadata={"project": "prior-project"})
+        runs.stamp_run_metadata_for(prior, {
+            "status": "done", "ended_at": "2026-09-16T00:00:00+00:00"})
+        record = {"relation": "related", "chosen": prior, "continues": True,
+                  "rule": "judge", "reason": "continues",
+                  # review r26: apply validates that the chosen run was considered.
+                  "candidates": [{"handle_id": prior,
+                                  "goal": "Update revenue forecast dashboard",
+                                  "project": "prior-project"}],
+                  "scanned": 1, "below_floor": 0, "truncated": False,
+                  "prompt_version": landscape.PROMPT_VER}
+        monkeypatch.setattr(landscape, "decide", lambda *a, **k: dict(record))
+        import factory_thin
+
+        class _Thin:
+            status = "done"
+            final_report = "thin"
+            total_tokens = 2
+
+        monkeypatch.setattr(factory_thin, "run_factory_thin", lambda *a, **k: _Thin())
+        _stub_build_adapter(monkeypatch)
+        result = handle("mode:thin Update chart", force_lane="agenda")
+        meta = json.loads((runs.run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["project"] == "prior-project"
+        assert meta["project_binding"] == "landscape"
+        assert result.project == "prior-project"
+
+    def test_r26_mode_thin_records_the_operator_binding(self, monkeypatch, tmp_path):
+        import json
+        import runs
+        # review r26: explicit operator identity is stamped before thin returns.
+        result, _ = self._run(monkeypatch, tmp_path, "mode:thin inspect service",
+                              project="ops-x", fresh=True)
+        meta = json.loads((runs.run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["project"] == "ops-x"
+        assert meta["project_binding"] == "operator"
+        assert result.project == "ops-x"
+
+    def test_r27_mode_thin_persists_its_report_and_scans_no_project(
+            self, monkeypatch, tmp_path):
+        # review r27: thin output is run data, while its project is continuation identity only.
+        import factory_thin
+        import runs
+        from orch_items import project_dir
+        _setup(monkeypatch, tmp_path)
+        pdir = project_dir("thin-identity")
+        pdir.mkdir(parents=True)
+
+        class _Thin:
+            status = "done"
+            final_report = "Thin final report survives curation."
+            total_tokens = 4
+
+        def _fake_thin(*args, **kwargs):
+            (pdir / "OTHER_RUN_REPORT.md").write_text(
+                "This must not be copied.", encoding="utf-8")
+            return _Thin()
+
+        monkeypatch.setattr(factory_thin, "run_factory_thin", _fake_thin)
+        _stub_build_adapter(monkeypatch)
+        result = handle(
+            "mode:thin inspect service", force_lane="agenda",
+            project="thin-identity", fresh=True)
+        rd = runs.run_dir(result.handle_id)
+        meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+        result_files = list((rd / "build").glob("loop-*-RESULT.md"))
+        assert meta["execution"] == "thin"
+        assert len(result_files) == 1
+        assert "Thin final report survives curation" in result_files[0].read_text()
+        assert not (rd / "artifact" / "OTHER_RUN_REPORT.md").exists()
+
+    def test_r28_a_failed_thin_marker_is_warned_not_swallowed(
+            self, monkeypatch, tmp_path, caplog):
+        # review r28: a failed provenance stamp is visible without sacrificing
+        # the in-hand answer or its independently persisted report.
+        import logging
+        import runs
+        monkeypatch.setattr(runs, "stamp_run_metadata", lambda fields: None)
+        with caplog.at_level(logging.WARNING, logger="maro.handle"):
+            result, _ = self._run(
+                monkeypatch, tmp_path, "mode:thin inspect marker failure",
+                fresh=True)
+        rd = runs.run_dir(result.handle_id)
+        reports = list((rd / "build").glob("loop-*-RESULT.md"))
+        assert "thin result" in result.result
+        assert len(reports) == 1 and "thin result" in reports[0].read_text()
+        assert "execution marker not recorded" in caplog.text
+
+    def test_r28_a_failed_thin_report_is_warned(
+            self, monkeypatch, tmp_path, caplog):
+        # review r28: report I/O failure cannot hide either the mode marker or returned answer.
+        import logging
+        import runs
+        real_write_text = Path.write_text
+
+        def _fail_thin_report(path, *args, **kwargs):
+            if path.name == "loop-thin-RESULT.md":
+                raise OSError("report disk failure")
+            return real_write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", _fail_thin_report)
+        with caplog.at_level(logging.WARNING, logger="maro.handle"):
+            result, _ = self._run(
+                monkeypatch, tmp_path, "mode:thin inspect report failure",
+                fresh=True)
+        meta = json.loads(
+            (runs.run_dir(result.handle_id) / "metadata.json").read_text(
+                encoding="utf-8"))
+        assert meta["execution"] == "thin"
+        assert "thin result" in result.result
+        assert "thin report not persisted" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -756,7 +908,7 @@ class TestNavigatorProjectContinuation:
     one in its execute payload; the pick binds only when it names an
     existing project dir."""
 
-    def _run(self, monkeypatch, tmp_path, payload):
+    def _run(self, monkeypatch, tmp_path, payload, move="execute"):
         _setup(monkeypatch, tmp_path)
         import handle as handle_mod
         from types import SimpleNamespace
@@ -776,7 +928,7 @@ class TestNavigatorProjectContinuation:
         monkeypatch.setattr(
             "navigator_shadow.shadow_dispatch_live",
             lambda *a, **kw: SimpleNamespace(
-                move="execute", confidence=0.92,
+                move=move, confidence=0.92,
                 reasoning="continues prior work", payload=payload))
         monkeypatch.setattr(handle_mod, "_navigator_act_dispatch",
                             lambda *a, **kw: None)
@@ -789,6 +941,18 @@ class TestNavigatorProjectContinuation:
         (tmp_path / "projects" / "prior-tire-research").mkdir(parents=True)
         cap = self._run(monkeypatch, tmp_path,
                         {"instruction": "go", "project": "prior-tire-research"})
+        assert cap["project"] == "prior-tire-research"
+        assert cap["origin"]["dispatch_navigator"]["project"] == "prior-tire-research"
+
+    def test_extend_move_binds_too(self, monkeypatch, tmp_path):
+        """2026-09-07 (run 38cfec83): an "extend" (plan-first) move that
+        names the prior project must land there as well — the execute-only
+        check dropped the pick and the follow-up started over in a fresh
+        project."""
+        (tmp_path / "projects" / "prior-tire-research").mkdir(parents=True)
+        cap = self._run(monkeypatch, tmp_path,
+                        {"instruction": "plan", "expected_artifact": "PLAN.md",
+                         "project": "prior-tire-research"}, move="extend")
         assert cap["project"] == "prior-tire-research"
         assert cap["origin"]["dispatch_navigator"]["project"] == "prior-tire-research"
 
@@ -5630,8 +5794,18 @@ class TestVerdictFollowup:
             events.append(("closure-ran", {}))
             return self._closure_decision()
 
+        def _fake_loop(*args, **kwargs):
+            import json
+            import runs
+            # review r17: the answer-first contract needs an actual answer.
+            artifact = runs.current_run_dir() / "artifact"
+            artifact.mkdir(exist_ok=True)
+            (artifact / f"now-{runs.current_handle_id()}.json").write_text(
+                json.dumps({"result": "Built X successfully."}))
+            return self._fake_loop_result()
+
         with patch("agent_loop.run_agent_loop",
-                   side_effect=lambda g, *a, **kw: self._fake_loop_result()), \
+                   side_effect=_fake_loop), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.evaluate_closure", side_effect=_fake_closure), \
              patch("quality_gate.run_quality_gate", return_value=gate):
@@ -5688,15 +5862,176 @@ class TestVerdictFollowup:
         # user would get a verdict for an answer they never received. The
         # finalize re-sends the full run_completed instead.
         import config as config_mod
-        _real_get = config_mod.get
         monkeypatch.setattr(
-            config_mod, "get",
-            lambda k, d=None: ("some-notify-cmd" if k == "notify.command"
-                               else _real_get(k, d)))
+            config_mod, "snapshot",
+            lambda **kw: ({"notify": {"command": "some-notify-cmd"}}, []))
         events = []
         self._drive(monkeypatch, tmp_path, events, emit_returns=False)
         names = [e for e, _ in events]
         # Early attempt + finalize re-send — and no verdict-only follow-up.
+        assert names.count("run_completed") == 2
+        assert "run_verdict" not in names
+
+    def test_r20_the_ordinary_finalize_owns_its_story_until_told(
+            self, monkeypatch, tmp_path):
+        # review r20: the ordinary finalize's obligation write stamps
+        # story_owed_at (r15: the owner may not get to tell it) — the
+        # untold sweep must not read that stamp as a finished repair and
+        # retell the record while the LIVE owner is still finalizing (its
+        # final close can still change the story). Only the owner's
+        # death or the grace releases an owner-owed story.
+        import json
+        import os
+        import subprocess
+        import config as config_mod
+        import notify
+        import runs
+        from audit_repair import sweep_untold_finalizes
+        monkeypatch.setattr(
+            config_mod, "snapshot",
+            lambda **kw: ({"notify": {"command": "some-notify-cmd"}}, []))
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events, emit_returns=False)
+        rd = runs.run_dir(result.handle_id)
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta.get("story_owed_at") and meta.get("story_owed_by") == "owner", meta
+        assert "final_notified_at" not in meta  # the hook failed: still owed
+        runs.stamp_run_metadata_for(result.handle_id, {"pid": os.getpid()})
+        told = []
+        monkeypatch.setattr(
+            notify, "tell", lambda kind, payload, **kw: told.append(kind) or True)
+        assert sweep_untold_finalizes(grace_s=3600)["told"] == 0 and told == []
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        runs.stamp_run_metadata_for(result.handle_id, {"pid": dead.pid})
+        assert sweep_untold_finalizes(grace_s=3600)["told"] == 1 and told == ["run_completed"]
+
+    def test_failed_early_journal_downgrades_to_full_completion(
+            self, monkeypatch, tmp_path):
+        # Review 2026-09-13 r16: with NO hook the journal row is the early
+        # answer's whole channel; a row that failed to write is not an
+        # answer that reached anyone, so the finalize re-sends the full
+        # run_completed — never a verdict for an answer never received.
+        import observe
+        rows = {"n": 0}
+
+        def flaky_journal(kind, **kw):
+            rows["n"] += 1
+            return rows["n"] > 1  # the first row (the early answer) is lost
+
+        monkeypatch.setattr(observe, "write_event", flaky_journal)
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events, emit_returns=True)
+        names = [e for e, _ in events]
+        assert names.count("run_completed") == 2
+        assert "run_verdict" not in names
+        import json as _json
+        from runs import run_dir as _run_dir
+        meta = _json.loads(
+            (_run_dir(result.handle_id) / "metadata.json").read_text())
+        vp = meta.get("verdict_pending") or {}
+        assert vp.get("notified_early") is True and vp.get("early_told") is False
+        assert meta.get("final_notified_at")
+
+    def test_empty_early_card_downgrades_to_full_completion(
+            self, monkeypatch, tmp_path):
+        import runs
+        import observe
+        import notify
+        real_close = runs.close_run
+        calls = []
+
+        def close_run(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == 1:
+                return None
+            return real_close(*args, **kwargs)
+
+        monkeypatch.setattr(runs, "close_run", close_run)
+        monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+        assert notify.hook_owed("run_completed") is False
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events, emit_returns=False)
+        names = [e for e, _ in events]
+        assert names.count("run_completed") == 2
+        assert "run_verdict" not in names
+        final = [p for e, p in events if e == "run_completed"][-1]
+        assert final.get("result_excerpt") or final.get("answer_summary")
+        import json
+        meta = json.loads(
+            (runs.run_dir(result.handle_id) / "metadata.json").read_text())
+        vp = meta["verdict_pending"]
+        assert vp["notified_early"] is True
+        assert vp["early_told"] is False
+        assert meta.get("final_notified_at")
+
+    def test_r18_summary_only_early_answer_reaches_journal_and_routes_verdict(
+            self, monkeypatch, tmp_path):
+        import json
+        import observe
+        import run_curation
+        import runs
+
+        def excerpt_result(rd, meta, card):
+            pass
+
+        def synthesize_answer(rd, meta, card):
+            card["answer_summary"] = "Revenue rose 12%."
+
+        # review r18: registry functions mutate cards; exercise a real summary-only card.
+        replacements = {"excerpt_result": excerpt_result,
+                        "synthesize_answer": synthesize_answer}
+        monkeypatch.setattr(run_curation, "CURATORS", [
+            replacements.get(fn.__name__, fn) for fn in run_curation.CURATORS])
+        rows = []
+        monkeypatch.setattr(
+            observe, "write_event",
+            lambda kind, **kw: rows.append((kind, kw)) or True)
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events, emit_returns=False)
+        early = next(p for kind, p in events if kind == "run_completed")
+        assert not early.get("result_excerpt")
+        assert early["answer_summary"] == "Revenue rose 12%."
+        row = next(p for kind, p in rows if kind == "run_completed")
+        assert "Revenue rose 12%." in row["detail"]
+        meta = json.loads(
+            (runs.run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["verdict_pending"]["early_told"] is True
+        names = [kind for kind, _ in events]
+        assert names.count("run_completed") == 1
+        assert "run_verdict" in names
+
+    def test_r18_blank_summary_early_card_downgrades_to_full_completion(
+            self, monkeypatch, tmp_path):
+        # review r18: the early sender's eligibility is the journal's
+        # projection, not a truthiness test of the raw field — a
+        # whitespace-only answer_summary carries nothing, so the marker
+        # must stay early_told False and the full completion must follow.
+        import json
+        import observe
+        import run_curation
+        import runs
+
+        def excerpt_result(rd, meta, card):
+            pass
+
+        def synthesize_answer(rd, meta, card):
+            card["answer_summary"] = "   "
+
+        replacements = {"excerpt_result": excerpt_result,
+                        "synthesize_answer": synthesize_answer}
+        monkeypatch.setattr(run_curation, "CURATORS", [
+            replacements.get(fn.__name__, fn) for fn in run_curation.CURATORS])
+        monkeypatch.setattr(observe, "write_event", lambda *a, **kw: True)
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events, emit_returns=False)
+        early = next(p for kind, p in events if kind == "run_completed")
+        assert not early.get("result_excerpt")
+        assert early["answer_summary"] == "   "
+        meta = json.loads(
+            (runs.run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["verdict_pending"]["early_told"] is False
+        names = [kind for kind, _ in events]
         assert names.count("run_completed") == 2
         assert "run_verdict" not in names
 

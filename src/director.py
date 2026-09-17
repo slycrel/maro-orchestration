@@ -37,7 +37,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ancestry import Origin
 
@@ -107,9 +107,21 @@ class DirectorResult:
     project: Optional[str] = None
     tokens_in: int = 0
     tokens_out: int = 0
+    # Round 19: the workers' billed cost and cache reads, summed (tickets
+    # and revisions, refused ones included) — the director's own calls
+    # are metered separately by the adapter's call records.
+    cost_usd: float = 0.0
+    cache_read_tokens: int = 0
     elapsed_ms: int = 0
     log_path: Optional[str] = None
     worker_slice: bool = False  # was memory.worker_slice active for this run? (default-on since 2026-07-08)
+    # The typed environmental pause that stopped dispatch (review round 2,
+    # 2026-09-13): a worker ticket refused by the environment (dead
+    # container session, dead backend) ends the directive `stuck` with this
+    # set — no review, no revision, no further tickets — instead of the
+    # director judging and re-dispatching a refusal. Same vocabulary as the
+    # loop's pause_reason; "" otherwise.
+    pause_reason: str = ""
 
     def summary(self) -> str:
         done = sum(1 for r in self.worker_results if r.status == "done")
@@ -121,6 +133,8 @@ class DirectorResult:
             f"tickets={len(self.tickets)} workers_done={done}/{len(self.worker_results)}",
             f"tokens={self.tokens_in}in+{self.tokens_out}out elapsed_ms={self.elapsed_ms}",
         ]
+        if self.pause_reason:
+            lines.append(f"pause_reason={self.pause_reason}")
         if self.log_path:
             lines.append(f"log={self.log_path}")
         return "\n".join(lines)
@@ -334,8 +348,15 @@ def run_director(
              director_id, directive[:60], dry_run, skip_if_simple)
 
     def _log(msg: str):
+        # Never fatal (review round 5, 2026-09-13): a closed stderr raised
+        # BrokenPipeError out of the pause branches before the typed
+        # result, its report or the durable log existed. Presentation
+        # never stands between an outcome and its consequences.
         if verbose:
-            print(f"[maro:director:{director_id}] {msg}", file=sys.stderr, flush=True)
+            try:
+                print(f"[maro:director:{director_id}] {msg}", file=sys.stderr, flush=True)
+            except Exception:
+                pass
 
     _log(f"directive={directive!r}")
 
@@ -361,6 +382,18 @@ def run_director(
             elapsed = int((time.monotonic() - started_at) * 1000)
             done_steps = [s for s in loop_result.steps if s.status == "done"]
             report = "\n\n".join(s.result for s in done_steps if s.result) or "[no output]"
+            _skip_pause = str(getattr(loop_result, "pause_reason", "") or "")
+            if _skip_pause:
+                # Round 4: this branch is Telegram's whole reply
+                # (skip_if_simple=True there) and said "[no output]" for a
+                # paused loop. Same deterministic renderer as the full path.
+                _undone = sum(1 for s in loop_result.steps if s.status != "done")
+                report = _pause_report(
+                    _skip_pause, loop_result.stuck_reason or "",
+                    f"{_undone} step(s) did not finish",
+                    [s.result for s in done_steps if s.result]
+                    + [f"**step {i + 1} (partial — refused by the environment; not accepted)**\n{s.result}"
+                       for i, s in enumerate(loop_result.steps) if s.status == "blocked" and s.result])
             log.info("director_skip_done id=%s loop_status=%s steps=%d elapsed=%dms",
                      director_id, loop_result.status, len(done_steps), elapsed)
             return DirectorResult(
@@ -376,7 +409,12 @@ def run_director(
                 project=loop_result.project,
                 tokens_in=loop_result.total_tokens_in,
                 tokens_out=loop_result.total_tokens_out,
+                # Round 21: the direct loop's bill rides too (its steps
+                # carry both; the constructor left the new fields at zero).
+                cost_usd=sum(float(getattr(s, "provider_cost_usd", 0.0) or 0.0) for s in loop_result.steps),
+                cache_read_tokens=sum(int(getattr(s, "cache_read_tokens", 0) or 0) for s in loop_result.steps),
                 elapsed_ms=elapsed,
+                pause_reason=str(getattr(loop_result, "pause_reason", "") or ""),
             )
         except Exception as exc:
             log.warning("director_skip failed, falling back to full Director: %s", exc)
@@ -394,6 +432,9 @@ def run_director(
         adapter = build_adapter(model=assign_model_by_role("planner"))
 
     total_tokens_in = 0
+    total_cost_usd = 0.0
+    total_cache_read = 0
+    superseded_results: List[WorkerResult] = []  # drafts a revision replaced (round 20)
     total_tokens_out = 0
 
     # Phase 1: Produce SPEC + tickets
@@ -451,6 +492,7 @@ def run_director(
             except Exception:
                 parent_goal_brain = ""
 
+    director_pause_reason = ""
     for ticket in tickets:
         _log(f"dispatching worker={ticket.worker_type} task={ticket.task[:50]!r}")
 
@@ -513,6 +555,8 @@ def run_director(
                 log.warning("director: slice_echo failed for ticket %s: %s", ticket.ticket_id, exc)
         total_tokens_in += result.tokens_in
         total_tokens_out += result.tokens_out
+        total_cost_usd += float(getattr(result, "cost_usd", 0.0) or 0.0)
+        total_cache_read += int(getattr(result, "cache_read_tokens", 0) or 0)
 
         # Spot-check: worker result should reference the requested worker_type
         if result.worker_type != ticket.worker_type:
@@ -525,6 +569,18 @@ def run_director(
                 "WorkerResult.ticket is empty for ticket=%s worker=%s",
                 ticket.ticket_id, ticket.worker_type,
             )
+
+        _env_pause = _worker_environmental_pause(result)
+        if _env_pause:
+            # The environment refused the ticket — reviewing or revising
+            # a refusal spends calls to re-refuse (round 2). Stop here.
+            director_pause_reason = _env_pause
+            worker_results.append(result)
+            log.warning("director: ticket %s refused by the environment (%s) — "
+                        "directive paused, no review/revision/further tickets",
+                        ticket.ticket_id, _env_pause)
+            _log(f"environmental pause: {_env_pause} — dispatch stopped")
+            break
 
         # Review worker output
         review, rev_tokens = _review_worker_output(
@@ -549,6 +605,10 @@ def run_director(
                     context=context,
                     revision_of=ticket.ticket_id,
                 )
+                _draft = result
+                # The draft's row leaves worker_results with the revision;
+                # its accounting stays durable (round 20).
+                superseded_results.append(_draft)
                 result = dispatch_worker(
                     revised_ticket.worker_type,
                     revised_ticket.task,
@@ -565,6 +625,20 @@ def run_director(
                         log.warning("director: slice_echo failed for revision of ticket %s: %s", ticket.ticket_id, exc)
                 total_tokens_in += result.tokens_in
                 total_tokens_out += result.tokens_out
+                total_cost_usd += float(getattr(result, "cost_usd", 0.0) or 0.0)
+                total_cache_read += int(getattr(result, "cache_read_tokens", 0) or 0)
+                _env_pause = _worker_environmental_pause(result)
+                if _env_pause:
+                    director_pause_reason = _env_pause
+                    # Retained whatever the refused revision left behind
+                    # (round 10: gated on an empty revision result, a
+                    # refusal carrying partial evidence discarded the draft).
+                    if _draft.result:
+                        result.unaccepted_draft = _draft.result
+                    log.warning("director: revision of ticket %s refused by the environment "
+                                "(%s) — directive paused", ticket.ticket_id, _env_pause)
+                    _log(f"environmental pause: {_env_pause} — dispatch stopped")
+                    break
                 review, rev_tokens = _review_worker_output(
                     directive=directive,
                     ticket=revised_ticket,
@@ -588,12 +662,34 @@ def run_director(
         if result.status == "done" and result.result:
             completed_context.add(
                 f"[{ticket.worker_type}] {ticket.task}:\n{result.result}")
+        if director_pause_reason:
+            break
 
     # Phase 3: Compile final report
-    _log("compiling final report...")
-    report, compile_tokens = _compile_report(directive, spec, worker_results, adapter, dry_run)
-    total_tokens_in += compile_tokens[0]
-    total_tokens_out += compile_tokens[1]
+    if director_pause_reason:
+        # Round 3: the pause lived only on the returned object — the
+        # report (Telegram's whole reply), the durable log and the CLI JSON
+        # all described "blocked work" with no remedy. A paused directive
+        # gets a DETERMINISTIC report (no compile call spent on refused
+        # work): the pause, the refusal's own remedy text, what was not
+        # dispatched, and any finished worker output verbatim.
+        _refused = next((r for r in reversed(worker_results) if r.status == "blocked"), None)
+        report = _pause_report(
+            director_pause_reason, (_refused.stuck_reason if _refused else "") or "",
+            f"{max(len(tickets) - len(worker_results), 0)} of {len(tickets)} ticket(s) not dispatched",
+            [f"**{r.worker_type} (done)**\n{r.result}" for r in worker_results
+             if r.status == "done" and r.result]
+            + [f"**{r.worker_type} (draft — its revision was refused by the environment; "
+               f"not accepted)**\n{r.unaccepted_draft}"
+               for r in worker_results if getattr(r, "unaccepted_draft", "")]
+            + [f"**{r.worker_type} (partial — refused by the environment; not accepted)**\n{r.result}"
+               for r in worker_results if r.status == "blocked" and r.result])
+        _log("paused — deterministic report, no compile call")
+    else:
+        _log("compiling final report...")
+        report, compile_tokens = _compile_report(directive, spec, worker_results, adapter, dry_run)
+        total_tokens_in += compile_tokens[0]
+        total_tokens_out += compile_tokens[1]
 
     # MH subagent-edge candidates (#6 + #13) — candidate-grade evidence
     # (the #7 contradiction-candidate convention), advisory only, never
@@ -670,6 +766,10 @@ def run_director(
         status=status,
         elapsed_ms=elapsed,
         worker_slice=worker_slice_enabled,
+        pause_reason=director_pause_reason,
+        worker_totals={"tokens_in": total_tokens_in, "tokens_out": total_tokens_out,
+                       "cost_usd": total_cost_usd, "cache_read_tokens": total_cache_read},
+        superseded_results=superseded_results,
     )
 
     result = DirectorResult(
@@ -685,9 +785,12 @@ def run_director(
         project=project,
         tokens_in=total_tokens_in,
         tokens_out=total_tokens_out,
+        cost_usd=total_cost_usd,
+        cache_read_tokens=total_cache_read,
         elapsed_ms=elapsed,
         log_path=log_path,
         worker_slice=worker_slice_enabled,
+        pause_reason=director_pause_reason,
     )
 
     log.info("director_done id=%s status=%s tickets=%d tokens=%d elapsed=%dms",
@@ -698,6 +801,34 @@ def run_director(
 
 # ---------------------------------------------------------------------------
 # Internal helpers
+# ---------------------------------------------------------------------------
+
+def _pause_report(pause_reason: str, remedy: str, undone: str, done_outputs: List[str]) -> str:
+    """The deterministic report of a paused directive — Telegram's whole
+    reply and the CLI's `report` field (rounds 3–4): the typed pause, the
+    refusal's own remedy text, what did not run, and finished output
+    verbatim. No model call: compiling refused work spends a call to say
+    less than this."""
+    head = (f"⏸ Directive paused ({pause_reason}): "
+            f"{remedy or 'the environment refused the work'}. "
+            f"{undone}; re-run the directive once the environment is restored.")
+    return head + ("\n\n" + "\n\n".join(done_outputs) if done_outputs else "")
+
+
+def _worker_environmental_pause(result: WorkerResult) -> str:
+    """The typed pause a blocked worker result calls for — the loop's own
+    seam (stop_verdicts.environmental_pause_for) fed the worker's
+    structured error class. "" for anything else; never raises."""
+    try:
+        from stop_verdicts import environmental_pause_for
+        return environmental_pause_for({
+            "status": result.status,
+            "error_class": str(getattr(result, "error_class", "") or ""),
+        })
+    except Exception:
+        return ""
+
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
 def _produce_spec(
@@ -1004,6 +1135,9 @@ def _write_director_log(
     status: str,
     elapsed_ms: int,
     worker_slice: bool = False,
+    pause_reason: str = "",
+    worker_totals: Optional[Dict[str, Any]] = None,
+    superseded_results: Optional[List[WorkerResult]] = None,
 ) -> Optional[str]:
     try:
         try:
@@ -1033,6 +1167,7 @@ def _write_director_log(
             "spec": spec,
             "status": status,
             "elapsed_ms": elapsed_ms,
+            "pause_reason": pause_reason,  # typed environmental pause that stopped dispatch ("" otherwise)
             "worker_slice": worker_slice,  # A/B experiment: memory.worker_slice active for this run?
             "tickets": [
                 {"ticket_id": t.ticket_id, "worker_type": t.worker_type, "task": t.task}
@@ -1052,10 +1187,39 @@ def _write_director_log(
                     # (attribution.delegation_gap; False for done workers).
                     "delegation_gap": (r.status == "blocked"
                                        and _delegation_gap_row(r)),
+                    # Round 3: a blocked worker's own diagnosis, durable.
+                    "error_class": getattr(r, "error_class", "") or "",
+                    "stuck_reason": _clip(r.stuck_reason or "", 200),
+                    # Round 5: the draft a refused revision was revising.
+                    "unaccepted_draft_length": len(getattr(r, "unaccepted_draft", "") or ""),
                     "tokens_in": r.tokens_in,
                     "tokens_out": r.tokens_out,
+                    # Round 19: the bill and the cache share, durable too.
+                    "cost_usd": float(getattr(r, "cost_usd", 0.0) or 0.0),
+                    "cache_read_tokens": int(getattr(r, "cache_read_tokens", 0) or 0),
                 }
                 for r in worker_results
+            ],
+            # Round 20: the directive's whole worker bill, durable — the
+            # rows above hold only each ticket's FINAL attempt, so a paid
+            # draft replaced by a refused revision left a zero-cost record.
+            "worker_totals": {
+                "tokens_in": int((worker_totals or {}).get("tokens_in", 0) or 0),
+                "tokens_out": int((worker_totals or {}).get("tokens_out", 0) or 0),
+                "cost_usd": float((worker_totals or {}).get("cost_usd", 0.0) or 0.0),
+                "cache_read_tokens": int((worker_totals or {}).get("cache_read_tokens", 0) or 0),
+            },
+            "superseded_attempts": [
+                {
+                    "ticket": _clip(r.ticket or "", 120),
+                    "status": r.status,
+                    "error_class": getattr(r, "error_class", "") or "",
+                    "tokens_in": r.tokens_in,
+                    "tokens_out": r.tokens_out,
+                    "cost_usd": float(getattr(r, "cost_usd", 0.0) or 0.0),
+                    "cache_read_tokens": int(getattr(r, "cache_read_tokens", 0) or 0),
+                }
+                for r in (superseded_results or [])
             ],
         }
         from file_lock import atomic_write
@@ -1065,7 +1229,12 @@ def _write_director_log(
             return relative_display_path(path)
         except Exception:
             return str(path)
-    except Exception:
+    except Exception as exc:
+        # Round 4: the durable diagnosis (pause_reason, per-worker
+        # error_class) was promised; losing it silently is a record that
+        # lies by omission. The caller's log_path=None is the visible sign.
+        log.warning("director log NOT written for %s (%s: %s)",
+                    director_id, type(exc).__name__, exc)
         return None
 
 
@@ -1855,6 +2024,7 @@ def evaluate_closure(
     loop_id: str = "",
     project: str = "",
     prior_verdict: Optional[ClosureVerdict] = None,
+    regression_obligations: Optional[list] = None,
 ) -> DirectorDecision:
     """The closure trigger of the adaptive-execution seam (ADAPTIVE_EXECUTION_
     DESIGN Phase C leftover, unified 2026-07-28).
@@ -1910,6 +2080,7 @@ def evaluate_closure(
         diagnosis=diagnosis,
         loop_id=loop_id,
         project=project,
+        regression_obligations=regression_obligations,
     )
 
     restart_worthy = (
@@ -2075,7 +2246,10 @@ def main(argv=None):
             "report": result.report,
             "tokens_in": result.tokens_in,
             "tokens_out": result.tokens_out,
+            "cost_usd": float(getattr(result, "cost_usd", 0.0) or 0.0),
+            "cache_read_tokens": int(getattr(result, "cache_read_tokens", 0) or 0),
             "elapsed_ms": result.elapsed_ms,
+            "pause_reason": result.pause_reason,
         }, indent=2))
     else:
         print(result.summary())

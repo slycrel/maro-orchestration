@@ -26,12 +26,105 @@ challenger re-run of the same goal, arm randomized:
 | harness (champion) | the primary run itself — maro's machinery + accrued learning | — |
 | `star` | headless frontier subprocess carrying the star SKILL.md contract (orchestration-as-prompt) | harness > star ⇒ the machinery/learning earn their keep beyond the pattern |
 | `plain` | headless frontier subprocess, bare goal, no orchestration teaching | star > plain ⇒ the orchestration pattern itself adds value; **plain ≥ harness ⇒ bitter-lesson red alert** |
+| `go` (2026-09-06, own track) | the Go successor engine (`maro-go now\|agenda`) on its own persistent workspace, scratch work dir, every mutating/network tool denied by tool policy | harness vs go ⇒ does the successor carry the machinery's value on the live stream; go ≥ harness at lower cost ⇒ the successor is ready to be the champion |
 
 Randomizing the arm per shadow keeps cost at one challenger per run while
 both comparison corpuses accumulate passively. "Plain might be sometimes
 better, sometimes worse than star, and we don't need to know today"
 (Jeremy) — the answer emerges when n is big enough, no dedicated
 experiment.
+
+### The Go track (2026-09-06)
+
+The `go` arm is not a third pick in the star|plain randomization — it is
+its own track inside the same sweep (same lock, so serial stays a system
+invariant): own switch (`shadow.go.enabled`, double opt-in with
+`shadow.enabled`), own claim dir (`<run-dir>/shadow-go/`, a SIBLING of
+`shadow/` because the star|plain track claims by the existence of
+`shadow/`), own daily cap counted from its own `arm: "go"` rows, own
+eligibility. Why own track: the live ledger held ONE star|plain row in
+three weeks (tight read-tier gate × sparse stream); the successor's
+challenger evidence cannot wait on a slot it would compete for, and a
+run may honestly carry both a star|plain shadow and a Go shadow.
+
+Eligibility: a primary of EITHER lane passes on the basic checks alone
+(done, not dry, organic, non-empty) — the engine runs with
+`--deny-tools` naming every mutating/network tool
+(`shadow_lane.GO_DENY_TOOLS`), so the goal text cannot act whatever its
+shape; containment is structural (the engine refuses the tool), not the
+star|plain preamble (instruction-level; `containment_preamble_version:
+null` on Go rows so the batch judge partitions). Shipped first with the
+star|plain read-tier gate on AGENDA; widened the same day (Jeremy: "if
+we're going to shadow, let's do it right"). The cost of the width, on
+record: a build-shaped goal runs in Go without write tools and fails
+honestly — those pairs say nothing about engine quality, so every Go
+row carries `primary_goal_shape` (worker type + action tier as the
+star|plain gate would have classified it) and the adjudication
+partitions on it. Any other lane is a terminal skip (`lane!=now|agenda`).
+
+The engine keeps its OWN persistent workspace (`shadow.go.workspace`,
+default `<workspace_root>/shadow-go`): its landscape (related-run
+decisions) and lineage-scoped memory accrue across shadows the way the
+primary's do — a fresh workspace per shadow would measure a memoryless
+engine. It never reads this workspace (isolation invariant 3 holds by
+construction: the Go journal is not a Python store, and the env scrub
+unsets every `MARO_*` pointer before setting `MARO_GO_WORKSPACE`).
+
+Readout: after the run, `maro-go runs show --json <handle>` (the run's
+`Summary`: mission outcome/closure, landscape relation, every call with
+its receipt — the landscape judge included — and the usage sum with
+`cost_reported` honest about partial sums). Row fields: `go_handle`,
+`go_outcome`, `go_closure`, `go_calls`, `go_landscape`, `cost_usd`
+(None unless every call reported), `tokens_cached` (cache-read tokens,
+so the diagnose-cost question below has its denominator),
+`go_binary_sha256` (the version pin, the star arm's `prompt_sha256`
+analogue), `tool_policy`; and `go_reason` / `go_needs_clarification` /
+`go_question` — the engine's intake may decide the goal is not clear
+enough to plan and ask a question instead of running (the first live
+pair, 37d0e041, did: "what is 'the maro box'?"). A shadow asks nobody,
+so the outcome is recorded as what it is (asked, not failed) and never
+acted on; the adjudication partitions on it.
+
+Operator-context parity (2026-09-06): the champion's planner injects the
+operator docs (`user/GOALS.md`, `CONTEXT.md`, `SIGNALS.md`, workspace
+overlay over repo template, `clip(…, 4000)` per doc as the breaker) into
+its plan prompt; the Go challenger got none, which is what 37d0e041's
+question was made of. The sweep now renders the same docs the same way
+(`shadow_lane._operator_context`), writes them to
+`<run-dir>/shadow-go/context.md`, and hands the file to the engine as
+`--context <file>` — a RECORDED input on the Go side (a `context`
+thought cited by the goal record; every intent, plan and NOW execute
+request carries it and the fold re-derives the request from it, so a
+journal that carried context verifies). Row fields: `context_docs` (which
+docs were present), `context_sha256`, `context_chars`, `go_context` (the
+engine's own hash of the thought it stored — the two hashes are of the
+same bytes, so a mismatch is a transport defect). No docs → no flag, and
+the row says so with an empty `context_docs`.
+
+Reading the pairs (2026-09-06): `python3 -m shadow_lane pairs [--arm
+go] [--json]` renders every ledger row as the pair the adjudication
+reads — the primary's side (achieved, cost, wall, model), the
+challenger's (outcome, asked-a-clarification + the question, cost, wall,
+tokens incl. cached, landscape relation, context docs, binary pin), the
+cost and wall ratios, and the challenger's result excerpt when the run
+dir is still there — with a summary that partitions on arm, goal shape
+and asked-vs-failed and gives median ratios. It does NOT claim answer
+agreement: that is the batch judge's, at ~10 rows. The same view is the
+viz's **Pairs tab** (`runs_root()/pairs.html`, `loop_report.
+write_pairs_page`, allowlisted in `viz_server`), refreshed by the
+runs-index write and by the sweep after every row it appends — the
+challenger result is inlined because `shadow-go/` is not a servable
+subtree. Rows written before the clarification fields existed read as
+"not asked"; nothing is backfilled (the engine's reason was not on the
+row, and the ledger is append-only).
+
+Pre-registered questions for the Go track (adjudication at ~10 pairs,
+the same bar as star|plain): (1) delivered-answer agreement with the
+primary on NOW pairs; (2) cost and wall per pair (the 2026-09-05
+comparison predicts Go at ~1/5 the cost and ~2/3 the wall); (3) landscape
+relation on follow-ups — does the engine relate a run the primary
+related. Prediction on record: Go ≥ harness on NOW answers at lower cost;
+Go < harness on AGENDA depth until its workspace has accrued lessons.
 
 ## Design invariants
 
@@ -160,7 +253,9 @@ adjudication pass over pairs → comparison verdicts → GOAL_BRAIN
 
 Module: `src/shadow_lane.py` (sweep + eligibility + runner + ledger), CLI
 `python3 -m shadow_lane sweep|status`. Cadence wiring into the existing
-post-run/heartbeat sweep family. Config namespace `shadow.*` (default OFF;
+post-run/heartbeat sweep family (on this box, 2026-09-06: a crontab
+entry every 10 minutes — no heartbeat process runs here, so the
+heartbeat tick was never a live cadence). Config namespace `shadow.*` (default OFF;
 ON on this box), registered in docs/DEFAULTS.md.
 
 ### Seam map (recon 2026-08-14)
@@ -208,6 +303,9 @@ ON on this box), registered in docs/DEFAULTS.md.
 - Sandboxed eligibility expansion (worktree/container) so build-shaped
   goals can be shadowed safely — evidence-gated on v1 actually producing
   findings.
+- ~~Whether a NOW shadow should also run another engine~~ — the Go track
+  (2026-09-06) is exactly that: the successor as challenger, on its own
+  track so it never competes with star|plain for the run's slot.
 - Whether NOW shadows should also run the *harness* AGENDA arm ("would the
   machinery have done better?") — v1 keeps arms to star|plain to bound
   cost; revisit at first adjudication.

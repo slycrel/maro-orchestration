@@ -597,7 +597,149 @@ class TestContainerAuthProbe:
     def test_armed_and_clear_is_ok(self, monkeypatch):
         self._patch(monkeypatch, "on", None)
         status, evidence, obs = sh._probe_container_auth({})
-        assert status == OK and obs["breaker_tripped"] is False
+        # Review round 2: no expiry evidence is UNKNOWN, not OK — OK after
+        # a narrated SILENT narrates RECOVERED, and "we lost sight of it"
+        # is not recovery.
+        assert status == UNKNOWN and obs["breaker_tripped"] is False
+        assert obs["liveness"] == "unknown" and "not established" in evidence
+
+    def _liveness(self, monkeypatch, days_left, *, has_refresh=True):
+        import time
+        import container_exec as ce
+        monkeypatch.setattr(ce, "auth_liveness_state", lambda: {
+            "checked_at": time.time(), "ok": True, "has_refresh": has_refresh,
+            "refresh_expires_at": time.time() + days_left * 86400.0})
+
+    def test_session_expiring_within_margin_is_silent_before_any_failure(self, monkeypatch):
+        # The point of the record (2026-09-13): warn while there is still
+        # time to re-seed, not after the first run dies.
+        self._patch(monkeypatch, "require", None)
+        self._liveness(monkeypatch, 2)
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == SILENT and "expiring" in evidence and "re-seed" in evidence
+        assert obs["liveness"] == "warn" and obs["breaker_tripped"] is False
+
+    def test_session_expired_is_silent_even_with_breaker_clear(self, monkeypatch):
+        self._patch(monkeypatch, "on", None)
+        self._liveness(monkeypatch, -0.5)
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == SILENT and "EXPIRED" in evidence and obs["liveness"] == "expired"
+
+    def test_a_failed_probe_after_a_warning_does_not_read_as_recovered(self, monkeypatch):
+        # Review 2026-09-13: the recorder keeps the last good sample on a
+        # failed probe, so the probe still warns instead of narrating
+        # SUBSYSTEM_RECOVERED on a docker outage.
+        import time
+        import container_exec as ce
+        self._patch(monkeypatch, "require", None)
+        now = time.time()
+        rec = {"checked_at": now, "ok": False, "detail": "credentials expiry probe failed: docker down",
+               "last_good": {"checked_at": now - 3600, "ok": True, "has_refresh": True,
+                             "refresh_expires_at": now + 2 * 86400.0}}
+        monkeypatch.setattr(ce, "auth_liveness_state", lambda now=None: rec)
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == SILENT and obs["liveness"] == "warn"
+        assert "last good sample" in evidence and "docker down" in evidence
+        # ... and once the good sample itself is stale (48 h), the probe
+        # goes UNKNOWN — never OK — so the standing warning is not
+        # narrated as recovered by a prolonged docker outage (round 2).
+        rec["last_good"]["checked_at"] = now - 49 * 3600
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == UNKNOWN and obs["liveness"] == "unknown"
+
+    def test_lost_observation_never_narrates_recovered(self, monkeypatch):
+        # The health lane's own edge rule: SILENT → UNKNOWN keeps the told
+        # state; only an affirmative OK narrates SUBSYSTEM_RECOVERED.
+        monkeypatch.setattr(
+            sh, "DECLARED_PROCESSES", [_decl(_seq_probe([SILENT, UNKNOWN, UNKNOWN, OK]))])
+        for _ in range(3):
+            run_health_probes()
+        assert len(_events(SUBSYSTEM_SILENT)) == 1
+        assert _events(SUBSYSTEM_RECOVERED) == []
+        run_health_probes()
+        assert len(_events(SUBSYSTEM_RECOVERED)) == 1
+
+    def test_only_runs_the_named_probe_and_keeps_the_cycle(self, monkeypatch, _tmp_health):
+        # Round 5: the heartbeat narrates the container-auth warning through
+        # this machinery for ONE probe; the streak probes must not run off
+        # their goal-run cadence and the cycle counter must not advance.
+        import json as _json
+        streak = []
+        def _streak(prior):
+            streak.append(1)
+            return OK, "fine", {}
+        monkeypatch.setattr(sh, "DECLARED_PROCESSES", [
+            _decl(_streak, name="streaky"),
+            _decl(_seq_probe([SILENT, OK]), name="container_auth")])
+        run_health_probes()
+        assert streak == [1]
+        assert _json.loads(_tmp_health.read_text())["cycle"] == 1
+        assert len(_events(SUBSYSTEM_SILENT)) == 1
+        summary = run_health_probes(only=("container_auth",))
+        assert summary["ran"] == 1 and streak == [1]
+        snap = _json.loads(_tmp_health.read_text())
+        assert snap["cycle"] == 1 and snap["processes"]["container_auth"]["status"] == OK
+        assert len(_events(SUBSYSTEM_RECOVERED)) == 1
+        assert snap["processes"]["streaky"]["status"] == OK, "untouched entries survive"
+
+    def test_narration_is_delivered_under_the_snapshot_lock(self, monkeypatch, _tmp_health):
+        # Round 7: the lock was released before narration, so an older
+        # cycle's SILENT could land in the log AFTER a newer cycle's
+        # RECOVERED. The narration now happens while the lock is held.
+        import threading
+        from file_lock import locked_write, FileLockTimeout
+        monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "0.2")
+        held_during = []
+        real = sh._narrate_transition
+        def spy(decl, status, evidence):
+            # probe from ANOTHER thread: the lock is reentrant for its holder
+            def contend():
+                try:
+                    with locked_write(_tmp_health, require=True, timeout_s=0.2):
+                        held_during.append(False)
+                except FileLockTimeout:
+                    held_during.append(True)
+            t = threading.Thread(target=contend); t.start(); t.join(5)
+            real(decl, status, evidence)
+        monkeypatch.setattr(sh, "_narrate_transition", spy)
+        monkeypatch.setattr(sh, "DECLARED_PROCESSES", [_decl(_seq_probe([SILENT, OK]))])
+        run_health_probes(); run_health_probes()
+        assert held_during == [True, True], held_during
+        assert sorted(e["event_type"] for e in _events()) == sorted([SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED])
+
+    def test_a_busy_lock_skips_the_cycle_even_under_fail_open(self, monkeypatch, _tmp_health):
+        # Round 6: the snapshot transaction (read → probe → narrated= → write)
+        # used the DEFAULT lock contract, which proceeds UNLOCKED under
+        # MARO_FILELOCK_FAIL_OPEN on contention — two cycles could then
+        # double- or lose-narrate. It now requires the lock: busy → skipped
+        # whole (no probe, no write, no narration).
+        import threading
+        from file_lock import locked_write
+        monkeypatch.setenv("MARO_FILELOCK_FAIL_OPEN", "1")
+        monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "0.2")
+        probes = []
+        monkeypatch.setattr(sh, "DECLARED_PROCESSES", [
+            _decl(lambda prior: probes.append(1) or (SILENT, "down", {}))])
+        held = threading.Event(); release = threading.Event()
+        def holder():
+            with locked_write(_tmp_health):
+                held.set(); release.wait(5)
+        t = threading.Thread(target=holder); t.start(); held.wait(2)
+        try:
+            summary = run_health_probes()
+        finally:
+            release.set(); t.join(5)
+        assert summary.get("skipped", "").startswith("snapshot lock busy")
+        assert probes == [] and not _tmp_health.exists() and _events() == []
+        # control: the lock free → the cycle runs and narrates
+        summary = run_health_probes()
+        assert summary["ran"] == 1 and probes == [1] and len(_events(SUBSYSTEM_SILENT)) == 1
+
+    def test_session_with_time_left_stays_ok_and_names_the_date(self, monkeypatch):
+        self._patch(monkeypatch, "on", None)
+        self._liveness(monkeypatch, 20)
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == OK and "valid until" in evidence and obs["liveness"] == "ok"
 
     def test_tripped_is_silent_immediately(self, monkeypatch):
         # A tripped breaker is a definite state, not cross-cycle noise — no
@@ -628,7 +770,8 @@ class TestContainerAuthProbe:
         # OK means "no auth failure observed", never "session is live" —
         # nothing here probes liveness (review 2026-08-13).
         self._patch(monkeypatch, "on", None)
+        self._liveness(monkeypatch, 20)   # round 2: OK needs expiry evidence
         status, evidence, _ = sh._probe_container_auth({})
         assert status == OK
         assert "no auth failure observed" in evidence
-        assert "live" not in evidence.lower()
+        assert "is live" not in evidence.lower()

@@ -8,7 +8,10 @@ surface ("show me my runs", "clean that up").
 from __future__ import annotations
 
 import json
+import errno  # review r28: simulate a sidecar-only ENOSPC preservation failure.
+import os  # review r29: sidecar names include the preserving process id.
 import sys
+from datetime import datetime, timezone  # review r30: fixture windows carry explicit aware ends.
 from pathlib import Path
 
 import pytest
@@ -207,6 +210,69 @@ def test_classification_refresh_sidecars_tainted_valid_card(workspace):
     assert sidecars[0].read_bytes() == tainted
     rewritten = (rd / "run_card.json").read_bytes()
     assert b"udcff" not in rewritten.lower() and b"\xff" not in rewritten
+
+
+def test_r28_a_failed_sidecar_declines_the_publish(workspace, monkeypatch):
+    # review r28: unreadable original bytes remain authoritative unless a sidecar succeeds.
+    rd = _finish("r28-nospace", "Preserve this card", "done", achieved=False)
+    card_path = rd / "run_card.json"
+    original = b"corrupt card that must survive"
+    card_path.write_bytes(original)
+    import file_lock
+    real_atomic_write = file_lock.atomic_write
+
+    def _no_sidecar_space(path, data, **kwargs):
+        if ".unreadable-" in path.name:
+            raise OSError(errno.ENOSPC, "no space for sidecar")
+        return real_atomic_write(path, data, **kwargs)
+
+    # review r29: preservation failures now flow through the atomic writer.
+    monkeypatch.setattr(file_lock, "atomic_write", _no_sidecar_space)
+    assert refresh_run_card_classification("r28-nospace", run_dir=rd) is None
+    assert card_path.read_bytes() == original
+    assert not list(rd.glob("run_card.json.unreadable-*"))
+
+
+def test_r29_the_sidecar_is_written_atomically(workspace, monkeypatch):
+    # review r29: unreadable bytes use fsynced temp-and-replace publication,
+    # and simultaneous processes cannot choose the same sidecar name.
+    import file_lock
+    import run_curation
+    rd = _finish("r29-atomic", "Preserve atomically", "done", achieved=False)
+    calls = []
+
+    def _record_atomic(path, content, **kwargs):
+        calls.append((path, content, kwargs))
+
+    monkeypatch.setattr(file_lock, "atomic_write", _record_atomic)
+    assert run_curation._park_unreadable_card(
+        rd / "run_card.json", "tainted \udcff") is True
+    assert len(calls) == 1
+    sidecar, content, kwargs = calls[0]
+    # review r30: pid is followed by a per-call disambiguator.
+    assert f"-{os.getpid()}-" in sidecar.name
+    assert ".unreadable-" in sidecar.name
+    assert content == "tainted \udcff"
+    assert kwargs == {"errors": "surrogateescape", "durable": True}
+
+
+def test_r30_sidecar_names_are_unique_per_call(workspace, monkeypatch):
+    # review r30: identical clock ticks and pids still preserve both bodies.
+    import run_curation
+
+    class _FrozenDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            from datetime import datetime
+            return datetime(2026, 9, 16, 18, 0, tzinfo=tz)
+
+    monkeypatch.setattr(run_curation, "datetime", _FrozenDateTime)
+    card = workspace / "run_card.json"
+    assert run_curation._park_unreadable_card(card, "first body")
+    assert run_curation._park_unreadable_card(card, "second body")
+    sidecars = sorted(workspace.glob("run_card.json.unreadable-*"))
+    assert len(sidecars) == 2
+    assert {path.read_text() for path in sidecars} == {"first body", "second body"}
 
 
 def test_classification_refresh_merge_keeps_maintenance_keys(workspace):
@@ -1515,7 +1581,8 @@ def test_locate_deliverables_and_answer_excerpt(workspace):
     rd = create_run_dir(
         "h000delv", prompt="what should I install?", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-x", "goal_achieved": True},
+        extra_metadata={"project": "proj-x", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-x"
     pdir.mkdir(parents=True)
@@ -1546,6 +1613,120 @@ def test_locate_deliverables_no_project_is_noop(workspace):
     card = curate_run("h000nodl")
     assert "deliverables" not in card
     assert "deliverable_link_path" not in card
+
+
+def test_r27_locate_deliverables_skips_a_thin_run(workspace):
+    # review r27: a thin run must never curate a neighboring run's project file.
+    import orch_items
+    import run_curation
+    rd = create_run_dir(
+        "h000thin", prompt="inspect service", lane="agenda", model="cheap",
+        extra_metadata={"project": "shared-project", "execution": "thin"})
+    pdir = orch_items.projects_root() / "shared-project"
+    pdir.mkdir(parents=True)
+    (pdir / "FINAL_REPORT.md").write_text(
+        "Another run's fresh report", encoding="utf-8")
+    meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+    card = {}
+    run_curation.locate_deliverables(rd, meta, card)
+    assert "deliverables" not in card
+    assert not (rd / "artifact" / "FINAL_REPORT.md").exists()
+
+
+@pytest.mark.parametrize("extra, lane, started_at, expect_scan", [
+    ({}, "now", "2026-09-01T00:00:00+00:00", False),
+    ({"project": "r28-bound", "project_binding": "landscape"},
+     "agenda", "2026-09-16T16:20:00+00:00", False),
+    ({"project": "r28-loop", "execution": "loop"},
+     "agenda", "2026-09-16T16:20:00+00:00", True),
+    ({}, "agenda", "2026-09-01T00:00:00+00:00", True),
+    # review r29: failed provenance stamps do not turn a modern run legacy.
+    ({}, "agenda", "2026-09-16T16:20:00+00:00", False),
+    # review r30: legacy classification requires an aware time and the corrected cutoff.
+    ({}, "agenda", "2026-09-16T09:00:00", False),
+    ({}, "agenda", "2026-09-16T16:10:00+00:00", True),
+], ids=["now", "bound-paused", "loop", "legacy", "modern-no-stamps",
+        "naive-not-legacy", "aware-before-cutoff"])
+def test_r28_locate_deliverables_needs_execution_provenance(
+        workspace, extra, lane, started_at, expect_scan):
+    # review r29: only a proven loop or a record started before the provenance
+    # rollout may claim a project file as this run's deliverable.
+    import orch_items
+    import run_curation
+    from agent_loop import _goal_to_slug
+    handle_id = f"r28-{lane}-{extra.get('project', 'legacy')}"
+    prompt = "R28 provenance scan"
+    rd = create_run_dir(
+        handle_id, prompt=prompt, lane=lane, model="cheap",
+        extra_metadata=extra or None,
+    )
+    slug = extra.get("project") or _goal_to_slug(prompt)
+    pdir = orch_items.projects_root() / slug
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "FINAL_REPORT.md").write_text(
+        "Fresh neighboring report", encoding="utf-8")
+    meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+    meta["started_at"] = started_at
+    assert meta.get("ended_at") is None  # review r31: an active run's None end stays unbounded.
+    card = {}
+    run_curation.locate_deliverables(rd, meta, card)
+    copied = rd / "artifact" / "FINAL_REPORT.md"
+    assert ("deliverables" in card) is expect_scan
+    assert copied.exists() is expect_scan
+
+
+def test_r30_files_modified_after_the_run_ended_are_not_its_deliverables(
+        workspace):
+    # review r30: deliverable ownership is bounded by both ends of the attempt.
+    import orch_items
+    import run_curation
+    from datetime import datetime, timezone
+    rd = create_run_dir(
+        "r30-window", prompt="Windowed report", lane="agenda", model="cheap",
+        extra_metadata={"project": "r30-window", "execution": "loop"})
+    pdir = orch_items.projects_root() / "r30-window"
+    pdir.mkdir(parents=True)
+    inside = pdir / "FINAL_REPORT.md"
+    later = pdir / "LATER_REPORT.md"
+    inside.write_text("belongs to this run", encoding="utf-8")
+    later.write_text("belongs to the next run", encoding="utf-8")
+    start = datetime(2026, 9, 16, 18, 0, tzinfo=timezone.utc).timestamp()
+    end = start + 60
+    os.utime(inside, (start + 30, start + 30))
+    os.utime(later, (end + 30, end + 30))
+    meta = json.loads((rd / "metadata.json").read_text())
+    meta["started_at"] = datetime.fromtimestamp(start, timezone.utc).isoformat()
+    meta["ended_at"] = datetime.fromtimestamp(end, timezone.utc).isoformat()
+    card = {}
+
+    run_curation.locate_deliverables(rd, meta, card)
+
+    # review r30: inspect the curator's structured path entries.
+    names = {Path(item["path"]).name for item in card["deliverables"]}
+    assert "FINAL_REPORT.md" in names
+    assert "LATER_REPORT.md" not in names
+    assert (rd / "artifact" / "FINAL_REPORT.md").exists()
+    assert not (rd / "artifact" / "LATER_REPORT.md").exists()
+
+
+def test_r30_a_legacy_thin_prompt_is_not_scanned(workspace):
+    # review r30: mode:thin predates the explicit execution marker.
+    import orch_items
+    import run_curation
+    rd = create_run_dir(
+        "r30-thin-legacy", prompt="mode:thin inspect service",
+        lane="agenda", model="cheap", extra_metadata={"project": "r30-thin"})
+    pdir = orch_items.projects_root() / "r30-thin"
+    pdir.mkdir(parents=True)
+    (pdir / "FINAL_REPORT.md").write_text("neighbor output", encoding="utf-8")
+    meta = json.loads((rd / "metadata.json").read_text())
+    meta["started_at"] = "2026-09-01T00:00:00+00:00"
+    card = {}
+
+    run_curation.locate_deliverables(rd, meta, card)
+
+    assert "deliverables" not in card
+    assert not (rd / "artifact" / "FINAL_REPORT.md").exists()
 
 
 def test_synthesize_answer_llm_path(workspace, monkeypatch, tmp_path):
@@ -1711,7 +1892,8 @@ def test_locate_deliverables_recency_beats_size(workspace):
     create_run_dir(
         "h000recn", prompt="evaluate the thread", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-recency", "goal_achieved": True},
+        extra_metadata={"project": "proj-recency", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-recency"
     (pdir / "artifacts").mkdir(parents=True)
@@ -1724,6 +1906,9 @@ def test_locate_deliverables_recency_beats_size(workspace):
     os.utime(early, (now + 1, now + 1))
     os.utime(late, (now + 901, now + 901))
     finalize_run("h000recn", status="done")
+    # review r30: synthetic future mtimes remain inside this fixture's run window.
+    runs.stamp_run_metadata_for("h000recn", {
+        "ended_at": datetime.fromtimestamp(now + 902, timezone.utc).isoformat()})
     card = curate_run("h000recn")
 
     names = [Path(d["path"]).name for d in card["deliverables"]]
@@ -1745,7 +1930,8 @@ def test_locate_deliverables_serves_all_candidates(workspace):
     rd = create_run_dir(
         "h000srvall", prompt="steal what's useful", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-serveall", "goal_achieved": True},
+        extra_metadata={"project": "proj-serveall", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-serveall"
     pdir.mkdir(parents=True)
@@ -1758,6 +1944,9 @@ def test_locate_deliverables_serves_all_candidates(workspace):
     os.utime(older, (now + 1, now + 1))
     os.utime(newer, (now + 601, now + 601))
     finalize_run("h000srvall", status="done")
+    # review r30: synthetic future mtimes remain inside this fixture's run window.
+    runs.stamp_run_metadata_for("h000srvall", {
+        "ended_at": datetime.fromtimestamp(now + 602, timezone.utc).isoformat()})
     card = curate_run("h000srvall")
 
     # Both real deliverables land in the served tree.
@@ -1784,7 +1973,8 @@ def test_locate_deliverables_collision_first_wins(workspace):
     rd = create_run_dir(
         "h000colld", prompt="summarize findings", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-collide", "goal_achieved": True},
+        extra_metadata={"project": "proj-collide", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-collide"
     (pdir / "drafts").mkdir(parents=True)
@@ -1796,6 +1986,9 @@ def test_locate_deliverables_collision_first_wins(workspace):
     os.utime(loser, (now + 1, now + 1))
     os.utime(winner, (now + 601, now + 601))
     finalize_run("h000colld", status="done")
+    # review r30: synthetic future mtimes remain inside this fixture's run window.
+    runs.stamp_run_metadata_for("h000colld", {
+        "ended_at": datetime.fromtimestamp(now + 602, timezone.utc).isoformat()})
     card = curate_run("h000colld")
 
     served = (rd / "artifact" / "notes.md").read_text()
@@ -1874,6 +2067,7 @@ def test_primary_loop_deliverable_outranks_posthoc_audit_note(workspace):
         model="cheap",
         extra_metadata={
             "project": "proj-ploop", "goal_achieved": True,
+            "execution": "loop",  # review r29: positive loop fixture.
             "loops": [
                 {"loop_id": "aaa", "loop_reason": "initial",
                  "created_at": "2026-08-05T17:48:00+00:00"},
@@ -1895,6 +2089,9 @@ def test_primary_loop_deliverable_outranks_posthoc_audit_note(workspace):
     recovery = datetime.fromisoformat("2026-08-06T17:00:00+00:00").timestamp()
     os.utime(audit, (recovery + 60, recovery + 60))
     finalize_run("h00ploop", status="done")
+    # review r30: the synthetic primary mtime remains inside this fixture's window.
+    runs.stamp_run_metadata_for("h00ploop", {
+        "ended_at": datetime.fromtimestamp(now + 2, timezone.utc).isoformat()})
     card = curate_run("h00ploop")
 
     names = [Path(d["path"]).name for d in card["deliverables"]]
@@ -1919,7 +2116,8 @@ def test_truncated_llm_answer_preserves_full_copy(workspace, monkeypatch):
     rd = create_run_dir(
         "h00full", prompt="summarize the findings", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-full", "goal_achieved": True},
+        extra_metadata={"project": "proj-full", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     import orch_items
     pdir = orch_items.projects_root() / "proj-full"
@@ -1949,7 +2147,8 @@ def test_locate_deliverables_records_what_it_drops(workspace):
     rd = create_run_dir(
         "h000omit", prompt="summarize findings", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-omit", "goal_achieved": True},
+        extra_metadata={"project": "proj-omit", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-omit"
     (pdir / "drafts").mkdir(parents=True)
@@ -1961,6 +2160,9 @@ def test_locate_deliverables_records_what_it_drops(workspace):
     os.utime(loser, (now + 1, now + 1))
     os.utime(winner, (now + 601, now + 601))
     finalize_run("h000omit", status="done")
+    # review r30: synthetic future mtimes remain inside this fixture's run window.
+    runs.stamp_run_metadata_for("h000omit", {
+        "ended_at": datetime.fromtimestamp(now + 602, timezone.utc).isoformat()})
     card = curate_run("h000omit")
 
     assert card["served_artifact_sources"]["notes.md"] == str(winner)
@@ -1978,7 +2180,8 @@ def test_locate_deliverables_over_cap_is_recorded(workspace):
     create_run_dir(
         "h000cap", prompt="produce many reports", lane="agenda",
         model="cheap",
-        extra_metadata={"project": "proj-cap", "goal_achieved": True},
+        extra_metadata={"project": "proj-cap", "goal_achieved": True,
+                        "execution": "loop"},  # review r29: positive loop fixture.
     )
     pdir = orch_items.projects_root() / "proj-cap"
     pdir.mkdir(parents=True)
@@ -1991,3 +2194,458 @@ def test_locate_deliverables_over_cap_is_recorded(workspace):
     omitted = card["served_artifacts_omitted"]
     assert len(omitted) == 2
     assert all(o["reason"] == "over-cap" for o in omitted)
+
+
+@pytest.mark.parametrize("ended_at, scans", [
+    ("2026-09-16T12:00:00", False),
+    ("2026-09-16T12:00:00+00:00", True),
+    # review r31: the run-dir writer stores None until the run closes; a
+    # still-running or crashed run keeps the recorded unbounded scan.
+    (None, True),
+    ("", True),
+], ids=["naive", "aware", "none", "empty"])
+def test_r31_deliverable_end_requires_an_aware_timestamp(
+        workspace, monkeypatch, ended_at, scans):
+    # review r31: present naive ends fail closed; aware ends retain their bound.
+    import artifact_check
+    import run_curation
+    pdir = workspace / "project"
+    pdir.mkdir()
+    seen = []
+    monkeypatch.setattr(run_curation, "_project_dir_for", lambda meta: pdir)
+    monkeypatch.setattr(
+        artifact_check, "files_modified_since",
+        lambda *args, **kwargs: seen.append(kwargs.get("until_ts")) or [],
+    )
+    run_curation.locate_deliverables(
+        workspace / "run",
+        {"execution": "loop", "started_at": "2026-09-16T11:00:00+00:00",
+         "ended_at": ended_at},
+        {},
+    )
+    assert bool(seen) is scans
+    if scans and ended_at:
+        assert seen[0] == datetime.fromisoformat(ended_at).timestamp()
+    elif scans:
+        assert seen[0] is None
+
+
+def test_r31_vanished_candidate_does_not_abort_other_deliverables(
+        workspace, monkeypatch):
+    # review r31: ranking and card construction consume the discovery stat cache.
+    import artifact_check
+    import run_curation
+    rd = workspace / "run"
+    rd.mkdir()
+    pdir = workspace / "project"
+    pdir.mkdir()
+    vanished = pdir / "FINAL_REPORT.md"
+    survivor = pdir / "OTHER_REPORT.md"
+    vanished.write_text("vanish")
+    survivor.write_text("survive")
+    monkeypatch.setattr(run_curation, "_project_dir_for", lambda meta: pdir)
+    monkeypatch.setattr(
+        artifact_check, "files_modified_since",
+        lambda *args, **kwargs: [vanished.name, survivor.name],
+    )
+    real_stat = Path.stat
+    deleted = False
+
+    def _delete_after_first_discovery(path, *args, **kwargs):
+        nonlocal deleted
+        if path == survivor and not deleted:
+            deleted = True
+            vanished.unlink()
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _delete_after_first_discovery)
+    card = {}
+    run_curation.locate_deliverables(
+        rd, {"execution": "loop", "started_at": "2020-01-01T00:00:00+00:00"}, card)
+
+    assert any(item["path"] == str(survivor) for item in card["deliverables"])
+    assert all(item["path"] != str(vanished) for item in card["deliverables"])
+    assert any(path.endswith("OTHER_REPORT.md") for path in card["served_artifacts"])
+    assert deleted
+
+
+def test_r31_changed_or_symlinked_deliverables_are_not_served(
+        workspace, monkeypatch):
+    # review r31: source identity and the run window are revalidated after copying.
+    import artifact_check
+    import run_curation
+    rd = workspace / "run"
+    rd.mkdir()
+    pdir = workspace / "project"
+    pdir.mkdir()
+    report = pdir / "FINAL_REPORT.md"
+    report.write_text("original")
+    link = pdir / "LINKED_REPORT.md"
+    link.symlink_to(report)
+    ended = datetime.now(timezone.utc).timestamp() + 10
+    monkeypatch.setattr(run_curation, "_project_dir_for", lambda meta: pdir)
+    monkeypatch.setattr(
+        artifact_check, "files_modified_since",
+        lambda *args, **kwargs: [report.name, link.name],
+    )
+    real_copy = run_curation.shutil.copy2
+
+    def _rewrite_after_copy(src, dst, *args, **kwargs):
+        out = real_copy(src, dst, *args, **kwargs)
+        if Path(src) == report:
+            report.write_text("rewritten after check")
+            os.utime(report, (ended + 10, ended + 10))
+        return out
+
+    monkeypatch.setattr(run_curation.shutil, "copy2", _rewrite_after_copy)
+    card = {}
+    run_curation.locate_deliverables(
+        rd,
+        {"execution": "loop", "started_at": "2020-01-01T00:00:00+00:00",
+         "ended_at": datetime.fromtimestamp(ended, timezone.utc).isoformat()},
+        card,
+    )
+
+    assert not card.get("served_artifacts")
+    assert not card.get("deliverables")
+    assert {item["reason"] for item in card["served_artifacts_omitted"]} == {
+        "changed-after-check"}
+    assert not (rd / "artifact" / link.name).exists()
+
+
+def test_r26_deliverable_uses_verbatim_project_directory(workspace):
+    # review r26: pin the renamed runs-level verbatim identity contract.
+    from orch_items import project_dir
+    rd = create_run_dir(
+        "h000r21", prompt="report for the board", lane="agenda",
+        extra_metadata={"project": " board-reports ", "goal_achieved": True,
+                        "execution": "loop"})  # review r29: positive loop fixture.
+    for slug, body in [(" board-reports ", "Recorded project's report"),
+                       ("board-reports", "Another project's report")]:
+        pdir = project_dir(slug)
+        pdir.mkdir(parents=True)
+        (pdir / "FINAL_REPORT.md").write_text(body)
+    finalize_run("h000r21", status="done")
+    card = curate_run("h000r21")
+    assert (rd / "artifact" / "FINAL_REPORT.md").read_text() == "Recorded project's report"
+    assert Path(card["deliverables"][0]["path"]).parent == project_dir(" board-reports ")
+
+
+def test_r23_refresh_declines_an_unreadable_record(workspace, monkeypatch):
+    rd = _finish("r23-card", "Real verdict", "done", achieved=False)
+    runs.stamp_run_metadata_for("r23-card", {"goal_verdict_source": "closure"})
+    assert refresh_run_card_classification("r23-card", run_dir=rd) is not None
+    original = (rd / "run_card.json").read_bytes()
+    real_read = Path.read_text
+
+    def unreadable(path, *a, **kw):
+        if path == rd / "metadata.json":
+            raise OSError("metadata temporarily unavailable")
+        return real_read(path, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    assert refresh_run_card_classification("r23-card", run_dir=rd) is None
+    assert (rd / "run_card.json").read_bytes() == original
+
+
+def test_r24_the_refresh_publishes_the_metadata_at_publication(workspace, monkeypatch):
+    import file_lock
+    hid = "r24-card"
+    rd = _finish(hid, "Real verdict", "done")
+    vp = {"since": "2020-01-01T00:00:00+00:00"}
+    runs.stamp_run_metadata_for(hid, {"verdict_pending": vp})
+    assert refresh_run_card_classification(hid, run_dir=rd)["success_class"] == "done-verdict-pending"
+    real_rmw = file_lock.locked_rmw
+    injected = []
+
+    def publish(path, fn, *args, **kwargs):
+        if path == rd / "run_card.json" and not injected:
+            injected.append(True)
+            assert runs.stamp_run_metadata_for(hid, {
+                "verdict_pending": {**vp, "resolved_at": "owner-time"},
+                "goal_achieved": False, "goal_verdict_source": "closure",
+            }) is not None
+        return real_rmw(path, fn, *args, **kwargs)
+
+    monkeypatch.setattr(file_lock, "locked_rmw", publish)
+    card = refresh_run_card_classification(hid, run_dir=rd)
+    assert injected
+    written = json.loads((rd / "run_card.json").read_text())
+    assert written["success_class"] == "done-not-achieved"
+    assert written["goal_achieved"] is False
+    assert "verdict_pending" not in written
+    assert card == written
+
+
+def test_r25_a_torn_utf8_record_declines_the_refresh(workspace):
+    rd = _finish("r25-torn", "Real verdict", "done", achieved=False)
+    assert refresh_run_card_classification("r25-torn", run_dir=rd) is not None
+    original = (rd / "run_card.json").read_bytes()
+    # a crash mid-write cuts a multi-byte sequence: invalid UTF-8, not JSON
+    (rd / "metadata.json").write_bytes(b'{"status": "done", "prompt": "caf\xc3')
+    assert refresh_run_card_classification("r25-torn", run_dir=rd) is None
+    assert (rd / "run_card.json").read_bytes() == original
+
+
+def test_r25_the_first_card_is_published_from_the_metadata_under_the_lock(workspace, monkeypatch):
+    import file_lock
+    hid = "r25-first"
+    rd = _finish(hid, "Real verdict", "done")
+    vp = {"since": "2020-01-01T00:00:00+00:00"}
+    runs.stamp_run_metadata_for(hid, {"verdict_pending": vp})
+    (rd / "run_card.json").unlink(missing_ok=True)  # no card yet: the first refresh writes it
+    real_rmw = file_lock.locked_rmw
+    injected = []
+
+    def publish(path, fn, *args, **kwargs):
+        if path == rd / "run_card.json" and not injected:
+            injected.append(True)
+            assert runs.stamp_run_metadata_for(hid, {
+                "verdict_pending": {**vp, "resolved_at": "owner-time"},
+                "goal_achieved": False, "goal_verdict_source": "closure",
+            }) is not None
+        return real_rmw(path, fn, *args, **kwargs)
+
+    monkeypatch.setattr(file_lock, "locked_rmw", publish)
+    card = refresh_run_card_classification(hid, run_dir=rd)
+    assert injected, "the first card must go through the locked read-build-write"
+    written = json.loads((rd / "run_card.json").read_text())
+    assert written["success_class"] == "done-not-achieved"
+    assert "verdict_pending" not in written
+    assert card == written
+    assert not list(rd.glob("run_card.json.unreadable-*")), "no card is not an unreadable card"
+
+
+def test_r26_a_refresh_never_regresses_a_resolved_card(workspace, monkeypatch):
+    import threading
+    import run_curation
+    # review r26: a stale owner build must revalidate after a refresh wins.
+    hid = "r26-race"
+    rd = _finish(hid, "Resolve this verdict", "done")
+    pending = {"since": "2020-01-01T00:00:00+00:00"}
+    runs.stamp_run_metadata_for(hid, {"verdict_pending": pending})
+    entered, release = threading.Event(), threading.Event()
+    real_build = run_curation._build_run_card
+
+    def blocked_build(handle_id, run_dir, meta):
+        if threading.current_thread().name == "r26-owner" and not entered.is_set():
+            entered.set()
+            assert release.wait(3)
+        return real_build(handle_id, run_dir, meta)
+
+    monkeypatch.setattr(run_curation, "_build_run_card", blocked_build)
+    result = {}
+    owner = threading.Thread(
+        name="r26-owner", target=lambda: result.setdefault("card", curate_run(hid)))
+    owner.start()
+    assert entered.wait(2)
+    runs.stamp_run_metadata_for(hid, {
+        "verdict_pending": {**pending, "resolved_at": "owner-time"},
+        "goal_achieved": False, "goal_verdict_source": "closure",
+    })
+    refreshed = refresh_run_card_classification(hid, run_dir=rd)
+    assert refreshed["success_class"] == "done-not-achieved"
+    release.set()
+    owner.join(4)
+    assert not owner.is_alive() and result["card"] is not None
+    written = json.loads((rd / "run_card.json").read_text())
+    assert written["success_class"] == "done-not-achieved"
+    assert "verdict_pending" not in written
+
+
+def test_r27_a_second_corrupt_card_is_parked_before_it_is_replaced(
+        workspace, monkeypatch):
+    # review r27: corruption arriving during preserve/re-merge gets its own sidecar.
+    import run_curation
+    hid = "r27-corrupt-race"
+    rd = _finish(hid, "Preserve corrupt cards", "done", achieved=False)
+    card_path = rd / "run_card.json"
+    first = "first corrupt body"
+    second = "second corrupt body"
+    card_path.write_text(first, encoding="utf-8")
+    real_park = run_curation._park_unreadable_card
+    parked = []
+
+    def _park(path, old, **kwargs):
+        # review r28: preserve the parking helper's authorization contract in this race seam.
+        preserved = real_park(path, old, **kwargs)
+        parked.append(old)
+        if len(parked) == 1:
+            card_path.write_text(second, encoding="utf-8")
+        return preserved
+
+    monkeypatch.setattr(run_curation, "_park_unreadable_card", _park)
+    card = refresh_run_card_classification(hid, run_dir=rd)
+    sidecar_bodies = {
+        p.read_text(encoding="utf-8")
+        for p in rd.glob("run_card.json.unreadable-*")}
+    assert card is not None
+    assert sidecar_bodies == {first, second}
+    assert json.loads(card_path.read_text(encoding="utf-8")) == card
+
+
+def test_r27_parking_a_corrupt_card_does_not_rebuild_it(workspace, monkeypatch):
+    # review r27: a sidecar costs a re-merge, never a second curator pass
+    # (the curators include answer synthesis, which may call an LLM).
+    import run_curation
+    hid = "r27-park-no-rebuild"
+    rd = _finish(hid, "Park without rebuilding", "done", achieved=False)
+    card_path = rd / "run_card.json"
+    card_path.write_text("{not json", encoding="utf-8")
+    real_build = run_curation._build_run_card
+    builds = []
+
+    def _build(*args, **kwargs):
+        builds.append(1)
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(run_curation, "_build_run_card", _build)
+    card = refresh_run_card_classification(hid, run_dir=rd)
+    assert card is not None
+    assert len(builds) == 1
+    assert len(list(rd.glob("run_card.json.unreadable-*"))) == 1
+    assert json.loads(card_path.read_text(encoding="utf-8")) == card
+
+
+def test_r26_two_first_card_refreshes_do_not_lose_the_later_metadata(
+        workspace, monkeypatch):
+    import threading
+    import run_curation
+    # review r26: first-card writers use the same optimistic revalidation.
+    hid = "r26-first-race"
+    rd = _finish(hid, "First publication", "done")
+    pending = {"since": "2020-01-01T00:00:00+00:00"}
+    runs.stamp_run_metadata_for(hid, {"verdict_pending": pending})
+    (rd / "run_card.json").unlink(missing_ok=True)
+    monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "0.2")
+    entered, release = threading.Event(), threading.Event()
+    real_build = run_curation._build_run_card
+
+    def blocked_build(handle_id, run_dir, meta):
+        if threading.current_thread().name == "r26-old" and not entered.is_set():
+            entered.set()
+            assert release.wait(3)
+        return real_build(handle_id, run_dir, meta)
+
+    monkeypatch.setattr(run_curation, "_build_run_card", blocked_build)
+    old = threading.Thread(name="r26-old",
+                           target=lambda: refresh_run_card_classification(hid, run_dir=rd))
+    old.start()
+    assert entered.wait(2)
+    runs.stamp_run_metadata_for(hid, {
+        "verdict_pending": {**pending, "resolved_at": "later"},
+        "goal_achieved": False, "goal_verdict_source": "closure",
+    })
+    newer_result = {}
+    newer = threading.Thread(
+        name="r26-new", target=lambda: newer_result.setdefault(
+            "card", refresh_run_card_classification(hid, run_dir=rd)))
+    newer.start()
+    newer.join(1)
+    release.set()
+    old.join(4)
+    newer.join(4)
+    assert newer_result.get("card") is not None
+    written = json.loads((rd / "run_card.json").read_text())
+    assert written["success_class"] == "done-not-achieved"
+    assert "verdict_pending" not in written
+
+
+def test_r26_a_slow_synthesis_does_not_starve_the_finalize(workspace, monkeypatch):
+    import threading
+    import time
+    import config
+    import run_curation
+    # review r26: synthesis sleeps outside run_card.json.lock.
+    hid = "r26-slow"
+    rd = create_run_dir(hid, prompt="Summarize report", lane="agenda",
+                        extra_metadata={"project": "r26-project", "goal_achieved": True,
+                                        # review r29: synthesis needs proven loop output.
+                                        "execution": "loop"})
+    from orch_items import project_dir
+    pdir = project_dir("r26-project")
+    pdir.mkdir(parents=True)
+    (pdir / "FINAL_REPORT.md").write_text("# Report\n\nUseful result\n")
+    finalize_run(hid, status="done")
+    monkeypatch.setenv("MARO_FILELOCK_TIMEOUT_S", "0.3")
+    monkeypatch.setattr(
+        config, "get", lambda k, d=None: True if k == "curation.answer_synthesis" else d)
+    sleeping = threading.Event()
+
+    def slow_answer(*_args, **_kwargs):
+        if threading.current_thread().name == "r26-refresh":
+            sleeping.set()
+            time.sleep(1.0)
+        return "Useful result"
+
+    monkeypatch.setattr(run_curation, "_llm_answer", slow_answer)
+    refresh = threading.Thread(
+        name="r26-refresh", target=lambda: refresh_run_card_classification(hid, run_dir=rd))
+    refresh.start()
+    assert sleeping.wait(2)
+    card = curate_run(hid, run_dir=rd)
+    refresh.join(4)
+    assert isinstance(card, dict) and card["success_class"] == "success"
+
+
+def test_r26_card_builders_never_run_under_the_card_lock(workspace, monkeypatch):
+    from contextlib import contextmanager
+    import file_lock
+    import run_curation
+    # review r26: tripwire every first/existing refresh and curate build.
+    hid = "r26-tripwire"
+    rd = _finish(hid, "Trip lock", "done", achieved=True)
+    (rd / "run_card.json").unlink(missing_ok=True)
+    held = {"value": False}
+    real_locked_write = file_lock.locked_write
+    real_build = run_curation._build_run_card
+
+    @contextmanager
+    def tracking_lock(path, *args, **kwargs):
+        with real_locked_write(path, *args, **kwargs):
+            previous = held["value"]
+            held["value"] = True
+            try:
+                yield
+            finally:
+                held["value"] = previous
+
+    def checked_build(*args, **kwargs):
+        assert not held["value"], "_build_run_card ran under a file lock"
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(file_lock, "locked_write", tracking_lock)
+    monkeypatch.setattr(run_curation, "_build_run_card", checked_build)
+    assert refresh_run_card_classification(hid, run_dir=rd) is not None
+    assert refresh_run_card_classification(hid, run_dir=rd) is not None
+    assert curate_run(hid, run_dir=rd) is not None
+
+
+def test_r26_duplicate_verdict_keys_decline_the_refresh(workspace):
+    # review r26: duplicate verdict keys are ambiguous, never last-key-wins.
+    hid = "r26-duplicate"
+    rd = _finish(hid, "Duplicate verdict", "done", achieved=False)
+    assert refresh_run_card_classification(hid, run_dir=rd) is not None
+    original = (rd / "run_card.json").read_bytes()
+    (rd / "metadata.json").write_text(
+        '{"handle_id":"r26-duplicate","status":"done",'
+        '"goal_achieved":false,"goal_achieved":true}')
+    assert refresh_run_card_classification(hid, run_dir=rd) is None
+    assert (rd / "run_card.json").read_bytes() == original
+
+
+def test_r26_an_empty_existing_card_is_warned_not_silently_replaced(
+        workspace, caplog):
+    import logging
+    # review r26: absence is normal; an existing empty file is corruption.
+    empty_rd = _finish("r26-empty", "Empty", "done", achieved=True)
+    (empty_rd / "run_card.json").write_bytes(b"")
+    with caplog.at_level(logging.WARNING, logger="run_curation"):
+        assert refresh_run_card_classification("r26-empty", run_dir=empty_rd) is not None
+    assert "run_card.json is empty" in caplog.text
+    caplog.clear()
+    absent_rd = _finish("r26-absent", "Absent", "done", achieved=True)
+    (absent_rd / "run_card.json").unlink(missing_ok=True)
+    with caplog.at_level(logging.WARNING, logger="run_curation"):
+        assert refresh_run_card_classification("r26-absent", run_dir=absent_rd) is not None
+    assert "run_card.json is empty" not in caplog.text
