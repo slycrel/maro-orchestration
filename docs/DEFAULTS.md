@@ -40,6 +40,16 @@ wrapper reads and f-string-constructed keys are resolved by AST shape, so
 there is no hand-maintained exemption list). This table can't silently rot
 in either direction.
 
+**The Go successor engine keeps its own registry.** Its defaults live in
+`go/internal/defaults` with the human surface at
+[go/DEFAULTS.md](../go/DEFAULTS.md), enforced by a census test in both
+directions exactly like this one. They are deliberately not listed here:
+this file's reverse lane demands a reader in `src/` for every dotted key
+in a table row, so a Go key in the table below would fail the Python
+suite. Judgment providers, the shadow arm (off by default), the hosted
+tier's endpoint/model/key-name and the PCD sidecar URL are documented
+there.
+
 ---
 
 ## Memory & knowledge

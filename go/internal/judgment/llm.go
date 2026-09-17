@@ -28,15 +28,42 @@ const PromptVer = "judgment-llm/1"
 type LLM struct {
 	B     invoke.Backend
 	Model string // reported in the parsed Response; "" ⇒ the backend's model
+	// Provider is the name this adapter answers to: `llm` (the engine's
+	// own judge backend) or `hosted` (a cheap OpenAI-compatible tier).
+	// Both render and parse identically; only the backend differs.
+	Provider string
 }
 
-func (l *LLM) Name() string { return ProviderLLM }
-func (l *LLM) Wire() bool   { return false }
+func (l *LLM) Name() string {
+	if l.Provider != "" {
+		return l.Provider
+	}
+	return ProviderLLM
+}
+func (l *LLM) Wire() bool { return false }
 
 func (l *LLM) Capabilities() invoke.Capabilities { return l.B.Capabilities() }
 
 func (l *LLM) Complete(ctx context.Context, req invoke.Request, sink invoke.Sink) (*invoke.Result, error) {
 	return l.B.Complete(ctx, req, sink)
+}
+
+// NewHosted is the hosted provider: the same prose rendering and the
+// same strict parse as `llm`, over a cheap OpenAI-compatible endpoint.
+// baseURL, model and keyName default to the hosted-free tier when empty.
+func NewHosted(baseURL, model, keyName string, key func(string) (string, error)) *LLM {
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = HostedBaseURL
+	}
+	if strings.TrimSpace(model) == "" {
+		model = HostedModel
+	}
+	if strings.TrimSpace(keyName) == "" {
+		keyName = HostedKeyName
+	}
+	name := keyName
+	b := invoke.NewOpenAIChat(ProviderHosted, baseURL, model, keyName, func() (string, error) { return key(name) })
+	return &LLM{B: b, Provider: ProviderHosted, Model: model}
 }
 
 // Render writes the Request as a deterministic prose prompt. Determinism

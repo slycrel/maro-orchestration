@@ -33,7 +33,11 @@ type Provider interface {
 const (
 	ProviderLLM = "llm"
 	ProviderJev = "jev"
-	ProviderPCD = "pcd"
+	// ProviderHosted is the cheap hosted tier: an OpenAI-compatible
+	// chat endpoint behind the same prose rendering as `llm`. It is the
+	// drop-in second opinion that costs almost nothing.
+	ProviderHosted = "hosted"
+	ProviderPCD    = "pcd"
 )
 
 // Defaults (registered in go/DEFAULTS.md).
@@ -46,7 +50,16 @@ const (
 	JevBaseURL = "https://api.typesafe.ai"
 	JevModel   = "jev-latest"
 	JevKeyName = "TYPESAFE_API_KEY"
-	// DefaultPCDURL is the local sidecar (no auth, same wire shape).
+	// The hosted tier's defaults mirror the Python engine's hosted-free
+	// ladder (src/hosted_free.py; gemini-first decided 2026-07-16 on the
+	// same 14-case corpus). Another host — groq's
+	// https://api.groq.com/openai/v1 with llama-3.1-8b-instant and
+	// GROQ_API_KEY — is a flag, never a code change.
+	HostedBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+	HostedModel   = "gemini-flash-lite-latest"
+	HostedKeyName = "GEMINI_API_KEY"
+	// DefaultPCDURL is the local sidecar (no auth, same wire shape). It
+	// stays an optional experimental provider.
 	DefaultPCDURL = "http://192.168.0.50:8765"
 	PCDModel      = "pcd-latest"
 	// DefaultTimeout bounds a wire judgment call.
@@ -60,10 +73,12 @@ const (
 func DefaultShadow() []string { return nil }
 
 // Known lists the provider names this binary can build.
-func Known() []string { return []string{ProviderLLM, ProviderJev, ProviderPCD} }
+func Known() []string { return []string{ProviderLLM, ProviderJev, ProviderHosted, ProviderPCD} }
 
-// IsWire says whether a provider name is a wire (System One) provider.
-// The fold uses it to choose which rendering to re-derive.
+// IsWire says whether a provider name is a wire (System One) provider —
+// asked in JSON, answered in JSON. `llm` and `hosted` are not: they are
+// asked in the versioned prose template. The fold uses this to choose
+// which rendering to re-derive.
 func IsWire(name string) bool { return name == ProviderJev || name == ProviderPCD }
 
 // Ask is the one way a judgment call is made: through invoke.Shell, so it
