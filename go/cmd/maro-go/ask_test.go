@@ -78,10 +78,12 @@ func TestCLIAskAnswerLoop(t *testing.T) {
 		t.Fatalf("bounce blocks in the prompts: %d\n%s", n, prompt)
 	}
 	ws := os.Getenv(workspace.EnvOverride)
-	if _, err := os.Stat(filepath.Join(ws, "drop", "ask-operator.json")); err == nil {
+	// the ask channel has its own directory under drop/: a containerized
+	// step gets that one bound, not every channel's archive (chunk 5a)
+	if _, err := os.Stat(filepath.Join(ws, "drop", "ask", "ask-operator.json")); err == nil {
 		t.Fatal("ask file not archived")
 	}
-	archived, _ := filepath.Glob(filepath.Join(ws, "drop", "ask-operator.*.asked.json"))
+	archived, _ := filepath.Glob(filepath.Join(ws, "drop", "ask", "ask-operator.*.asked.json"))
 	if len(archived) != 2 {
 		t.Fatalf("archived copies (the bounced ask and the re-ask): %v", archived)
 	}

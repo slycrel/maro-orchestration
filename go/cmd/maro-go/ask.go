@@ -28,11 +28,20 @@ import (
 // wireAsk names the ask file for a subprocess backend's workers: the
 // workspace's drop directory, next to the derived-secrets drop.
 func wireAsk(sp *invoke.Subprocess, a *workspace.Announced) string {
-	p := filepath.Join(a.Path("drop"), spine.AskName)
+	// Its OWN directory under drop/: the container lane binds a writable
+	// path's directory, and a channel that shares a directory with another
+	// hands the worker everything in it (review r1). The archives of past
+	// asks do live here — the same questions the operator already saw, and
+	// the same exposure the host lane has always had.
+	p := filepath.Join(a.Path("drop"), "ask", spine.AskName)
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return ""
 	}
 	sp.Env = append(sp.Env, spine.AskEnv+"="+p)
+	// the worker WRITES this one: on the container lane its directory is
+	// bound read-write at the same path, so the ask lane is the same lane
+	// in both worlds (invoke/executor.go)
+	sp.Writable = append(sp.Writable, p)
 	return p
 }
 
@@ -63,15 +72,24 @@ func cmdAnswer(args []string, out, errw io.Writer) error {
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--source":
-			if i+1 < len(args) {
-				source = args[i+1]
-				i++
+			v, err := flagValue(args, &i, "--source")
+			if err != nil {
+				return err
 			}
-		case "--backend", "--model", "--judge-model", "--work":
-			if i+1 < len(args) {
-				passthrough = append(passthrough, args[i], args[i+1])
-				i++
+			source = v
+		case "--backend", "--model", "--judge-model", "--work", "--executor", "--executor-image":
+			// A flag with no value is an ERROR here too. This loop used to
+			// drop a trailing flag silently, which on `--executor` meant
+			// `answer <h> "text" --executor` committed the answer and ran
+			// the follow-up on the HOST — the round-1 defect, living on in
+			// the sibling parser (review r2). Nothing is committed before
+			// this loop finishes.
+			name := args[i]
+			v, err := flagValue(args, &i, name)
+			if err != nil {
+				return err
 			}
+			passthrough = append(passthrough, name, v)
 		default:
 			words = append(words, args[i])
 		}
@@ -156,7 +174,11 @@ func cmdAnswer(args []string, out, errw io.Writer) error {
 			return err
 		}
 		lane = rs.Goal.Lane
-		contextFile = filepath.Join(a.Path("drop"), "answer-"+handle+".txt")
+		// NOT in drop/: that directory is the worker's own hand-off surface
+		// and the container lane binds it writable, so an answer meant for
+		// one run's prompt does not go and sit where every later worker can
+		// read it.
+		contextFile = filepath.Join(a.Path("context"), "answer-"+handle+".txt")
 		if err := os.MkdirAll(filepath.Dir(contextFile), 0o700); err != nil {
 			return err
 		}

@@ -74,10 +74,15 @@ type Invocation struct {
 	Backend       Capabilities `json:"backend"`
 	Tools         bool         `json:"tools,omitempty"` // the request offered tools; false = confined: any reported effect is refused
 	Cwd           string       `json:"cwd,omitempty"`   // the working directory an agentic backend ran in (absolute); "" = the process's own
-	EffectToken   string       `json:"effect_token"`    // hex, the namespace per-effect keys derive from
-	TargetName    string       `json:"target_name,omitempty"`
-	TargetLimit   int64        `json:"target_limit,omitempty"`
-	TargetWhy     string       `json:"target_why,omitempty"`
+	// Executor is WHERE the call ran (executor.go): the host, or a
+	// container from the image named here. Absent = the backend does not
+	// answer for an executor (a scripted one) or the record predates the
+	// field — never "the host", which a host call says outright.
+	Executor    *Executor `json:"executor,omitempty"`
+	EffectToken string    `json:"effect_token"` // hex, the namespace per-effect keys derive from
+	TargetName  string    `json:"target_name,omitempty"`
+	TargetLimit int64     `json:"target_limit,omitempty"`
+	TargetWhy   string    `json:"target_why,omitempty"`
 	// Lens: the persona lens a judge/render request was rendered under
 	// (§13). Absent = neutral. Present ⇒ the request body begins with the
 	// lens text (the run fold checks the bytes).
@@ -149,6 +154,18 @@ func (r *Invocation) ValidateWire() error {
 	}
 	if err := r.Lens.validate(r.Purpose); err != nil {
 		return err
+	}
+	if err := r.Executor.validate(); err != nil {
+		return err
+	}
+	// A tool-less call is never containerized, whatever the run's policy
+	// says: the container protects the machine from TOOL calls, and a
+	// verdict touches nothing. The rule belongs at the DOOR, not to an
+	// attempt's policy check, because it holds for every invocation this
+	// engine will ever read — including the landscape's, which is attempt 0
+	// and never reaches an attempt's checks at all (review r1).
+	if !r.Tools && r.Executor != nil && r.Executor.Kind != ExecutorHost {
+		return fmt.Errorf("invocation: tool-less %s call in a %s, which this engine never asks for", r.Purpose, r.Executor.Kind)
 	}
 	if (r.TargetName == "") != (r.TargetWhy == "") {
 		return fmt.Errorf("invocation: a target needs both a name and a why")

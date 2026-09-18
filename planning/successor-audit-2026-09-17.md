@@ -70,8 +70,8 @@ Every main commit since the branch point, grouped. Status vocabulary:
 | 07cf9d8e, 3db8b45f, 8d1b509a | ask grounding gate (an ask is a claim: links resolve, a code ask says `sent`, bounce once then `unverified`); LIVE in-step ask (`$MARO_ASK_ANSWER`, `delivered`); a code is bound to the session that asked | **OWED** — `docs/OPERATOR_ASK_DESIGN.md` §7–§8 says so itself ("Go successor parity for §7–§8 is owed"). The grounding gate ports as a contract on the Question record. The live ask collides with OWN WAY above: a time-boxed input (2FA) dies with the attempt, and the Go lane ends the attempt. See §3 item 3. |
 | a050cbb3, 661cf820 | answer resumes wait for the project slot; re-drive a refused resume by stamped job id | N/A — Python's project-slot scheduler; the Go serve lane queues submissions itself (step 7b) and `answer` submits a normal run |
 | 996b0611, 2651d58c, 873a5fe9 | Hermes SKILL / inbox fixes | N/A (mini2 side) |
-| 11199a35, cce046bd, 8e5a06fb | env-request lane: Maro installs what a job needs, root at image build only, escalate to the orchestrator; `browsers` bakes Playwright | **OWED**, behind the container executor (next row) |
-| 74a2c616, 72aac36d, 9efe6f8b … 4b3706f0 (r1–r22) | container lane `executor.container: require`; typed container-auth-expired pause; heartbeat expiry warning; 22 rounds of CLI-capture / failover / accounting fixes | **OWED** as a strand: the Go engine has ONE executor kind (the claude subprocess backend, host lane, per-run work dir + tool policy). The r1–r22 fixes are the Python CLI-capture reader's — the Go stream-json parser (step 3) was built with the same failure classes as declared contracts and does not inherit them. Phase 3 "platform breadth". |
+| 11199a35, cce046bd, 8e5a06fb | env-request lane: Maro installs what a job needs, root at image build only, escalate to the orchestrator; `browsers` bakes Playwright | **OWED** — the container executor below LANDED 2026-09-18 (§4.5), so this is unblocked and is chunk 5b |
+| 74a2c616, 72aac36d, 9efe6f8b … 4b3706f0 (r1–r22) | container lane `executor.container: require`; typed container-auth-expired pause; heartbeat expiry warning; 22 rounds of CLI-capture / failover / accounting fixes | **LANDED 2026-09-18** (§4.5, chunk 5a): the container is a launcher under the one stream parser, the policy is per attempt and owned by the backend, `require` fails closed before dispatch. Before today the Go engine had ONE executor kind (the claude subprocess backend, host lane, per-run work dir + tool policy). The r1–r22 fixes are the Python CLI-capture reader's — the Go stream-json parser (step 3) was built with the same failure classes as declared contracts and does not inherit them. |
 | 136fa077, 0352ff71, 1a5cf7bb | dispatch navigator binds on any move; dead-run sweep gives a killed worker an honest terminal status; follow-up dispatch lands in a fresh project | N/A (dispatch lane) / dead-run honesty is HAS — supervisor + Sheriff stuck verdicts (step 7a), a killed attempt reconciles to a terminal on restart (step 3) |
 | 1dc74714, 0390fbe1 … e6999d78 (r1–r31) | landscape binding: the landscape's decision binds the loop's PROJECT (operator > landscape > named > minted), stamped `project_binding`; 31 rounds on card publication, ledger guards, config snapshots, pause API | see §2a |
 | 0fb2190d, 8af73b5e | review-loop postmortem; budget decree | DOCS |
@@ -120,7 +120,9 @@ relation is rerun, record it, refuse a forged binding.
 4. **Work-dir binding under the rerun relation** (§2a). Contract in
    §4.3. LANDED 2026-09-17.
 5. **Container executor + env-request lane** — a strand (Phase 3
-   platform breadth), not a chunk. Owed; not today.
+   platform breadth), not a chunk. The CONTAINER EXECUTOR half is contract
+   §4.5 and LANDED 2026-09-18 (chunk 5a). The env-request lane is the
+   remaining half and is still owed (chunk 5b).
 
 ## 4. Contracts for the chunks built from this audit
 
@@ -260,3 +262,82 @@ re-runs the step from scratch on resume; the five-link cap is silent
 ask channel (pre-existing; owed with the replay strand); judge calls
 carry no cwd and `WorkOperator` is self-attested (chunk 4's stated
 choices, re-filed by r1 with no new consequence).
+
+### 4.5 The container executor: WHERE a tool-bearing call ran is part of its record, and the policy is the fold's — LANDED 2026-09-18
+
+**Contract (shared with main — `src/container_exec.py`, design §2–§4; the
+image, the auth volume and the login are literally the same artifacts):**
+
+| Clause | Python main | Go successor (this chunk) |
+|---|---|---|
+| The setting | `executor.container` = `off｜on｜require` in config; `require` live on this box since 2026-09-13 | `--executor off｜on｜require` (+ `MARO_GO_EXECUTOR`) on every command that can run work — `now`, `agenda`, `runs resume`, `serve`, `experiment`, and `answer` passes it through to the run it resumes. The Go engine has no config file, so the operator's setting arrives by flag or env; a flag with no value is an ERROR, not the `off` default. The setting is RECORDED on the attempt (`ConfigSnapshot.Executor`; absent = off, which is what every journal before this field says) |
+| Who owns the setting | the config, read where it is needed | the BACKEND, and only the backend (`invoke.Isolated`): the driver asks it what policy the attempt ran under. `Driver.Executor` and `process.Options.Executor` do not exist — two owners of one setting is how a recorded policy and an executed policy come to disagree |
+| What is containerized | the worker's execute steps; judges and other tool-less calls stay on the host | the same narrowing, and here it is CHECKED at the WIRE DOOR: any invocation that carries no tools and names a container is refused, whatever policy any attempt ran under. At the door rather than in the fold because the landscape call is attempt 0 and reaches no attempt's checks at all |
+| Where the decision is made | `container_exec.plan()` per step, inside the execution path | ONCE. `Subprocess.decide(ctx, req)` chooses; the shell commits the choice onto the invocation AND onto `Request.Executor`; the launcher is then a LOOKUP of what was committed, not a second decision. A backend that answers out of vocabulary is `ErrBackendContract` |
+| What the record says | run meta + the executor tag; the 2026-09-12 degrade was NOT in it | `invocation.executor = {kind, image, digest, network}` on every call a container-capable backend makes. The TAG is what the operator named and can rebuild under; the DIGEST is the world the call actually ran in (the daemon's `{{.Id}}`, captured by the preflight); the NETWORK changes what the isolated call could reach, so it belongs to the exposure too. Absent = the backend answers for none, or the record predates the field — never "the host", which a host call states |
+| What is handed to the runtime | the tag | the resolved ID, and it has to LOOK like one (`<algorithm>:<hex>`, so a tag cannot arrive wearing the name of a digest). A tag is a mutable name for a world: an image rebuilt or retagged between the preflight and the launch would run something the record does not describe. `docker run <id>` makes the record and the call one world by construction, and a launcher asked to run a venue that is not the committed one refuses before dispatch — the WHOLE venue, not just its kind |
+| The degrade under `on` | announced; the 2026-09-12 incident was a SILENT one (the secrets store was decrypted on a host step the operator believed isolated) | recorded first, announced second. Under `on` the fold refuses a tool-bearing call that names NO venue at all — `on` permits both lanes, but it is still a request for isolation, and a call that will not say where it ran is the silent degrade this lane exists to refuse. `run.ExecutorViewOf` DERIVES the degrade from the attempt's own calls; the notice prints once per reason. There is no second bookkeeping trail to keep honest |
+| `require` when the container cannot run | refuses the step | `ErrBeforeDispatch` from the preflight, so nothing was dispatched and nothing is half-recorded; the message is "the required executor cannot run: <what>: <fix> and resume" (chunk 4's gone-work-dir grammar). The DAEMON is probed on every preflight; the image digest, the volume and the LOGIN are cached only on success, so an operator who starts docker mid-run is picked up by the next attempt without a restart |
+| What the preflight proves | the image and volume exist | that, plus a usable image id (an unusable answer from the daemon is a refusal, not a recorded digest), plus that the shared login is USABLE: inside the image, as the executor's own uid, `.credentials.json` is a regular readable file that starts the JSON object the CLI writes. `test -s` alone was not enough — it passes on a directory and on any non-empty garbage. A volume that exists and holds no login is the failure an operator hits after `docker volume create` and before `claude login`. What this does NOT prove is that the session inside is unexpired: that is a live question, answered by the call and by main's breaker over cached observations |
+| How the two lanes differ | a container path with its own fence→mount translation and (historically) its own forked capture reader — 22 review rounds | ONE `invoke.Launcher` seam: `Wrap(Launch) (Launched, error)`. The stream parser, the redaction, the secrets hand-off, the transcript capture and the terminal classification are the same code on both lanes; the only difference is the argv the child is started with |
+| Ending the work | the sweep reaps strays by label + `maro-exec-` prefix | `Launched.Stop`, because killing the `docker run` CLIENT does not kill the container (proved with a live probe on this box before it was fixed: SIGKILL to the client left the container `Up`). The container's `Stop` runs `docker kill` on its own name, under `context.WithoutCancel`, on EVERY way out of the call — the deadline, the operator's ^C, a client killed independently, a panic — and BEFORE the engine ingests what the worker wrote. `--rm` means "there is nothing left to end" is the normal case, and the launcher reports that as success; a container that could not be ended downgrades the call to Partial and says so in the record, not only in a notice. The login probe is a container too, so it is named, labelled and killed the same way |
+| The mounts | the run's write-fence translated to binds, identity-mapped; a per-run scratch at the container's `/tmp`; the auth volume at `$HOME/.claude` | the run's work dir bound identity-mapped; each READ path (the per-call secrets hand-off file) bound read-only; each WRITE path's DIRECTORY (`$MARO_ASK`, the derived-secrets drop) bound read-write, identity-mapped — never a single-file bind, which detaches on the atomic write-and-rename a careful writer does. Identity mapping everywhere means a path in the run's own record means one thing in both worlds, so the Go engine needs no translation table (main's `CONTAINER_ASK_PATH` is `/tmp/ask-operator.json`) |
+| What may NOT be bound | `_forbidden_mount_roots` | two rules, because one could not say it. FORBIDDEN is a contains-rule: `bindSource` resolves symlinks and refuses a source that IS or CONTAINS `/`, this engine's workspace, `$HOME`, `$HOME/.maro` or `$HOME/.maro-go`, while a DESCENDANT is the normal case and is fine (the drop directory lives inside the workspace). SEALED is a tree: nothing at or inside it is ever bound, and the secrets store is the case the contains-rule allowed — it is a descendant of `~/.maro`, so `--work ~/.maro/secrets` walked straight through and would have handed the sops file and the age identity to the worker read-write. Every bind source must also be ABSOLUTE: the target inside the container is the path the run's record names. The lists fail CLOSED — a box whose home or secrets store cannot be resolved gets a refusal, not a shorter list |
+| The worker's own channels | one ask path at a fixed container path | one directory per channel under `drop/` (`drop/ask`, `drop/secrets`), so binding the channel a step needs does not hand it every other channel's archive; the answer-context file moved out of `drop/` into `context/` entirely |
+| Secrets across the boundary | bare `-e NAME` with the value in the docker CLIENT's env | the same, and the per-call hand-off FILE rides too (bound read-only at its own path), so a containerized worker reads its secrets exactly as a host worker does — main's container path has only the env leg |
+| The container's identity | `maro-exec-<run>` + `maro.owner_pid` / `maro.owner_start` labels; a sweep filters its own label + prefix | `maro-exec-go-<pid>-<n>` + `maro.owner_pid`. The `maro-exec-` prefix is kept ON PURPOSE: the stranded-container sweep already running on this box filters on label + that prefix, so a Go container this engine could not end is reaped by the sweep that exists, rather than waiting for a second one |
+| The regression consequence | — (main re-runs obligations on the host) | an obligation is re-run WHERE IT WAS RECORDED or not at all: a container-recorded command comes back `Inconclusive` with the reason, because a host re-run is a different experiment wearing the same name and a green from it would retire an obligation nothing verified |
+| The surface | doctor rows, health lines | `runs show` prints `run.ExecutorLine`; the Summary carries `executor`, `executor_image`, `executor_images`, `executor_policy`, `executor_degraded`, and every DISTINCT image in first-appearance order (an attempt that moved A → B → A used two images, not three). The view's kind is EMPTY until a tool-bearing call has said where it ran — a `require` attempt that never got as far as a call says "requires a container; no tool call has run yet", not "executes in container" |
+
+**Intentional differences:** the policy is per ATTEMPT, not per run —
+unlike the work dir (§4.3), which is a FACT about where the run's files
+are and so cannot change under it; an operator who fixes the image and
+turns `require` back on between attempts is deciding about the next
+attempt, and each attempt is held to the policy its own config records.
+The fold enforces the policy rather than trusting the dispatcher, which
+is what makes the 2026-09-12 class of incident a REFUSED record instead
+of a missing line. The tool-less narrowing sits at the wire door instead,
+because it is true of every record this engine will ever read.
+`ExecutorViewOf` derives the run's surface from the calls instead of
+keeping a second trail (and so a fork, whose children are Confined,
+inherits no policy state that could race). The engine never builds the
+image or seeds the volume: the operator runs main's two commands
+(`maro-bootstrap container-setup`), and the preflight names what is
+missing.
+
+**Also from reviews r2 and r3 (all fixed, listed because they are the shape
+of what this lane gets wrong):** the digest was recorded but the launch
+still named the tag — and then the "is this an id" check accepted a tag;
+the kill path ran only when the engine already knew the call had been cut
+short, and when it failed the engine still read what the worker had
+written; `answer`'s own flag parser still dropped a trailing `--executor`;
+the login probe was an unnamed, unkillable container running the mutable
+tag; `test -s` was doing the work of a shape check, and its replacement
+(the first byte) passed on `{}`; and a RELATIVE `MARO_SECRETS_DIR` could
+not be compared with a resolved bind source at all, so the sealed-tree
+check quietly answered "not contained" for the store it was protecting.
+
+**Residue:** a container the engine could not end is not a DURABLE barrier
+— this call is Partial, its channels are left unread and the operator is
+told once, but a later call may still bind the same directories, and a
+panic's cleanup failure reaches the notice and not the record; re-running
+an obligation INSIDE the recorded container (the kill path it needed now
+exists, so this is buildable rather than blocked); the worker's prompt does not say it is containerized (it learns
+from the paths it can and cannot see; main says it in the frame); no
+per-call `/tmp` bind, so scratch written to `/tmp` does not survive
+between a run's calls on the container lane (main binds the run scratch
+there); a RETAINED failed secret drop still sits in a directory the
+container lane binds read-write — accepted because the host lane has the
+identical exposure, so it is a secrets-retention question, not a
+container-lane regression; `ExecutorPolicy` is not part of the exposure
+hash, so an attempt whose policy changed does not itself invalidate a
+reuse — the recorded executor of each call is what the fold holds; a
+child that is ever un-confined will need the policy passed to it (noted
+in `fork.go`).
+
+**Out-of-scope leads named by the reviews (not this chunk's):** `runs
+resume <run>` ignores the handle and resumes every eligible run
+(`cmd/maro-go/main.go`); the fold's regression classification does not
+consult `rerunWorld`, so a forged host rerun of a container-recorded
+obligation should be checked; a continuation of legacy history with no
+recorded CWD takes today's default (chunk 4's contract, §4.3).

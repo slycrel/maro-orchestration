@@ -293,10 +293,11 @@ func experimentOpen(args []string, j *journal.Journal, st *thought.Store, out io
 
 func experimentRun(args []string, a *workspace.Announced, j *journal.Journal, st *thought.Store, out, errw io.Writer) error {
 	if len(args) < 1 {
-		return fmt.Errorf("experiment run <exp> [--model m] [--judge-model m]")
+		return fmt.Errorf("experiment run <exp> [--model m] [--judge-model m] [--executor off|on|require] [--executor-image img]")
 	}
 	exp := record.RecordID(args[0])
 	model, judgeModel := "haiku", ""
+	var exec executorFlags
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--model":
@@ -310,11 +311,23 @@ func experimentRun(args []string, a *workspace.Announced, j *journal.Journal, st
 				judgeModel = args[i]
 			}
 		default:
+			if ok, perr := exec.parse(args, &i); perr != nil {
+				return perr
+			} else if ok {
+				continue
+			}
 			return fmt.Errorf("unknown flag %q", args[i])
 		}
 	}
 	b, err := invoke.NewSubprocess(model)
 	if err != nil {
+		return err
+	}
+	// A replay arm makes tool-bearing calls like any other run, so it runs
+	// under the operator's isolation too: the arm's driver reads the policy
+	// off this backend (invoke.Isolated). Without this, `MARO_GO_EXECUTOR=
+	// require` was laundered into an off-policy host run (review r1).
+	if err := exec.wire(b, a, errw); err != nil {
 		return err
 	}
 	var jb invoke.Backend

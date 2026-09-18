@@ -96,7 +96,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--judge-provider llm|jev|hosted|pcd] [--judge-shadow a,b] [--judge-fallback p] [--judge-escalate 0.6] [--pcd-url u] [--hosted-url u --hosted-model m --hosted-key NAME] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--judge-provider llm|jev|hosted|pcd] [--judge-shadow a,b] [--judge-fallback p] [--judge-escalate 0.6] [--pcd-url u] [--hosted-url u --hosted-model m --hosted-key NAME] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status | secrets list|check [--json]|get <name> | answer <handle> [--source s] [--backend b] [--model m] <text> | asks [--json] | judgment report [--json]|ask --provider p --state-file f --questions-file q|replay --corpus f --providers llm,jev,hosted,pcd")
+	fmt.Fprintln(w, "usage: maro-go workspace | contracts gen|report|check [dir] | journal status|publish | now|agenda [--backend b] [--model m] [--judge-model m] [--judge-provider llm|jev|hosted|pcd] [--judge-shadow a,b] [--judge-fallback p] [--judge-escalate 0.6] [--pcd-url u] [--hosted-url u --hosted-model m --hosted-key NAME] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--executor off|on|require] [--executor-image img] [--target dim=limit --why t] [--ack] <goal> | ack <delivery> <token> | runs [resume [--executor off|on|require] [--executor-image img]|show [--json] <handle>] | learn add|stage|list | pack export <file>|import <file> [--label l]|import-python <dir> [--label l] | experiment open [--live --population f --n k [--expect answer]]|run|close [--judge-model m]|list|show | serve [--model m] [--judge-model m] [--judge-provider llm|jev|hosted|pcd] [--judge-shadow a,b] [--judge-fallback p] [--judge-escalate 0.6] [--pcd-url u] [--hosted-url u --hosted-model m --hosted-key NAME] [--lens l] [--work dir] [--allow-tools a,b] [--deny-tools c,d] [--executor off|on|require] [--executor-image img] | submit [--lane now|agenda] [--ack] [--target dim=limit --why t] <goal> | interrupt <handle> --why <text> | status | secrets list|check [--json]|get <name> | answer <handle> [--source s] [--backend b] [--model m] <text> | asks [--json] | judgment report [--json]|ask --provider p --state-file f --questions-file q|replay --corpus f --providers llm,jev,hosted,pcd")
 }
 
 func cmdWorkspace(out io.Writer) error {
@@ -256,7 +256,13 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	judgeProvider, judgeShadow, pcdURL := judgment.DefaultProvider, "", judgment.DefaultPCDURL
 	judgeFallback, judgeEscalate := judgment.DefaultFallback, judgment.DefaultEscalate
 	var hosted hostedSpec
+	var exec executorFlags
 	for i := 0; i < len(args); i++ {
+		if ok, err := exec.parse(args, &i); err != nil {
+			return err
+		} else if ok {
+			continue
+		}
 		switch args[i] {
 		case "--fresh":
 			fresh = true
@@ -367,7 +373,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 	}
 	goal := strings.TrimSpace(strings.Join(text, " "))
 	if goal == "" {
-		return fmt.Errorf("now needs a goal: maro-go now [--backend subprocess|scripted] [--model m] [--judge-model m] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--target dim=limit --why text] [--ack] <goal text>")
+		return fmt.Errorf("now needs a goal: maro-go now [--backend subprocess|scripted] [--model m] [--judge-model m] [--lens l] [--after handle | --fresh] [--work dir] [--context file] [--allow-tools a,b] [--deny-tools c,d] [--executor off|on|require] [--executor-image img] [--target dim=limit --why text] [--ack] <goal text>")
 	}
 	toolPolicy, err := invoke.ParseToolPolicy(allowTools, denyTools)
 	if err != nil {
@@ -416,6 +422,13 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 			frame += wireSecrets(sp, a, errw)
 			askPath = wireAsk(sp, a)
 			frame += "\n\n" + spine.AskInstructions(askPath)
+			if err := exec.wire(sp, a, errw); err != nil {
+				return err
+			}
+		} else if err := exec.wire(nil, a, errw); err != nil {
+			// a scripted backend cannot isolate anything: an operator who
+			// asked for isolation hears so before a journal is touched
+			return err
 		}
 		var lineage *spine.Lineage
 		if after != "" && fresh {
@@ -445,8 +458,7 @@ func cmdNow(lane spine.Lane, args []string, out, errw io.Writer) error {
 		// a NOW run judges its closure when a judge model is named OR a
 		// non-default provider is: `--judge-provider jev` alone is a judge
 		modelJudge := jb != nil || (judgeProvider != "" && judgeProvider != judgment.ProviderLLM)
-		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: modelJudge, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, WorkDefault: a.Path("work"), Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath,
-			JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: providers, JudgeFallback: judgeFallback, JudgeEscalate: judgeEscalate,
+		d := &spine.Driver{J: j, Store: st, Backend: b, Judge: jb, Lane: lane, ModelJudge: modelJudge, Origin: spine.CLIOrigin{W: out}, Timeout: 20 * time.Minute, Admit: experiment.Admit(j, st), Lens: lens, Target: spec, Work: work, WorkDefault: a.Path("work"), Frame: frame, After: lineage, Fresh: fresh, Context: contextText, AskPath: askPath, JudgeProvider: judgeProvider, JudgeShadow: shadow, Providers: providers, JudgeFallback: judgeFallback, JudgeEscalate: judgeEscalate,
 			Events: func(e spine.Event) {
 				fmt.Fprintf(errw, "event %s run=%s attempt=%d %s %s\n", e.Handle, e.Run, e.Attempt, e.Stage, e.Detail)
 			}}
@@ -514,6 +526,21 @@ func cmdAck(args []string, out io.Writer) error {
 // cmdRuns lists every run's mission fold; `resume` first finishes what a
 // previous process left non-terminal (reconcile → recover → deliver).
 func cmdRuns(args []string, out, errw io.Writer) error {
+	// `runs resume` wires the executor lane exactly as `run` does: a resume
+	// that ran the rest of a required-container run on the host would be
+	// the silent degrade this policy exists to refuse (and the fold would
+	// refuse its records anyway).
+	var exec executorFlags
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		if ok, err := exec.parse(args, &i); err != nil {
+			return err
+		} else if ok {
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	args = rest
 	return withJournal(out, func(a *workspace.Announced, j *journal.Journal, st *thought.Store) error {
 		if len(args) > 1 && args[0] == "show" {
 			led, err := spine.Fold(j.Production(), st)
@@ -552,6 +579,9 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 					if w := spine.Summarize(rs); w.Work != "" {
 						fmt.Fprintf(out, "works in %s (%s)\n", w.Work, w.WorkBinding)
 					}
+					if l := spine.ExecutorLine(rs.Latest()); l != "" {
+						fmt.Fprintf(out, "%s\n", l)
+					}
 					if by := spine.ContinuedBy(led, rs); by != "" {
 						fmt.Fprintln(out, by)
 					}
@@ -569,12 +599,21 @@ func cmdRuns(args []string, out, errw io.Writer) error {
 			s, err := invoke.NewSubprocess("haiku")
 			if err == nil {
 				// the same tool environment a run's backend gets (the secrets
-				// drop, the ask path): a resumed attempt's calls and re-runs
-				// see what the original's did
+				// drop, the ask path, the executor lane): a resumed attempt's
+				// calls and re-runs see what the original's did
 				wireSecrets(s, a, errw)
 				d.AskPath = wireAsk(s, a)
+				if werr := exec.wire(s, a, errw); werr != nil {
+					return werr
+				}
 				d.Backend = s
 			} else {
+				// the isolation the operator asked for has nothing to run
+				// in: say so before resuming, rather than resume on the
+				// scripted fallback and record an off-policy attempt
+				if werr := exec.wire(nil, a, errw); werr != nil {
+					return werr
+				}
 				fmt.Fprintln(errw, "resume: no subprocess backend available; runs needing re-execution will fail honestly:", err)
 			}
 			reps, err := d.Resume(context.Background())
@@ -767,7 +806,13 @@ func cmdServe(args []string, out, errw io.Writer) error {
 	judgeProvider, judgeShadow, pcdURL := judgment.DefaultProvider, "", judgment.DefaultPCDURL
 	judgeFallback, judgeEscalate := judgment.DefaultFallback, judgment.DefaultEscalate
 	var hosted hostedSpec
+	var exec executorFlags
 	for i := 0; i < len(args); i++ {
+		if ok, err := exec.parse(args, &i); err != nil {
+			return err
+		} else if ok {
+			continue
+		}
 		switch args[i] {
 		case "--work":
 			i++
@@ -862,6 +907,9 @@ func cmdServe(args []string, out, errw io.Writer) error {
 		return err
 	}
 	b.Policy = toolPolicy
+	if err := exec.wire(b, a, errw); err != nil {
+		return err
+	}
 	var jb invoke.Backend
 	if judgeModel != "" {
 		js, err := invoke.NewSubprocess(judgeModel)
@@ -1111,7 +1159,9 @@ func printImport(out io.Writer, rep *pack.Report) error {
 // injects nothing — the frame still tells.
 func wireSecrets(sp *invoke.Subprocess, a *workspace.Announced, errw io.Writer) string {
 	sec := secrets.Open()
-	drop := filepath.Join(a.Path("drop"), secrets.DropName)
+	// the derived-secret drop gets its OWN directory (see wireAsk): on the
+	// container lane the directory of a writable path is what is bound
+	drop := filepath.Join(a.Path("drop"), "secrets", secrets.DropName)
 	file := filepath.Join(a.Path("drop"), secrets.FileName)
 	inj, err := sec.Inject()
 	if err != nil {
@@ -1122,6 +1172,9 @@ func wireSecrets(sp *invoke.Subprocess, a *workspace.Announced, errw io.Writer) 
 			// values ride a per-call 0600 file (invoke.HandOff), the env
 			// carries only the two paths
 			sp.Env = []string{secrets.DropEnv + "=" + drop}
+			// the step WRITES the drop file (a secret it derived): the
+			// container lane binds its directory read-write
+			sp.Writable = append(sp.Writable, drop)
 			sp.HandOff = &invoke.HandOff{Path: file, EnvName: secrets.FileEnv, Lines: inj.Env}
 			if len(inj.Env) == 0 {
 				file = ""

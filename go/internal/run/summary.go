@@ -37,6 +37,17 @@ type Summary struct {
 	// the binding.
 	Work        string      `json:"work,omitempty"`
 	WorkBinding WorkBinding `json:"work_binding,omitempty"`
+	// Executor is where the LATEST attempt's tool-bearing calls ran, the
+	// image when that was a container, and whether the attempt asked for a
+	// container and ran on the host anyway — all derived from the calls'
+	// own records (executor.go).
+	Executor      invoke.ExecutorKind `json:"executor,omitempty"`
+	ExecutorImage string              `json:"executor_image,omitempty"`
+	// ExecutorImages is every distinct image the attempt used, present only
+	// when it used more than one (a resume under a different image).
+	ExecutorImages   []string              `json:"executor_images,omitempty"`
+	ExecutorPolicy   invoke.ExecutorPolicy `json:"executor_policy,omitempty"`
+	ExecutorDegraded bool                  `json:"executor_degraded,omitempty"`
 	// ContinuedBy is the source-side line ("continued by <handle>: <state>");
 	// it needs the ledger, so the caller fills it. "" when nothing does.
 	ContinuedBy string `json:"continued_by,omitempty"`
@@ -87,6 +98,16 @@ func Summarize(rs *RunState) Summary {
 	}
 	if b := boundAttempt(rs); b != nil {
 		s.Work, s.WorkBinding = b.Attempt.Config.Work, b.Attempt.Config.WorkBinding
+	}
+	if a := rs.Latest(); a != nil {
+		v := ExecutorViewOf(a)
+		if v.Policy != invoke.ExecutorOff {
+			s.ExecutorPolicy = v.Policy
+		}
+		s.Executor, s.ExecutorImage, s.ExecutorDegraded = v.Kind, v.Image, v.Degraded
+		if len(v.Images) > 1 {
+			s.ExecutorImages = v.Images
+		}
 	}
 	if rs.Goal != nil {
 		s.Goal = string(rs.Goal.ID)

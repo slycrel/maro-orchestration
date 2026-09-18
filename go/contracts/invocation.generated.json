@@ -113,6 +113,13 @@
       "is_thought": false
     },
     {
+      "name": "Executor",
+      "wire": "executor",
+      "go_type": "*invoke.Executor",
+      "omittable": true,
+      "is_thought": false
+    },
+    {
       "name": "EffectToken",
       "wire": "effect_token",
       "go_type": "string",
@@ -148,6 +155,6 @@
       "is_thought": false
     }
   ],
-  "source_ref": "06fefc90",
+  "source_ref": "54841881",
   "generator": "maro-go contracts gen v1"
 }

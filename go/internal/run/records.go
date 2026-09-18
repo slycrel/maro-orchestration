@@ -235,6 +235,11 @@ type ConfigSnapshot struct {
 	// shows bound configs.
 	Work        string      `json:"work,omitempty"`
 	WorkBinding WorkBinding `json:"work_binding,omitempty"`
+	// Executor is the operator's isolation setting for this attempt's
+	// tool-bearing calls (executor.go): ABSENT = off, the host lane, which
+	// is what every journal before the field recorded. Per attempt, not per
+	// run: turning isolation on is a decision about the next attempt.
+	Executor invoke.ExecutorPolicy `json:"executor,omitempty"`
 	// Policy is the attempt's policy selection (same command as the
 	// attempt); Mechanisms is its snapshot, copied here so the attempt's
 	// config is complete on its own record. The fold checks equality.
@@ -366,6 +371,9 @@ func (r *RunAttempt) ValidateWire() error {
 	}
 	if r.Config.Work != "" && r.Config.WorkBinding == "" {
 		return errors.New("run_attempt: a work dir is bound by dir and binding together")
+	}
+	if r.Config.Executor != "" && !invoke.ValidExecutorPolicy(r.Config.Executor) {
+		return fmt.Errorf("run_attempt: executor policy %q out of vocabulary", r.Config.Executor)
 	}
 	if r.RecoversFrom != 0 && r.RecoversFrom >= r.Attempt {
 		return errors.New("run_attempt: recovers_from must be an earlier attempt")

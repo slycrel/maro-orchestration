@@ -249,7 +249,14 @@ func (d *Driver) regress(ctx context.Context, rs *RunState, a *AttemptState, obs
 			if te, ok := d.Backend.(ToolEnver); ok {
 				extra = te.ToolEnv()
 			}
-			res := regression.Rerun(ctx, ob.Cmd, ob.Dir, extra, d.Timeout)
+			// an obligation is re-run WHERE IT WAS RECORDED or not at all
+			// (executor.go): a container-recorded probe re-run on the host
+			// is a different experiment wearing the same name, and its
+			// green would retire an obligation nothing verified
+			res := &regression.Result{Exit: -1, Outcome: regression.Inconclusive, Why: rerunWorld(ob.Inv)}
+			if res.Why == "" {
+				res = regression.Rerun(ctx, ob.Cmd, ob.Dir, extra, d.Timeout)
+			}
 			rr = &RegressionRerun{Header: header(runRef(rs.Run), rs.Run, n, "regression_rerun/1"), Step: ob.Step, Invocation: ob.Inv.ID, Effect: ob.Effect.ID, Argv: ob.Cmd.Argv, Env: ob.Cmd.Env, Dir: ob.Dir, Exit: res.Exit, TimedOut: res.TimedOut, Truncated: res.Truncated, Outcome: res.Outcome, Why: res.Why}
 			for _, pair := range []struct {
 				b   []byte

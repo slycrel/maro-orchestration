@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -49,9 +50,37 @@ type Subprocess struct {
 	// every TOOL-BEARING call and shredded when the call returns (any path);
 	// the child sees only EnvName=Path. This is how injected secret VALUES
 	// reach a host worker — never through Env, which every descendant of
-	// the child inherits (docs/SECRETS_DESIGN.md §10).
+	// the child inherits (docs/SECRETS_DESIGN.md §10). On the container
+	// lane the same file is bind-mounted read-only at the same path, so the
+	// worker reads it exactly as it would on the host.
 	HandOff *HandOff
+	// Writable are absolute paths a TOOL-BEARING call must be able to write
+	// (the operator-question file, the derived-secrets drop): the CLI names
+	// them in Env, and on the container lane their directories are bound
+	// read-write at the same absolute path, so a containerized worker asks
+	// and hands back exactly as a host worker does.
+	Writable []string
+	// Container is the container launcher tool-bearing calls run through
+	// when the policy asks for it; nil = the host lane only.
+	Container *Container
+	// Isolation is the operator's setting (executor.go): "" or off = host,
+	// on = container when it can run, require = container or nothing. This
+	// backend is the policy's ONE owner: the attempt records it by asking
+	// (ExecutorPolicy), so nothing has to keep two copies equal.
+	Isolation ExecutorPolicy
+	// Notify is told, once per distinct note, about anything the operator
+	// should know about where a call ran: a degrade to the host under `on`,
+	// or a container the engine could not end. The record carries the
+	// facts, so this is a courtesy, not the evidence. Nil = nothing.
+	Notify func(note string)
+
+	noteMu sync.Mutex
+	noted  map[string]bool
 }
+
+// ExecutorPolicy is the policy every attempt of this backend runs under
+// (invoke.Isolated).
+func (s *Subprocess) ExecutorPolicy() ExecutorPolicy { return s.Isolation }
 
 // ToolEnv is the environment this backend's tool-bearing calls get beyond
 // the process's own (run.ToolEnver): a re-run of what they ran gets it too.
@@ -118,6 +147,98 @@ func (s *Subprocess) Capabilities() Capabilities {
 	return Capabilities{Name: subprocessName, Model: s.Model, ActsOutward: true, OutwardReconcilable: false, ReadsByReference: true, ToolPolicy: s.Policy.String()}
 }
 
+// launcher is the venue of a call that is about to be dispatched. The venue
+// is decided ONCE per call: when the shell has already asked (ExecutorFor)
+// and committed the answer on the invocation, the call runs THERE and
+// nothing is decided again. Deciding twice is how a record and a call come
+// to disagree — the first probe fails and commits `host`, the operator
+// starts docker, and the second probe sends the call into a container the
+// journal says nothing about (review r1).
+func (s *Subprocess) launcher(ctx context.Context, req Request) (Launcher, error) {
+	if req.Executor == nil {
+		// nobody asked: an unshelled call (a direct Complete) decides here,
+		// under the CALLER's context — a preflight that outlived the call
+		// that wanted it would hold a cancelled caller for two docker
+		// timeouts (review r2)
+		return s.decide(ctx, req)
+	}
+	if req.Executor.Kind != ExecutorContainer {
+		return HostLauncher{}, nil
+	}
+	if s.Container == nil {
+		return nil, fmt.Errorf("%w: the call was committed to a container and this backend has none", ErrBeforeDispatch)
+	}
+	// The committed venue is the WHOLE venue, not just its kind: the record
+	// names an image, an id and a network, and a launcher that would run
+	// something else is not the venue the invocation was committed to. This
+	// cannot normally differ (the choice is made once, and the id is
+	// resolved before the record is written) — which is exactly why a
+	// difference here means something changed underneath and the call must
+	// not go out (review r2).
+	if now := s.Container.Executor(); now != *req.Executor {
+		return nil, fmt.Errorf("%w: the call was committed to %+v and this launcher would run %+v", ErrBeforeDispatch, *req.Executor, now)
+	}
+	return s.Container, nil
+}
+
+// decide is where the venue is CHOSEN (and the container preflighted): the
+// host for every tool-less call (a judge touches nothing, so isolating it
+// buys nothing and costs a container per verdict) and for every lane the
+// operator left off; otherwise the container. Under `require` a container
+// that cannot run refuses the call before dispatch — nothing is recorded
+// and nothing ran; under `on` it degrades to the host, which the invocation
+// records and Notify announces.
+func (s *Subprocess) decide(ctx context.Context, req Request) (Launcher, error) {
+	if !req.Tools || s.Isolation == "" || s.Isolation == ExecutorOff {
+		return HostLauncher{}, nil
+	}
+	if s.Container == nil {
+		// `require` with nothing to require: refuse before dispatch rather
+		// than run on the host and let the fold refuse the record afterwards
+		if s.Isolation == ExecutorRequire {
+			return nil, fmt.Errorf("%w: %w: this backend has no container to run in", ErrBeforeDispatch, ErrExecutorUnavailable)
+		}
+		s.notify("ran on the host instead: this backend has no container to run in")
+		return HostLauncher{}, nil
+	}
+	if err := s.Container.Preflight(ctx); err != nil {
+		if s.Isolation == ExecutorRequire {
+			return nil, fmt.Errorf("%w: %w", ErrBeforeDispatch, err)
+		}
+		s.notify("ran on the host instead: " + err.Error())
+		return HostLauncher{}, nil
+	}
+	return s.Container, nil
+}
+
+// notify tells the operator once per distinct note: the invocation records
+// the facts, so this is the notice, not the record.
+func (s *Subprocess) notify(note string) {
+	s.noteMu.Lock()
+	first := !s.noted[note]
+	if first {
+		if s.noted == nil {
+			s.noted = map[string]bool{}
+		}
+		s.noted[note] = true
+	}
+	s.noteMu.Unlock()
+	if first && s.Notify != nil {
+		s.Notify(note)
+	}
+}
+
+// ExecutorFor answers where a call of this request will run, before the
+// invocation is committed (invoke.Executored). It is the ONLY place the
+// venue is chosen; Complete runs the call where this answer said.
+func (s *Subprocess) ExecutorFor(ctx context.Context, req Request) (Executor, error) {
+	l, err := s.decide(ctx, req)
+	if err != nil {
+		return Executor{}, err
+	}
+	return l.Executor(), nil
+}
+
 func (s *Subprocess) args(req Request) []string {
 	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--strict-mcp-config"}
 	if req.Tools {
@@ -156,24 +277,66 @@ func (s *Subprocess) Complete(ctx context.Context, req Request, sink Sink) (*Res
 	}
 	capPath := capture.Name()
 	defer os.Remove(capPath)
-	cmd := exec.CommandContext(cctx, s.Bin, s.args(req)...)
+	// Where this call runs was decided before the invocation was committed
+	// (ExecutorFor) and rides on the request: the record and the call are
+	// the same decision, not two that happen to agree.
+	lr, err := s.launcher(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	l := Launch{Bin: s.Bin, Args: s.args(req), Cwd: req.Cwd}
+	if req.Tools {
+		l.Env = append(l.Env, s.Env...)
+		l.Writable = append(l.Writable, s.Writable...)
+		if s.HandOff != nil && len(s.HandOff.Lines) > 0 {
+			if err := s.HandOff.write(); err != nil {
+				return nil, fmt.Errorf("%w: secrets hand-off: %v", ErrBeforeDispatch, err)
+			}
+			defer s.HandOff.shred()
+			l.Env = append(l.Env, s.HandOff.EnvName+"="+s.HandOff.Path)
+			l.Files = append(l.Files, s.HandOff.Path)
+		}
+	}
+	lch, err := lr.Wrap(l)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBeforeDispatch, err)
+	}
+	// Ending the work, on EVERY way out of this function.
+	//
+	// On the container lane the child process is the docker CLIENT, not the
+	// worker: the client can die — killed independently, or dropped by the
+	// daemon — while the container keeps running, holding the work dir and
+	// the mounted channels. The first version of this stopped the container
+	// only when the call's own context had been cancelled, which covered the
+	// deadline and the operator's ^C and missed exactly the cases where the
+	// engine did not know the child was gone (review r2: an independently
+	// killed client, and a panic, both leave a live container behind a
+	// context that was never cancelled).
+	//
+	// So: stop unconditionally, once, under a context the cancellation
+	// cannot reach, and BEFORE the engine ingests what the worker wrote and
+	// shreds what it could read. `--rm` means the normal case is "there is
+	// nothing left to end", which the launcher reports as success.
+	// One goroutine walks this function, so `done` needs no lock; the
+	// second call (the defer, after the inline one) is the no-op.
+	done, stopErr := false, error(nil)
+	stop := func() error {
+		if lch.Stop == nil || done {
+			return stopErr
+		}
+		done = true
+		sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), probeTimeout)
+		defer scancel()
+		if stopErr = lch.Stop(sctx); stopErr != nil {
+			s.notify("could not end the container the call ran in: " + stopErr.Error())
+		}
+		return stopErr
+	}
+	defer stop() // a panic, an early return, anything
+	cmd := exec.CommandContext(cctx, lch.Argv[0], lch.Argv[1:]...)
 	cmd.Stdin = bytes.NewReader(req.Prompt)
-	if req.Tools && len(s.Env) > 0 {
-		cmd.Env = append(os.Environ(), s.Env...)
-	}
-	if req.Tools && s.HandOff != nil && len(s.HandOff.Lines) > 0 {
-		if err := s.HandOff.write(); err != nil {
-			return nil, fmt.Errorf("%w: secrets hand-off: %v", ErrBeforeDispatch, err)
-		}
-		defer s.HandOff.shred()
-		if cmd.Env == nil {
-			cmd.Env = os.Environ()
-		}
-		cmd.Env = append(cmd.Env, s.HandOff.EnvName+"="+s.HandOff.Path)
-	}
-	if req.Cwd != "" {
-		cmd.Dir = req.Cwd
-	}
+	cmd.Env = lch.Env
+	cmd.Dir = lch.Dir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		capture.Close()
@@ -202,6 +365,11 @@ func (s *Subprocess) Complete(ctx context.Context, req Request, sink Sink) (*Res
 		io.Copy(io.Discard, stdout)
 	}
 	waitErr := cmd.Wait()
+	// The client has exited; the container is either gone with it (`--rm`)
+	// or it outlived it, and either way this is where that is settled —
+	// before the terminal is classified, and before AfterTools ingests the
+	// worker's drop file.
+	stop()
 	var capErr error
 	if err := capture.Sync(); err != nil {
 		capErr = err
@@ -222,6 +390,9 @@ func (s *Subprocess) Complete(ctx context.Context, req Request, sink Sink) (*Res
 	if capErr != nil {
 		reasons = append(reasons, "capture: "+capErr.Error())
 	}
+	if stopErr != nil {
+		reasons = append(reasons, "container not ended: "+stopErr.Error())
+	}
 	if p.violations > 0 {
 		reasons = append(reasons, fmt.Sprintf("%d protocol violation(s): %s", p.violations, strings.Join(p.violationNotes, "; ")))
 	}
@@ -241,7 +412,9 @@ func (s *Subprocess) Complete(ctx context.Context, req Request, sink Sink) (*Res
 		if p.result.CostUSD != nil {
 			res.Usage.CostUSD, res.Usage.CostReported = *p.result.CostUSD, true
 		}
-		if p.violations > 0 || capErr != nil {
+		if p.violations > 0 || capErr != nil || stopErr != nil {
+			// a container the engine could not end is a call whose side
+			// effects it cannot say have stopped: complete is too strong
 			res.Terminal = TerminalPartial
 		} else {
 			res.Terminal = TerminalComplete
@@ -266,7 +439,16 @@ func (s *Subprocess) Complete(ctx context.Context, req Request, sink Sink) (*Res
 			res.Transcript = redact(res.Transcript, s.Redact)
 			res.Reason = string(redact([]byte(res.Reason), s.Redact))
 		}
-		if s.AfterTools != nil {
+		// The drop file is read only when the work is known to have STOPPED.
+		// A container the engine could not end is a worker that can still
+		// rewrite the channel this is about to ingest — and ingesting a
+		// derived secret written by a call the engine has lost is worse than
+		// not ingesting one (review r3). The file stays where it is; the
+		// next call's ingest picks it up once the box is sane again.
+		switch {
+		case stopErr != nil:
+			res.Reason = strings.TrimSpace(res.Reason + "; the worker's channels were not read: the container could not be ended")
+		case s.AfterTools != nil:
 			s.AfterTools()
 		}
 	}

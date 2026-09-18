@@ -85,6 +85,16 @@
       "pattern": "^/",
       "rejects": "work",
       "measured_by": "internal/invoke:TestToolPolicyAndCwd"
+    },
+    "executor": {
+      "absence": "omitted",
+      "on_absence": "tolerated",
+      "used_for": "authorization",
+      "unknown_value": "rejected",
+      "constraint": "defined",
+      "pattern": "^(?:\\{\"kind\":\"host\"\\}|\\{(?:\"digest\":\"[^\"]+\",)?\"image\":\"[^\"]+\",\"kind\":\"container\"(?:,\"network\":\"[^\"]+\")?\\})$",
+      "rejects": "{\"kind\":\"host\",\"network\":\"host\"}",
+      "measured_by": "internal/invoke:TestExecutorLaneIsRecordedBeforeDispatch"
     }
   }
 }

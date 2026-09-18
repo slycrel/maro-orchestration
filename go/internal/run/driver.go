@@ -325,6 +325,16 @@ func (d *Driver) config(lane Lane, pol *learn.PolicySelection) (ConfigSnapshot, 
 		return ConfigSnapshot{}, err
 	}
 	c := ConfigSnapshot{Lane: lane, Backend: d.Backend.Capabilities(), Judge: JudgeSelf, PlanCardinality: 1, TimeoutMillis: d.Timeout.Milliseconds(), Lens: d.lensName(), FamilyRule: FamilyRule, ResolverVer: verdict.ResolverVer, Confined: d.Confined, Policy: pol.ID, Mechanisms: map[learn.Mechanism]bool{}}
+	// The isolation setting this attempt runs under, ASKED OF THE BACKEND
+	// that enforces it (invoke.Isolated) rather than passed in beside it:
+	// one owner, so a driver cannot record a policy its own backend is not
+	// keeping (review r1). Off records nothing, as every journal before the
+	// field did (executor.go).
+	if iso, ok := d.Backend.(invoke.Isolated); ok {
+		if pol := iso.ExecutorPolicy(); pol != "" && pol != invoke.ExecutorOff {
+			c.Executor = pol
+		}
+	}
 	if l != nil {
 		ref := l.Text
 		c.LensText = &ref

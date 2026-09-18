@@ -681,6 +681,9 @@ func Fold(pr *journal.ProductionReader, store *thought.Store) (*Ledger, error) {
 				if err := checkWork(rs, a, st); err != nil {
 					return err
 				}
+				if err := checkExecutor(rs, a, st); err != nil {
+					return err
+				}
 				a.Invocations = append(a.Invocations, st)
 			}
 		case *Landscape:

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,7 +143,19 @@ func TestCLINowInjectsAndIngestsSecrets(t *testing.T) {
 	if m := sec.Meta()["MINTED_TOKEN"]; m.Origin != secrets.OriginMaro || m.Source != "drop" {
 		t.Fatalf("meta %+v", m)
 	}
-	if entries, _ := filepath.Glob(filepath.Join(ws, "drop", "*")); len(entries) != 0 {
-		t.Fatalf("drop or hand-off file survived: %v", entries)
+	// Nothing a secret could ride survives the step. The per-channel
+	// DIRECTORIES do survive (drop/secrets, drop/ask) and are meant to: they
+	// are what a containerized step gets bound, and binding the whole of
+	// drop/ would hand the worker every other channel's archive. So the
+	// assertion is about FILES, at any depth.
+	var left []string
+	filepath.WalkDir(filepath.Join(ws, "drop"), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			left = append(left, p)
+		}
+		return nil
+	})
+	if len(left) != 0 {
+		t.Fatalf("drop or hand-off file survived: %v", left)
 	}
 }

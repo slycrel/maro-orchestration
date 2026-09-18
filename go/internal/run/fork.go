@@ -588,6 +588,9 @@ func (d *Driver) childDriver(fs *ForkState, work string) *Driver {
 	if work == "" {
 		work = d.WorkDefault
 	}
+	// no executor policy: a child is Confined, so every call it makes is
+	// tool-less and stays on the host whatever the parent asked for
+	// (executor.go). A child that is ever un-confined needs the policy.
 	return &Driver{J: d.J, Store: d.Store, Backend: d.Backend, Judge: d.Judge, Lane: LaneNow, Origin: forkOrigin{}, Timeout: d.Timeout, Health: d.Health, Events: d.Events, Lens: d.Lens, Work: d.Work, WorkDefault: work, Frame: d.Frame,
 		Confined: true, ChildOf: fs.Fork.ID, ModelJudge: fs.Fork.Policy == JoinFirstVerdict, MaxAttempts: d.MaxAttempts, MaxDeliveryAttempts: d.MaxDeliveryAttempts,
 		JudgeProvider: d.JudgeProvider, JudgeShadow: d.JudgeShadow, Providers: d.Providers}

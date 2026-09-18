@@ -230,6 +230,23 @@ func (sh *Shell) Invoke(ctx context.Context, b Backend, req Request, target *Tar
 		return nil, err
 	}
 	inv := &Invocation{Header: sh.header(record.Ref{Kind: "prompt", ID: reqRef.Hash}), Purpose: req.Purpose, Request: reqRef, Backend: caps, Tools: req.Tools, Cwd: req.Cwd, EffectToken: token, Lens: req.Lens}
+	// Where the call will run is decided BEFORE the invocation is
+	// committed, so the record and the call agree; a refusal here means
+	// nothing happened (no record, no call) — the executor the operator
+	// required cannot run, and the reason says what to fix.
+	if ex, ok := b.(Executored); ok {
+		e, err := ex.ExecutorFor(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if e.Kind != "" { // "" = this backend does not answer for an executor
+			if err := e.validate(); err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrBackendContract, err)
+			}
+			inv.Executor = &e
+			req.Executor = &e // the call runs where the record says, not where a second decision would
+		}
+	}
 	if target != nil {
 		inv.TargetName, inv.TargetLimit, inv.TargetWhy = target.Name, target.Limit, target.Why
 	}

@@ -3448,3 +3448,293 @@ continued); container executor + env-request strand; the
 resolution-completeness check; the r3 residue above (a forged
 legacy-AGENDA plan-then-crash fixture; a NOW "recovers ⇒ ends on it"
 fold rule).
+
+
+## Post-v1 — the container executor, Go side: where a call ran is part of its record, and the policy is the fold's (2026-09-18)
+
+**Ask (Jeremy, 2026-09-17, the standing order):** audit §3's last item,
+the container-executor + env-request strand. Python main has had a
+containerized executor since 2026-07 and runs `require` on this box since
+2026-09-13; the Go engine ran every worker on the host, with nothing in
+the journal that even had a place to say otherwise. Two pieces of main's
+history set the shape: on 2026-09-12 a degrade under mode `on` ran a
+worker on the HOST and nothing in the record said so (the secrets store
+was decrypted there), and main's container path cost 22 adversarial
+rounds because it became a second execution path with its own capture
+reader.
+
+**Contract kept from main (audit §4.5):** the same three-value setting
+(`off｜on｜require`), the same narrowing (tool-bearing calls only), the
+same `docker run` shape (`--rm -i --init`, `--user uid:gid`, identity-
+mapped binds, bare `-e NAME` with the value in the docker client's env),
+and literally the same artifacts — image `maro-executor:2.1.210-r3`,
+volume `maro-claude-auth`, HOME `/home/maro`, auth at
+`/home/maro/.claude`. One built image, one login, two engines, like the
+shared secrets store. The engine builds nothing: the operator runs main's
+`container-setup` commands and the preflight names what is missing.
+
+**The Go engine's own road (D1, D5):**
+
+- **One launcher seam.** `invoke.Launcher` — `Executor()`,
+  `Wrap(Launch) (Launched, error)`, `Preflight(ctx)` — with
+  `HostLauncher` and `*Container` as its two implementations. The stream
+  parser, the redaction, the secrets hand-off, the transcript capture and
+  the terminal classification are the same code on both lanes; the only
+  difference is the argv the child is started with. That is the answer to
+  main's 22 rounds.
+- **The executor is exposure, and it is decided ONCE.**
+  `invoke.Executored.ExecutorFor(ctx, req)` is asked by the shell before
+  the `invocation/1` record is written; the shell then commits the choice
+  onto the invocation AND onto `Request.Executor`, and the launcher is a
+  LOOKUP of what was committed rather than a second decision that could
+  disagree with it. `invocation.executor = {kind, image, digest,
+  network}`: the tag is what the operator named and can rebuild under,
+  the digest (the daemon's `{{.Id}}`) is the world the call actually ran
+  in, and the network is what it could reach. A backend that answers out
+  of vocabulary is `ErrBackendContract`; an EMPTY kind means "this
+  backend answers for none", never "the host".
+- **The fold enforces the policy** (`run/executor.go:checkExecutor`,
+  called beside `checkWork`): under `require` a tool-bearing call that
+  ran on the host — or names nothing — is refused as the lie the policy
+  exists to catch; under `on` a call that will not say WHERE it ran is
+  refused too, because that is exactly the silent degrade of 2026-09-12;
+  under `off` a container call is a call this engine would not have made.
+  `ConfigSnapshot.Executor` records the policy per ATTEMPT (absent = off,
+  which is what every earlier journal says), and the attempt's policy is
+  read from the BACKEND — the one owner — through `invoke.Isolated`.
+- **The narrowing is the DOOR's, not the fold's.** A tool-less call in a
+  container is refused by `Invocation.ValidateWire`, so it holds for every
+  record this engine will ever read — including the landscape call, which
+  is attempt 0 and reaches no attempt's checks at all.
+- **The degrade is derived, not trailed.** `run.ExecutorViewOf(a)` reads
+  the attempt's own calls: the kind, the image, every distinct image the
+  attempt used, and `degraded` iff the policy was `on` and a tool-bearing
+  call ran on the host. The kind is EMPTY until a call has said where it
+  ran, so a `require` attempt that never got as far as a call says
+  "requires a container; no tool call has run yet" instead of claiming an
+  isolation nothing exercised. The notice prints once per reason; the
+  record is the evidence.
+- **`require` fails closed before dispatch.** The preflight probes the
+  daemon on EVERY call, then the image (capturing its digest), the volume,
+  and the LOGIN inside it (`test -s <auth mount>/.credentials.json` — a
+  volume that exists and holds no login is the failure an operator hits
+  between `docker volume create` and `claude login`). Only successes are
+  cached, so an operator who starts docker mid-run is picked up by the
+  next attempt; the refusal is `ErrBeforeDispatch` with "…: <what>: <fix>
+  and resume".
+- **The launcher can END what it started.** Killing the `docker run`
+  client does not kill the container — proved with a live probe on this
+  box, where SIGKILL to the client left it `Up`. `Launched.Stop` runs
+  `docker kill` on the container's own name (`maro-exec-go-<pid>-<n>`),
+  and the subprocess lane defers it on a context error under
+  `context.WithoutCancel`. The name keeps main's `maro-exec-` prefix on
+  purpose: the stranded-container sweep already running on this box
+  filters label + prefix, so a container this engine could not end is
+  reaped by the sweep that exists.
+- **What the worker writes crosses too.** `Launch.Writable` carries
+  `$MARO_ASK` and the derived-secrets drop; the container binds each
+  one's DIRECTORY read-write, identity-mapped. Never a file bind: it
+  detaches on the atomic write-and-rename a careful writer does, and the
+  worker's question would never leave the container. A writable path with
+  no directory on the host is refused before dispatch instead of letting
+  docker create a root-owned one. Each channel got its OWN directory
+  (`drop/ask`, `drop/secrets`) so binding the one a step needs does not
+  hand it every other channel's archive, and the answer-context file
+  moved out of `drop/` into `context/` entirely.
+- **What may never be bound.** `bindSource` resolves symlinks and refuses
+  a source that IS or CONTAINS `/`, this engine's workspace, `$HOME`,
+  `$HOME/.maro` or `$HOME/.maro-go`; a descendant is the normal case and
+  is fine. Without it `--work <workspace>` would hand the orchestration
+  to the worker read-write and still record "container".
+- **An obligation is re-run where it was recorded** (`rerunWorld`):
+  a container-recorded command comes back `regression.Inconclusive` with
+  the reason instead of being re-run on the host, because that would be a
+  different experiment wearing the same name and its green would retire
+  an obligation nothing verified.
+- **The same wiring on every command that runs work**: `now`, `agenda`,
+  `runs resume`, `serve`, `experiment`, and `answer` passes the flags
+  through to the run it resumes — a resume that wired the lane
+  differently would run the rest of a required-container run on the host
+  (pattern 132). The wiring is called even when a command has NO
+  subprocess backend, so a policy nothing can keep is a typed error
+  before the journal is touched rather than an attempt quietly recorded
+  as `off`. And `--executor` with no value is an error: at the isolation
+  boundary a missing value must not resolve to the least safe lane.
+- **Proven on real docker**, not only in argv assertions:
+  `TestContainerReallyRunsTheCall` runs the wrapped call on this box
+  (gated on the real preflight, skipped elsewhere) and checks the three
+  things argv cannot tell you — the worker's write reaches the host at
+  the same path, the work dir is identity-mapped, and a secret named on
+  the command line arrives inside the container with its value never in
+  an argv.
+
+**Review (decree 2026-09-16):** two rounds, both codex
+gpt-5.6-sol at high effort, tree frozen while they ran.
+
+**r1** (Skeptic + Architect over the whole chunk) found 7 distinct HIGH
+and 8 MEDIUM. The two that mattered most were the same finding from both
+lenses: a timed-out call killed only the `docker run` CLIENT (verified
+with a live probe on this box — SIGKILL to the client left the container
+`Up`), and the executor was decided TWICE, so the committed lane and the
+lane that ran could disagree. Both were structural, not incidental: the
+first added `Launched.Stop`, the second made the committed venue ride the
+request. Two more were owner problems — `on` accepted a call that named no
+venue at all, and the policy lived on the driver, the process options AND
+the backend — fixed by deleting the other two owners. The tool-less
+narrowing moved from the fold to the wire DOOR, because the landscape call
+is attempt 0 and reaches no attempt's checks. The rest: the flags fail
+closed on a missing value, every command that can run work is wired (a
+policy nothing can keep is a typed error before the journal is touched),
+`{kind, image}` grew a digest and a network, the preflight checks the
+LOGIN and not just the volume, `--work` cannot bind a forbidden root, and
+the view stops claiming a container before any call has run. The `drop/`
+exposure was accepted in part (per-channel directories, answer context
+moved out) with the residue recorded.
+
+**r2** (one Skeptic, fix diff only) found 3 HIGH, 3 MEDIUM and 1 LOW, all
+verified and all fixed — and every one of them was a hole IN a fix, which
+is what a second round is for. The digest the fix added was recorded but
+never used: the launch still named the mutable TAG, so an image rebuilt
+between the preflight and the launch would run a world the record does not
+name — now the launch is by the resolved id, and a launcher asked to run a
+venue it does not have refuses before dispatch. The new kill path ran only
+when the call's own context had been cancelled, which is exactly the case
+the engine knows about: an independently killed client and a panic both
+left a container running behind a context nobody cancelled, and the drop
+file was ingested while the worker could still write — the stop now runs
+on every way out, before the channels are read, and a container that could
+not be ended downgrades the terminal to Partial rather than living only in
+a notice. `answer`'s own passthrough loop still dropped a trailing
+`--executor`: the round-1 defect surviving in the sibling parser. The
+forbidden-root list could not express "the secrets store", because that
+directory is a DESCENDANT of the forbidden `~/.maro` — a sealed-tree list
+now refuses anything at or inside it, and the roots fail closed when they
+cannot be resolved. The login probe was a container with no name, no label
+and no kill path; `test -s` passed on a directory (the reviewer ran it);
+and "every distinct image" only removed adjacent duplicates. **r3** (one Skeptic, the r2 fix diff only) found 2 HIGH and 2 MEDIUM, all
+verified and all fixed, and all four were the same lesson in four places:
+a check is only as good as the value it is given. The sealed-tree list
+could not protect a RELATIVE `MARO_SECRETS_DIR` — `filepath.Rel` refuses a
+mixed absolute/relative pair, so the containment test read "not contained"
+for the very store it was protecting; the roots are now resolved to
+absolute paths at the wiring edge, and a root that is still not absolute
+refuses the bind instead of allowing it. The "usable image id" check
+accepted any non-empty token, a TAG included, so the thing recorded as a
+digest and handed to `docker run` could be mutable after all; it now has
+to be `<algorithm>:<hex>`, and the login probe runs that pinned id too.
+The failed-stop path changed the terminal label but still let `AfterTools`
+read the worker's drop file — a container the engine could not end is a
+worker that can still rewrite the channel being ingested, so the ingest is
+now skipped and the reason says so. And the login probe's first-byte check
+passed on `{}` and on any unrelated JSON: it now asks, with python3 inside
+the same image, the question main asks — a `claudeAiOauth` object holding a
+non-empty refresh token — proved against the live volume before it shipped.
+Three rounds were budgeted and three were used; the stop rule ends it
+here.
+
+**Patterns**
+
+- **159. The container is a launcher, not a backend.** One framer, one
+  classifier, one capture reader; the lane difference is the argv. Main's
+  other arrangement cost 22 rounds on a forked reader, and every one of
+  them was about two code paths having to agree.
+- **160. Where a call ran is part of its exposure.** Not metadata, not a
+  log line: the same class of fact as the working directory and the tool
+  policy, committed with the invocation BEFORE dispatch, answered from
+  the same inputs as the dispatch itself. A decision made twice can
+  disagree; a decision recorded once cannot.
+- **161. A policy the fold enforces cannot degrade silently.** Main's
+  2026-09-12 incident was not a missing feature, it was a record with
+  nowhere to say what happened. Under `require` the fold refuses the
+  attempt's own records, so the failure mode is a REFUSED run, not a
+  quiet host execution.
+- **162. An obligation is re-run where it was recorded, or not at all.**
+  A probe that passed in a container and is re-run on the host is a
+  different experiment wearing the same name. Inconclusive with a reason
+  beats a green nothing verified.
+- **163. Narrowing is a fact to check, not a habit to trust.** Tool-less
+  calls run on the host because a verdict touches nothing — so the DOOR
+  refuses a tool-less call that names a container (pattern 169). A
+  narrowing that only lives in the dispatcher's head rots into a
+  surprise.
+- **164. A new lane carries everything the old one did, writes
+  included.** The worker READS its secrets and WRITES its question: a
+  lane that bound only the read paths would have taken the ask lane away
+  from a containerized worker without a single failing test. And a
+  single-file bind is not a bind — it detaches on the rename that every
+  careful writer does.
+- **165. Derive the surface from the calls, not from a second trail.**
+  The degrade is a property of what the attempt's invocations say; a
+  parallel event trail would be one more thing to keep honest, and (with
+  forks) one more shared mutable thing to race on.
+- **166. Cache the yes, re-probe the no — and never cache the liveness.**
+  An image's digest and a volume's login are facts about the box that a
+  successful probe settles; a FAILURE is exactly the thing an operator is
+  off fixing, so caching it would make "start docker and resume" a lie.
+  The daemon itself is neither: it can go away mid-run, so it is probed on
+  every call and a cached success never speaks for it.
+- **167. A setting is per attempt; a fact is per run.** The work dir
+  cannot change under a run because it is where the files ARE (§4.3).
+  The isolation policy can, because it is a decision about what to do
+  next — and each attempt is held to the one its own config records.
+- **168. A launcher that cannot end what it started has no timeout.**
+  Killing the client is not killing the work: the `docker run` process
+  dies and the container keeps going, holding the run's files and its
+  secrets. Every lane that can start something must hand back the way to
+  stop it, and the cancel path must run OUTSIDE the cancelled context.
+- **169. A rule true of every record belongs at the door, not in a
+  fold.** "A tool-less call is never containerized" was written as an
+  attempt policy check, which the landscape call — attempt 0 — walks
+  straight past. The door is the only place that sees everything.
+- **170. At a safety boundary, a missing value is an error, not a
+  default.** `--executor` with nothing after it resolved to the empty
+  policy, which is `off`: one operator typo and the run silently took the
+  least safe lane. Parse into (consumed, error) and refuse.
+- **171. One setting, one owner.** The policy lived on the driver, on the
+  process options AND on the backend; the recorded policy and the
+  executed one could disagree. The owner is the thing that ENFORCES it —
+  ask the backend, and delete the other two fields.
+- **172. Launch the world the record names.** A tag is a mutable name for
+  a world: an image rebuilt between the preflight and the launch runs
+  something the record does not describe. Resolve the reference once,
+  record the id, and hand the ID to the runtime — then the record and the
+  call are one world by construction, and there is nothing to keep in
+  agreement.
+- **173. Clean up on every way out, not on the way you expected.** The
+  first kill path ran only when the context had been cancelled — the
+  deadline and the operator's ^C, the two cases the engine already knew
+  about. An independently killed client and a panic both left a live
+  container behind a context nobody cancelled. Stop unconditionally, once,
+  under a context the cancellation cannot reach, BEFORE reading what the
+  worker wrote. And every container the engine starts is one it must be
+  able to end — the login probe included.
+- **174. A contains-rule is not a containment rule.** "Never bind a path
+  that IS or CONTAINS the workspace" has to allow descendants, because the
+  drop directory is one. The secrets store is a descendant too, and walked
+  straight through. A tree that must stay out needs its own list, and the
+  list must fail closed when it cannot be resolved.
+- **175. A predicate that passes on a directory proves nothing.** `test -s
+  .credentials.json` was the login check; it passes on a directory, on an
+  unreadable file, and on any non-empty garbage. Its replacement checked
+  the first byte, which passes on `{}` — the same mistake one notch
+  further in. State what the probe must prove, then ask for exactly that
+  SHAPE (here: the CLI's own credential object with a non-empty refresh
+  token, which is the question the other engine already asks in the same
+  image) — and say out loud what it still does not prove (this one does
+  not prove the session is unexpired).
+- **176. A protection you cannot evaluate is a protection you do not
+  have.** A relative root and an absolute bind source cannot be compared at
+  all: `filepath.Rel` refuses the pair, and the containment test quietly
+  answers "no". Resolve protection roots at the edge where the process's cwd
+  still means something, and when a root is still unresolvable, refuse the
+  operation rather than the protection.
+- **177. Do not read what a lost worker can still write.** A container the
+  engine could not end is a worker that may still rewrite the channel the
+  engine is about to ingest. Reading a derived secret out of a call the
+  engine has lost is worse than not reading one: skip the ingest, say so in
+  the record, and leave the file for a later call on a sane box.
+- **178. A reference that is not content-addressed is not a world.**
+  "Not empty and no quotes in it" accepts a tag, and a tag recorded as a
+  digest is the mutable reference the record was supposed to pin. Pin the
+  FORMAT of an identity, not merely its presence — and pin every sibling
+  that runs from it, the probes included.
