@@ -182,3 +182,151 @@ went past the text above:
   them; the PCD run's 11-dimension schema
   (`~/.maro/workspace/projects/saw-this-in-discord-and/`) is the input,
   reduced to crisp discriminative questions.
+
+## Open design: the judge delivers data, and the engine cannot revise its question (2026-09-18)
+
+**Status: NOT DECIDED.** This section records a design hole and the angles
+found so far. It is deliberately not a plan — Jeremy's framing (2026-09-18)
+is that it "needs more vetting/angles", and two people at the end of a merge
+is not enough vetting for a change this shaped.
+
+### The premise
+
+Jeremy, on what the step judge is for: *"let's not get caught in the trap
+that the validator should drive a decision; it's delivering data for
+something else to make a decision on what's next"* — the planner when
+something needs rethinking, the orchestrator when a call is needed. And the
+answer need not be binary: a step's result is *"a reveal of new map data —
+new opportunity (build a bridge), new discovery (there's a tower here), dead
+end (an empty field)"*. The naive output is yes/no; the valuable output is
+the "okay, what now" metadata alongside it.
+
+### Finding 1: the decision layer exists, and step judgment bypasses it
+
+`internal/verdict` is already the "judge contributes, something else
+decides" architecture: `Candidates{Verdicts, Observations}` -> `Commit` ->
+a `Resolution` carrying the rule that decided it, with standing ranks
+(self < judge < deterministic < operator), per-standing direction (a
+self-claim `may_demote` only), thresholds each carrying a registered why,
+and `could_not_observe` held distinct from `refuted`. Versioned
+`resolver/1`; every resolution says which version decided it.
+
+`verdict.Commit` is called **once in the engine** — at closure
+(`run/driver.go`). A step binds the judge's answer straight to the engine's
+action:
+
+    sd.Verdict, sd.Outcome = v.ID, StepOutcome(v.Outcome)
+
+So at the level that matters most, the validator *is* the decider. Routing
+step judgment through the resolver is the structural fix, and it reuses
+machinery already proven at closure. Until that happens, a richer judge
+vocabulary only makes a bigger switch statement in a worse place.
+
+### Finding 2: the wire already carries more than one question
+
+`judgment.Request.Questions` is `map[string]Question` plus an `Order`;
+`Ask1` is a convenience commented as "the shape every judge in this engine
+makes". N questions is one call and one round-trip, with a wire provider
+returning a distribution per question. Asking more is a caller change, not
+a seam change.
+
+### Finding 3: the engine can revise its answer, but not its question
+
+What adaptation exists today:
+
+| channel | trigger | granularity | initiated by |
+|---|---|---|---|
+| mid-run ask | executor writes `$MARO_ASK`, grounded by `run/ground.go` | pauses the run, asks the operator | the executor, about itself |
+| `question_bounce/1` | the grounding gate refuses the ask | **the step re-runs, problems carried into its context** | the engine |
+| step `blocked` | judge | kills the attempt | judge |
+| new attempt | attempt failed | re-plans from the top | engine |
+| closure | end of plan | resolver + observations | judge |
+
+Three things follow.
+
+**The only fine-grained adaptive channel runs on the lowest-standing
+signal.** The executor volunteering that it is stuck is `StandingSelf` —
+which this engine's own doctrine says may only demote. The judge, which
+holds the evidence and outranks it, has exactly one mid-run verb: kill the
+attempt. The grounding gate (2026-09-17, audit §4.4) invests real machinery
+in validating an executor-initiated question, which sharpens rather than
+softens the asymmetry: nothing at all validates, or even solicits, a
+*judge*-initiated "the plan's premise has shifted".
+
+**The plan language cannot express a branch.** A plan is an ordered list
+with `after:` prerequisite edges. There is no way to say "step 4 depends on
+what step 2 finds", so organic shift must come through replanning — and
+replanning only happens by discarding an attempt. `planPrompt` has no slot
+for a prior attempt; whatever reaches a re-plan about why the last one died
+arrives through the recall block or not at all.
+
+**Rework is all-or-nothing, which is probably why nothing reworks.**
+Discovering at step 2 that the plan is wrong leaves two options: kill the
+attempt (discard the work) or ride out steps 3..n knowing they are wrong.
+The cost of acting on the discovery is high enough that not acting is the
+default.
+
+### The test case: learning a language to draw a kanji
+
+Jeremy's standing example. The goal asks for a kanji; carrying out step 2
+reveals the real task is learning the language. Today:
+
+- the executor volunteers it -> ask, grounded, operator decides. The good
+  path, and it exists — but only if the executor chooses to self-report;
+- the executor quietly draws a mediocre kanji -> the judge is asked "is this
+  step done?", and the step *was* done as asked -> `done` -> the remaining
+  steps run on a plan everyone would now reject, and **the discovery is
+  never recorded, because nothing ever asks for it**;
+- the executor fails -> `blocked` -> the attempt dies -> re-plan, possibly
+  into the same plan.
+
+The silent middle case is the common one and the expensive one.
+
+There is one encouraging precedent: `question_bounce/1` already re-runs a
+step *within* an attempt with new context attached. The primitive Jeremy
+wants — revise and retry a step mid-plan, carrying why — is built, for
+exactly one narrow trigger. Generalising it is a smaller move than
+inventing it.
+
+### A first cut at the question set (for critique, not for building)
+
+Each question must name a consumer; a question with no consumer is
+decoration, the same discipline the defaults registry applies to flags.
+
+| question | vocabulary | consumer |
+|---|---|---|
+| completion | done / partial / not done / cannot tell | resolver -> step outcome |
+| grounding | corroborated / contradicted / unverifiable | resolver (evidence, not claim) |
+| obstacle | missing prerequisite / capability limit / environment / ambiguous ask / false premise | routes planner vs operator |
+| reframe | none / narrower / broader / different problem | **planner — no consumer today** |
+| residue | nothing / new prerequisite / new opportunity / dead end | **planner — no consumer today** |
+| scope | as asked / did less / did more | orchestrator (over-reach) |
+
+### What needs vetting before any of this is built
+
+1. **Record shape.** The resolver's inputs are typed: `Observation` has a
+   closed `CheckKind` vocabulary and `Verdict` a closed outcome set per
+   kind. A six-answer judgment does not drop into that as-is. Which answers
+   become observations, which become verdicts, and which need a new record
+   kind is the real design question underneath this one.
+2. **Consumers first.** `reframe: different problem` with no re-planner
+   attached is a label, not a capability. The order of work is arguably:
+   route step judgment through the resolver; give the planner a mid-attempt
+   revision channel (generalise the bounce); *then* enrich the vocabulary.
+3. **Intent runs once, at the front.** The engine asks "do I understand the
+   goal?" at the moment it knows least, and never again. The kanji case is
+   an intent revision arriving late, and there is no record kind for one.
+   Whether that belongs to the judge, the planner, or a new stage is open.
+4. **Fork members bury it deepest.** A parallel member that finds the
+   reframe is folded into a member list and judged on "were the sub-goals
+   answered" — two layers from anything that could act on it.
+5. **Cost and failure direction.** Every new question is more surface for a
+   judge to be confidently wrong on. The measured behaviour so far (private:
+   `~/.maro/workspace/judgment/`, numbers stay out of this repo by contract)
+   is that evidence in the state moves errors toward the safe direction, but
+   that was measured on a pass/fail vocabulary, not this one.
+6. **No corpus exists for this question.** The 14-case fixture is
+   claim-only pass/fail and its labels reward trusting an unverifiable
+   claim. A vocabulary built around "what happened, therefore what?" would
+   need a corpus labelled from records. That is the measurement that would
+   settle any of this.
