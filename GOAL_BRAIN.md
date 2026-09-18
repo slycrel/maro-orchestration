@@ -1347,6 +1347,31 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
 
 - **2026-09-16 (LoopsBench is directly relevant — Jeremy: "I think it's directly relevant to maro, and poe-codex agrees"; "Let's do 1 and 2 and lay the proper groundwork for 3 for later"):** the Dependency Planning Gap and the missing automated regression verification from Microsoft's LoopsBench (arXiv:2608.00267, analysed by run 0b0a8fb6) are Maro's gaps too — the planner computed a DAG and a ready-frontier that the sequential lane never consulted, and nothing re-ran what a step had already verified. Built the same day: `step_gate.py` (declared `[after:]` edges hard-gate the sequential lane; sequential-default edges soft unless `execution.gate_implicit_prerequisites`) and `regression_ledger.py` (passing test-runner commands harvested from DONE steps' transcripts, re-run at closure, a hard fail downgrades the verdict). Item 3 (PCD prerequisite field) is groundwork only: `scripts/prereq-census.py` measures 28.5% explicit edges on this box; `docs/PCD_PREREQUISITE_FIELD_DESIGN.md` stages planner-native first, PCD second, with falsifiers. Review under the new 2–3 round budget; "if we can manage to not rabbit hole on reviews I think we can move forwards much quicker."
 
+- **2026-09-18 (a real plan before more execution — Jeremy: "new plan is to
+  make a real plan before we execute. I'll have to think about it."):**
+  restates the 2026-08-28 instruction that had been lost for three weeks
+  ("the plan is the goal for the moment, then we commit to how to
+  implement the plan as phase 2… I think you're designed with action in
+  mind (2-3 prompts at most and then go). I want to fight that a
+  little"). The trigger was a session that spent 2026-09-17/18 building
+  the judgment layer — good work at the layer that happened to have code
+  in front of it — while both of Jeremy's standing examples of what is
+  wrong with the engine (the rabbit/Bugs Bunny answer, the kanji plan
+  that should have been revised mid-run) live at other layers. Read: no
+  new implementation arc starts until the plan exists; the queued first
+  moves are to mine `origin/go-port:GOAL_BRAIN_GOPORT.md` (525 lines,
+  orphaned, built to be the steering file) and `~/claude/fromWork/`
+  (three forwards-compatibility documents, never read into this work),
+  then put five open questions to Jeremy — the port's boundary, what
+  "completely implemented" means in modules, whether the proposed layer
+  boundaries are right, whether the goal brain returns as a separate
+  file, and what consumer could act on a reframe. Full seed, including
+  the layer map and the proposed "every piece of work names its layer"
+  rule, is `planning/reorient-2026-09-18.md` on branch `successor`. The
+  container-executor chunk that was already built, reviewed and
+  documented landed the same day (37f767ed); it was finished work, not a
+  new arc.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
