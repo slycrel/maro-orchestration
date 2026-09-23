@@ -190,14 +190,24 @@ func TestContainerWrapsTheSameCall(t *testing.T) {
 	}
 	argv, wd, env := lch.Argv, lch.Dir, lch.Env
 	line := strings.Join(argv, " ")
+	// a bind SOURCE is the resolved host path while its TARGET stays the path
+	// the record names; they differ wherever the temp dir sits behind a
+	// symlink (macOS: /var -> /private/var)
+	real := func(p string) string {
+		r, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
 	for _, want := range []string{
 		"docker run --rm -i --init --name " + NamePrefix,
 		"--user " + strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
 		"--label maro.owner_pid=" + strconv.Itoa(os.Getpid()),
-		"--mount type=bind,source=" + dir + ",target=" + dir,
-		"--mount type=bind,source=" + handoff + ",target=" + handoff + ",readonly",
+		"--mount type=bind,source=" + real(dir) + ",target=" + dir,
+		"--mount type=bind,source=" + real(handoff) + ",target=" + handoff + ",readonly",
 		// the ask file does not exist yet: its DIRECTORY is bound, writable
-		"--mount type=bind,source=" + dropDir + ",target=" + dropDir,
+		"--mount type=bind,source=" + real(dropDir) + ",target=" + dropDir,
 		"--mount type=volume,source=vol,target=/home/maro/.claude",
 		"-e HOME=/home/maro",
 		"--network none",
