@@ -1193,6 +1193,15 @@ func wireSecrets(sp *invoke.Subprocess, a *workspace.Announced, errw io.Writer) 
 		}
 		sp.Redact = inj.Values
 	}
+	// the CLI's own long-lived token rides every call's environment (host:
+	// inherited; container: invoke.Container.AuthEnv), so a tool can print
+	// it: redact it from what comes back like an injected value
+	if tok := os.Getenv(invoke.DefaultAuthEnv); tok != "" {
+		if sp.Redact == nil {
+			sp.Redact = map[string]string{}
+		}
+		sp.Redact[invoke.DefaultAuthEnv] = tok
+	}
 	return sec.FrameSuffix(inj.Names, file, drop)
 }
 

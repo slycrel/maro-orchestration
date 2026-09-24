@@ -449,6 +449,7 @@ func name(argv []string) string {
 // not have started and an operator who fixes docker mid-run is picked up by
 // the next call.
 func TestContainerPreflightNamesWhatToFix(t *testing.T) {
+	t.Setenv(DefaultAuthEnv, "") // the volume login is the gate under test, not a token
 	for _, c := range []struct {
 		fail string
 		want string
@@ -579,6 +580,7 @@ func TestContainerPreflightNamesWhatToFix(t *testing.T) {
 // Two calls preflighting at once is not a data race and does not run the
 // probe sequence twice (run with -race).
 func TestContainerPreflightIsSerialized(t *testing.T) {
+	t.Setenv(DefaultAuthEnv, "") // the volume login is the gate under test, not a token
 	var mu sync.Mutex
 	n := 0
 	ct := NewContainer("img:1", "vol", "", "", "")
@@ -897,4 +899,74 @@ func TestTheContainerIsEndedOnEveryWayOut(t *testing.T) {
 			t.Fatalf("the operator was told about the normal case: %v", notes)
 		}
 	})
+}
+
+// A long-lived CLI token in this process's environment IS the container
+// login: the call gets it by NAME (the value rides the docker client's own
+// env, never an argv), and the preflight stops gating on the volume's
+// refresh-token session — the thing that expired under every container run
+// on 08-12, 09-12 and 09-18. The volume is still mounted: it is the CLI's
+// state directory either way.
+func TestContainerTokenIsTheLogin(t *testing.T) {
+	const tok = "sk-ant-oat01-not-a-real-token"
+	t.Setenv(DefaultAuthEnv, tok)
+	var seen []string
+	c := NewContainer("img:1", "vol", "", "", "none")
+	c.Exec = func(_ context.Context, argv []string) ([]byte, error) {
+		line := strings.Join(argv, " ")
+		seen = append(seen, line)
+		if strings.Contains(line, "volume inspect") || strings.Contains(line, "credentials.json") {
+			return nil, errors.New("no volume, no login in it")
+		}
+		return []byte(testID), nil
+	}
+	if err := c.Preflight(ctxBg); err != nil {
+		t.Fatalf("a token in hand still gated on the volume: %v", err)
+	}
+	for _, line := range seen {
+		if strings.Contains(line, "volume inspect") || strings.Contains(line, "credentials.json") {
+			t.Fatalf("the volume login was probed with a token in hand: %q", line)
+		}
+	}
+	dir := t.TempDir()
+	lch, err := c.Wrap(Launch{Bin: "claude", Args: []string{"-p"}, Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.Join(lch.Argv, " ")
+	if !strings.Contains(line, " -e "+DefaultAuthEnv+" ") {
+		t.Fatalf("the token's name is not passed: %q", line)
+	}
+	if strings.Contains(line, tok) {
+		t.Fatal("the token VALUE reached the argv")
+	}
+	if !containsLine(lch.Env, DefaultAuthEnv+"="+tok) {
+		t.Fatal("the token value is not in the docker client's env")
+	}
+	if !strings.Contains(line, "--mount type=volume,source=vol,target=/home/maro/.claude") {
+		t.Fatalf("the CLI's state volume is gone: %q", line)
+	}
+}
+
+// No token: nothing named, and the volume login is probed exactly as before.
+func TestContainerNoTokenProbesTheVolume(t *testing.T) {
+	t.Setenv(DefaultAuthEnv, "")
+	var probed bool
+	c := NewContainer("img:1", "vol", "", "", "none")
+	c.Exec = func(_ context.Context, argv []string) ([]byte, error) {
+		if strings.Contains(strings.Join(argv, " "), "credentials.json") {
+			probed = true
+		}
+		return []byte(testID), nil
+	}
+	if err := c.Preflight(ctxBg); err != nil || !probed {
+		t.Fatalf("no token, and the volume login was not probed: %v %v", err, probed)
+	}
+	lch, err := c.Wrap(Launch{Bin: "claude", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(lch.Argv, " "), DefaultAuthEnv) {
+		t.Fatalf("an absent token was named: %q", lch.Argv)
+	}
 }

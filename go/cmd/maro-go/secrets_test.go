@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/slycrel/maro-orchestration/go/internal/invoke"
 	"github.com/slycrel/maro-orchestration/go/internal/secrets"
 	"github.com/slycrel/maro-orchestration/go/internal/workspace"
 )
@@ -157,5 +158,28 @@ func TestCLINowInjectsAndIngestsSecrets(t *testing.T) {
 	})
 	if len(left) != 0 {
 		t.Fatalf("drop or hand-off file survived: %v", left)
+	}
+}
+
+// The CLI's own long-lived token rides every call's environment, so a tool
+// can print it: it is redacted from what comes back even with no secrets
+// store on this machine at all.
+func TestCLINowRedactsTheCLIToken(t *testing.T) {
+	const tok = "sk-ant-oat01-not-a-real-token"
+	bin := t.TempDir()
+	fake := "#!/bin/sh\ncat >/dev/null\nprintf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"tok=%s\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}\\n' \"$" + invoke.DefaultAuthEnv + "\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(secrets.EnvDir, t.TempDir()) // no store here
+	t.Setenv(workspace.EnvOverride, filepath.Join(t.TempDir(), "ws"))
+	t.Setenv(invoke.DefaultAuthEnv, tok)
+	var out, errw bytes.Buffer
+	if code := run([]string{"now", "--backend", "subprocess", "--fresh", "print your token"}, &out, &errw); code != 0 {
+		t.Fatalf("now exit %d: %s %s", code, out.String(), errw.String())
+	}
+	if strings.Contains(out.String(), tok) || !strings.Contains(out.String(), "tok=[REDACTED:"+invoke.DefaultAuthEnv+"]") {
+		t.Fatalf("the CLI token was not redacted:\n%s", out.String())
 	}
 }

@@ -258,6 +258,17 @@ type Container struct {
 	// directory INSIDE Home, not Home itself — a volume over the whole home
 	// would shadow everything else the image put there.
 	AuthMount string
+	// AuthEnv names the variable carrying a long-lived CLI token
+	// (`claude setup-token`). When THIS process's environment holds it, the
+	// call gets it the way it gets a secret — the name on the command line,
+	// the value in the docker client's environment — and the volume's
+	// login stops being the gate: a token outlives the refresh-token
+	// session the volume holds, which is what expired under every
+	// container run on 2026-08-12, 09-12 and 09-18. The worker can read
+	// the token either way (the volume's credentials file is mounted into
+	// it too), so the exposure is the same; the value is redacted from what
+	// comes back like any injected secret.
+	AuthEnv string
 	// Home is HOME inside the container. Fixed, not the invoking user's
 	// home, so the volume mounts at a known path whatever uid the call
 	// runs as.
@@ -306,6 +317,7 @@ type Container struct {
 const (
 	DefaultExecutorImage = "maro-executor:2.1.210-r3"
 	DefaultAuthVolume    = "maro-claude-auth"
+	DefaultAuthEnv       = "CLAUDE_CODE_OAUTH_TOKEN"
 	DefaultContainerHome = "/home/maro"
 	DefaultAuthMount     = DefaultContainerHome + "/.claude"
 	DefaultExecutorNet   = "bridge"
@@ -316,7 +328,7 @@ const (
 
 // NewContainer is the launcher with the defaults filled in.
 func NewContainer(image, volume, mount, home, network string, forbidden ...string) *Container {
-	c := &Container{Image: image, AuthVolume: volume, AuthMount: mount, Home: home, Network: network, Docker: "docker", Forbidden: forbidden}
+	c := &Container{Image: image, AuthVolume: volume, AuthMount: mount, Home: home, Network: network, AuthEnv: DefaultAuthEnv, Docker: "docker", Forbidden: forbidden}
 	if c.Image == "" {
 		c.Image = DefaultExecutorImage
 	}
@@ -385,6 +397,11 @@ func (c *Container) owner() int {
 		return c.Owner
 	}
 	return os.Getpid()
+}
+
+// authToken reports whether this process holds the CLI token AuthEnv names.
+func (c *Container) authToken() bool {
+	return c.AuthEnv != "" && os.Getenv(c.AuthEnv) != ""
 }
 
 func (c *Container) docker() string {
@@ -466,6 +483,9 @@ func (c *Container) Wrap(l Launch) (Launched, error) {
 	// docker copies each named variable from its own client env, so no
 	// secret value is ever visible in a host process listing.
 	env := os.Environ()
+	if c.authToken() {
+		argv = append(argv, "-e", c.AuthEnv) // the value is already in env
+	}
 	for _, kv := range l.Env {
 		name := kv
 		if i := strings.IndexByte(kv, '='); i >= 0 {
@@ -639,7 +659,9 @@ func (c *Container) Preflight(ctx context.Context) error {
 	if !isImageID(digest) {
 		return fmt.Errorf("%w: the docker daemon gave no usable image id for %s (%q): check the daemon and resume", ErrExecutorUnavailable, c.Image, truncateRef(digest))
 	}
-	if c.AuthVolume != "" {
+	// A token in hand is the login: the volume is only the CLI's state
+	// directory then, and docker creates a missing one on first use.
+	if c.AuthVolume != "" && !c.authToken() {
 		vctx, vcancel := context.WithTimeout(ctx, probeTimeout)
 		_, verr := c.run(vctx, []string{c.docker(), "volume", "inspect", c.AuthVolume})
 		vcancel()
