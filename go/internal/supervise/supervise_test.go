@@ -163,6 +163,10 @@ func TestStallIsReportedNotEnforced(t *testing.T) {
 	s.Register(lane)
 	s.Start(context.Background())
 	waitFor(t, "stall", func() bool { return len(s.Health()) == 1 && strings.Contains(s.Health()[0], "stalled") })
+	// the stall flips in memory under the lock and its record is written
+	// after unlock: wait on the journal, not the gauge (the same load flake
+	// as below, seen on the M6 2026-09-23)
+	waitFor(t, "stall record", func() bool { return len(events(t, j, "slow")) >= 2 })
 	if got := events(t, j, "slow"); strings.Join(got, " ") != "started stalled" {
 		t.Fatalf("events: %v", got)
 	}
