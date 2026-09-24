@@ -70,7 +70,7 @@ func fixture(t *testing.T, values map[string]string, policy string) *Store {
 	s.Lookup = func(string) (string, error) { return "/fake/sops", nil }
 	s.Exec = fakeSops(t)
 	var lines []string
-	for _, k := range []string{"MARO_SECRETS_STORE", "YAHOO_USER", "YAHOO_APP_PASSWORD", "NVIDIA_API_KEY"} {
+	for _, k := range []string{"MARO_SECRETS_STORE", "YAHOO_USER", "YAHOO_APP_PASSWORD", "NVIDIA_API_KEY", CLIAuthTokenName} {
 		if v, ok := values[k]; ok {
 			lines = append(lines, k+"=ENC[FAKE:"+v+"]")
 		}
@@ -253,6 +253,23 @@ func TestPresenceTellsWhatExistsAndWhatIsInjected(t *testing.T) {
 	}
 	if New(t.TempDir()).FrameSuffix(nil, "", "") != "" {
 		t.Fatal("no store ⇒ empty suffix")
+	}
+}
+
+// CLIAuthTokenName (CLAUDE_CODE_OAUTH_TOKEN) is a name in the store like
+// any other, but it is the CLI's own login — it rides into every
+// containerized call's env via a separate mechanism (invoke's AuthEnv),
+// not the policy-gated injected set passed here. Presence must never
+// call it "not injected", which would tell the worker to look for a
+// credential in the wrong place.
+func TestPresenceOmitsTheCLILoginToken(t *testing.T) {
+	s := fixture(t, map[string]string{"YAHOO_USER": "u", CLIAuthTokenName: "sk-ant-oat-secret"}, "YAHOO_*\n")
+	p := s.Presence(nil, "", "")
+	if strings.Contains(p, CLIAuthTokenName) {
+		t.Fatalf("presence names the CLI login token:\n%s", p)
+	}
+	if strings.Contains(p, "sk-ant-oat-secret") {
+		t.Fatal("a value leaked into the presence block")
 	}
 }
 

@@ -58,6 +58,15 @@ const (
 	OriginOperator = "operator"
 	OriginMaro     = "maro"
 
+	// CLIAuthTokenName is the CLI's own long-lived login token — same name
+	// as invoke.DefaultAuthEnv, kept as a local constant (not an import) so
+	// this package doesn't take on an internal/invoke dependency for one
+	// string. It is a name in the store like any other, but it is not a
+	// credential for the worker's use and it already rides into every
+	// containerized call's env by a separate mechanism, so Presence below
+	// omits it entirely rather than calling it "not injected".
+	CLIAuthTokenName = "CLAUDE_CODE_OAUTH_TOKEN"
+
 	exitNoKey = 128 // sops: no master key could decrypt the data key
 )
 
@@ -451,8 +460,19 @@ func Describe(name string, meta map[string]Meta) string {
 // credential at.
 // file, when set, is the hand-off path the injected values travel in
 // (the env wording is used when it is empty — the no-scratch fallback).
+//
+// CLIAuthTokenName is never listed here even when it is a name in the
+// store — it is the CLI's own login, not a credential for the worker's
+// use, and it already rides into every containerized call's env by a
+// separate mechanism (invoke's AuthEnv), so calling it "not injected"
+// would be misleading.
 func (s *Store) Presence(injected []string, file, drop string) string {
-	known := s.Names()
+	var known []string
+	for _, n := range s.Names() {
+		if n != CLIAuthTokenName {
+			known = append(known, n)
+		}
+	}
 	if len(known) == 0 {
 		return ""
 	}
