@@ -310,8 +310,8 @@ def run_doctor() -> bool:
             # a known-expired session showed four green rows here. File
             # read only; "unknown" is named as such, not rendered as health.
             try:
-                from container_exec import auth_liveness_state, auth_liveness_verdict
-                _lv, _ld = auth_liveness_verdict(auth_liveness_state())
+                from container_exec import container_auth_verdict
+                _lv, _ld = container_auth_verdict()
             except Exception as _lexc:
                 _lv, _ld = "unknown", f"liveness record unreadable: {str(_lexc)[:60]}"
             if _lv == "ok":

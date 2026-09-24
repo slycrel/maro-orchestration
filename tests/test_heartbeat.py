@@ -304,6 +304,28 @@ def test_nonverbose_heartbeat_surfaces_the_expiry_verdict(monkeypatch, tmp_path,
         assert report.health_status == "healthy", "no per-tick Telegram alert for a warning"
 
 
+def test_heartbeat_reports_the_token_age_in_token_mode(monkeypatch, tmp_path):
+    """A long-lived CLI token is the container login (2026-09-24): the
+    volume's session is not probed, and the token's own age verdict is what
+    the heartbeat surfaces."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import container_exec as ce
+    import system_health as sh
+    monkeypatch.setattr(ce, "refresh_auth_liveness", lambda: None)
+    monkeypatch.setattr(ce, "container_mode", lambda: "require")
+    monkeypatch.setattr(ce, "cli_auth_token", lambda: "tok")
+    monkeypatch.setattr(ce, "token_auth_verdict", lambda: ("warn", "token set 2025-10-01 (358 d ago)"))
+    monkeypatch.setattr(sh, "run_health_probes", lambda **kw: {})
+    with patch("heartbeat.check_system_health", return_value=_make_mock_health()), \
+         patch("heartbeat.check_all_projects", return_value=[]), \
+         patch("heartbeat.write_heartbeat_state"), \
+         patch("heartbeat._log_heartbeat"), \
+         patch("heartbeat._is_interactive_session_active", return_value=True):
+        report = run_heartbeat(dry_run=False, verbose=False, escalate=False)
+    assert report.checks["container_auth"] == "warn: token set 2025-10-01 (358 d ago)"
+
+
 def test_heartbeat_only_narrates_warning_recovery_warning(monkeypatch, tmp_path):
     """Review round 6: through the real health state machine — a heartbeat-
     only box (no goal-run finalization) must narrate SILENT on the warning,

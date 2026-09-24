@@ -518,6 +518,34 @@ class TestExecutorSeams:
         assert "-e YAHOO_USER" in joined and "YAHOO_USER=u" not in joined
         assert captured["env"]["YAHOO_USER"] == "u"
 
+    def test_container_lane_passes_the_cli_token_bare(self, fake_tools, monkeypatch, tmp_path):
+        """The long-lived CLI token rides the same bare `-e NAME` path as
+        the keys (so it is also in _secret_env, which is what the captured
+        output is scrubbed of) — resolved from the store when the process
+        env does not carry it, as on the live box."""
+        import llm
+        import container_exec as ce
+        _seed(fake_tools, {ce.AUTH_TOKEN_ENV: "sk-ant-oat01-fake"})
+        ss.load()   # warm the decrypt cache: Popen is faked below
+        captured = {}
+
+        def _fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["env"] = kwargs.get("env")
+            return _FakeProc()
+        monkeypatch.setattr("subprocess.Popen", _fake_popen)
+        monkeypatch.setattr(ce, "hosted_free_container_env", lambda: {})
+        monkeypatch.setattr(ce, "build_mount_map", lambda *a, **k: [])
+        monkeypatch.setattr(ce, "introspection_provision", lambda: None)
+        monkeypatch.setattr(ce, "attachment_ro_mounts", lambda: [])
+        monkeypatch.setattr(ce, "run_scratch_dir", lambda: None)
+        monkeypatch.setattr(ce, "kill_container", lambda name: None)
+        llm._run_subprocess_safe(["/opt/bin/notclaude", "-p", "x"], timeout=5, cwd=str(tmp_path),
+                                 container_name="maro-t", executor_step=True)
+        joined = " ".join(captured["cmd"])
+        assert f"-e {ce.AUTH_TOKEN_ENV}" in joined and "sk-ant-oat01-fake" not in joined
+        assert captured["env"][ce.AUTH_TOKEN_ENV] == "sk-ant-oat01-fake"
+
     def test_execute_frame_carries_the_presence_block_per_lane(self, fake_tools, monkeypatch):
         import container_exec as ce
         import step_exec

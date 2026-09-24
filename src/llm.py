@@ -1619,7 +1619,10 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         # file they came from) and in the container worker's env (the
         # decree's accepted exposure); _read_captured scrubs them from
         # captured output so they never persist in transcripts.
-        _secret_env = {**_ce.hosted_free_container_env(), **_store_env}
+        # The long-lived CLI token (container_exec.cli_auth_token) is the
+        # container's login when one resolves: same bare -e + client-env +
+        # scrub path as the keys, so it never reaches argv or transcripts.
+        _secret_env = {**_ce.hosted_free_container_env(), **_ce.container_auth_env(), **_store_env}
         if _drop_host and _scratch:
             # The scratch dir IS the container's /tmp, so the drop file the
             # worker writes at this path lands at _drop_host on the host.

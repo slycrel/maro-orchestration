@@ -201,7 +201,7 @@ def image_bakes_verbs() -> bool:
 # Docker probes — thin, mockable subprocess wrappers
 # ---------------------------------------------------------------------------
 
-def _run(cmd: list[str], timeout: int) -> Tuple[bool, str]:
+def _run(cmd: list[str], timeout: int, env: Optional[dict] = None) -> Tuple[bool, str]:
     """Run a docker command, returning (ok, detail).
 
     Maps the two ways docker can be "not present" — binary missing
@@ -210,7 +210,8 @@ def _run(cmd: list[str], timeout: int) -> Tuple[bool, str]:
     the caller can report *why* (e.g. "Cannot connect to the Docker daemon").
     """
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              env=env)
     except FileNotFoundError:
         return False, "docker binary not found on PATH"
     except subprocess.TimeoutExpired:
@@ -246,13 +247,115 @@ def image_probe(image: str | None = None) -> Tuple[bool, str]:
     return False, f"{img} not built — run `maro-bootstrap container-setup` for the build command"
 
 
+# ---------------------------------------------------------------------------
+# Long-lived CLI token (2026-09-24, Jeremy): `claude setup-token` mints a
+# ~1-year OAuth token the CLI reads from CLAUDE_CODE_OAUTH_TOKEN, and it
+# takes precedence over the volume's refresh-token session (proven live:
+# the expired maro-claude-auth volume + the token answers; without the
+# token the same volume fails "OAuth session expired"). That session is
+# what expired under every container run (08-12, 09-12, 09-18). When a
+# token resolves, it IS the container login: it rides the docker client's
+# env as a bare `-e NAME` (llm._run_subprocess_safe), captured output is
+# scrubbed of it, the breaker's self-clear keys on a token change instead
+# of a volume re-seed, and the health verdict reports the token's age
+# instead of the volume's expiry. The volume stays mounted as the CLI's
+# state directory. Exposure is unchanged: the worker could already read
+# the volume's credentials file. Same seam as the Go engine
+# (invoke.Container.AuthEnv).
+# ---------------------------------------------------------------------------
+
+AUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+# setup-token lives ~1 year; warn in the last month.
+AUTH_TOKEN_WARN_AGE_DAYS = 335.0
+
+
+def cli_auth_token() -> Optional[str]:
+    """The long-lived CLI token: this process's env, else the secrets store
+    (the live runtime's env does not carry it). None when neither holds
+    one. Never raises."""
+    v = (os.environ.get(AUTH_TOKEN_ENV) or "").strip()
+    if v:
+        return v
+    try:
+        import secrets_store
+        if secrets_store.store_present():
+            v = str(secrets_store.load().get(AUTH_TOKEN_ENV) or "").strip()
+            if v:
+                return v
+    except Exception:
+        log.debug("cli token lookup in the secrets store failed", exc_info=True)
+    return None
+
+
+def container_auth_env() -> dict:
+    """{AUTH_TOKEN_ENV: token} for the docker CLIENT's env, or {}."""
+    tok = cli_auth_token()
+    return {AUTH_TOKEN_ENV: tok} if tok else {}
+
+
+def _auth_source(token: Optional[str] = None) -> str:
+    """Which login the container lane is using: `token:<sha256 prefix>` or
+    `volume`. Recorded on a breaker trip so the recheck can tell "the login
+    changed" from "the same login is still dead"; a prefix of the digest,
+    never the token."""
+    import hashlib
+    tok = cli_auth_token() if token is None else token
+    if tok:
+        return "token:" + hashlib.sha256(tok.encode("utf-8")).hexdigest()[:12]
+    return "volume"
+
+
+def token_auth_verdict(*, now: Optional[float] = None) -> Tuple[str, str]:
+    """('ok' | 'warn', detail) for a token login. Its age is the store's
+    record of when the value was set, and only when the store holds the
+    same token this process resolved; otherwise the age is unknown (ok —
+    a token has no refresh schedule to fall behind)."""
+    now = time.time() if now is None else now
+    tok = cli_auth_token()
+    base = f"long-lived CLI token ({AUTH_TOKEN_ENV}); the {AUTH_VOLUME} session is not the login"
+    try:
+        import secrets_store
+        from datetime import datetime, timezone
+        if not tok or secrets_store.load().get(AUTH_TOKEN_ENV) != tok:
+            return "ok", f"{base}; age unknown (not the store's value)"
+        rec = secrets_store.read_meta().get(AUTH_TOKEN_ENV) or {}
+        stamp = rec.get("updated") or rec.get("created")
+        set_at = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        if set_at.tzinfo is None:
+            set_at = set_at.replace(tzinfo=timezone.utc)
+    except Exception:
+        return "ok", f"{base}; age unknown (no store record)"
+    days = (now - set_at.timestamp()) / 86400.0
+    when = set_at.strftime("%Y-%m-%d")
+    if days >= AUTH_TOKEN_WARN_AGE_DAYS:
+        return "warn", (f"{base}; set {when} ({days:.0f} d ago) — setup-token lasts "
+                        f"~1 year: mint a new one (`claude setup-token`) and "
+                        f"`maro secrets set {AUTH_TOKEN_ENV} --stdin`")
+    return "ok", f"{base}; set {when} ({days:.0f} d ago, ~1-year lifetime)"
+
+
+def container_auth_verdict(*, now: Optional[float] = None) -> Tuple[str, str]:
+    """The container login's health: the token's when one resolves, else
+    the volume session's recorded expiry (auth_liveness_verdict). Reads
+    files only — no docker (probe contract)."""
+    if cli_auth_token():
+        return token_auth_verdict(now=now)
+    if now is None:
+        return auth_liveness_verdict(auth_liveness_state())
+    return auth_liveness_verdict(auth_liveness_state(), now=now)
+
+
 def auth_volume_probe() -> Tuple[bool, str]:
     """Does the dedicated auth volume exist? Returns (ok, detail).
 
     Presence of the volume is the cheap, no-token signal that
     `container-setup`'s login step was run. It does NOT prove the session is
     still valid — that's what `login_probe` (token-spending) is for.
+    With a long-lived CLI token the volume is only the CLI's state
+    directory, and docker creates a missing one on first use.
     """
+    if cli_auth_token():
+        return True, f"CLI token is the login ({AUTH_TOKEN_ENV}); volume = CLI state only"
     ok, _ = _run(["docker", "volume", "inspect", AUTH_VOLUME], _PROBE_TIMEOUT_S)
     if ok:
         return True, f"volume {AUTH_VOLUME} present"
@@ -285,17 +388,20 @@ def login_probe(image: str | None = None) -> Tuple[bool, str]:
     network, so callers gate this behind doctor's `--live`, never the sweep.
     """
     img = image or container_image()
+    auth_env = container_auth_env()
     cmd = [
         "docker", "run", "--rm", *_user_args(),
         "-e", f"HOME={CONTAINER_HOME}",
+        *(["-e", AUTH_TOKEN_ENV] if auth_env else []),
         "--mount", f"type=volume,source={AUTH_VOLUME},target={AUTH_MOUNT}",
         "--network", str(get("executor.container_network", DEFAULT_NETWORK) or DEFAULT_NETWORK),
         img,
         "claude", "-p", "ok", "--tools", "",
     ]
-    ok, detail = _run(cmd, _LOGIN_TIMEOUT_S)
+    ok, detail = _run(cmd, _LOGIN_TIMEOUT_S,
+                      env={**os.environ, **auth_env} if auth_env else None)
     if ok:
-        return True, "container login ok"
+        return True, "container login ok" + (" (CLI token)" if auth_env else "")
     return False, f"container login failed — run the login step; ({detail[:80]})"
 
 
@@ -777,6 +883,7 @@ def _trip_auth_breaker(reason: str) -> Optional[dict]:
             "reason": reason,
             "last_recheck": time.time(),
             "notified": False,
+            "auth_source": _auth_source(),
         }
         atomic_write(path, json.dumps(state, sort_keys=True) + "\n")
         return state
@@ -921,6 +1028,7 @@ def note_container_failure(detail: str) -> None:
                 "reason": reason,
                 "last_recheck": time.time(),
                 "notified": False,
+                "auth_source": _auth_source(),
             }
             log.error("container auth breaker could not be persisted — "
                       "degrading process-locally only", exc_info=True)
@@ -1023,8 +1131,23 @@ def auth_breaker_blocks() -> Optional[str]:
             tripped_at = float(state.get("tripped_at", 0.0))
         except (TypeError, ValueError):
             last, tripped_at = 0.0, 0.0
+        # The login changed since the trip (a token now, or a different
+        # one): that IS the re-seed, and it costs no docker call, so it is
+        # checked every time. A trip recorded before this field existed was
+        # a volume-session trip. Under the SAME token a volume re-seed
+        # changes nothing (the token takes precedence), so only a new token
+        # clears it.
+        source = _auth_source()
+        token_mode = source.startswith("token:")
+        if token_mode and source != str(state.get("auth_source") or "volume"):
+            _clear_auth_breaker_if(tripped_at, "auth changed since the trip: a CLI token is the login")
+            _MEM_AUTH_BREAKER = None
+            return None
         if time.time() - last >= _AUTH_RECHECK_TTL_S:
-            ok, detail = _reseed_probe(tripped_at)
+            if token_mode:
+                ok, detail = False, "the CLI token that tripped the breaker is unchanged"
+            else:
+                ok, detail = _reseed_probe(tripped_at)
             if ok:
                 _clear_auth_breaker_if(tripped_at, detail)
                 _MEM_AUTH_BREAKER = None
@@ -1232,7 +1355,9 @@ def refresh_auth_liveness(*, max_age_s: float = _AUTH_LIVENESS_TTL_S,
     import json
     from file_lock import locked_write, atomic_write, FileLockTimeout
     try:
-        if container_mode() == "off":
+        if container_mode() == "off" or cli_auth_token():
+            # a token login: the volume's session is not the login, so its
+            # expiry is not worth a docker run (container_auth_verdict)
             return None
         path = _auth_liveness_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1403,13 +1528,21 @@ def _resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
             return container_name(_current_loop_id(), next(_seq_counter))
         reason = f"container auth breaker tripped ({auth_block[:120]})"
         if mode == "require":
+            if cli_auth_token():
+                fix = (f"mint a new CLI token (`claude setup-token`) and "
+                       f"`maro secrets set {AUTH_TOKEN_ENV} --stdin`; the breaker "
+                       "clears itself on the next executor call after the token "
+                       "changes and the paused run can resume")
+            else:
+                fix = (f"re-seed the {AUTH_VOLUME} volume (interactive `claude "
+                       "/login` inside the executor image; `maro-bootstrap "
+                       "container-setup` prints the command), or store a "
+                       f"long-lived {AUTH_TOKEN_ENV}; the breaker clears itself "
+                       "on the next executor call after the re-seed and the "
+                       "paused run can resume")
             raise ContainerAuthExpired(
                 "executor.container=require but the container lane is "
-                f"unavailable: {reason} — re-seed the {AUTH_VOLUME} volume "
-                "(interactive `claude /login` inside the executor image; "
-                "`maro-bootstrap container-setup` prints the command); the "
-                "breaker clears itself on the next executor call after the "
-                "re-seed and the paused run can resume"
+                f"unavailable: {reason} — {fix}"
             )
     if mode == "require":
         raise ContainerUnavailable(

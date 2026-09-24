@@ -132,6 +132,7 @@ def pytest_sessionfinish(session, exitstatus):
 # adapter explicitly set these; everything else gets isolation for free.
 _API_KEY_VARS = (
     "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
     "GROQ_API_KEY",

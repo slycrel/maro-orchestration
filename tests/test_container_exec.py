@@ -2016,3 +2016,108 @@ class TestRoundTwoHardening:
         finally:
             release.set(); t.join(5)
         assert ce.refresh_auth_liveness(force=True)["ok"] is True and calls["n"] == 1
+
+
+class TestCliTokenAuth:
+    """Long-lived CLI token (2026-09-24): `claude setup-token`'s token is
+    the container login when one resolves — env first, then the store —
+    so the lane stops dying with the volume's refresh-token session."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path, monkeypatch):
+        self.path = tmp_path / "container_auth_breaker.json"
+        monkeypatch.setattr(ce, "_auth_breaker_path", lambda: self.path)
+        monkeypatch.setattr(ce, "_auth_notify_path", lambda: tmp_path / "notified.json")
+        monkeypatch.setattr(ce, "_MEM_AUTH_BREAKER", None)
+        monkeypatch.delenv(ce.AUTH_TOKEN_ENV, raising=False)
+        import notify
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "require" if k == "executor.container" else d)
+
+    def _age_state(self):
+        import json
+        st = json.loads(self.path.read_text())
+        st["last_recheck"] = 0.0
+        self.path.write_text(json.dumps(st))
+
+    def test_token_resolves_env_then_store_then_none(self, monkeypatch):
+        import secrets_store as ss
+        monkeypatch.setattr(ss, "store_present", lambda: True)
+        monkeypatch.setattr(ss, "load", lambda **k: {ce.AUTH_TOKEN_ENV: "tok-store"})
+        assert ce.cli_auth_token() == "tok-store"
+        monkeypatch.setenv(ce.AUTH_TOKEN_ENV, "tok-env")
+        assert ce.cli_auth_token() == "tok-env"
+        assert ce.container_auth_env() == {ce.AUTH_TOKEN_ENV: "tok-env"}
+        monkeypatch.delenv(ce.AUTH_TOKEN_ENV)
+        monkeypatch.setattr(ss, "load", lambda **k: {})
+        assert ce.cli_auth_token() is None and ce.container_auth_env() == {}
+
+    def test_a_volume_trip_clears_when_a_token_arrives(self, monkeypatch):
+        ce.note_container_failure("OAuth session expired and could not be refreshed")
+        assert ce.auth_breaker_snapshot()["auth_source"] == "volume"
+        monkeypatch.setattr(ce, "_reseed_probe", lambda t: (False, "still wiped"))
+        assert ce.auth_breaker_blocks() is not None
+        # no recheck window elapsed and no docker probe: the login changed
+        monkeypatch.setattr(ce, "_reseed_probe", lambda t: pytest.fail("volume probed"))
+        monkeypatch.setenv(ce.AUTH_TOKEN_ENV, "tok-A")
+        assert ce.auth_breaker_blocks() is None
+        assert ce.auth_breaker_snapshot() is None
+
+    def test_a_token_trip_holds_until_the_token_changes(self, monkeypatch):
+        monkeypatch.setenv(ce.AUTH_TOKEN_ENV, "tok-A")
+        ce.note_container_failure("OAuth token revoked")
+        src = ce.auth_breaker_snapshot()["auth_source"]
+        assert src.startswith("token:") and "tok-A" not in src
+        # a volume re-seed changes nothing under the same token
+        monkeypatch.setattr(ce, "_reseed_probe", lambda t: (True, "auth volume re-seeded"))
+        self._age_state()
+        assert ce.auth_breaker_blocks() is not None
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "up"))
+        with pytest.raises(ce.ContainerAuthExpired, match="setup-token"):
+            ce.resolve_container_run(no_tools=False, executor=True)
+        monkeypatch.setenv(ce.AUTH_TOKEN_ENV, "tok-B")
+        assert ce.auth_breaker_blocks() is None
+
+    def test_token_verdict_ages_from_the_store_record(self, monkeypatch):
+        import secrets_store as ss
+        from datetime import datetime, timezone
+        set_at = datetime(2026, 9, 23, tzinfo=timezone.utc)
+        monkeypatch.setenv(ce.AUTH_TOKEN_ENV, "tok-A")
+        monkeypatch.setattr(ss, "load", lambda **k: {ce.AUTH_TOKEN_ENV: "tok-A"})
+        monkeypatch.setattr(ss, "read_meta", lambda: {ce.AUTH_TOKEN_ENV: {"updated": "2026-09-23T00:00:00Z"}})
+        level, detail = ce.container_auth_verdict(now=set_at.timestamp() + 10 * 86400)
+        assert level == "ok" and "set 2026-09-23" in detail and "tok-A" not in detail
+        level, detail = ce.container_auth_verdict(now=set_at.timestamp() + 340 * 86400)
+        assert level == "warn" and "setup-token" in detail
+        # an env token the store does not hold: age unknown, not a guess
+        monkeypatch.setenv(ce.AUTH_TOKEN_ENV, "tok-other")
+        assert ce.token_auth_verdict()[1].endswith("age unknown (not the store's value)")
+
+    def test_no_token_verdict_is_the_volume_session(self, monkeypatch):
+        monkeypatch.setattr(ce, "auth_liveness_state", lambda: {"x": 1})
+        monkeypatch.setattr(ce, "auth_liveness_verdict", lambda rec: ("expired", "refresh token expired"))
+        assert ce.container_auth_verdict() == ("expired", "refresh token expired")
+
+    def test_token_mode_skips_the_volume_probes(self, monkeypatch):
+        monkeypatch.setenv(ce.AUTH_TOKEN_ENV, "tok-A")
+        monkeypatch.setattr(ce, "_run", lambda *a, **k: pytest.fail("docker ran"))
+        assert ce.refresh_auth_liveness() is None
+        ok, detail = ce.auth_volume_probe()
+        assert ok and "CLI token" in detail
+
+    def test_login_probe_hands_the_token_by_name(self, monkeypatch):
+        seen = {}
+
+        def _fake_run(cmd, timeout, env=None):
+            seen["cmd"], seen["env"] = cmd, env
+            return True, "ok"
+        monkeypatch.setattr(ce, "_run", _fake_run)
+        monkeypatch.setenv(ce.AUTH_TOKEN_ENV, "tok-A")
+        ok, detail = ce.login_probe(image="img:1")
+        joined = " ".join(seen["cmd"])
+        assert ok and "(CLI token)" in detail
+        assert f"-e {ce.AUTH_TOKEN_ENV}" in joined and "tok-A" not in joined
+        assert seen["env"][ce.AUTH_TOKEN_ENV] == "tok-A"
+        monkeypatch.delenv(ce.AUTH_TOKEN_ENV)
+        ce.login_probe(image="img:1")
+        assert ce.AUTH_TOKEN_ENV not in " ".join(seen["cmd"]) and seen["env"] is None

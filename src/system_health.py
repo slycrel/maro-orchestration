@@ -438,8 +438,8 @@ def _probe_container_auth(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
         # ~30-day lifetime whose end is the monthly outage); this probe reads
         # that record only (no docker, no token) and warns while there is
         # still time to re-seed, instead of the first run being the casualty.
-        from container_exec import auth_liveness_state, auth_liveness_verdict
-        level, detail = auth_liveness_verdict(auth_liveness_state())
+        from container_exec import container_auth_verdict
+        level, detail = container_auth_verdict()
         obs["liveness"] = level
         if level in ("warn", "expired"):
             return SILENT, (

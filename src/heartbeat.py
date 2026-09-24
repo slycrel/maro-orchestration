@@ -584,10 +584,16 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     # only, no token spend) so system_health can warn BEFORE the monthly
     # expiry takes a real run down. No-op when the container lane is off.
     try:
-        from container_exec import refresh_auth_liveness, auth_liveness_verdict
+        from container_exec import (refresh_auth_liveness, auth_liveness_verdict,
+                                    cli_auth_token, container_mode, token_auth_verdict)
         _live = refresh_auth_liveness()
+        _lvl = None
         if _live is not None:
             _lvl, _ldetail = auth_liveness_verdict(_live)
+        elif container_mode() != "off" and cli_auth_token():
+            # a long-lived CLI token is the login: its age, not the volume's
+            _lvl, _ldetail = token_auth_verdict()
+        if _lvl is not None:
             result["container_auth_liveness"] = _lvl
             result["container_auth_liveness_detail"] = _ldetail
             if verbose and _lvl != "ok":

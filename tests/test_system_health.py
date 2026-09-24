@@ -603,6 +603,17 @@ class TestContainerAuthProbe:
         assert status == UNKNOWN and obs["breaker_tripped"] is False
         assert obs["liveness"] == "unknown" and "not established" in evidence
 
+    def test_a_cli_token_login_is_ok_over_an_expired_volume(self, monkeypatch):
+        # 2026-09-24: with a long-lived CLI token the volume's session is
+        # not the login — its expiry must not hold the lane SILENT.
+        import container_exec as ce
+        self._patch(monkeypatch, "require", None)
+        self._liveness(monkeypatch, -5)
+        monkeypatch.setattr(ce, "cli_auth_token", lambda: "tok")
+        monkeypatch.setattr(ce, "token_auth_verdict", lambda now=None: ("ok", "long-lived CLI token; set 2026-09-23"))
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == OK and "CLI token" in evidence and obs["liveness"] == "ok"
+
     def _liveness(self, monkeypatch, days_left, *, has_refresh=True):
         import time
         import container_exec as ce
