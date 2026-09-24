@@ -100,6 +100,13 @@ DROP_NAME = "secrets-derived.env"   # inside a run's scratch dir
 DROP_ENV = "MARO_SECRETS_DROP"
 FILE_NAME = "secrets.env"           # host-lane hand-off, per step, 0600, shredded after
 FILE_ENV = "MARO_SECRETS_FILE"
+# The CLI's own long-lived login token (container_exec.AUTH_TOKEN_ENV; same
+# name in the Go engine as invoke.DefaultAuthEnv). A local constant, not an
+# import, to avoid a cycle: container_exec lazily imports secrets_store.
+# It is the CLI's own login, not a credential for tool use, so the
+# presence block below omits it entirely rather than calling it "held" or
+# "not injected" — it rides into every containerized call's env already.
+CLI_AUTH_TOKEN_NAME = "CLAUDE_CODE_OAUTH_TOKEN"
 ORIGIN_OPERATOR = "operator"
 ORIGIN_MARO = "maro"
 
@@ -587,8 +594,14 @@ def presence_block(injected: Iterable[str] = (), *, host: bool,
     `undelivered`: names the policy allows that this process could NOT
     inject (the store did not decrypt here) — said plainly, so the frame
     never promises a variable the mechanism did not deliver.
+
+    The CLI's own login token (CLI_AUTH_TOKEN_NAME) is never listed here
+    even when it is a name in the store — it is not a credential for the
+    worker's use, and it already rides into every containerized call's
+    env by a separate mechanism (container_exec.container_auth_env), so
+    calling it "held" or "not injected" would be misleading.
     """
-    known = names()
+    known = [n for n in names() if n != CLI_AUTH_TOKEN_NAME]
     if not known:
         return ""
     meta = read_meta()

@@ -307,6 +307,26 @@ class TestInjectionAndPresence:
         assert "Never conclude" not in block
         assert "MARO_SECRETS_DROP" not in block   # no drop path given
 
+    def test_presence_block_omits_the_cli_login_token_container(self, fake_tools):
+        # CLI_AUTH_TOKEN_NAME (CLAUDE_CODE_OAUTH_TOKEN) is a name in the
+        # store like any other, but it is the CLI's own login — it rides
+        # into every containerized call's env via a separate mechanism
+        # (container_exec.container_auth_env), not the policy-gated
+        # injected set passed here. The presence block must never call it
+        # "held" / "not injected", which would tell the worker to look for
+        # a credential in the wrong place.
+        _seed(fake_tools, {"YAHOO_USER": "u", ss.CLI_AUTH_TOKEN_NAME: "sk-ant-oat-secret"},
+              policy="YAHOO_*\n")
+        block = ss.presence_block(ss.container_env(), host=False)
+        assert ss.CLI_AUTH_TOKEN_NAME not in block
+        assert "sk-ant-oat-secret" not in block
+
+    def test_presence_block_omits_the_cli_login_token_host(self, fake_tools):
+        _seed(fake_tools, {"YAHOO_USER": "u", ss.CLI_AUTH_TOKEN_NAME: "sk-ant-oat-secret"})
+        block = ss.presence_block([], host=True)
+        assert ss.CLI_AUTH_TOKEN_NAME not in block
+        assert "sk-ant-oat-secret" not in block
+
 
 # ---------------------------------------------------------------------------
 # The drop file — maro-derived secrets
