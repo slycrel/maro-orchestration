@@ -1371,6 +1371,23 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   container-executor chunk that was already built, reviewed and
   documented landed the same day (37f767ed); it was finished work, not a
   new arc.
+- **2026-09-24 (M6 is the fan-out box — Jeremy: "ssh into the M6 for extra
+  concurrent `claude -p` tasks. I think the maro box in particular is
+  limited to 1-2 subprocesses due to the age of the hardware… the M6 should
+  allow us fan-out capabilities far beyond what we've had in the past";
+  "Let's keep all of our working files there when we can"):** independent
+  CLI batches (review lenses, sweeps, A/B and benchmark arms) run on m6, not
+  as local subprocesses; the dev-side tool is `m6run` (mirror dirs to m6's
+  SSD, map paths both ways, copy outputs back), and adversarial-review
+  batches run through it (8 reviewers in 17 s, measured). m6's working
+  files live on its external SSD (`/Volumes/Maro`); the secrets identity
+  stays on the internal disk. Direction, not yet built: dual shadow runs on
+  m6 during the succession — Jeremy: "might be great to have dual runs going
+  during the succession development, one on the 'stable' python code and
+  one on the experimental branch… meaningfully testing 'alternate
+  timelines'" — additive to the existing shadow lane, not a replacement.
+  Separate runs only; no splitting one run's steps across boxes ("maybe
+  someday").
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
