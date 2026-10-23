@@ -84,6 +84,8 @@ class TestConstants:
             ("2.1.210", 2): "1e0cf1a80909d799",   # + python3-pytest
             ("2.1.210", 3): "4d4cc6d24e36487d",   # + baked maro verbs (src
             # tree + maro-read/maro-fetch shims + python3-yaml/-requests)
+            ("2.1.210", 4): "d2bb528f4b97f6a5",   # base node:22.23.4-slim (2026-10-21 Node
+            # security release), toolset unchanged
         }
         key = (ce.CLAUDE_CLI_VERSION, ce.IMAGE_REVISION)
         expected = KNOWN.get(key)
@@ -1395,7 +1397,12 @@ class TestAuthBreaker:
         # The probe is SHAPE-only — the four-integer frame the shared reader
         # prints (mtime, exact-field refresh flag, two expiries); credential
         # bytes never transit to the host (reviews 2026-08-13, 2026-09-13).
-        return f"{mtime} {1 if has_refresh else 0} 1791000000 1789312634"
+        # Expiries are relative to now: the literal epochs this used to carry
+        # (1791000000 / 1789312634) aged into the past in 2026-10 and the
+        # "fresh" fixture silently became an expired one.
+        import time
+        far = int(time.time()) + 180 * 86400
+        return f"{mtime} {1 if has_refresh else 0} {far + 86400} {far}"
 
     def test_reseed_probe_accepts_fresh_live_creds(self, monkeypatch):
         monkeypatch.setattr(ce, "_run",
