@@ -42,6 +42,16 @@ full triage: 2026-07-04.
 
 ## Actionable Stack
 
+### Dated followups now live in FOLLOWUPS.md (tripwired) — process, 2026-10-23
+Jeremy: "my concern is we won't revisit in a week." Items with a due date go in
+`FOLLOWUPS.md`; `scripts/followups-check.sh --notify` runs daily (crontab 08:10,
+Telegram on red) and stays red from the due date until the box is ticked. It also
+carries the one dateless standing probe (Java `blocked.certs` entry count — apt
+rewrites that file on every openjdk upgrade). Mirrored as one-shot Hermes cron
+reminders on mini2 so Hermes can offer to dispatch. First two entries: Hermes
+update on mini2 (due 2026-10-30) and the Python 3.15 migration on the maro box
+(due 2026-11-06). Context: auto-memory `project_security_pass_2026_10_23`.
+
 Ordered open work that matters. Top of the list is next.
 
 ### The review loop itself: 31 rounds on item 2 is "holding it wrong" (Jeremy, 2026-09-16: "2-3 should be the norm, 6-7 should be rare") — HIGH, process

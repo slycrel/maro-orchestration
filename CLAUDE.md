@@ -8,7 +8,7 @@
 1. Read this file (CLAUDE.md)
 2. Read GOAL_BRAIN.md — compiled truth: Jeremy's invariants (quoted), verified state, decisions, open threads. **When it disagrees with any other doc, GOAL_BRAIN.md wins** — all other docs are best-guess by decree. Update its system-maintained sections at end-of-chunk.
 3. Read MILESTONES.md — prioritized work queue. This is what to do next.
-4. Read BACKLOG.md — active deferred items, bugs, ideas. Update as you work. When an item ships, move it to BACKLOG_DONE.md with its context intact (the archive is ingested by `dev-recall` for historical "why/how/rejected" context).
+4. Read BACKLOG.md — active deferred items, bugs, ideas. Dated items with a tripwire live in FOLLOWUPS.md (`scripts/followups-check.sh`, daily cron → Telegram when due); tick them there when done. Update as you work. When an item ships, move it to BACKLOG_DONE.md with its context intact (the archive is ingested by `dev-recall` for historical "why/how/rejected" context).
 5. Looking for a specific doc? `docs/INDEX.md` maps questions → docs and carries the status legend (living / dormant-design / history).
 6. Check `~/claude/grok-response-*.txt` for unprocessed feedback (the two files there as of 2026-08-11 — rounds 2–3, March — are long processed; only NEW files matter)
 
