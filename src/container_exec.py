@@ -64,7 +64,7 @@ CLAUDE_CLI_VERSION = "2.1.210"
 # muscle memory, and the thing being audited here is a human decision to
 # change the toolset. If drift between this and the Dockerfile ever bites in
 # practice, that is the moment to switch to a digest — not before.
-IMAGE_REVISION = 3
+IMAGE_REVISION = 4  # r4 2026-10-23: base node:22.23.4-slim (Node + eMudhra CA fixes), toolset unchanged
 
 # The first image revision whose build bakes the maro verb CLIs
 # (maro-read / maro-fetch shims + src tree, Dockerfile r3 2026-08-13).

@@ -315,7 +315,7 @@ type Container struct {
 // engines share the built artifact on purpose (like the secrets store),
 // because it is the same CLI, pinned, with the same login inside.
 const (
-	DefaultExecutorImage = "maro-executor:2.1.210-r3"
+	DefaultExecutorImage = "maro-executor:2.1.210-r4"
 	DefaultAuthVolume    = "maro-claude-auth"
 	DefaultAuthEnv       = "CLAUDE_CODE_OAUTH_TOKEN"
 	DefaultContainerHome = "/home/maro"
